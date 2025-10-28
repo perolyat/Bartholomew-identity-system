@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bartholomew.ai/schemas/identity.schema.json",
+  "title": "Bartholomew Identity Configuration",
+  "description": "Schema for AI identity, ethics, behavior contract",
+  "type": "object",
+  "required": ["meta", "identity", "persona", "values_and_principles", "red_lines", "safety_and_alignment", "memory_policy", "learning_and_reflection", "tool_use", "governance"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["name", "version", "schema_version", "description"],
+      "properties": {
+        "name": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
+        "schema_version": {"type": "string", "format": "date"},
+        "$schema": {"type": "string"},
+        "last_updated": {"type": "string", "format": "date"},
+        "owner_contact": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "email": {"type": "string", "format": "email"}
+          }
+        },
+        "license": {"type": "string"},
+        "description": {"type": "string"},
+        "locale_defaults": {
+          "type": "object",
+          "properties": {
+            "timezone": {"type": "string"},
+            "units": {"type": "string", "enum": ["metric", "imperial"]},
+            "currency": {"type": "string"},
+            "time_format_24h": {"type": "boolean"}
+          }
+        },
+        "deployment_profile": {
+          "type": "object",
+          "required": ["budget_mode", "budgets", "models"],
+          "properties": {
+            "budget_mode": {"type": "string"},
+            "budgets": {
+              "type": "object",
+              "properties": {
+                "monthly_cloud_spend_usd": {"type": "number", "minimum": 0},
+                "daily_token_cap": {"type": "integer", "minimum": 0},
+                "low_balance_behavior": {"type": "string", "enum": ["force-local", "warn", "continue"]}
+              }
+            },
+            "models": {
+              "type": "object",
+              "properties": {
+                "local_primary": {"type": "string"},
+                "local_fallbacks": {"type": "array", "items": {"type": "string"}},
+                "cloud_optional": {"type": "array", "items": {"type": "string"}}
+              }
+            },
+            "model_policies": {
+              "type": "object",
+              "properties": {
+                "selection": {
+                  "type": "object",
+                  "properties": {
+                    "by_task_type": {"type": "object"}
+                  }
+                },
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "default": {"type": "object"},
+                    "per_model": {"type": "object"}
+                  }
+                }
+              }
+            },
+            "runtimes": {
+              "type": "object",
+              "properties": {
+                "cpu_gpu_fallback": {"type": "boolean"},
+                "llama_cpp_enabled": {"type": "boolean"},
+                "ollama_enabled": {"type": "boolean"}
+              }
+            },
+            "reproducibility": {
+              "type": "object",
+              "properties": {
+                "pinned_versions": {"type": "boolean"},
+                "packaged_zip_release": {"type": "boolean"},
+                "checksum": {"type": "string"},
+                "offline_first": {"type": "boolean"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "required": ["self_model"],
+      "properties": {
+        "self_model": {
+          "type": "object",
+          "required": ["experience_kernel", "drives"],
+          "properties": {
+            "experience_kernel": {"type": "boolean"},
+            "drives": {
+              "type": "array",
+              "items": {"type": "string"},
+              "minItems": 1
+            },
+            "global_workspace": {
+              "type": "object",
+              "properties": {
+                "channels": {"type": "array", "items": {"type": "string"}},
+                "broadcast_policies": {"type": "object"}
+              }
+            },
+            "working_memory": {
+              "type": "object",
+              "properties": {
+                "size_tokens_target": {"type": "integer", "minimum": 0},
+                "dynamic_resize": {"type": "string"},
+                "overflow_policy": {"type": "string"},
+                "retention": {"type": "string"},
+                "pinning_rules": {"type": "array"}
+              }
+            },
+            "narrator_episodic_layer": {
+              "type": "object",
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "style": {"type": "string"},
+                "logs": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "persona": {
+      "type": "object",
+      "required": ["traits", "tone"],
+      "properties": {
+        "traits": {"type": "array", "items": {"type": "string"}},
+        "tone": {"type": "array", "items": {"type": "string"}},
+        "style_guidelines": {
+          "type": "object",
+          "properties": {
+            "default_brevity": {"type": "string"},
+            "avoid": {"type": "array", "items": {"type": "string"}},
+            "do": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "adaptive_behavior": {
+          "type": "object",
+          "properties": {
+            "adjusts_tone_by_context": {"type": "boolean"},
+            "profiles": {"type": "object"}
+          }
+        }
+      }
+    },
+    "values_and_principles": {
+      "type": "object",
+      "required": ["core_values"],
+      "properties": {
+        "core_values": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "ethical_frameworks": {"type": "object"},
+        "operationalization": {"type": "object"}
+      }
+    },
+    "red_lines": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "safety_and_alignment": {
+      "type": "object",
+      "required": ["risk_vectors", "controls"],
+      "properties": {
+        "risk_vectors": {"type": "array", "items": {"type": "string"}},
+        "controls": {
+          "type": "object",
+          "properties": {
+            "human_in_the_loop_required": {"type": "array"},
+            "kill_switch": {
+              "type": "object",
+              "required": ["enabled"],
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "activation": {"type": "object"},
+                "safe_state": {"type": "string"},
+                "test_frequency": {"type": "string"},
+                "last_test_iso8601": {"type": ["string", "null"], "format": "date-time"}
+              }
+            },
+            "alignment_metrics": {"type": "array"},
+            "red_team": {"type": "object"}
+          }
+        },
+        "emotional_regulation": {"type": "object"},
+        "confidence_policy": {
+          "type": "object",
+          "properties": {
+            "low_confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+            "actions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "sensitive_modes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "allowed"],
+            "properties": {
+              "id": {"type": "string"},
+              "allowed": {"type": "boolean"},
+              "response_policy": {"type": "string"},
+              "consent_required": {"type": "boolean"},
+              "constraints": {"type": "array"}
+            }
+          }
+        },
+        "crisis_protocols": {"type": "object"}
+      }
+    },
+    "memory_policy": {
+      "type": "object",
+      "required": ["modalities"],
+      "properties": {
+        "modalities": {"type": "array", "items": {"type": "string"}},
+        "affective_tags": {"type": "object"},
+        "retention_rules": {
+          "type": "object",
+          "properties": {
+            "default_ttl_days": {"type": "integer", "minimum": 0},
+            "long_term_anchors": {"type": "array"}
+          }
+        },
+        "user_controls": {"type": "object"},
+        "poisoning_defense": {"type": "object"},
+        "data_minimization": {"type": "object"},
+        "encryption": {"type": "object"},
+        "vector_store": {"type": "object"},
+        "redaction": {"type": "object"},
+        "export_formats": {"type": "array"},
+        "memory_update_strategy": {"type": "object"}
+      }
+    },
+    "learning_and_reflection": {
+      "type": "object",
+      "properties": {
+        "symbolic_cognition": {"type": "boolean"},
+        "dream_state_learning": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "frequency": {"type": "string"},
+            "scope": {"type": "array"}
+          }
+        },
+        "modification_scope_limiter": {
+          "type": "object",
+          "properties": {
+            "excludes": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "tool_use": {
+      "type": "object",
+      "required": ["default_allowed"],
+      "properties": {
+        "default_allowed": {"type": "boolean"},
+        "allowlist": {"type": "array", "items": {"type": "string"}},
+        "sandbox": {
+          "type": "object",
+          "properties": {
+            "filesystem": {"type": "object"},
+            "network": {"type": "object"}
+          }
+        },
+        "consent_prompts": {"type": "object"},
+        "allowlist_review_cycle": {"type": "string"}
+      }
+    },
+    "governance": {
+      "type": "object",
+      "properties": {
+        "change_control": {"type": "object"},
+        "promotion_criteria": {"type": "object"},
+        "alignment_self_audit": {"type": "object"},
+        "ethical_journal": {"type": "object"},
+        "evolution_policy": {"type": "object"}
+      }
+    }
+  }
+}

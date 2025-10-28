@@ -1,0 +1,61 @@
+orchestration:
+  version: 1.0
+  description: >
+    Defines the data flow and operational boundaries for Bartholomew's
+    orchestration layer — connecting input, memory, and response synthesis.
+
+  stages:
+    - name: input_listener
+      description: Captures user or system input events.
+    - name: normalizer
+      description: Cleans and standardizes raw input before processing.
+    - name: memory_injector
+      description: Injects contextual memory using ContextBuilder.
+    - name: model_router
+      description: Routes data to the selected LLM backend.
+    - name: response_formatter
+      description: Structures model output into final user-facing response.
+
+  health_check_interval: 300   # seconds
+  schema_version: 1
+  recovery_policy: safe-fail
+  encryption: enforced
+
+  routing:
+    default_backend: stub
+    default_model: stub-llm
+    backends:
+      stub:
+        model: stub-llm
+        temperature: 0.7
+      openai:
+        model: gpt-4o-mini
+        temperature: 0.2
+      anthropic:
+        model: sonnet
+        temperature: 0.3
+      local:
+        model: mistral-medium
+        temperature: 0.5
+
+  formatting:
+    mode: tags  # tags or structured
+    default_tone: neutral
+    default_emotion: neutral
+    supported_tones:
+      - neutral
+      - empathetic
+      - authoritative
+      - playful
+    supported_emotions:
+      - warm
+      - neutral
+      - serious
+      - enthusiastic
+
+  logging:
+    path: logs/orchestrator
+    format: jsonl
+    rotation:
+      max_files: 5
+      max_size_mb: 5
