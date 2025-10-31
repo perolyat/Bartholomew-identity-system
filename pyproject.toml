@@ -3,15 +3,29 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "identity_interpreter"
-version = "0.1.0"
-description = "Identity Interpreter for Bartholomew AI"
+name = "bartholomew"
+version = "0.0.1"
+description = "Bartholomew AI - Proactive assistant kernel"
 authors = [
     {name = "Taylor Paul", email = "tpaul733@gmail.com"}
 ]
 requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
+dependencies = [
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "pydantic>=2.6",
+    "python-dateutil>=2.8",
+    "tzdata>=2023.3",
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.19",
+    "tenacity>=8.2",
+    "pyyaml>=6.0.1",
+]
+
+[tool.uvicorn]
+factory = false
 
 [tool.black]
 line-length = 100

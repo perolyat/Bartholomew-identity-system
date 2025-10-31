@@ -1,0 +1,106 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Bartholomew • v0.1 Minimal UI</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; margin: 24px; background: #0b0f14; color: #e8f0fe; }
+    .row { display:flex; gap:8px; align-items:center; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:14px; padding:16px; margin-bottom:16px; }
+    button { border-radius:10px; border:1px solid #374151; background:#111827; color:#e8f0fe; padding:8px 12px; cursor:pointer; }
+    button:hover { background:#1f2937; }
+    input, textarea { width:100%; border-radius:10px; border:1px solid #374151; background:#0b1220; color:#e8f0fe; padding:10px; }
+    .badge { border:1px solid #374151; padding:4px 8px; border-radius:999px; font-size:12px; }
+    #chatlog { max-height: 40vh; overflow:auto; white-space:pre-wrap; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px;}
+  </style>
+</head>
+<body>
+  <h1>Bartholomew <span class="badge">v0.1</span></h1>
+  <div class="card">
+    <div class="row">
+      <div id="health" class="mono">health: pending…</div>
+      <button onclick="refreshHealth()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Chat</h3>
+    <div id="chatlog" class="mono"></div>
+    <div class="row">
+      <input id="msg" placeholder="Say something…" onkeydown="if(event.key==='Enter'){sendMsg()}"/>
+      <button onclick="sendMsg()">Send</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Water</h3>
+    <div class="row">
+      <button onclick="addWater(250)">+250ml</button>
+      <button onclick="addWater(500)">+500ml</button>
+      <span id="total" class="badge">today: … ml</span>
+      <button onclick="refreshWater()">Refresh</button>
+    </div>
+  </div>
+
+  <script>
+    const API = location.origin;
+
+    async function refreshHealth(){
+      try{
+        const r = await fetch(API + "/api/health");
+        const j = await r.json();
+        document.getElementById("health").textContent = JSON.stringify(j, null, 2);
+      }catch(e){
+        document.getElementById("health").textContent = "health failed: " + e;
+      }
+    }
+
+    async function refreshWater(){
+      const r = await fetch(API + "/api/water/today");
+      const j = await r.json();
+      document.getElementById("total").textContent = `today: ${j.total_ml} ml`;
+    }
+
+    async function addWater(ml){
+      const r = await fetch(API + "/api/water/log", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ml})
+      });
+      const j = await r.json();
+      await refreshWater();
+    }
+
+    async function sendMsg(){
+      const el = document.getElementById("msg");
+      const val = el.value.trim();
+      if(!val) return;
+      el.value = "";
+      appendChat("> " + val);
+      try{
+        const r = await fetch(API + "/api/chat", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({message: val})
+        });
+        const j = await r.json();
+        appendChat(j.reply + (j.tone ? `\n[tone:${j.tone}]` : "") + (j.emotion? ` [emotion:${j.emotion}]` : ""));
+      }catch(e){
+        appendChat("! chat failed: " + e);
+      }
+    }
+
+    function appendChat(t){
+      const el = document.getElementById("chatlog");
+      el.textContent += (el.textContent ? "\n" : "") + t;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    // initial
+    refreshHealth(); refreshWater();
+  </script>
+</body>
+</html>

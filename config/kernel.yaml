@@ -1,0 +1,24 @@
+timezone: "Australia/Brisbane"
+loop_interval_seconds: 15
+
+memory:
+  db_path: "data/barth.db"
+
+planner:
+  max_actions_per_tick: 1
+  allow_proactive: true
+
+quiet_hours:
+  start: "21:30"
+  end: "07:00"
+
+dreaming:
+  nightly_window: "21:00-23:00"
+  weekly:
+    weekday: "Sun"
+    time: "21:30"
+
+drives:
+  self_check: "every:900"
+  curiosity_probe: "window:3600:2"
+  reflection_micro: "every:7200"

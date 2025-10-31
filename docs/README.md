@@ -10,6 +10,8 @@ The Identity Interpreter parses, validates, and enforces the Identity.yaml confi
 - **CLI Tools**: Lint, explain, and simulate commands
 - **Adapter System**: Pluggable backends for LLMs, tools, consent, metrics
 
+> 🧠 **Understanding Bartholomew's Brain**: For a comprehensive overview of the cognitive architecture and how all components work together as an integrated brain, see [brain.md](brain.md).
+
 ## Installation
 
 ```bash

@@ -7,7 +7,6 @@ Tests schema versioning, persistence, encryption, and API stability
 import shutil
 import sqlite3
 import sys
-import tempfile
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,265 +24,269 @@ from identity_interpreter.adapters.memory_manager import (
 )
 
 
-def test_schema_versioning():
+def test_schema_versioning(temp_dir):
     """Test that schema version is properly set and readable"""
     print("\n🔢 Testing Schema Versioning...")
 
-    tmpdir = tempfile.mkdtemp()
+    # Load identity
+    identity = load_identity("Identity.yaml")
+    identity = normalize_identity(identity)
+
+    # Create memory manager in temp directory
+    mm = MemoryManager(identity, data_dir=temp_dir)
+
+    # Check schema version in database
+    db_path = Path(temp_dir) / "memory.db"
+    conn = None
     try:
-        # Load identity
-        identity = load_identity("Identity.yaml")
-        identity = normalize_identity(identity)
-
-        # Create memory manager in temp directory
-        mm = MemoryManager(identity, data_dir=tmpdir)
-
-        # Check schema version in database
-        db_path = Path(tmpdir) / "memory.db"
-        with sqlite3.connect(db_path) as conn:
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-            # Close WAL properly
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-
-        del mm  # Ensure cleanup
-
-        print(f"✓ Database schema version: {version}")
-        print(f"✓ Expected version: {CURRENT_SCHEMA_VERSION}")
-
-        if version == CURRENT_SCHEMA_VERSION:
-            print("✅ Schema versioning is correctly set")
-            return True
-        else:
-            print(f"❌ Schema version mismatch: {version} != "
-                  f"{CURRENT_SCHEMA_VERSION}")
-            return False
+        conn = sqlite3.connect(db_path)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        # Close WAL properly
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
-        import shutil
-        import time
-        time.sleep(0.1)  # Give Windows time to release files
-        try:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        except:
-            pass
+        if conn:
+            conn.close()
+
+    del mm  # Ensure cleanup
+
+    print(f"✓ Database schema version: {version}")
+    print(f"✓ Expected version: {CURRENT_SCHEMA_VERSION}")
+
+    if version == CURRENT_SCHEMA_VERSION:
+        print("✅ Schema versioning is correctly set")
+        return True
+    else:
+        print(f"❌ Schema version mismatch: {version} != "
+              f"{CURRENT_SCHEMA_VERSION}")
+        return False
 
 
-def test_wal_mode_enabled():
+def test_wal_mode_enabled(temp_dir):
     """Test that WAL mode is enabled for crash resilience"""
     print("\n📝 Testing WAL Mode...")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        identity = load_identity("Identity.yaml")
-        identity = normalize_identity(identity)
+    identity = load_identity("Identity.yaml")
+    identity = normalize_identity(identity)
 
-        mm = MemoryManager(identity, data_dir=tmpdir)
+    # Create memory manager to ensure database is initialized
+    MemoryManager(identity, data_dir=temp_dir)
 
-        # Check journal mode
-        db_path = Path(tmpdir) / "memory.db"
-        with sqlite3.connect(db_path) as conn:
-            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    # Check journal mode
+    db_path = Path(temp_dir) / "memory.db"
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        if conn:
+            conn.close()
 
-        print(f"✓ Journal mode: {mode}")
+    print(f"✓ Journal mode: {mode}")
 
-        if mode.upper() == "WAL":
-            print("✅ WAL mode is enabled for crash resilience")
-            return True
-        else:
-            print(f"❌ WAL mode not enabled, found: {mode}")
-            return False
+    if mode.upper() == "WAL":
+        print("✅ WAL mode is enabled for crash resilience")
+        return True
+    else:
+        print(f"❌ WAL mode not enabled, found: {mode}")
+        return False
 
 
-def test_cold_boot_reload():
+def test_cold_boot_reload(temp_dir):
     """Test that memory persists across system restarts"""
     print("\n❄️ Testing Cold Boot Reload...")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        identity = load_identity("Identity.yaml")
-        identity = normalize_identity(identity)
+    identity = load_identity("Identity.yaml")
+    identity = normalize_identity(identity)
 
-        # Phase 1: Create and store data
-        print("  Phase 1: Storing test data...")
-        mm1 = MemoryManager(identity, data_dir=tmpdir)
+    # Phase 1: Create and store data
+    print("  Phase 1: Storing test data...")
+    mm1 = MemoryManager(identity, data_dir=temp_dir)
 
-        test_id = str(uuid.uuid4())
-        test_turn = ConversationTurn(
-            id=test_id,
-            timestamp=datetime.now(),
-            user_input="Test cold boot: What is your name?",
-            ai_response="I am Bartholomew.",
-            context={"session": "cold_boot_test"},
-            confidence=0.95,
-            model_used="test_model",
-        )
+    test_id = str(uuid.uuid4())
+    test_turn = ConversationTurn(
+        id=test_id,
+        timestamp=datetime.now(),
+        user_input="Test cold boot: What is your name?",
+        ai_response="I am Bartholomew.",
+        context={"session": "cold_boot_test"},
+        confidence=0.95,
+        model_used="test_model",
+    )
 
-        success = mm1.store_conversation_turn(test_turn)
-        print(f"  ✓ Stored test conversation: {success}")
+    success = mm1.store_conversation_turn(test_turn)
+    print(f"  ✓ Stored test conversation: {success}")
 
-        # Delete the first instance (simulating app shutdown)
-        del mm1
+    # Delete the first instance (simulating app shutdown)
+    del mm1
 
-        # Phase 2: Simulate cold boot - new MemoryManager instance
-        print("  Phase 2: Simulating cold boot (new instance)...")
-        mm2 = MemoryManager(identity, data_dir=tmpdir)
+    # Phase 2: Simulate cold boot - new MemoryManager instance
+    print("  Phase 2: Simulating cold boot (new instance)...")
+    mm2 = MemoryManager(identity, data_dir=temp_dir)
 
-        # Try to retrieve the conversation
-        recent = mm2.get_recent_conversation(limit=5)
-        print(f"  ✓ Retrieved {len(recent)} conversations after restart")
+    # Try to retrieve the conversation
+    recent = mm2.get_recent_conversation(limit=5)
+    print(f"  ✓ Retrieved {len(recent)} conversations after restart")
 
-        # Check if our test conversation is present
-        found = False
-        for turn in recent:
-            if turn.id == test_id:
-                found = True
-                print(f"  ✓ Found test conversation: '{turn.user_input[:40]}...'")
-                break
+    # Check if our test conversation is present
+    found = False
+    for turn in recent:
+        if turn.id == test_id:
+            found = True
+            print(f"  ✓ Found test conversation: "
+                  f"'{turn.user_input[:40]}...'")
+            break
 
-        if found:
-            print("✅ Cold boot reload successful - data persists")
-            return True
-        else:
-            print("❌ Cold boot reload failed - data not found after restart")
-            return False
+    if found:
+        print("✅ Cold boot reload successful - data persists")
+        return True
+    else:
+        print("❌ Cold boot reload failed - data not found after restart")
+        return False
 
 
-def test_cleanup_expired_memories():
+def test_cleanup_expired_memories(temp_dir):
     """Test that expired memories are properly cleaned up"""
     print("\n🗑️ Testing Expired Memory Cleanup...")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        identity = load_identity("Identity.yaml")
-        identity = normalize_identity(identity)
+    identity = load_identity("Identity.yaml")
+    identity = normalize_identity(identity)
 
-        mm = MemoryManager(identity, data_dir=tmpdir)
+    mm = MemoryManager(identity, data_dir=temp_dir)
 
-        # Create an already-expired memory
-        expired_id = str(uuid.uuid4())
-        expired_memory = MemoryEntry(
-            id=expired_id,
-            modality=MemoryModality.EPISODIC,
-            timestamp=datetime.now() - timedelta(days=100),
-            content="This should be deleted",
-            metadata={"test": "expired"},
-            confidence=0.8,
-            ttl_days=1,  # Short TTL
-            anchor=None,
+    # Create an already-expired memory
+    expired_id = str(uuid.uuid4())
+    expired_memory = MemoryEntry(
+        id=expired_id,
+        modality=MemoryModality.EPISODIC,
+        timestamp=datetime.now() - timedelta(days=100),
+        content="This should be deleted",
+        metadata={"test": "expired"},
+        confidence=0.8,
+        ttl_days=1,  # Short TTL
+        anchor=None,
+    )
+
+    # Store the expired memory directly in DB
+    expires_at = (datetime.now() - timedelta(days=1)).isoformat()
+    db_path = Path(temp_dir) / "memory.db"
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            INSERT INTO memories
+            (id, modality, timestamp, content, metadata, confidence,
+             ttl_days, anchor, encrypted, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                expired_id,
+                expired_memory.modality.value,
+                expired_memory.timestamp.isoformat(),
+                expired_memory.content,
+                "{}",
+                expired_memory.confidence,
+                expired_memory.ttl_days,
+                expired_memory.anchor,
+                False,
+                expires_at,
+            ),
         )
+    finally:
+        if conn:
+            conn.close()
 
-        # Store the expired memory directly in DB
-        expires_at = (datetime.now() - timedelta(days=1)).isoformat()
-        db_path = Path(tmpdir) / "memory.db"
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO memories
-                (id, modality, timestamp, content, metadata, confidence,
-                 ttl_days, anchor, encrypted, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    expired_id,
-                    expired_memory.modality.value,
-                    expired_memory.timestamp.isoformat(),
-                    expired_memory.content,
-                    "{}",
-                    expired_memory.confidence,
-                    expired_memory.ttl_days,
-                    expired_memory.anchor,
-                    False,
-                    expires_at,
-                ),
-            )
+    print("  ✓ Inserted expired memory")
 
-        print("  ✓ Inserted expired memory")
+    # Run cleanup
+    count = mm.cleanup()
+    print(f"  ✓ Cleanup removed {count} expired memories")
 
-        # Run cleanup
-        count = mm.cleanup()
-        print(f"  ✓ Cleanup removed {count} expired memories")
+    # Verify it was deleted
+    memories = mm.retrieve_memories(limit=100)
+    found = any(m.id == expired_id for m in memories)
 
-        # Verify it was deleted
-        memories = mm.retrieve_memories(limit=100)
-        found = any(m.id == expired_id for m in memories)
-
-        if count > 0 and not found:
-            print("✅ Expired memory cleanup successful")
-            return True
-        else:
-            print("❌ Expired memory cleanup failed")
-            return False
+    if count > 0 and not found:
+        print("✅ Expired memory cleanup successful")
+        return True
+    else:
+        print("❌ Expired memory cleanup failed")
+        return False
 
 
-def test_stable_api_interface():
+def test_stable_api_interface(temp_dir):
     """Test that stable API methods work correctly"""
     print("\n🔌 Testing Stable API Interface...")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        identity = load_identity("Identity.yaml")
-        identity = normalize_identity(identity)
+    identity = load_identity("Identity.yaml")
+    identity = normalize_identity(identity)
 
-        mm = MemoryManager(identity, data_dir=tmpdir)
+    mm = MemoryManager(identity, data_dir=temp_dir)
 
-        # Test write_memory (stable API)
-        test_id = str(uuid.uuid4())
-        memory = MemoryEntry(
-            id=test_id,
-            modality=MemoryModality.SEMANTIC,
-            timestamp=datetime.now(),
-            content="Test stable API",
-            metadata={"api_test": True},
-            confidence=0.9,
-        )
+    # Test write_memory (stable API)
+    test_id = str(uuid.uuid4())
+    memory = MemoryEntry(
+        id=test_id,
+        modality=MemoryModality.SEMANTIC,
+        timestamp=datetime.now(),
+        content="Test stable API",
+        metadata={"api_test": True},
+        confidence=0.9,
+    )
 
-        write_success = mm.write_memory(memory)
-        print(f"  ✓ write_memory: {write_success}")
+    write_success = mm.write_memory(memory)
+    print(f"  ✓ write_memory: {write_success}")
 
-        # Test read_memories (stable API)
-        memories = mm.read_memories(modality=MemoryModality.SEMANTIC, limit=10)
-        read_success = any(m.id == test_id for m in memories)
-        print(f"  ✓ read_memories: found={read_success}")
+    # Test read_memories (stable API)
+    memories = mm.read_memories(modality=MemoryModality.SEMANTIC, limit=10)
+    read_success = any(m.id == test_id for m in memories)
+    print(f"  ✓ read_memories: found={read_success}")
 
-        # Test build_context (stable API)
-        turn = ConversationTurn(
-            id=str(uuid.uuid4()),
-            timestamp=datetime.now(),
-            user_input="Hello",
-            ai_response="Hi there!",
-            context={},
-            confidence=0.9,
-            model_used="test",
-        )
-        mm.store_conversation_turn(turn)
-        context = mm.build_context(limit=5)
-        context_success = len(context) > 0 and "Hello" in context
-        print(f"  ✓ build_context: {len(context)} chars")
+    # Test build_context (stable API)
+    turn = ConversationTurn(
+        id=str(uuid.uuid4()),
+        timestamp=datetime.now(),
+        user_input="Hello",
+        ai_response="Hi there!",
+        context={},
+        confidence=0.9,
+        model_used="test",
+    )
+    mm.store_conversation_turn(turn)
+    context = mm.build_context(limit=5)
+    context_success = len(context) > 0 and "Hello" in context
+    print(f"  ✓ build_context: {len(context)} chars")
 
-        # Test cleanup (stable API)
-        cleanup_count = mm.cleanup()
-        cleanup_success = cleanup_count >= 0  # Returns int count
-        print(f"  ✓ cleanup: {cleanup_count} removed")
+    # Test cleanup (stable API)
+    cleanup_count = mm.cleanup()
+    cleanup_success = cleanup_count >= 0  # Returns int count
+    print(f"  ✓ cleanup: {cleanup_count} removed")
 
-        # Test health_check (stable API)
-        health = mm.health_check()
-        health_success = "db" in health and "cipher" in health
-        print(f"  ✓ health_check: db={health['db']}, cipher={health['cipher']}")
+    # Test health_check (stable API)
+    health = mm.health_check()
+    health_success = "db" in health and "cipher" in health
+    print(f"  ✓ health_check: db={health['db']}, "
+          f"cipher={health['cipher']}")
 
-        all_success = all(
-            [
-                write_success,
-                read_success,
-                context_success,
-                cleanup_success,
-                health_success,
-            ]
-        )
+    all_success = all(
+        [
+            write_success,
+            read_success,
+            context_success,
+            cleanup_success,
+            health_success,
+        ]
+    )
 
-        if all_success:
-            print("✅ Stable API interface working correctly")
-            return True
-        else:
-            print("❌ Some stable API methods failed")
-            return False
+    if all_success:
+        print("✅ Stable API interface working correctly")
+        return True
+    else:
+        print("❌ Some stable API methods failed")
+        return False
 
 
-def test_encryption_keystore_persistence():
+def test_encryption_keystore_persistence(temp_dir):
     """Test that encryption key persists in OS keystore"""
     print("\n🔐 Testing Encryption Key Persistence...")
 
@@ -291,34 +294,35 @@ def test_encryption_keystore_persistence():
     identity = normalize_identity(identity)
 
     # Check if encryption is enabled
-    encryption_enabled = identity.memory_policy.encryption.get("at_rest", False)
+    encryption_enabled = identity.memory_policy.encryption.get(
+        "at_rest", False
+    )
     print(f"  ✓ Encryption at rest: {encryption_enabled}")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # First instance
-        mm1 = MemoryManager(identity, data_dir=tmpdir)
-        key1 = mm1.encryption_key if mm1.cipher else None
+    # First instance
+    mm1 = MemoryManager(identity, data_dir=temp_dir)
+    key1 = mm1.encryption_key if mm1.cipher else None
 
-        # Second instance (should reuse same key from keystore)
-        mm2 = MemoryManager(identity, data_dir=tmpdir)
-        key2 = mm2.encryption_key if mm2.cipher else None
+    # Second instance (should reuse same key from keystore)
+    mm2 = MemoryManager(identity, data_dir=temp_dir)
+    key2 = mm2.encryption_key if mm2.cipher else None
 
-        if encryption_enabled:
-            if key1 and key2 and key1 == key2:
-                print("  ✓ Same encryption key retrieved from keystore")
-                print("✅ Encryption key persistence confirmed")
-                return True
-            else:
-                print("  ✗ Keys don't match or are None")
-                print("❌ Encryption key persistence failed")
-                return False
-        else:
-            print("  ℹ️ Encryption not required by config - test skipped")
+    if encryption_enabled:
+        if key1 and key2 and key1 == key2:
+            print("  ✓ Same encryption key retrieved from keystore")
+            print("✅ Encryption key persistence confirmed")
             return True
+        else:
+            print("  ✗ Keys don't match or are None")
+            print("❌ Encryption key persistence failed")
+            return False
+    else:
+        print("  ℹ️ Encryption not required by config - test skipped")
+        return True
 
 
 def main():
-    """Run all integration boundary tests"""
+    """Run all integration boundary tests using pytest fixtures"""
     print("=" * 60)
     print("🧪 Memory Integration Boundary Tests")
     print("=" * 60)
@@ -334,16 +338,18 @@ def main():
 
     results = []
 
-    for test_name, test_func in tests:
-        try:
-            result = test_func()
-            results.append((test_name, result))
-        except Exception as e:
-            print(f"❌ {test_name} failed with exception: {e}")
-            import traceback
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for test_name, test_func in tests:
+            try:
+                result = test_func(tmpdir)
+                results.append((test_name, result))
+            except Exception as e:
+                print(f"❌ {test_name} failed with exception: {e}")
+                import traceback
 
-            traceback.print_exc()
-            results.append((test_name, False))
+                traceback.print_exc()
+                results.append((test_name, False))
 
     # Summary
     print("\n" + "=" * 60)

@@ -1,0 +1,26 @@
+version: 1
+consent:
+  proactive_nudges: true
+  device_access:
+    camera: ask
+    calendar: ask
+    location: ask
+boundaries:
+  escalate_emotional_distress:
+    threshold: medium
+    actions:
+      - ask_gentle_checkin
+      - suggest_break
+      - offer_help_options
+  health_nudges:
+    hydration:
+      cadence_min_minutes: 60
+      max_per_day_prompts: 6
+  data_retention:
+    event_log_days: 30
+    memories_days: 365
+safety:
+  do_not:
+    - impersonate_user
+    - send messages without explicit approval
+    - record audio/video without explicit approval

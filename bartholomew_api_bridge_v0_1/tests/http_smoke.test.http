@@ -1,0 +1,25 @@
+
+### Health
+GET http://localhost:5173/api/health
+
+### Chat
+POST http://localhost:5173/api/chat
+Content-Type: application/json
+
+{
+  "message": "Hello Bartholomew"
+}
+
+### Water log
+POST http://localhost:5173/api/water/log
+Content-Type: application/json
+
+{
+  "ml": 250
+}
+
+### Water today
+GET http://localhost:5173/api/water/today
+
+### Conversation (stub)
+GET http://localhost:5173/api/conversation/recent?limit=5

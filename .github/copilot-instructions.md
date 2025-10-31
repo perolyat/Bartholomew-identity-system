@@ -18,14 +18,20 @@
 
 ### Core Components
 
-- **`Identity.yaml`**: The central configuration file defining all AI behavior, safety policies, ethics, and operational constraints
+- **`Identity.yaml`**: The central configuration file defining all AI behavior, safety policies, ethics, and operational parameters
 - **`identity_interpreter/`**: Python package for parsing, validating, and normalizing the identity configuration
   - `loader.py`: YAML parsing with JSON Schema validation via `IdentityLoadError` exceptions
-  - `models.py`: Pydantic models providing type-safe access to all configuration sections
+  - `models.py`: Pydantic v2 models providing type-safe access to all configuration sections
   - `normalizer.py`: Computes derived values (e.g., dynamic memory sizing, model parameter overlays)
   - `schema/identity.schema.json`: JSON Schema for configuration validation
   - `policies/`: Policy engines for model routing, safety checks, tool control, confidence handling
   - `adapters/`: Interface stubs for external systems (LLM, storage, metrics, consent, tools)
+  - `orchestrator/`: Central controller coordinating input, memory, and model routing with JSONL logging
+- **`bartholomew_api_bridge_v0_1/`**: FastAPI bridge exposing REST endpoints for UI integration
+  - `services/api/app.py`: Core API with chat, health, water logging endpoints
+  - `app.py`: Root import stub for uvicorn deployment
+- **`chat.py`**: Interactive terminal interface demonstrating full system integration
+- **`test_bartholomew.py`**: Integration test with real Ollama backend
 
 ### Key Design Patterns
 
@@ -46,8 +52,15 @@ decision = select_model(identity, task_type="code", budget_exhausted=False)
 **Adapter Stub Pattern**: External integrations use consistent interface stubs in `adapters/`:
 - `LLMAdapter`: Ollama integration with model name mapping
 - `StorageAdapter`: Memory persistence with encryption
-- `ConsentAdapter`: Terminal-based consent prompts
+- `ConversationTurn`: Structured chat history storage
 - `MetricsLogger`: Decision tracking and audit logs
+
+**Orchestrator Pipeline**: Request processing through configurable pipeline with JSONL trace logging:
+```python
+# Pipeline: inject_memory_context → route_model → format_response
+data = orchestrator.handle_input(user_input)
+# Logs to logs/orchestrator/orchestrator.log with timing and session tracking
+```
 
 ## Critical Configuration Sections
 
@@ -58,6 +71,7 @@ decision = select_model(identity, task_type="code", budget_exhausted=False)
 - **`tool_use.default_allowed`**: Security model is deny-by-default with explicit allowlisting (never compromise)
 - **`memory_policy.encryption`**: Data protection requirements for persistent storage (privacy-first)
 - **`governance.change_control`**: Defines what configuration changes require human approval (human-in-the-loop)
+- **`persona.personality_modes`**: Multi-mode personality switching (exploration, tactical, healthcare)
 
 ## Development Workflows
 
@@ -79,6 +93,7 @@ D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe -m identity_interpreter.c
 # Alternative using installed entry point
 barth lint Identity.yaml
 barth explain Identity.yaml --task-type general --confidence 0.7
+barth health  # System health checks
 ```
 
 **Testing & Development**: 
@@ -86,6 +101,15 @@ barth explain Identity.yaml --task-type general --confidence 0.7
 - `pytest tests/` - Full test suite with policy engine tests
 - `D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe chat.py` - Interactive chat interface for end-to-end testing
 - `ollama list` - Verify available local models before testing
+
+**API Bridge Development**:
+```powershell
+# Setup PYTHONPATH for API bridge
+cd d:\workspace\bartholomew0.0.1\bartholomew_api_bridge_v0_1
+$env:PYTHONPATH="d:\workspace\bartholomew0.0.1"
+uvicorn app:app --host 127.0.0.1 --port 8000
+# Test endpoints: /api/health, /api/chat, /api/water/log
+```
 
 **Model Integration**: The `LLMAdapter` maps Identity.yaml model names to Ollama models:
 ```python
@@ -111,10 +135,11 @@ entry_points={
 - **Schema validation**: All changes must pass `identity.schema.json` validation
 - **Model parameters**: Use `get_model_parameters(identity, model_name)` for runtime config
 - **Budget-aware model selection**: `get_available_models(identity, budget_exhausted)`
+- **PYTHONPATH setup**: API bridge requires `d:\workspace\bartholomew0.0.1` in PYTHONPATH
 
 ## Project Structure Patterns
 
-**Package Layout**: Standard Python package with CLI entry point
+**Package Layout**: Standard Python package with CLI entry point and orchestrator
 ```
 identity_interpreter/
 ├── __init__.py           # Package exports (load_identity, normalize_identity)
@@ -123,12 +148,25 @@ identity_interpreter/
 ├── normalizer.py         # Derived value computation
 ├── cli.py                # Typer-based CLI with rich formatting
 ├── policies/             # Decision engines (pure functions)
-└── adapters/             # External system stubs (Ollama, storage, etc.)
+├── adapters/             # External system stubs (Ollama, storage, etc.)
+└── orchestrator/         # Central pipeline controller with JSONL logging
+```
+
+**API Bridge Structure**: FastAPI service bridge for UI integration
+```
+bartholomew_api_bridge_v0_1/
+├── app.py                # Root import stub for uvicorn
+├── services/api/         # Core API implementation
+│   ├── app.py           # FastAPI app with chat/health endpoints
+│   ├── models.py        # Pydantic API models
+│   └── db.py            # SQLite for water logging
+└── ui/minimal/          # Basic web UI components
 ```
 
 **Test Organization**: 
 - `test_bartholomew.py` - Integration test using `chat.py` and real Ollama
 - `tests/test_policies.py` - Unit tests for policy engines
+- `chat.py` - Full-stack interactive test interface
 - `scenarios/` - Planned scenario-based testing (currently empty)
 
 ## Security & Ethics Patterns
@@ -143,12 +181,16 @@ identity_interpreter/
 
 **Sandboxed Tool Use**: Filesystem/network access explicitly constrained via `tool_use.sandbox` configuration—security by design.
 
+**Multi-Modal Persona**: Adaptive personality modes for different contexts (exploration, tactical, healthcare) with explicit mode switching.
+
 ## Data Flow
 
 > **CANONICAL PIPELINE**: This represents the immutable data processing pipeline. All features must flow through this architecture to maintain consistency and auditability.
 
 ```
-Identity.yaml → loader.py → Pydantic models → normalizer.py → Policy engines → Adapter stubs → Runtime
+Identity.yaml → loader.py → Pydantic models → normalizer.py → Policy engines → Orchestrator pipeline → Adapter stubs → Runtime
 ```
 
-All runtime decisions flow through policy engines that reference specific YAML configuration paths for explainability. This ensures every action can be traced back to its configuration source and ethical justification.
+**Full Request Flow**: User input → Red line check → Model selection → Prompt building → LLM generation → Response validation → Confidence evaluation → Memory storage → Response formatting
+
+All runtime decisions flow through policy engines that reference specific YAML configuration paths for explainability. The orchestrator logs all pipeline steps with timing data to `logs/orchestrator/orchestrator.log` for debugging and performance analysis.

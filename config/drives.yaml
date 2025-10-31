@@ -1,0 +1,10 @@
+drives:
+  - id: logistics
+    priority: 0.8
+    goal: "Smooth errands, groceries, route."
+  - id: social
+    priority: 0.7
+    goal: "Support key relationships gently."
+  - id: rest
+    priority: 0.7
+    goal: "Protect rest; cap late-night drift."

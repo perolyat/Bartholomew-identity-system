@@ -3,7 +3,7 @@
 ## Installation
 
 ```bash
-# Install dependencies
+# Install dependencies (pinned with hashes for reproducibility)
 pip install -r requirements.txt
 
 # Install package
@@ -12,6 +12,79 @@ pip install -e .
 # Install email validator (required by Pydantic)
 pip install email-validator
 ```
+
+### Dependency Management
+
+This project uses `pip-tools` to manage dependencies:
+
+- **requirements.in**: Human-readable, unpinned dependencies (edit this)
+- **requirements.txt**: Auto-generated, fully pinned with hashes (install from this)
+- **requirements.lock**: Frozen snapshot of the entire environment
+
+To update dependencies:
+```bash
+# Install pip-tools
+pip install pip-tools
+
+# Compile new requirements.txt from requirements.in
+pip-compile --resolver=backtracking --generate-hashes -o requirements.txt requirements.in
+
+# Update requirements.lock
+pip freeze > requirements.lock
+```
+
+## Running the API Bridge (Optional)
+
+### Local Development
+
+To run the local REST API and minimal UI:
+
+```bash
+# Start the API server
+uvicorn app:app --reload --port 5173
+
+# API docs available at: http://localhost:5173/docs
+# Minimal UI at: bartholomew_api_bridge_v0_1/ui/minimal/index.html
+```
+
+The API provides:
+- **`/healthz`** - Minimal liveness endpoint (for load balancers/monitoring)
+- **`/api/health`** - Detailed health check with timezone, orchestrator, and version info
+- **`/api/chat`** - Chat with Bartholomew
+- **`/api/water/log`** - Log water intake
+- **`/api/water/today`** - Get today's water total
+
+### Docker Deployment
+
+Run the API in a container:
+
+```bash
+# Using Docker Compose (recommended)
+docker-compose up -d
+
+# Or build and run manually
+docker build -t bartholomew-api .
+docker run -p 5173:5173 -v $(pwd)/data:/app/data bartholomew-api
+```
+
+### Environment Configuration
+
+- **`ALLOWED_ORIGINS`**: Comma-separated CORS origins (default: `http://localhost,http://localhost:5173,http://127.0.0.1:5173,http://127.0.0.1`)
+- **`TZ`**: Timezone for date/time operations (default: `Australia/Brisbane`)
+
+Example:
+```bash
+ALLOWED_ORIGINS=http://localhost:3000,http://myapp.com TZ=Australia/Brisbane uvicorn app:app --port 5173
+```
+
+### Timezone Handling
+
+All timestamps are handled in **Australia/Brisbane** timezone:
+- Water logs use Brisbane time for "today" calculations
+- ISO8601 timestamps are timezone-aware
+- Server exposes current timezone via `/api/health`
+
+See `bartholomew_api_bridge_v0_1/README_API_BRIDGE.md` for full details.
 
 ## Basic Usage
 
@@ -98,3 +171,21 @@ pytest tests/
 
 # Run tests with coverage
 pytest --cov=identity_interpreter tests/
+
+# Smoke test the API
+bash bartholomew_api_bridge_v0_1/scripts/curl_smoke.sh http://localhost:5173
+
+# Run Docker Compose
+docker-compose up -d
+docker-compose logs -f
+docker-compose down
+```
+
+## CI/CD
+
+The project includes a GitHub Actions workflow (`.github/workflows/smoke.yml`) that:
+- Boots the API server
+- Validates `/healthz` returns `{"status": "ok", "version": "0.1.0"}`
+- Tests `/api/health` and `/docs` endpoints
+
+This ensures the API can start successfully on every commit.

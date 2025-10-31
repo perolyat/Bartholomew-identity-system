@@ -1,6 +1,27 @@
 # Bartholomew Identity Interpreter
 
+**This workspace is Bartholomew's Brain** - a cognitive architecture implementing identity, memory, planning, safety, and decision-making systems.
+
 Python implementation of the Identity Interpreter for Bartholomew AI system.
+
+## Phase 0 Quickstart - "It's Alive" Baseline
+
+```bash
+# Setup
+python -m venv .venv && .venv\Scripts\activate  # Windows
+# or: source .venv/bin/activate                 # Linux/Mac
+
+pip install -e .
+pip install -r requirements.txt
+
+# First run creates DB and starts the kernel
+uvicorn app:app --reload --port 5173
+
+# Test the kernel is alive (nudges will print in console every ~15s)
+curl -X POST http://127.0.0.1:5173/kernel/command/water_log_250
+```
+
+The kernel runs an autonomy loop with scheduled drives that monitor system health and generate proactive nudges.
 
 ## Quick Start
 
@@ -18,6 +39,45 @@ barth lint Identity.yaml
 barth explain Identity.yaml --task-type code --confidence 0.4
 ```
 
+## Testing
+
+Run tests with pytest:
+
+```bash
+# Run all tests
+pytest
+
+# Run specific test categories
+pytest -m database        # Database-related tests
+pytest -m integration     # Integration tests
+pytest -m windows_quirk   # Tests handling Windows file issues
+
+# Run tests with verbose output
+pytest -v
+```
+
+### Windows Testing Notes
+
+**File Locking Issues**: Windows tests may occasionally fail with `PermissionError` (WinError 32) during teardown due to lingering database file handles. This is a Windows-specific quirk where SQLite WAL files can remain locked briefly after connection closure.
+
+**Test Fixtures**: The test suite includes robust fixtures in `conftest.py` that handle Windows file locking:
+
+- `temp_db_path`: Creates temporary database files with retry cleanup logic
+- `db_conn`: Provides database connections with proper teardown
+- `ensure_cleanup`: Auto-runs garbage collection after each test
+
+**CI Expectations**:
+
+- Local Windows development: Occasional non-functional test failures due to file locking
+- CI environments: Should be more reliable due to isolated container environments
+- Test failures related to file deletion are infrastructure issues, not logic bugs
+
+**Troubleshooting**: If tests consistently fail with file permission errors:
+
+1. Close any database browser tools (DB Browser for SQLite, etc.)
+2. Restart the terminal/IDE to clear file handles
+3. Run tests individually with `pytest -k test_name` to isolate issues
+
 ## Features
 
 - ✅ JSON Schema validation of Identity.yaml
@@ -34,7 +94,7 @@ See [docs/README.md](docs/README.md) for full documentation.
 
 ## Project Structure
 
-```
+```text
 ├── identity_interpreter/     # Core package
 │   ├── policies/            # Policy engines
 │   ├── adapters/            # External integrations (stubs)
