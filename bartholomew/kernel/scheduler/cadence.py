@@ -8,9 +8,24 @@ Supports two cadence types:
 
 from typing import Tuple, Union, Optional, Dict, Any
 import json
+import os
+import random
 
 
 CadenceType = Union[Tuple[str, int], Tuple[str, int, int]]
+
+
+def _speed_factor() -> float:
+    """
+    Get the speed factor from environment variable.
+    
+    Returns speed factor clamped to minimum 0.001.
+    Defaults to 1.0 if not set or invalid.
+    """
+    try:
+        return max(0.001, float(os.getenv("BARTH_SPEED_FACTOR", "1.0")))
+    except Exception:
+        return 1.0
 
 
 def parse(cadence_str: str) -> CadenceType:
@@ -113,16 +128,23 @@ def compute_next_run(
     cadence = parse(cadence_str)
     
     if cadence[0] == "every":
-        seconds = cadence[1]
+        # Scale interval and add ~5% jitter
+        seconds = max(1, int(cadence[1]))
+        seconds = max(1, int(seconds * _speed_factor()))
+        jitter = max(1, int(seconds * 0.05))
+        delta = max(1, seconds + random.randint(-jitter, jitter))
+        
         if last_run_ts is None:
             # First run: schedule for now + interval
-            return (now_ts + seconds, None)
+            return (now_ts + delta, None)
         else:
             # Schedule relative to last run (not now) to avoid drift
-            return (last_run_ts + seconds, None)
+            return (last_run_ts + delta, None)
     
     elif cadence[0] == "window":
-        window_s = cadence[1]
+        # Scale the window length; keep even-split scheduling
+        window_s = max(1, int(cadence[1]))
+        window_s = max(1, int(window_s * _speed_factor()))
         max_runs = cadence[2]
         
         # Parse window state

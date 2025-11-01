@@ -39,6 +39,37 @@ barth lint Identity.yaml
 barth explain Identity.yaml --task-type code --confidence 0.4
 ```
 
+## Database Configuration
+
+Both the Kernel and API use a single SQLite database.
+
+**Resolution order:**
+1. `BARTH_DB_PATH` environment variable (used as-is)
+2. Default: `data/barth.db` under the project root (directory containing `pyproject.toml`)
+
+**Examples:**
+
+```bash
+# Windows (cmd)
+set BARTH_DB_PATH=D:\data\barth-prod.db
+
+# Windows (PowerShell)
+$env:BARTH_DB_PATH="D:\data\barth-prod.db"
+
+# Linux/macOS (bash)
+export BARTH_DB_PATH=/var/lib/bartholomew/barth.db
+```
+
+On first run, the data directory is created automatically if it doesn't exist.
+
+**Git hygiene:**
+
+The repository ignores local SQLite databases and WAL/SHM files by default:
+- `data/*.db`
+- `data/*-wal`
+- `data/*-shm`
+- `data/**/*.db`
+
 ## Testing
 
 Run tests with pytest:
@@ -91,6 +122,12 @@ pytest -v
 ## Documentation
 
 See [docs/README.md](docs/README.md) for full documentation.
+
+### Key Documentation
+
+- [Reflection Generation](docs/REFLECTION_GENERATION.md) - LLM-based daily/weekly reflections with safety guardrails
+- [Metrics Security](METRICS_SECURITY_IMPLEMENTATION.md) - Production-ready metrics implementation
+- [Quick Start](QUICKSTART.md) - Getting started guide
 
 ## Project Structure
 

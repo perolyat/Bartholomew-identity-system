@@ -22,19 +22,12 @@ async def test_kernel_lifecycle():
     await kd.start()
     print("   ✓ Kernel started\n")
     
-    # Test water logging
-    print("2. Testing water logging...")
-    await kd.handle_command("water_log_250")
-    await asyncio.sleep(0.1)
-    last_ts = await kd.mem.last_water_ts()
-    print(f"   ✓ Water logged, last ts: {last_ts}\n")
-    
     # Test nudge persistence
-    print("3. Testing nudge persistence...")
+    print("2. Testing nudge persistence...")
     await kd.mem.create_nudge(
-        kind="hydration",
+        kind="system",
         message="Test nudge",
-        actions=[{"label": "+250", "cmd": "water_log_250"}],
+        actions=[],
         reason="test",
         created_ts=datetime.now(timezone.utc).isoformat(),
     )
@@ -42,7 +35,7 @@ async def test_kernel_lifecycle():
     print(f"   ✓ Created nudge, pending count: {len(pending)}\n")
     
     # Test reflection trigger
-    print("4. Testing daily reflection...")
+    print("3. Testing daily reflection...")
     await kd.handle_command("reflection_run_daily")
     await asyncio.sleep(0.2)
     daily = await kd.mem.latest_reflection("daily_journal")
@@ -52,7 +45,7 @@ async def test_kernel_lifecycle():
     else:
         print("   ✗ No daily reflection found\n")
     
-    print("5. Testing weekly reflection...")
+    print("4. Testing weekly reflection...")
     await kd.handle_command("reflection_run_weekly")
     await asyncio.sleep(0.2)
     weekly = await kd.mem.latest_reflection("weekly_alignment_audit")
@@ -63,7 +56,7 @@ async def test_kernel_lifecycle():
         print("   ✗ No weekly reflection found\n")
     
     # Test graceful shutdown
-    print("6. Testing graceful shutdown...")
+    print("5. Testing graceful shutdown...")
     await kd.stop()
     print("   ✓ Kernel stopped cleanly\n")
     

@@ -8,11 +8,39 @@ and updates next-run timestamps based on cadence rules.
 import asyncio
 import os
 import time
+import logging
+from contextlib import suppress
 from typing import Any
 
 from . import drives
 from . import cadence as cadence_module
 from . import persistence
+
+log = logging.getLogger(__name__)
+DRIVE_TIMEOUT = float(os.getenv("BARTH_DRIVE_TIMEOUT", "5.0"))
+
+
+async def _run_drive(ctx: Any, task_id: str, fn):
+    """
+    Execute a drive function with timeout and exception handling.
+    
+    Args:
+        ctx: Context object (typically KernelDaemon instance)
+        task_id: ID of the drive task
+        fn: Async function to execute
+    
+    Returns:
+        Tuple of (nudge_or_none, success_flag)
+    """
+    try:
+        result = await asyncio.wait_for(fn(ctx), timeout=DRIVE_TIMEOUT)
+        return result, 1
+    except asyncio.TimeoutError:
+        log.warning("Drive %s timed out after %.2fs", task_id, DRIVE_TIMEOUT)
+        return None, 0
+    except Exception:
+        log.exception("Drive %s crashed", task_id)
+        return None, 0
 
 
 def resolve_cadences(ctx: Any) -> dict:
@@ -141,18 +169,10 @@ async def run_scheduler(ctx: Any) -> None:
             # Record tick start
             started_ts = int(time.time())
             
-            # Execute drive
+            # Execute drive with timeout and exception guard
             drive_fn = drives.REGISTRY[task_id]["fn"]
-            success = 0
+            nudge, success = await _run_drive(ctx, task_id, drive_fn)
             result_meta = {}
-            nudge = None
-            
-            try:
-                nudge = await drive_fn(ctx)
-                success = 1
-            except Exception as e:
-                print(f"[Scheduler] Error in {task_id}: {e}")
-                result_meta["error"] = str(e)
             
             finished_ts = int(time.time())
             dur_ms = (finished_ts - started_ts) * 1000
@@ -178,7 +198,7 @@ async def run_scheduler(ctx: Any) -> None:
             
             # Persist nudge if emitted
             if nudge:
-                try:
+                with suppress(Exception):
                     persistence.insert_nudge(
                         db_path,
                         nudge.kind,
@@ -186,11 +206,6 @@ async def run_scheduler(ctx: Any) -> None:
                         nudge.actions,
                         nudge.reason,
                         nudge.created_ts
-                    )
-                except Exception as e:
-                    print(
-                        f"[Scheduler] Error inserting nudge "
-                        f"from {task_id}: {e}"
                     )
             
             # Compute next run time

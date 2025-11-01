@@ -6,18 +6,36 @@ import atexit
 import asyncio
 import re, os
 from typing import Optional
+import time as _time
+import datetime as dt
+import yaml
+
+# Load timezone from kernel config (single source of truth)
+with open("config/kernel.yaml", "r", encoding="utf-8") as f:
+    _kernel_cfg = yaml.safe_load(f)
+    _tz_name = _kernel_cfg["timezone"]
+
 # tz support (prefer zoneinfo, fallback to dateutil.tz)
 try:
     from zoneinfo import ZoneInfo  # py>=3.9
-    TZ = ZoneInfo("Australia/Brisbane")
+    TZ = ZoneInfo(_tz_name)
 except Exception:
     from dateutil import tz
-    TZ = tz.gettz("Australia/Brisbane")
+    TZ = tz.gettz(_tz_name)
 
-from .models import ChatIn, ChatOut, WaterLogIn, WaterTodayOut, ConversationItem, ConversationList
-from .db import get_conn, DB_PATH
+from .models import ChatIn, ChatOut, ConversationItem, ConversationList
+from .db import DB_PATH
 from . import db_ctx
-from .routes import liveness
+from .routes import liveness, metrics
+from .routes.metrics import KERNEL_TICKS_TOTAL, BARTHOLOMEW_TICKS_TOTAL
+from prometheus_client import ProcessCollector, PlatformCollector
+
+
+def is_truthy(val: str | None) -> bool:
+    """Check if an environment variable value is truthy."""
+    if not val:
+        return False
+    return val.lower() in ("1", "true", "yes", "on")
 
 # Import orchestrator
 Orchestrator = None
@@ -35,6 +53,14 @@ app = FastAPI(title="Bartholomew API v0.1", version="0.1.0")
 
 # Include routers
 app.include_router(liveness.router)
+
+# Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
+# to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)
+metrics_internal_only = is_truthy(os.getenv("METRICS_INTERNAL_ONLY"))
+app.include_router(
+    metrics.router,
+    prefix="/internal" if metrics_internal_only else ""
+)
 
 # Register atexit handler for WAL cleanup on shutdown
 atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
@@ -67,13 +93,27 @@ _kernel_task = None
 @app.on_event("startup")
 async def startup():
     global _kernel, _kernel_task
+    
+    # Initialize state for liveness + metrics
+    app.state.start_monotonic = _time.monotonic()
+    app.state.last_tick_iso = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    app.state.drives = ["self_check", "curiosity_probe", "reflection_micro"]
+    app.state.current_drive = "self_check"
+    
+    # Register Prometheus collectors
+    try:
+        ProcessCollector()
+        PlatformCollector()
+    except Exception:
+        pass
+    
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
     
     # Start kernel in-process
     _kernel = KernelDaemon(
         cfg_path="config/kernel.yaml",
-        db_path="data/barth.db",
+        db_path=DB_PATH,
         persona_path="config/persona.yaml",
         policy_path="config/policy.yaml",
         drives_path="config/drives.yaml",
@@ -95,9 +135,47 @@ async def shutdown():
         await _kernel.stop()
 
 
+# --- Kernel-facing helpers ---
+def set_last_tick(ts: dt.datetime | None = None, drive: str | None = None) -> None:
+    """
+    Call from the kernel loop after each tick.
+    Optionally pass the active `drive` to increment the labeled counter.
+    """
+    if ts is None:
+        ts = dt.datetime.utcnow().replace(microsecond=0)
+    app.state.last_tick_iso = ts.isoformat() + "Z"
+
+    if drive:
+        app.state.current_drive = drive
+        # Update the drives snapshot while preserving insertion order (unique, stable)
+        try:
+            lst = list(getattr(app.state, "drives", []))
+            if drive not in lst:
+                lst.append(drive)
+            app.state.drives = lst
+        except Exception:
+            # Never let metrics/liveness helpers crash the app
+            pass
+
+    # Bump labeled counters
+    try:
+        label = getattr(app.state, "current_drive", None) or "unknown"
+        KERNEL_TICKS_TOTAL.labels(label).inc()
+        BARTHOLOMEW_TICKS_TOTAL.labels(label).inc()
+    except Exception:
+        pass
+
+
+def set_drives(drives: list[str]) -> None:
+    """Call when the active drive set changes."""
+    app.state.drives = list(drives)
+    if drives:
+        app.state.current_drive = drives[0]
+
+
 @app.post("/kernel/command/{cmd}")
 async def kernel_command(cmd: str):
-    """Execute a kernel command (e.g., water_log_250, water_log_500)"""
+    """Execute a kernel command (e.g., reflection_run_daily, reflection_run_weekly)"""
     if _kernel is None:
         raise HTTPException(503, "Kernel not initialized")
     await _kernel.handle_command(cmd)
@@ -115,13 +193,6 @@ def _parse_reply(raw: str):
     if m_em: emotion = m_em.group(1).strip()
     reply = re.sub(r"\[[^\]]+\]\s*", "", raw).strip()
     return (reply, tone, emotion)
-
-def _today_bounds():
-    # Determine start/end of "today" in Australia/Brisbane
-    now = datetime.now(TZ)
-    start = datetime.combine(now.date(), time(0,0,0), tzinfo=TZ)
-    end   = datetime.combine(now.date(), time(23,59,59,999999), tzinfo=TZ)
-    return start, end
 
 @app.get("/healthz", tags=["health"])
 def healthz():
@@ -170,45 +241,6 @@ def chat(body: ChatIn):
     if not reply:
         reply = str(raw)
     return ChatOut(reply=reply, tone=tone, emotion=emotion)
-
-@app.post("/api/water/log", response_model=WaterTodayOut)
-def log_water(body: WaterLogIn):
-    ml = int(body.ml)
-    if not (1 <= ml <= 2000):
-        raise HTTPException(400, "ml must be between 1 and 2000")
-    if body.timestamp:
-        try:
-            ts = datetime.fromisoformat(body.timestamp)
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=TZ)
-            else:
-                ts = ts.astimezone(TZ)
-        except Exception:
-            raise HTTPException(400, "timestamp must be ISO8601")
-    else:
-        ts = datetime.now(TZ)
-
-    with get_conn() as conn:
-        conn.execute("INSERT INTO water_logs(ts, ml) VALUES (?, ?)", (ts.isoformat(), ml))
-        conn.commit()
-        start, end = _today_bounds()
-        cur = conn.execute(
-            "SELECT COALESCE(SUM(ml),0) FROM water_logs WHERE ts BETWEEN ? AND ?",
-            (start.isoformat(), end.isoformat()),
-        )
-        total = int(cur.fetchone()[0] or 0)
-    return WaterTodayOut(date=ts.date().isoformat(), total_ml=total)
-
-@app.get("/api/water/today", response_model=WaterTodayOut)
-def water_today():
-    with get_conn() as conn:
-        start, end = _today_bounds()
-        cur = conn.execute(
-            "SELECT COALESCE(SUM(ml),0) FROM water_logs WHERE ts BETWEEN ? AND ?",
-            (start.isoformat(), end.isoformat()),
-        )
-        total = int(cur.fetchone()[0] or 0)
-    return WaterTodayOut(date=start.date().isoformat(), total_ml=total)
 
 @app.get("/api/conversation/recent", response_model=ConversationList)
 def conversation_recent(limit: int = 10):

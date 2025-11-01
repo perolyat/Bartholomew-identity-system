@@ -15,6 +15,12 @@ import pytest
 
 
 @pytest.fixture
+def anyio_backend():
+    """Configure anyio to use only asyncio backend (no trio)."""
+    return "asyncio"
+
+
+@pytest.fixture
 def temp_db_path(tmp_path: Path):
     """
     Create a temporary database file path with WAL cleanup.

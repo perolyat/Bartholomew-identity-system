@@ -69,6 +69,12 @@ exports/sessions/
 data/temp/
 data/cache/
 
+# SQLite databases and WAL/SHM artifacts
+data/*.db
+data/*-wal
+data/*-shm
+data/**/*.db
+
 # Test outputs
 .pytest_cache/
 .coverage

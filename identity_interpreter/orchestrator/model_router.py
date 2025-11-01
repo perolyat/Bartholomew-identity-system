@@ -9,14 +9,30 @@ from typing import Dict, Any, Optional
 class ModelRouter:
     """Routes requests to appropriate LLM backends."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        identity_config: Optional[Any] = None
+    ):
         """
         Initialize the model router.
         
         Args:
             config: Optional configuration dictionary
+            identity_config: Optional identity config for LLM adapter
         """
         self.config = config or self._default_config()
+        self.identity_config = identity_config
+        self.llm_adapter = None
+        
+        # Lazily initialize LLM adapter if identity config provided
+        if identity_config:
+            try:
+                from ..adapters.llm_stub import LLMAdapter
+                self.llm_adapter = LLMAdapter(identity_config)
+            except Exception:
+                # Adapter unavailable, will use stub
+                pass
 
     def _default_config(self) -> Dict[str, Any]:
         """Return default routing configuration."""
@@ -67,11 +83,25 @@ class ModelRouter:
         """
         route = self.select_route(data)
         prompt = data.get("prompt", data.get("user_input", ""))
+        backend = route["backend"]
         
-        # For now, return mock responses
-        # Future: Dispatch to actual backends based on route["backend"]
-        if route["backend"] == "stub":
-            # Simple stub response
+        # Use LLM adapter for local/ollama backends
+        if backend in ["local", "ollama"] and self.llm_adapter:
+            try:
+                result = self.llm_adapter.generate(
+                    prompt=prompt,
+                    model=route["model"],
+                    parameters=route["parameters"],
+                    context=data,
+                )
+                if result.get("success"):
+                    return result.get("response", "")
+                # Fallback to stub on error
+            except Exception:
+                pass
+        
+        # Stub response for testing/fallback
+        if backend == "stub":
             return (
                 f"[{route['model']}] "
                 f"Mock response for prompt: {prompt[:50]}..."

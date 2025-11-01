@@ -1,27 +1,11 @@
-# Core dependencies
-pydantic>=2.0.0
-PyYAML>=6.0
-jsonschema>=4.0.0
-requests>=2.28.0
-ollama>=0.3.0
-
-# Database
-aiosqlite>=0.19
-
-# CLI dependencies
-typer[all]>=0.9.0
-rich>=13.0.0
-
-# Memory and encryption
-cryptography>=41.0.0
-keyring>=24.0.0
-
-# Testing
-pytest>=7.0.0
-pytest-cov>=4.0.0
-
-# API Bridge (optional - for bartholomew_api_bridge_v0_1)
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-python-dateutil>=2.8.0
+# Bartholomew dependencies - mirrors pyproject.toml
+fastapi>=0.104
+uvicorn[standard]>=0.24
+pydantic>=2.6
+python-dateutil>=2.8
 tzdata>=2023.3
+sqlalchemy>=2.0
+aiosqlite>=0.19
+tenacity>=8.2
+pyyaml>=6.0.1
+prometheus_client>=0.20.0

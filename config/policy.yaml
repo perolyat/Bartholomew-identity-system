@@ -12,10 +12,6 @@ boundaries:
       - ask_gentle_checkin
       - suggest_break
       - offer_help_options
-  health_nudges:
-    hydration:
-      cadence_min_minutes: 60
-      max_per_day_prompts: 6
   data_retention:
     event_log_days: 30
     memories_days: 365

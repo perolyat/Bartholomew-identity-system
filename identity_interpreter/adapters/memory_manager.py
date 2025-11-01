@@ -3,6 +3,7 @@ Comprehensive Memory Management System for Bartholomew
 Implements episodic, semantic, affective, and symbolic memory modalities
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -17,9 +18,14 @@ from typing import Any
 import keyring
 from cryptography.fernet import Fernet
 
+from bartholomew.kernel.memory.privacy_guard import (
+    is_sensitive,
+    request_permission_to_store,
+)
+
 
 # Schema version for migration management
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 # Configurable keyring identifiers
 SERVICE_NAME = os.getenv("BARTHO_MEMORY_KEYRING_SERVICE", "bartholomew_memory")
@@ -48,6 +54,13 @@ class MemoryEntry:
     ttl_days: int | None = None
     anchor: str | None = None
     encrypted: bool = False
+    # e.g. "user.essential", "user.identity",
+    # "environment.passive", "thirdparty.private"
+    privacy_class: str | None = None
+    # e.g. "context_only", "always", "never"
+    recall_policy: str | None = None
+    # e.g. "30d", "7d", null = no expiry
+    expires_in: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage"""
@@ -203,7 +216,10 @@ class MemoryManager:
                 anchor TEXT,
                 encrypted BOOLEAN DEFAULT FALSE,
                 expires_at TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                privacy_class TEXT,
+                recall_policy TEXT,
+                expires_in TEXT
             )
         """
         )
@@ -227,9 +243,28 @@ class MemoryManager:
         """Migrate database schema between versions"""
         for v in range(from_version + 1, to_version + 1):
             if v == 2:
-                # Future migration example:
-                # conn.execute("ALTER TABLE memories ADD COLUMN ...")
-                pass
+                # Add privacy-aware metadata columns
+                try:
+                    conn.execute(
+                        "ALTER TABLE memories ADD COLUMN "
+                        "privacy_class TEXT;"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                try:
+                    conn.execute(
+                        "ALTER TABLE memories ADD COLUMN "
+                        "recall_policy TEXT;"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                try:
+                    conn.execute(
+                        "ALTER TABLE memories ADD COLUMN "
+                        "expires_in TEXT;"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
             else:
                 raise RuntimeError(
                     f"No migration path defined for version {v}"
@@ -280,6 +315,39 @@ class MemoryManager:
             True if stored successfully
         """
         try:
+            # Privacy guard: check for sensitive content
+            if is_sensitive(memory.content):
+                try:
+                    # Check if we're in a running event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+
+                    if loop and loop.is_running():
+                        # Use sync fallback to avoid nested loop issues
+                        from identity_interpreter.adapters.consent_terminal import (  # noqa: E501
+                            ConsentAdapter,
+                        )
+
+                        allowed = ConsentAdapter(self.identity).request_consent(  # noqa: E501
+                            action="store_sensitive_memory",
+                            details=memory.content,
+                            scope="per_use",
+                        )
+                    else:
+                        # Safe to use asyncio.run
+                        allowed = asyncio.run(
+                            request_permission_to_store(memory.content)
+                        )
+                except Exception as e:
+                    self.logger.error(f"Consent prompt failed: {e}")
+                    return False
+
+                if not allowed:
+                    print("[Bartholomew] OK, I won't store that memory.")
+                    return False
+
             # Calculate expiry
             expires_at = self._calculate_expiry(memory.ttl_days, memory.anchor)
 
@@ -299,8 +367,9 @@ class MemoryManager:
                     """
                     INSERT OR REPLACE INTO memories
                     (id, modality, timestamp, content, metadata,
-                     confidence, ttl_days, anchor, encrypted, expires_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     confidence, ttl_days, anchor, encrypted, expires_at,
+                     privacy_class, recall_policy, expires_in)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         memory.id,
@@ -313,6 +382,9 @@ class MemoryManager:
                         memory.anchor,
                         should_encrypt,
                         expires_at.isoformat() if expires_at else None,
+                        memory.privacy_class,
+                        memory.recall_policy,
+                        memory.expires_in,
                     ),
                 )
 
@@ -390,6 +462,9 @@ class MemoryManager:
                     ttl_days=row["ttl_days"],
                     anchor=row["anchor"],
                     encrypted=row["encrypted"],
+                    privacy_class=row["privacy_class"],
+                    recall_policy=row["recall_policy"],
+                    expires_in=row["expires_in"],
                 )
                 memories.append(memory)
 
@@ -442,7 +517,8 @@ class MemoryManager:
             now = datetime.now().isoformat()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
-                    "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",
+                    "DELETE FROM memories WHERE expires_at IS NOT NULL "
+                    "AND expires_at < ?",
                     (now,),
                 )
                 if cursor.rowcount > 0:
@@ -529,7 +605,9 @@ class MemoryManager:
                 )
                 count = cursor.rowcount or 0
                 if count > 0:
-                    self.logger.info(f"Cleaned up {count} expired memories")
+                    self.logger.info(
+                        f"Cleaned up {count} expired memories"
+                    )
                 return count
         except Exception as e:
             self.logger.error(f"Cleanup failed: {e}")

@@ -39,17 +39,16 @@ class ConsentAdapter:
         if scope == "per_session" and action in self.session_consents:
             return self.session_consents[action]
 
-        # Terminal prompt (stub - would be real input in production)
+        # Terminal prompt
         print("\n=== CONSENT REQUIRED ===")
         print(f"Action: {action}")
         if details:
             print(f"Details: {details}")
         print(f"Scope: {scope}")
 
-        # Stub: auto-grant for testing
-        # In production: response = input("Allow? (y/n): ").lower()
-        response = "y"
-        granted = response == "y"
+        # Real user input
+        response = input("Allow? (y/n): ").strip().lower()
+        granted = response in ("y", "yes")
 
         if scope == "per_session":
             self.session_consents[action] = granted

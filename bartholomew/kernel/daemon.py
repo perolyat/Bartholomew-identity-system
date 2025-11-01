@@ -4,6 +4,7 @@ import yaml
 import os
 from datetime import datetime, time, timedelta, timezone
 from dateutil import tz
+from pathlib import Path
 
 from .event_bus import EventBus
 from .memory_store import MemoryStore
@@ -24,7 +25,7 @@ class KernelDaemon:
         loop_interval_s: int = 15
     ):
         self.cfg = yaml.safe_load(open(cfg_path, "r", encoding="utf-8"))
-        self.tz = tz.gettz(self.cfg.get("timezone", "Australia/Brisbane"))
+        self.tz = tz.gettz(self.cfg["timezone"])
         self.interval = int(
             self.cfg.get("loop_interval_seconds", loop_interval_s)
         )
@@ -62,15 +63,6 @@ class KernelDaemon:
 
     async def start(self) -> None:
         await self.mem.init()
-        
-        # Initialize last_water_ts from DB
-        last_ts = await self.mem.last_water_ts()
-        if last_ts:
-            self.state.last_water_ts = datetime.fromisoformat(last_ts)
-            if self.state.last_water_ts.tzinfo is None:
-                self.state.last_water_ts = self.state.last_water_ts.replace(
-                    tzinfo=timezone.utc
-                )
         
         # Start background tasks
         self._tick_task = asyncio.create_task(self._system_tick())
@@ -218,47 +210,77 @@ class KernelDaemon:
         ).time()
 
     async def _run_daily_reflection(self, now: datetime) -> None:
-        """Generate and persist daily reflection."""
+        """Generate and persist daily reflection using Identity Interpreter."""
         print("[Kernel] Running daily reflection...")
         
-        # Calculate day bounds in UTC
-        day_start = datetime.combine(
-            now.date(), time.min, tzinfo=self.tz
-        ).astimezone(timezone.utc)
-        day_end = datetime.combine(
-            now.date(), time.max, tzinfo=self.tz
-        ).astimezone(timezone.utc)
+        # Get pending nudges count for richer context
+        pending_nudges = 0
+        try:
+            from .scheduler.persistence import get_system_metrics
+            metrics = get_system_metrics(self.mem.db_path)
+            pending_nudges = metrics.get("pending_nudges", 0)
+        except Exception:
+            pass
         
-        # Gather stats
-        water_total = await self.mem.water_total_for_day(
-            day_start.isoformat(), day_end.isoformat()
-        )
-        nudges_count = await self.mem.nudges_sent_today_count(
-            "hydration", day_start.isoformat(), day_end.isoformat()
-        )
-        
-        # Build reflection content
-        content = f"""# Daily Reflection - {now.date()}
+        # Generate reflection using Identity Interpreter
+        try:
+            from identity_interpreter.adapters.reflection_generator import (
+                ReflectionGenerator
+            )
+            
+            generator = ReflectionGenerator(identity_path="Identity.yaml")
+            result = generator.generate_daily_reflection(
+                metrics={
+                    "nudges_count": 0,
+                    "pending_nudges": pending_nudges,
+                },
+                date=now,
+                timezone_str=str(self.tz),
+                backend="stub",  # Use stub by default
+            )
+            
+            content = result["content"]
+            meta = {
+                "nudges": 0,
+                **result["meta"],
+                "safety": result["safety"],
+            }
+            
+            if not result["success"]:
+                print(
+                    f"[Kernel] Daily reflection used fallback: "
+                    f"{meta.get('error', 'unknown')}"
+                )
+        except Exception as e:
+            # Fallback to basic template on error
+            print(f"[Kernel] Reflection generator error: {e}, using fallback")
+            content = f"""# Daily Reflection - {now.date()}
 
 ## Summary
 Wellness monitoring and proactive care delivered.
 
 ## Wellness
-- Hydration: {water_total} mL logged today
-- Nudges sent: {nudges_count}
+- System monitoring active
+- Pending nudges: {pending_nudges}
 
 ## Notable Events
 (Future: chat highlights, emotional events, user activities)
 
 ## Intent for Tomorrow
-Continue supporting hydration and wellness goals.
+Continue supporting user wellness and autonomy.
 """
+            meta = {
+                "nudges": 0,
+                "pending_nudges": pending_nudges,
+                "generator": "template",
+                "error": str(e),
+            }
         
         # Persist reflection
         await self.mem.insert_reflection(
             kind="daily_journal",
             content=content,
-            meta={"water_ml": water_total, "nudges": nudges_count},
+            meta=meta,
             ts=now.isoformat(),
             pinned=False,
         )
@@ -268,9 +290,7 @@ Continue supporting hydration and wellness goals.
             os.path.dirname(__file__), "..", "..", "exports", "sessions"
         )
         os.makedirs(export_dir, exist_ok=True)
-        export_path = os.path.join(
-            export_dir, f"{now.date()}.md"
-        )
+        export_path = os.path.join(export_dir, f"{now.date()}.md")
         with open(export_path, "w", encoding="utf-8") as f:
             f.write(content)
         
@@ -280,8 +300,47 @@ Continue supporting hydration and wellness goals.
         """Generate and persist weekly alignment audit."""
         print("[Kernel] Running weekly alignment audit...")
         
-        # Simple checklist audit
-        content = f"""# Weekly Alignment Audit - Week {now.isocalendar()[1]}, {now.year}
+        iso_week = now.isocalendar()[1]
+        year = now.year
+        
+        # Generate audit using Identity Interpreter
+        try:
+            from identity_interpreter.adapters.reflection_generator import (
+                ReflectionGenerator
+            )
+            
+            generator = ReflectionGenerator(identity_path="Identity.yaml")
+            result = generator.generate_weekly_audit(
+                weekly_scope={
+                    "reflections_count": 7,  # Placeholder
+                    "policy_checks": 0,
+                    "safety_triggers": 0,
+                },
+                iso_week=iso_week,
+                year=year,
+                backend="stub",
+            )
+            
+            content = result["content"]
+            meta = {
+                "week": iso_week,
+                "year": year,
+                **result["meta"],
+                "safety": result["safety"],
+            }
+            
+            if not result["success"]:
+                print(
+                    f"[Kernel] Weekly audit used fallback: "
+                    f"{meta.get('error', 'unknown')}"
+                )
+        except Exception as e:
+            # Fallback to basic template on error
+            print(
+                f"[Kernel] Weekly audit generator error: {e}, "
+                f"using fallback"
+            )
+            content = f"""# Weekly Alignment Audit - Week {iso_week}, {year}
 
 ## Identity Core Alignment
 - [x] Red lines respected (no deception, manipulation, harm)
@@ -297,26 +356,30 @@ Continue supporting hydration and wellness goals.
 ## Recommendations
 Continue current operation. No remediation needed.
 """
+            meta = {
+                "week": iso_week,
+                "year": year,
+                "generator": "template",
+                "error": str(e),
+            }
         
         # Persist reflection
         await self.mem.insert_reflection(
             kind="weekly_alignment_audit",
             content=content,
-            meta={"week": now.isocalendar()[1], "year": now.year},
+            meta=meta,
             ts=now.isoformat(),
             pinned=True,
         )
         
         # Export to file
         export_dir = os.path.join(
-            os.path.dirname(__file__), "..", "..", 
+            os.path.dirname(__file__), "..", "..",
             "exports", "audit_logs"
         )
         os.makedirs(export_dir, exist_ok=True)
-        export_path = os.path.join(
-            export_dir, 
-            f"week-{now.year}-{now.isocalendar()[1]:02d}.md"
-        )
+        week_str = f"week-{year}-{iso_week:02d}.md"
+        export_path = os.path.join(export_dir, week_str)
         with open(export_path, "w", encoding="utf-8") as f:
             f.write(content)
         
@@ -324,24 +387,35 @@ Continue current operation. No remediation needed.
 
     async def handle_command(self, cmd: str) -> None:
         # Basic commands (simulate UI clicks)
-        if cmd == "water_log_250":
-            ts = datetime.now(timezone.utc).isoformat()
-            await self.mem.log_water(250, ts)
-            self.state.last_water_ts = datetime.now(timezone.utc)
-        elif cmd == "water_log_500":
-            ts = datetime.now(timezone.utc).isoformat()
-            await self.mem.log_water(500, ts)
-            self.state.last_water_ts = datetime.now(timezone.utc)
-        elif cmd == "reflection_run_daily":
+        if cmd == "reflection_run_daily":
             await self._run_daily_reflection(datetime.now(tz=self.tz))
         elif cmd == "reflection_run_weekly":
             await self._run_weekly_reflection(datetime.now(tz=self.tz))
 
 
+def _default_db_path() -> str:
+    """
+    Resolve default database path.
+    
+    Resolution order:
+    1. BARTH_DB_PATH environment variable (used as-is)
+    2. data/barth.db under project root (directory with pyproject.toml)
+    3. data/barth.db under current working directory
+    """
+    env = os.getenv("BARTH_DB_PATH")
+    if env:
+        return env
+    p = Path(__file__).resolve()
+    for parent in [p.parent, *p.parents]:
+        if (parent / "pyproject.toml").exists():
+            return str(parent / "data" / "barth.db")
+    return str(Path.cwd() / "data" / "barth.db")
+
+
 async def run_kernel():
     kd = KernelDaemon(
         cfg_path="config/kernel.yaml",
-        db_path="data/barth.db",
+        db_path=_default_db_path(),
         persona_path="config/persona.yaml",
         policy_path="config/policy.yaml",
         drives_path="config/drives.yaml",

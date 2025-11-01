@@ -50,9 +50,102 @@ uvicorn app:app --reload --port 5173
 The API provides:
 - **`/healthz`** - Minimal liveness endpoint (for load balancers/monitoring)
 - **`/api/health`** - Detailed health check with timezone, orchestrator, and version info
+- **`/api/liveness/self`** - Quick self-test snapshot for Brain Console
+- **`/metrics`** - Prometheus metrics endpoint
 - **`/api/chat`** - Chat with Bartholomew
 - **`/api/water/log`** - Log water intake
 - **`/api/water/today`** - Get today's water total
+
+### Liveness & Metrics Endpoints
+
+**GET /api/liveness/self**
+- Purpose: Quick self-test snapshot for Brain Console
+- Returns: `{"uptime": <int seconds>, "drives": [<str>...], "last_tick": "YYYY-MM-DDTHH:MM:SSZ"}`
+- Example:
+  ```bash
+  curl -s http://localhost:5173/api/liveness/self | jq
+  ```
+
+**GET /metrics**
+- Purpose: Prometheus text exposition format endpoint
+- Series:
+  - `kernel_uptime_seconds` (gauge) - Process uptime since API bridge start
+  - `kernel_ticks_total{drive="<name>"}` (counter) - Total kernel ticks, labeled by active drive
+- The API registers ProcessCollector and PlatformCollector on startup to expose CPU/memory/process/platform metrics
+- Example:
+  ```bash
+  curl -s http://localhost:5173/metrics
+  ```
+
+**Security Note (Production):**
+
+The `/metrics` endpoint is unauthenticated by default, which is fine for local development and testing. For production deployments, use the `METRICS_INTERNAL_ONLY` environment variable to move metrics to `/internal/metrics` and restrict access:
+
+**Development/Test (default):**
+```bash
+# /metrics is public (no env var set)
+uvicorn app:app --port 5173
+curl http://localhost:5173/metrics
+```
+
+**Production Mode:**
+```bash
+# Set METRICS_INTERNAL_ONLY to move endpoint to /internal/metrics
+export METRICS_INTERNAL_ONLY=1  # or "true", "yes", "on"
+uvicorn app:app --port 5173
+
+# Now /metrics returns 404
+# Metrics are at /internal/metrics
+curl http://localhost:5173/internal/metrics
+```
+
+**Production Deployment Options:**
+
+1. **Reverse Proxy IP Allowlist (Recommended)**
+   
+   Nginx example:
+   ```nginx
+   location /internal/metrics {
+       # Only allow Prometheus server and localhost
+       allow 127.0.0.1;
+       allow 10.0.0.5;  # Prometheus server IP
+       deny all;
+       proxy_pass http://127.0.0.1:5173;
+   }
+   ```
+
+   Traefik example (docker-compose labels):
+   ```yaml
+   labels:
+     - "traefik.http.routers.metrics.rule=Path(`/internal/metrics`)"
+     - "traefik.http.routers.metrics.middlewares=metrics-ipwhitelist"
+     - "traefik.http.middlewares.metrics-ipwhitelist.ipwhitelist.sourcerange=127.0.0.1/32,10.0.0.5/32"
+   ```
+
+2. **Private Network Only**
+   
+   Bind the API to a private interface and only allow Prometheus/sidecar access:
+   ```bash
+   # Bind to loopback or private network interface
+   uvicorn app:app --host 127.0.0.1 --port 5173
+   
+   # Or bind to private subnet
+   uvicorn app:app --host 10.0.0.10 --port 5173
+   ```
+
+3. **Prometheus Scrape Configuration**
+   
+   Update your Prometheus config to scrape `/internal/metrics`:
+   ```yaml
+   scrape_configs:
+     - job_name: 'bartholomew'
+       static_configs:
+         - targets: ['localhost:5173']
+       metrics_path: '/internal/metrics'  # Changed from /metrics
+   ```
+
+**Environment Variables:**
+- `METRICS_INTERNAL_ONLY`: Set to `1`, `true`, `yes`, or `on` to enable production mode
 
 ### Docker Deployment
 

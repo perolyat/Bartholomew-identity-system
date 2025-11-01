@@ -1,8 +1,11 @@
 from __future__ import annotations
 import aiosqlite
+import asyncio
 import json
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
+
+from bartholomew.kernel.memory.privacy_guard import is_sensitive, request_permission_to_store
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -17,12 +20,6 @@ CREATE TABLE IF NOT EXISTS memories (
   ts TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_kind_key ON memories(kind, key);
-
-CREATE TABLE IF NOT EXISTS water_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ml INTEGER NOT NULL,
-  ts TEXT NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS nudges (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +57,19 @@ class MemoryStore:
     async def upsert_memory(
         self, kind: str, key: str, value: str, ts: str
     ) -> None:
+        if is_sensitive(value):
+            try:
+                allowed = asyncio.run(request_permission_to_store(value))
+            except RuntimeError:
+                # Handles "event loop is already running" errors
+                import nest_asyncio
+                nest_asyncio.apply()
+                allowed = asyncio.run(request_permission_to_store(value))
+
+            if not allowed:
+                print("[Bartholomew] OK, I won't store that kernel memory.")
+                return
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO memories(kind,key,value,ts) VALUES(?,?,?,?) "
@@ -68,35 +78,6 @@ class MemoryStore:
                 (kind, key, value, ts),
             )
             await db.commit()
-
-    async def log_water(self, ml: int, ts: str) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO water_logs(ml, ts) VALUES(?, ?)", (ml, ts)
-            )
-            await db.commit()
-
-    async def water_total_for_day(
-        self, start_utc_iso: str, end_utc_iso: str
-    ) -> int:
-        """Get total water intake for a day range in UTC."""
-        async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute(
-                "SELECT COALESCE(SUM(ml),0) FROM water_logs "
-                "WHERE ts BETWEEN ? AND ?",
-                (start_utc_iso, end_utc_iso),
-            )
-            row = await cur.fetchone()
-            return int(row[0] or 0)
-
-    async def last_water_ts(self) -> Optional[str]:
-        """Get the timestamp of the most recent water log."""
-        async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute(
-                "SELECT ts FROM water_logs ORDER BY ts DESC LIMIT 1"
-            )
-            row = await cur.fetchone()
-            return row[0] if row else None
 
     async def create_nudge(
         self,

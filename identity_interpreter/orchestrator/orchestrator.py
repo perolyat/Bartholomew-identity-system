@@ -34,7 +34,7 @@ class Orchestrator:
         self.pipeline = Pipeline()
         self.context = ContextBuilder(identity_config)
         self.state = StateManager()
-        self.router = ModelRouter()
+        self.router = ModelRouter(identity_config=identity_config)
         self.formatter = ResponseFormatter()
         
         # Setup logging

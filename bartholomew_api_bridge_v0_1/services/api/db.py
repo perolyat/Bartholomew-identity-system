@@ -2,12 +2,22 @@
 import os
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 
 from . import db_ctx
 
-DB_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "data", "barth.db"
-)
+
+def _find_project_root() -> Path:
+    """Locate project root by walking up for pyproject.toml."""
+    p = Path(__file__).resolve()
+    for parent in [p.parent, *p.parents]:
+        if (parent / "pyproject.toml").exists():
+            return parent
+    return Path.cwd()
+
+
+DEFAULT_DB_PATH = str(_find_project_root() / "data" / "barth.db")
+DB_PATH = os.getenv("BARTH_DB_PATH", DEFAULT_DB_PATH)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 # Thread-local storage for connection pooling
@@ -29,19 +39,10 @@ def get_conn():
     on Windows where file locking can cause permission errors.
     """
     with db_ctx.wal_db(DB_PATH, timeout=30.0) as conn:
-        # Create table if not exists
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS water_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts TEXT NOT NULL,
-                ml INTEGER NOT NULL
-            )"""
-        )
         yield conn
 
 
 def init_db():
     """Initialize the database with required tables."""
     with get_conn():
-        # Table creation is handled in get_conn()
         pass

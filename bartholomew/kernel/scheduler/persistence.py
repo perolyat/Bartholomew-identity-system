@@ -11,7 +11,7 @@ import json
 from typing import Optional, Dict, Any, List
 
 # Import wal_db context manager
-from bartholomew_api_bridge_v0_1.services.api.db_ctx import wal_db
+from bartholomew.kernel.db_ctx import wal_db
 
 # Import canonical schema from MemoryStore
 sys.path.insert(  # noqa: E402

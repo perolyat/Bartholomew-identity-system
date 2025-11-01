@@ -22,6 +22,7 @@ dependencies = [
     "aiosqlite>=0.19",
     "tenacity>=8.2",
     "pyyaml>=6.0.1",
+    "prometheus_client>=0.20.0",
 ]
 
 [tool.uvicorn]
@@ -80,7 +81,7 @@ force-single-line = false
 lines-after-imports = 2
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
