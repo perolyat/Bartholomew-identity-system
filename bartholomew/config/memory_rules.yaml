@@ -1,0 +1,182 @@
+# Bartholomew Memory Governance Rules (v2.1 - Phase 2c)
+# Supports redaction, encryption routing, and summarization
+#
+# Encryption policy:
+#   encrypt: standard|strong|true|false
+#     - standard: AES-GCM 256 with STANDARD key (BME_KEY_STANDARD)
+#     - strong:   AES-GCM 256 with STRONG key (BME_KEY_STRONG)
+#     - true:     alias of standard
+#     - false or omitted: no encryption
+#
+# Redaction policy:
+#   redact: true|false
+#   redact_strategy: mask|remove|replace:<text>
+#     - mask:    Replace matches with ****
+#     - remove:  Delete matches entirely
+#     - replace: Replace with custom text after colon
+#
+# Summarization policy:
+#   summarize: true|false
+#   summary_mode: summary_only | summary_also | full_always
+#     - summary_only:  Only the summary is stored (replaces value)
+#     - summary_also:  Both original and summary stored (default)
+#     - full_always:   No summarization
+#   Auto-triggers for kinds: conversation.transcript, recording.transcript,
+#   article.ingested, code.diff, chat when content > 1000 characters
+
+always_keep:
+  - match:
+      kind: user_profile
+    metadata:
+      privacy_class: user.identity
+      recall_policy: always
+      encrypt: standard
+
+  - match:
+      key: birthday
+    metadata:
+      privacy_class: user.essential
+      recall_policy: always
+      encrypt: standard
+
+  - match:
+      kind: user_schedule
+    metadata:
+      privacy_class: user.intent
+      recall_policy: always
+
+  - match:
+      tags:
+        - health
+        - medical
+    metadata:
+      privacy_class: user.health
+      recall_policy: always
+      encrypt: strong
+
+ask_before_store:
+  - match:
+      content: "(?i)(password|bank|account number|two-factor|auth code)"
+    metadata:
+      privacy_class: user.secure
+      requires_consent: true
+      recall_policy: always
+      redact: true
+      redact_strategy: mask
+      encrypt: strong
+
+  - match:
+      content: "(?i)(bank|medical|address|phone|email)"
+    metadata:
+      privacy_class: user.sensitive
+      requires_consent: true
+      redact: true
+      summarize: false
+      encrypt: strong
+
+  - match:
+      tags:
+        - trauma
+        - confessional
+    metadata:
+      privacy_class: user.emotional
+      requires_consent: true
+      recall_policy: always
+
+  - match:
+      speaker: thirdparty
+    metadata:
+      privacy_class: thirdparty.private
+      requires_consent: true
+      recall_policy: context_only
+
+auto_expire:
+  - match:
+      kind: drive_output
+    metadata:
+      expires_in: 2h
+      recall_policy: context_only
+
+  - match:
+      kind: environment_observation
+    metadata:
+      expires_in: 7d
+      recall_policy: context_only
+
+  - match:
+      tags:
+        - transient
+        - mood
+    metadata:
+      expires_in: 3d
+      recall_policy: context_only
+
+never_store:
+  - match:
+      content: "(?i)(child sexual abuse|csam|illegal content)"
+    metadata:
+      allow_store: false
+
+  - match:
+      kind: environment
+      content: security camera
+    metadata:
+      allow_store: false
+
+  - match:
+      key: password
+      content: "(?i)hunter2"
+    metadata:
+      allow_store: false
+
+  - match:
+      tags:
+        - illegal
+        - exploit
+    metadata:
+      allow_store: false
+
+  - match:
+      speaker: unknown
+    metadata:
+      allow_store: false
+
+context_only:
+  - match:
+      kind: sensitive_joke
+    metadata:
+      recall_policy: context_only
+
+  - match:
+      kind: chat
+      tags:
+        - smalltalk
+    metadata:
+      recall_policy: context_only
+      summarize: true
+      summary_mode: summary_also
+
+  - match:
+      tags:
+        - politics
+        - religious
+        - adult
+    metadata:
+      recall_policy: context_only
+
+# Redact-only rules: Apply redaction without blocking storage
+redact:
+  - match:
+      kind: user
+      content: "(?i)my (email|phone|address) is .+"
+    metadata:
+      redact_strategy: mask
+      encrypt: standard
+      summarize: true
+      summary_mode: summary_also
+
+  - match:
+      content: "(?i)ssn:?\\s*\\d{3}-\\d{2}-\\d{4}"
+    metadata:
+      redact_strategy: replace:[SSN REDACTED]
+      encrypt: strong

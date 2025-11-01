@@ -25,6 +25,9 @@ dependencies = [
     "prometheus_client>=0.20.0",
 ]
 
+[project.scripts]
+bartholomew = "bartholomew.cli:main"
+
 [tool.uvicorn]
 factory = false
 
@@ -86,3 +89,6 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --strict-markers"
+markers = [
+    "asyncio: mark test as async",
+]

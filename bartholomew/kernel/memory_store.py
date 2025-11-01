@@ -2,10 +2,71 @@ from __future__ import annotations
 import aiosqlite
 import asyncio
 import json
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
+import logging
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Tuple
 
-from bartholomew.kernel.memory.privacy_guard import is_sensitive, request_permission_to_store
+import numpy as np
+
+from bartholomew.kernel.memory.privacy_guard import (
+    is_sensitive,
+    request_permission_to_store,
+)
+from bartholomew.kernel.memory_rules import _rules_engine
+from bartholomew.kernel.redaction_engine import apply_redaction
+from bartholomew.kernel.encryption_engine import _encryption_engine
+from bartholomew.kernel.summarization_engine import _summarization_engine
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StoreResult:
+    """Result of a memory storage operation"""
+    memory_id: Optional[int] = None
+    stored: bool = False
+    ephemeral_embeddings: List[Tuple[str, np.ndarray]] = field(
+        default_factory=list
+    )
+    created_or_updated: str = "created"  # "created" or "updated"
+
+
+# Phase 2d: Lazy imports for embeddings (optional feature)
+_embedding_engine = None
+_vector_store = None
+_summary_fallback_warned = False  # Global flag to warn once
+
+
+def _get_embedding_components(db_path: str):
+    """
+    Lazy load embedding components
+    
+    Returns tuple of (embedding_engine, vector_store) or (None, None)
+    if embeddings not enabled or imports fail
+    """
+    global _embedding_engine, _vector_store
+    
+    # Check if embeddings are enabled
+    import os
+    if not os.getenv("BARTHO_EMBED_ENABLED"):
+        return None, None
+    
+    try:
+        if _embedding_engine is None:
+            from bartholomew.kernel.embedding_engine import (
+                get_embedding_engine
+            )
+            _embedding_engine = get_embedding_engine()
+        
+        if _vector_store is None:
+            from bartholomew.kernel.vector_store import VectorStore
+            _vector_store = VectorStore(db_path)
+        
+        return _embedding_engine, _vector_store
+    except Exception as e:
+        logger.warning(f"Failed to load embedding components: {e}")
+        return None, None
+
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -14,9 +75,10 @@ PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind TEXT NOT NULL,      -- 'fact' | 'event' | 'preference'
+  kind TEXT NOT NULL,      -- 'fact', 'event', 'preference'
   key TEXT NOT NULL,
   value TEXT NOT NULL,
+  summary TEXT,            -- Optional summary of value content
   ts TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_kind_key ON memories(kind, key);
@@ -26,7 +88,9 @@ CREATE TABLE IF NOT EXISTS nudges (
   kind TEXT NOT NULL,
   message TEXT NOT NULL,
   actions TEXT,  -- JSON array of action objects
-  status TEXT CHECK(status IN ('pending','acked','dismissed')) DEFAULT 'pending',
+  status TEXT CHECK(
+    status IN ('pending','acked','dismissed')
+  ) DEFAULT 'pending',
   reason TEXT,
   created_ts TEXT NOT NULL,
   acted_ts TEXT
@@ -41,7 +105,15 @@ CREATE TABLE IF NOT EXISTS reflections (
   ts TEXT NOT NULL,
   pinned INTEGER DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_reflections_kind_ts ON reflections(kind, ts);
+CREATE INDEX IF NOT EXISTS idx_reflections_kind_ts
+  ON reflections(kind, ts);
+
+CREATE TABLE IF NOT EXISTS memory_consent (
+  memory_id INTEGER PRIMARY KEY,
+  consent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  source TEXT,
+  FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+);
 """
 
 
@@ -52,11 +124,77 @@ class MemoryStore:
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            
+            # Phase 2c: Migrate existing databases to add summary column
+            cursor = await db.execute("PRAGMA table_info(memories)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if "summary" not in column_names:
+                await db.execute(
+                    "ALTER TABLE memories ADD COLUMN summary TEXT"
+                )
+                logger.info("Migrated memories table: added summary column")
+            
             await db.commit()
 
     async def upsert_memory(
         self, kind: str, key: str, value: str, ts: str
-    ) -> None:
+    ) -> StoreResult:
+        # Rule evaluation: check governance rules first
+        memory_dict = {
+            "kind": kind,
+            "key": key,
+            "value": value,
+            "ts": ts,
+        }
+        evaluated = _rules_engine.evaluate(memory_dict)
+        
+        # Check if storage is blocked by rules
+        if not _rules_engine.should_store(evaluated):
+            print(
+                f"[Bartholomew] Memory blocked by governance rules: "
+                f"{kind}/{key}"
+            )
+            return StoreResult(stored=False)
+        
+        # Apply redaction if required by rules (Phase 2a)
+        if evaluated.get("redact_strategy"):
+            value = apply_redaction(value, evaluated)
+        
+        # Phase 2c: Generate summary if required (before encryption)
+        summary = None
+        summary_mode = evaluated.get("summary_mode", "summary_also")
+        
+        if _summarization_engine.should_summarize(evaluated, value, kind):
+            summary = _summarization_engine.summarize(value)
+            
+            # Handle summary_only mode: replace value with summary
+            if summary_mode == "summary_only":
+                value = summary
+                summary = None  # Don't store separate summary
+        
+        # Apply encryption if required by rules (Phase 2b)
+        cipher = _encryption_engine.encrypt_for_policy(
+            value,
+            evaluated,
+            {"kind": kind, "key": key, "ts": ts},
+        )
+        if cipher is not None:
+            value = cipher
+        
+        # Encrypt summary if present and encryption is enabled
+        cipher_summary = None
+        if summary is not None:
+            cipher_summary = _encryption_engine.encrypt_for_policy(
+                summary,
+                evaluated,
+                {"kind": kind, "key": key + "::summary", "ts": ts},
+            )
+            if cipher_summary is not None:
+                summary = cipher_summary
+        
+        # Privacy guard fallback: check for sensitive content
         if is_sensitive(value):
             try:
                 allowed = asyncio.run(request_permission_to_store(value))
@@ -68,16 +206,125 @@ class MemoryStore:
 
             if not allowed:
                 print("[Bartholomew] OK, I won't store that kernel memory.")
-                return
+                return StoreResult(stored=False)
+
+        # Prepare result object
+        result = StoreResult()
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT INTO memories(kind,key,value,ts) VALUES(?,?,?,?) "
+                "INSERT INTO memories(kind,key,value,summary,ts) "
+                "VALUES(?,?,?,?,?) "
                 "ON CONFLICT(kind,key) DO UPDATE SET "
-                "value=excluded.value, ts=excluded.ts",
-                (kind, key, value, ts),
+                "value=excluded.value, summary=excluded.summary, "
+                "ts=excluded.ts",
+                (kind, key, value, summary, ts),
             )
             await db.commit()
+            
+            # Get memory_id for result
+            cursor = await db.execute(
+                "SELECT id FROM memories WHERE kind=? AND key=?",
+                (kind, key)
+            )
+            row = await cursor.fetchone()
+            if row:
+                result.memory_id = row[0]
+                result.stored = True
+            
+            # Phase 2d: Generate embeddings if enabled
+            embed_engine, vec_store = _get_embedding_components(
+                self.db_path
+            )
+            if embed_engine and vec_store and result.memory_id:
+                # Check if rule allows embedding
+                embed_mode = evaluated.get("embed", "summary")
+                embed_store = evaluated.get("embed_store", False)
+                
+                if embed_mode != "none":
+                    # Determine what to embed
+                    texts_to_embed = []
+                    sources = []
+                    
+                    # Use ORIGINAL values before encryption for embedding
+                    orig_value = memory_dict["value"]
+                    if evaluated.get("redact_strategy"):
+                        orig_value = apply_redaction(orig_value, evaluated)
+                    
+                    # Check if we have summary
+                    orig_summary = None
+                    if _summarization_engine.should_summarize(
+                        evaluated, orig_value, kind
+                    ):
+                        orig_summary = _summarization_engine.summarize(
+                            orig_value
+                        )
+                    
+                    # Build texts list with fallback for missing summary
+                    if embed_mode in ("summary", "both"):
+                        if orig_summary:
+                            texts_to_embed.append(orig_summary)
+                            sources.append("summary")
+                        else:
+                            # Phase 2d+: Fallback to redacted content
+                            global _summary_fallback_warned
+                            if not _summary_fallback_warned:
+                                logger.warning(
+                                    "Summary missing for embedding; "
+                                    "using redacted content as fallback"
+                                )
+                                _summary_fallback_warned = True
+                            # Trim to ~500 chars as summary substitute
+                            fallback_text = orig_value[:500].strip()
+                            if fallback_text:
+                                texts_to_embed.append(fallback_text)
+                                sources.append("summary")
+                    
+                    if embed_mode in ("full", "both"):
+                        texts_to_embed.append(orig_value)
+                        sources.append("full")
+                    
+                    if texts_to_embed:
+                        try:
+                            # Embed texts
+                            vecs = embed_engine.embed_texts(texts_to_embed)
+                            
+                            if embed_store:
+                                # Persist to database
+                                await db.execute(
+                                    "INSERT OR IGNORE INTO memory_consent "
+                                    "(memory_id, source) VALUES (?, ?)",
+                                    (result.memory_id, "upsert_memory")
+                                )
+                                
+                                cfg = embed_engine.config
+                                for src, vec in zip(sources, vecs):
+                                    vec_store.upsert(
+                                        result.memory_id, vec, src,
+                                        cfg.provider, cfg.model
+                                    )
+                                
+                                await db.commit()
+                                logger.debug(
+                                    f"Stored {len(vecs)} embedding(s) "
+                                    f"for memory {result.memory_id}"
+                                )
+                            else:
+                                # Compute-only: return as ephemeral
+                                for src, vec in zip(sources, vecs):
+                                    result.ephemeral_embeddings.append(
+                                        (src, vec)
+                                    )
+                                logger.debug(
+                                    f"Computed {len(vecs)} ephemeral "
+                                    f"embedding(s) (not persisted)"
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to generate embeddings: {e}"
+                            )
+        
+        return result
 
     async def create_nudge(
         self,
@@ -193,6 +440,147 @@ class MemoryStore:
                 "ts": row[4],
                 "pinned": bool(row[5]),
             }
+
+    async def persist_embeddings_for(
+        self,
+        memory_id: int,
+        sources: Optional[List[str]] = None
+    ) -> int:
+        """
+        Persist embeddings for a memory (post-consent promotion)
+        
+        Use this to generate and store embeddings for a memory that was
+        previously blocked by ask_before_store or other consent gates.
+        
+        Args:
+            memory_id: Memory ID to generate embeddings for
+            sources: List of sources to embed ('summary', 'full').
+                    If None, uses rule's embed setting.
+                    
+        Returns:
+            Number of embeddings created
+        """
+        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        if not (embed_engine and vec_store):
+            return 0
+        
+        # Load memory
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT kind, key, value, summary FROM memories "
+                "WHERE id=?",
+                (memory_id,)
+            )
+            row = await cursor.fetchone()
+        
+        if not row:
+            logger.warning(f"Memory {memory_id} not found")
+            return 0
+        
+        kind, key, value, summary = row
+        
+        # Re-evaluate rules (consent may have changed)
+        memory_dict = {"kind": kind, "key": key, "value": value}
+        evaluated = _rules_engine.evaluate(memory_dict)
+        
+        embed_mode = evaluated.get("embed", "summary")
+        if embed_mode == "none":
+            return 0
+        
+        # Determine sources to embed
+        if sources is None:
+            if embed_mode == "both":
+                sources = ["summary", "full"]
+            elif embed_mode == "summary":
+                sources = ["summary"] if summary else []
+            else:  # full
+                sources = ["full"]
+        
+        # Generate embeddings
+        texts_to_embed = []
+        sources_to_store = []
+        
+        for src in sources:
+            if src == "summary" and summary:
+                texts_to_embed.append(summary)
+                sources_to_store.append("summary")
+            elif src == "full":
+                texts_to_embed.append(value)
+                sources_to_store.append("full")
+        
+        if not texts_to_embed:
+            return 0
+        
+        try:
+            vecs = embed_engine.embed_texts(texts_to_embed)
+            cfg = embed_engine.config
+            
+            # Phase 2d+: Record consent for embeddings
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "INSERT OR IGNORE INTO memory_consent "
+                    "(memory_id, source) VALUES (?, ?)",
+                    (memory_id, "persist_embeddings_for")
+                )
+                await db.commit()
+            
+            for src, vec in zip(sources_to_store, vecs):
+                vec_store.upsert(
+                    memory_id, vec, src, cfg.provider, cfg.model
+                )
+            
+            logger.info(
+                f"Persisted {len(vecs)} embedding(s) for memory {memory_id}"
+            )
+            return len(vecs)
+        except Exception as e:
+            logger.error(f"Failed to persist embeddings: {e}")
+            return 0
+    
+    async def reembed_memory(
+        self,
+        memory_id: int,
+        sources: Optional[List[str]] = None
+    ) -> int:
+        """
+        Re-generate embeddings for a memory (e.g., after summary change)
+        
+        Deletes existing embeddings and creates fresh ones based on
+        current content. Transactional: either all succeed or none.
+        
+        Args:
+            memory_id: Memory ID to re-embed
+            sources: List of sources to re-embed. If None, defaults to
+                    existing sources for this memory (to avoid dropping).
+                    
+        Returns:
+            Number of embeddings created
+        """
+        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        if not (embed_engine and vec_store):
+            return 0
+        
+        # Phase 2d+: If sources not specified, default to existing sources
+        if sources is None:
+            import sqlite3
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("PRAGMA foreign_keys = ON")
+                cursor = conn.execute(
+                    "SELECT DISTINCT source FROM memory_embeddings "
+                    "WHERE memory_id=?",
+                    (memory_id,)
+                )
+                rows = cursor.fetchall()
+                if rows:
+                    sources = [row[0] for row in rows]
+                # If no existing embeddings, sources remains None
+                # and persist_embeddings_for will use rule defaults
+        
+        # Delete existing embeddings
+        vec_store.delete_for_memory(memory_id)
+        
+        # Re-create embeddings
+        return await self.persist_embeddings_for(memory_id, sources)
 
     async def close(self) -> None:
         """Checkpoint and clean up WAL files."""

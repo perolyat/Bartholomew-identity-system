@@ -1,0 +1,35 @@
+# Bartholomew Embeddings Configuration
+# Governs vector embedding behavior for memory retrieval
+
+embeddings:
+  # Default provider (local-sbert = offline-first)
+  default_provider: local-sbert
+  
+  # Default model
+  default_model: BAAI/bge-small-en-v1.5
+  
+  # Default embedding dimension
+  default_dim: 384
+  
+  # Default embedding mode
+  # Options: none, summary, full, both
+  default_mode: summary
+  
+  # Allow remote providers (OpenAI, etc.)
+  # Must be true AND env vars set to use network providers
+  allow_remote: false
+  
+  # Store embeddings by default
+  # Set to false for backwards compatibility
+  # Individual rules can override via embed_store: true
+  store: false
+  
+  # IMPORTANT: Embeddings are NOT encrypted at rest
+  # This enables ANN search but means vectors are stored in plaintext
+  # Mitigation: local-only default, summary-first, OS file security
+  encrypt: false
+
+# Notes:
+# - To enable embeddings globally, set BARTHO_EMBED_ENABLED=1
+# - Per-rule overrides in memory_rules.yaml take precedence
+# - Embeddings happen AFTER summarization, BEFORE encryption

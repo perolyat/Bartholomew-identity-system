@@ -1,0 +1,105 @@
+# Bartholomew Memory Governance Rules (v1.0)
+
+always_keep:
+  - match:
+      kind: user_profile
+    metadata:
+      privacy_class: user.identity
+      recall_policy: always
+
+  - match:
+      key: birthday
+    metadata:
+      privacy_class: user.essential
+      recall_policy: always
+
+  - match:
+      kind: user_schedule
+    metadata:
+      privacy_class: user.intent
+      recall_policy: always
+
+  - match:
+      tags:
+        - health
+        - medical
+    metadata:
+      privacy_class: user.health
+      recall_policy: always
+
+ask_before_store:
+  - match:
+      content: "(?i)(password|bank|account number|two-factor|auth code)"
+    metadata:
+      privacy_class: user.secure
+      requires_consent: true
+      recall_policy: always
+
+  - match:
+      tags:
+        - trauma
+        - confessional
+    metadata:
+      privacy_class: user.emotional
+      requires_consent: true
+      recall_policy: always
+
+  - match:
+      speaker: "thirdparty"
+    metadata:
+      privacy_class: thirdparty.private
+      requires_consent: true
+      recall_policy: context_only
+
+auto_expire:
+  - match:
+      kind: drive_output
+    metadata:
+      expires_in: "2h"
+      recall_policy: context_only
+
+  - match:
+      kind: environment_observation
+    metadata:
+      expires_in: "7d"
+      recall_policy: context_only
+
+  - match:
+      tags:
+        - transient
+        - mood
+    metadata:
+      expires_in: "3d"
+      recall_policy: context_only
+
+never_store:
+  - match:
+      content: "(?i)(child sexual abuse|csam|illegal content)"
+    metadata:
+      allow_store: false
+
+  - match:
+      tags:
+        - illegal
+        - exploit
+    metadata:
+      allow_store: false
+
+  - match:
+      speaker: "unknown"
+    metadata:
+      allow_store: false
+
+context_only:
+  - match:
+      kind: sensitive_joke
+    metadata:
+      recall_policy: context_only
+
+  - match:
+      tags:
+        - politics
+        - religious
+        - adult
+    metadata:
+      recall_policy: context_only

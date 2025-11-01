@@ -22,10 +22,12 @@ from bartholomew.kernel.memory.privacy_guard import (
     is_sensitive,
     request_permission_to_store,
 )
+from bartholomew.kernel.memory_rules import _rules_engine
+from bartholomew.kernel.redaction_engine import apply_redaction
 
 
 # Schema version for migration management
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 # Configurable keyring identifiers
 SERVICE_NAME = os.getenv("BARTHO_MEMORY_KEYRING_SERVICE", "bartholomew_memory")
@@ -54,6 +56,7 @@ class MemoryEntry:
     ttl_days: int | None = None
     anchor: str | None = None
     encrypted: bool = False
+    summary: str | None = None  # Phase 2c: Optional summary
     # e.g. "user.essential", "user.identity",
     # "environment.passive", "thirdparty.private"
     privacy_class: str | None = None
@@ -210,6 +213,7 @@ class MemoryManager:
                 modality TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 content TEXT NOT NULL,
+                summary TEXT,
                 metadata TEXT NOT NULL,
                 confidence REAL NOT NULL,
                 ttl_days INTEGER,
@@ -265,6 +269,14 @@ class MemoryManager:
                     )
                 except sqlite3.OperationalError:
                     pass  # Column already exists
+            elif v == 3:
+                # Phase 2c: Add summary column
+                try:
+                    conn.execute(
+                        "ALTER TABLE memories ADD COLUMN summary TEXT;"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
             else:
                 raise RuntimeError(
                     f"No migration path defined for version {v}"
@@ -315,7 +327,71 @@ class MemoryManager:
             True if stored successfully
         """
         try:
-            # Privacy guard: check for sensitive content
+            # Rule evaluation: check governance rules first
+            memory_dict = memory.to_dict()
+            evaluated = _rules_engine.evaluate(memory_dict)
+            
+            # Check if storage is blocked by rules
+            if not _rules_engine.should_store(evaluated):
+                self.logger.info(
+                    f"Memory blocked by governance rules: {memory.id}"
+                )
+                return False
+            
+            # Check if consent is required by rules
+            if _rules_engine.requires_consent(evaluated):
+                try:
+                    # Check if we're in a running event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+
+                    if loop and loop.is_running():
+                        # Use sync fallback
+                        from identity_interpreter.adapters.consent_terminal import (  # noqa: E501
+                            ConsentAdapter,
+                        )
+
+                        allowed = ConsentAdapter(self.identity).request_consent(  # noqa: E501
+                            action="store_sensitive_memory",
+                            details=memory.content,
+                            scope="per_use",
+                        )
+                    else:
+                        # Safe to use asyncio.run
+                        allowed = asyncio.run(
+                            request_permission_to_store(memory.content)
+                        )
+                except Exception as e:
+                    self.logger.error(f"Consent prompt failed: {e}")
+                    return False
+
+                if not allowed:
+                    print("[Bartholomew] OK, I won't store that memory.")
+                    return False
+            
+            # Apply redaction if required by rules (Phase 2a)
+            if evaluated.get("redact_strategy"):
+                memory.content = apply_redaction(memory.content, evaluated)
+                strategy = evaluated['redact_strategy']
+                self.logger.debug(
+                    f"Applied redaction strategy '{strategy}' "
+                    f"to memory {memory.id}"
+                )
+            
+            # Inject enriched metadata from rules
+            if evaluated.get("privacy_class"):
+                memory.privacy_class = evaluated["privacy_class"]
+            if evaluated.get("recall_policy"):
+                memory.recall_policy = evaluated["recall_policy"]
+            if evaluated.get("expires_in"):
+                memory.expires_in = evaluated["expires_in"]
+            
+            # TODO Phase 2b: Enforce encryption based on evaluated["encrypt"]
+            # TODO Phase 2c: Generate summary if evaluated["summarize"] is true
+            
+            # Privacy guard fallback: check for sensitive content
             if is_sensitive(memory.content):
                 try:
                     # Check if we're in a running event loop
