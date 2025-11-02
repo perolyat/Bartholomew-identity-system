@@ -9,6 +9,7 @@ aiosqlite>=0.19
 tenacity>=8.2
 pyyaml>=6.0.1
 prometheus_client>=0.20.0
+keyring>=24.0
 cryptography>=42.0
 pytest-asyncio>=0.21.0
 numpy>=2.1,<3

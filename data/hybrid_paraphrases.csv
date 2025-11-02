@@ -1,0 +1,56 @@
+id,group_id,text,ts,kind,privacy_marker
+1,1,"The robot can learn from user interactions",2025-01-01T10:00:00Z,fact,
+2,1,"Robots have the ability to learn through user engagement",2025-01-01T10:01:00Z,fact,
+3,1,"User interactions enable robot learning",2025-01-01T10:02:00Z,fact,
+4,1,"Learning from users is a robot capability",2025-01-01T10:03:00Z,fact,
+5,1,"Robots adapt based on how users interact with them",2025-01-01T10:04:00Z,fact,
+6,2,"Privacy protection is a core requirement",2025-01-01T11:00:00Z,fact,
+7,2,"Protecting user privacy is fundamental",2025-01-01T11:01:00Z,fact,
+8,2,"Core to the system is privacy safeguarding",2025-01-01T11:02:00Z,fact,
+9,2,"User data privacy must be protected",2025-01-01T11:03:00Z,fact,
+10,2,"Privacy is a foundational requirement",2025-01-01T11:04:00Z,fact,
+11,3,"Machine learning models process natural language",2025-01-01T12:00:00Z,fact,
+12,3,"Natural language is processed by ML models",2025-01-01T12:01:00Z,fact,
+13,3,"ML systems handle natural language processing",2025-01-01T12:02:00Z,fact,
+14,3,"Language processing uses machine learning",2025-01-01T12:03:00Z,fact,
+15,3,"NLP is performed by machine learning models",2025-01-01T12:04:00Z,fact,
+16,4,"Data encryption secures sensitive information",2025-01-01T13:00:00Z,fact,
+17,4,"Sensitive data is protected through encryption",2025-01-01T13:01:00Z,fact,
+18,4,"Encryption is used to secure sensitive information",2025-01-01T13:02:00Z,fact,
+19,4,"Sensitive information requires encryption",2025-01-01T13:03:00Z,fact,
+20,4,"Protecting sensitive data uses encryption methods",2025-01-01T13:04:00Z,fact,
+21,5,"Vector embeddings represent semantic meaning",2025-01-01T14:00:00Z,fact,
+22,5,"Semantic meaning is captured in vector embeddings",2025-01-01T14:01:00Z,fact,
+23,5,"Embeddings encode semantic information",2025-01-01T14:02:00Z,fact,
+24,5,"Vectors represent the semantic content",2025-01-01T14:03:00Z,fact,
+25,5,"Semantic representations use vector embeddings",2025-01-01T14:04:00Z,fact,
+26,6,"User consent is required before storing personal data",2025-01-01T15:00:00Z,fact,requires_consent
+27,6,"Personal data storage needs user permission",2025-01-01T15:01:00Z,fact,requires_consent
+28,6,"Storing personal information requires consent",2025-01-01T15:02:00Z,fact,requires_consent
+29,6,"User authorization is needed for personal data storage",2025-01-01T15:03:00Z,fact,requires_consent
+30,6,"Consent must be obtained before storing personal data",2025-01-01T15:04:00Z,fact,requires_consent
+31,7,"Full-text search enables keyword matching",2025-01-01T16:00:00Z,fact,
+32,7,"Keyword matching is performed via full-text search",2025-01-01T16:01:00Z,fact,
+33,7,"FTS allows users to find content by keywords",2025-01-01T16:02:00Z,fact,
+34,7,"Searching by keywords uses full-text indexing",2025-01-01T16:03:00Z,fact,
+35,7,"Keyword-based search relies on FTS",2025-01-01T16:04:00Z,fact,
+36,8,"Hybrid retrieval combines multiple search methods",2025-01-01T17:00:00Z,fact,
+37,8,"Multiple search approaches are fused in hybrid systems",2025-01-01T17:01:00Z,fact,
+38,8,"Combining search methods creates hybrid retrieval",2025-01-01T17:02:00Z,fact,
+39,8,"Hybrid search merges different retrieval techniques",2025-01-01T17:03:00Z,fact,
+40,8,"Search fusion creates hybrid retrieval systems",2025-01-01T17:04:00Z,fact,
+41,9,"Temporal decay reduces the importance of old memories",2025-01-01T18:00:00Z,fact,
+42,9,"Old memories become less important over time",2025-01-01T18:01:00Z,fact,
+43,9,"Memory importance decreases with age",2025-01-01T18:02:00Z,fact,
+44,9,"Recency affects memory relevance through decay",2025-01-01T18:03:00Z,fact,
+45,9,"Older memories are weighted less through temporal decay",2025-01-01T18:04:00Z,fact,
+46,10,"Context-only memories are not directly retrievable",2025-01-01T19:00:00Z,fact,
+47,10,"Memories marked context-only cannot be directly accessed",2025-01-01T19:01:00Z,fact,
+48,10,"Direct retrieval is disabled for context-only memories",2025-01-01T19:02:00Z,fact,
+49,10,"Context-only items are excluded from direct access",2025-01-01T19:03:00Z,fact,
+50,10,"Memories with context-only policy aren't directly retrievable",2025-01-01T19:04:00Z,fact,
+51,11,"Password storage should never be allowed in system",2025-01-01T20:00:00Z,fact,never_store
+52,11,"The system must never store passwords directly",2025-01-01T20:01:00Z,fact,never_store
+53,11,"Passwords cannot be stored in this system",2025-01-01T20:02:00Z,fact,never_store
+54,11,"Storing passwords is prohibited by security policy",2025-01-01T20:03:00Z,fact,never_store
+55,11,"The password storage ban is a security requirement",2025-01-01T20:04:00Z,fact,never_store

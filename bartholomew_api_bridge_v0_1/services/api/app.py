@@ -27,7 +27,7 @@ from .models import ChatIn, ChatOut, ConversationItem, ConversationList
 from .db import DB_PATH
 from . import db_ctx
 from .routes import liveness, metrics
-from .routes.metrics import KERNEL_TICKS_TOTAL, BARTHOLOMEW_TICKS_TOTAL
+from .routes.metrics import KERNEL_TICKS_TOTAL, BARTHOLOMEW_TICKS_TOTAL, REGISTRY
 from prometheus_client import ProcessCollector, PlatformCollector
 
 
@@ -100,10 +100,10 @@ async def startup():
     app.state.drives = ["self_check", "curiosity_probe", "reflection_micro"]
     app.state.current_drive = "self_check"
     
-    # Register Prometheus collectors
+    # Register Prometheus collectors to local registry
     try:
-        ProcessCollector()
-        PlatformCollector()
+        ProcessCollector(registry=REGISTRY)
+        PlatformCollector(registry=REGISTRY)
     except Exception:
         pass
     

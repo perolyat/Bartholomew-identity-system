@@ -70,7 +70,21 @@ class TestVectorStore:
     
     def test_upsert_and_search(self, tmp_path):
         """Store and retrieve vectors"""
+        from tests.helpers import (
+            connect_test_db,
+            create_minimal_memories_table,
+            insert_test_memory
+        )
+        
         db_path = str(tmp_path / "test.db")
+        
+        # Create memories table with test data
+        conn = connect_test_db(db_path)
+        create_minimal_memories_table(conn)
+        mem1_id = insert_test_memory(conn, kind="test", key="key1")
+        mem2_id = insert_test_memory(conn, kind="test", key="key2")
+        conn.close()
+        
         store = VectorStore(db_path)
         
         # Create test vectors
@@ -80,45 +94,72 @@ class TestVectorStore:
         vec2 = vec2 / np.linalg.norm(vec2)
         
         # Upsert vectors
-        store.upsert(1, vec1, "summary", "local-sbert", "test-model")
-        store.upsert(2, vec2, "summary", "local-sbert", "test-model")
+        store.upsert(mem1_id, vec1, "summary", "local-sbert", "test-model")
+        store.upsert(mem2_id, vec2, "summary", "local-sbert", "test-model")
         
         # Search
         results = store.search(vec1, top_k=2)
         
         assert len(results) == 2
-        assert results[0][0] == 1  # Best match is memory_id 1
+        assert results[0][0] == mem1_id  # Best match is memory_id 1
         assert results[0][1] > 0.9  # High score (similar vector)
     
     def test_delete_for_memory(self, tmp_path):
         """Delete embeddings for a memory"""
+        from tests.helpers import (
+            connect_test_db,
+            create_minimal_memories_table,
+            insert_test_memory
+        )
+        
         db_path = str(tmp_path / "test.db")
+        
+        # Create memories table with test data
+        conn = connect_test_db(db_path)
+        create_minimal_memories_table(conn)
+        mem_id = insert_test_memory(conn, kind="test", key="key1")
+        conn.close()
+        
         store = VectorStore(db_path)
         
         vec = np.random.randn(384).astype(np.float32)
         vec = vec / np.linalg.norm(vec)
         
-        store.upsert(1, vec, "summary", "local-sbert", "test")
+        store.upsert(mem_id, vec, "summary", "local-sbert", "test")
         assert store.count() == 1
         
-        store.delete_for_memory(1)
+        store.delete_for_memory(mem_id)
         assert store.count() == 0
     
     def test_source_filter(self, tmp_path):
         """Filter by source (summary vs full)"""
+        from tests.helpers import (
+            connect_test_db,
+            create_minimal_memories_table,
+            insert_test_memory
+        )
+        
         db_path = str(tmp_path / "test.db")
+        
+        # Create memories table with test data
+        conn = connect_test_db(db_path)
+        create_minimal_memories_table(conn)
+        mem1_id = insert_test_memory(conn, kind="test", key="key1")
+        mem2_id = insert_test_memory(conn, kind="test", key="key2")
+        conn.close()
+        
         store = VectorStore(db_path)
         
         vec = np.random.randn(384).astype(np.float32)
         vec = vec / np.linalg.norm(vec)
         
-        store.upsert(1, vec, "summary", "local-sbert", "test")
-        store.upsert(2, vec, "full", "local-sbert", "test")
+        store.upsert(mem1_id, vec, "summary", "local-sbert", "test")
+        store.upsert(mem2_id, vec, "full", "local-sbert", "test")
         
         # Search only summary
         results = store.search(vec, top_k=10, source="summary")
         assert len(results) == 1
-        assert results[0][0] == 1
+        assert results[0][0] == mem1_id
 
 
 class TestMemoryStoreIntegration:
@@ -203,8 +244,21 @@ class TestRetriever:
     def test_retriever_basic_query(self, tmp_path):
         """Basic retrieval query"""
         from bartholomew.kernel.memory_store import MemoryStore
+        from tests.helpers import (
+            connect_test_db,
+            create_minimal_memories_table,
+            insert_test_memory
+        )
         
         db_path = str(tmp_path / "test.db")
+        
+        # Create memories table with test data
+        conn = connect_test_db(db_path)
+        create_minimal_memories_table(conn)
+        mem_id = insert_test_memory(
+            conn, kind="test", key="key1", value="hello world"
+        )
+        conn.close()
         
         # Set up vector store with test data
         vec_store = VectorStore(db_path)
@@ -212,7 +266,7 @@ class TestRetriever:
         
         # Create test embedding
         test_vec = engine.embed_texts(["hello world"])[0]
-        vec_store.upsert(1, test_vec, "summary", "local-sbert", "test")
+        vec_store.upsert(mem_id, test_vec, "summary", "local-sbert", "test")
         
         # Create retriever
         rules_engine = MemoryRulesEngine()
@@ -251,6 +305,8 @@ class TestEmbedStoreDefaults:
                 "allow_store": True,
                 "embed": "summary",  # Set but no embed_store
                 # embed_store is MISSING - should default to True
+                "summary_enabled": True,  # Enable summarization
+                "summary_mode": "summary_also",
                 "kind": memory_dict.get("kind"),
                 "key": memory_dict.get("key"),
                 "content": memory_dict.get("value"),

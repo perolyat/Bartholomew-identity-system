@@ -1,0 +1,3 @@
+"""
+Bartholomew utility scripts package
+"""

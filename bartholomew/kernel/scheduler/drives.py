@@ -128,6 +128,33 @@ Status: Autonomy loop active
     return None
 
 
+async def drive_fts_optimize(ctx: Any) -> Optional[Nudge]:
+    """
+    FTS optimize drive: run weekly FTS index optimization.
+    
+    Runs INSERT INTO memory_fts(memory_fts) VALUES('optimize') to merge
+    FTS segments and reduce fragmentation for better search performance.
+    
+    Args:
+        ctx: Context object (typically KernelDaemon instance)
+    
+    Returns:
+        None (optimization runs silently)
+    """
+    db_path = ctx.mem.db_path
+    
+    try:
+        from bartholomew.kernel.fts_client import FTSClient
+        fts = FTSClient(db_path)
+        fts.optimize()
+        print("[Scheduler] FTS index optimized")
+    except Exception as e:
+        print(f"[Scheduler] Error optimizing FTS index: {e}")
+    
+    # No nudge emitted for maintenance tasks
+    return None
+
+
 # Drive registry with default cadences
 REGISTRY: Dict[str, Dict[str, Any]] = {
     "self_check": {
@@ -141,5 +168,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "reflection_micro": {
         "fn": drive_reflection_micro,
         "cadence": "every:7200",  # Every 2 hours
+    },
+    "fts_optimize": {
+        "fn": drive_fts_optimize,
+        "cadence": "every:604800",  # Every 7 days (weekly)
     },
 }

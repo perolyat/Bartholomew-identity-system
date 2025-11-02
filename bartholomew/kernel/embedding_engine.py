@@ -268,13 +268,15 @@ except ImportError:
 # Metrics (gated by BARTHO_METRICS=1)
 _metrics_enabled = os.getenv("BARTHO_METRICS") == "1"
 
-if _metrics_enabled and _metrics_available:
-    embeddings_total = Counter(
-        'bartholomew_embeddings_total',
-        'Total number of embeddings generated'
-    )
-else:
-    embeddings_total = Counter('noop', 'noop')
+# Define embeddings_total once to avoid double registration across reloads
+if 'embeddings_total' not in globals():
+    if _metrics_enabled and _metrics_available:
+        embeddings_total = Counter(
+            'bartholomew_embeddings_total',
+            'Total number of embeddings generated'
+        )
+    else:
+        embeddings_total = Counter('noop', 'noop')
 
 
 class EmbeddingEngineFactory:

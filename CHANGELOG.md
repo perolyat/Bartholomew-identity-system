@@ -55,8 +55,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Unified retrieval factory**: `get_retriever(mode="hybrid"|"vector"|"fts")` 
+  - Single entry point for all retrieval modes
+  - Configuration precedence: explicit arg > BARTHO_RETRIEVAL_MODE env > kernel.yaml retrieval.mode > "hybrid"
+  - Returns retrievers with unified `.retrieve(query, top_k, filters)` interface
+- **FTS-only retriever**: `FTSOnlyRetriever` for full-text search without embeddings
+  - Suitable for exact keyword matching and low-resource environments
+  - Supports RetrievalFilters (kinds, after/before timestamps)
+  - BM25 ranking with normalized scores
+- **Vector retriever adapter**: `VectorRetrieverAdapter` wraps existing `Retriever.query()` as `.retrieve()`
+  - Provides consistent interface across all retrieval modes
+- **Retrieval mode configuration**: Added `retrieval.mode` to config/kernel.yaml
+  - Default: "hybrid" (FTS + vector fusion via HybridRetriever)
+  - Options: "hybrid", "vector", "fts"
+
+### Changed
+- Retrieval interface unified: all modes expose `.retrieve(query, top_k, filters)` method
+- Backward compatible: existing `Retriever.query()` usage unchanged
+
 ### Planned
-- Phase 2e: Hybrid retrieval (FTS + vectors)
+- Phase 2e: Hybrid retrieval enhancements
 - Phase 2f: Chunking for long documents
 - Phase 2d+: Orthonormal rotation for at-rest obfuscation
 - Per-user encryption keys with rotation sync

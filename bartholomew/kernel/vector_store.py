@@ -9,6 +9,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from bartholomew.kernel.db_ctx import set_wal_pragmas
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,8 +64,7 @@ class VectorStore:
     def _init_schema(self) -> None:
         """Create vector embeddings table if not exists"""
         with sqlite3.connect(self.db_path) as conn:
-            # Ensure foreign keys are enabled
-            conn.execute("PRAGMA foreign_keys = ON")
+            set_wal_pragmas(conn)
             conn.executescript(VECTOR_SCHEMA)
             conn.commit()
             
@@ -82,7 +83,7 @@ class VectorStore:
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA foreign_keys = ON")
+                set_wal_pragmas(conn)
                 # Try to load vss extension
                 conn.enable_load_extension(True)
                 conn.load_extension("vss0")
@@ -229,7 +230,7 @@ class VectorStore:
         dim = len(vec)
         
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
+            set_wal_pragmas(conn)
             # Check if embedding already exists for this memory/source
             cursor = conn.execute(
                 "SELECT embedding_id FROM memory_embeddings "
@@ -266,7 +267,7 @@ class VectorStore:
             memory_id: Memory ID to delete embeddings for
         """
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
+            set_wal_pragmas(conn)
             conn.execute(
                 "DELETE FROM memory_embeddings WHERE memory_id=?",
                 (memory_id,)
@@ -279,12 +280,17 @@ class VectorStore:
         top_k: int = 8,
         provider: Optional[str] = None,
         model: Optional[str] = None,
-        dim: Optional[int] = None,
+        dim: Optional[str] = None,
         source: Optional[str] = None,
-        allow_mismatch: bool = False
+        allow_mismatch: bool = False,
+        apply_consent_gate: bool = True
     ) -> List[Tuple[int, float]]:
         """
         Search for similar embeddings
+        
+        Privacy gates are applied by default to exclude:
+        - never_store memories (allow_store=false)
+        - ask_before_store memories without consent
         
         Args:
             qvec: Query vector (1D numpy array, float32, normalized)
@@ -297,6 +303,7 @@ class VectorStore:
                           matching provider/model/dim when specified.
                           Backward compat: treated as True when all
                           provider/model/dim are None.
+            apply_consent_gate: If True (default), apply privacy filtering
             
         Returns:
             List of (memory_id, score) tuples, sorted by score descending
@@ -319,14 +326,28 @@ class VectorStore:
         if provider is None and model is None and dim is None:
             allow_mismatch = True
         
+        # Fetch more candidates if consent filtering is enabled
+        fetch_k = top_k * 3 if apply_consent_gate else top_k
+        
         if self.vss_available:
-            return self._search_vss(
-                qvec, top_k, provider, model, dim, source, allow_mismatch
+            results = self._search_vss(
+                qvec, fetch_k, provider, model, dim, source, allow_mismatch
             )
         else:
-            return self._search_bruteforce(
-                qvec, top_k, provider, model, dim, source, allow_mismatch
+            results = self._search_bruteforce(
+                qvec, fetch_k, provider, model, dim, source, allow_mismatch
             )
+        
+        # Apply consent gate if enabled
+        if apply_consent_gate and results:
+            from bartholomew.kernel.consent_gate import ConsentGate
+            gate = ConsentGate(self.db_path)
+            results = gate.apply_to_vector_results(results)
+            
+            # Trim to requested top_k after filtering
+            results = results[:top_k]
+        
+        return results
     
     def _search_vss(
         self,
@@ -369,7 +390,7 @@ class VectorStore:
         Efficient enough for small to medium datasets (<10k vectors).
         """
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
+            set_wal_pragmas(conn)
             # Build query with optional filters
             query = (
                 "SELECT memory_id, vec, dim, provider, model "
@@ -439,7 +460,7 @@ class VectorStore:
             Number of embedding rows
         """
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
+            set_wal_pragmas(conn)
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM memory_embeddings"
             )

@@ -250,6 +250,79 @@ print(f"Requires consent: {tool_decision.requires_consent}")
 - Architecture: See policy engines and adapter system
 - Extending: Add custom policies and adapters
 
+## Hybrid Retrieval Testing and Demo
+
+### Running Unit Tests
+
+Test individual components of hybrid retrieval:
+
+```bash
+# Test fusion math (normalization, weighted fusion, imputation)
+pytest tests/test_hybrid_fusion_math.py -v
+
+# Test recency shaping (exponential decay)
+pytest tests/test_hybrid_recency.py -v
+
+# Test kind boosts and RRF fusion
+pytest tests/test_hybrid_rrf.py -v
+```
+
+### Running Integration Benchmark
+
+Prove hybrid retrieval outperforms single-channel on paraphrases:
+
+```bash
+# Run paraphrase benchmark (requires ≥50-row dataset)
+pytest tests/integration/test_hybrid_paraphrase_benchmark.py -v
+
+# Expected output shows hit rates:
+# Hit rates - FTS: 0.XX, Vector: 0.YY, Hybrid: 0.ZZ
+# Assertion: Hybrid ≥ max(FTS, Vector)
+```
+
+The integration test validates:
+- Hybrid beats best single-channel on paraphrase retrieval
+- Privacy gates exclude `never_store` and `requires_consent` memories
+
+### Using the Hybrid Search CLI
+
+Demo hybrid search with explainable scores:
+
+```bash
+# Basic search (hybrid mode, default)
+python -m scripts.hybrid_search --query "privacy protection" --k 10
+
+# Explain mode: show fusion config and score breakdown
+python -m scripts.hybrid_search --query "robot learning" --explain
+
+# Use specific retrieval mode
+python -m scripts.hybrid_search --query "encryption" --mode vector
+python -m scripts.hybrid_search --query "search" --mode fts
+
+# Use RRF fusion (Reciprocal Rank Fusion)
+python -m scripts.hybrid_search --query "memory" --rrf --rrf-k 30
+
+# Custom database path
+python -m scripts.hybrid_search --query "test" --db data/custom.db
+```
+
+Example output with `--explain`:
+```
+Search Results (hybrid mode)
+Query: 'privacy protection'
+Found 5 results
+
+Detailed Score Breakdown (Hybrid Mode)
+Fusion: weighted
+Weights: FTS=0.60, Vec=0.40
+Recency half-life: 168.0h
+
+[1] Memory ID: 7
+Score: 0.8542
+Kind: fact
+Snippet: Protecting user privacy is fundamental...
+```
+
 ## Common Commands
 
 ```bash
@@ -264,6 +337,9 @@ pytest tests/
 
 # Run tests with coverage
 pytest --cov=identity_interpreter tests/
+
+# Run hybrid retrieval tests only
+pytest tests/test_hybrid_*.py tests/integration/ -v
 
 # Smoke test the API
 bash bartholomew_api_bridge_v0_1/scripts/curl_smoke.sh http://localhost:5173
