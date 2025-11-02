@@ -14,7 +14,8 @@ class Decision(BaseModel):
 
     decision: Any
     rationale: list[str] = Field(
-        default_factory=list, description="YAML paths explaining the decision",
+        default_factory=list,
+        description="YAML paths explaining the decision",
     )
     confidence: float | None = None
     requires_consent: bool = False

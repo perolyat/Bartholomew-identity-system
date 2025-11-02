@@ -9,25 +9,25 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python 3.11
       uses: actions/setup-python@v5
       with:
         python-version: "3.11"
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    
+
     - name: Start uvicorn server
       run: |
         uvicorn app:app --host 127.0.0.1 --port 5173 &
         echo "Server started in background"
-    
+
     - name: Wait for server to be ready
       run: |
         for i in {1..30}; do
@@ -38,7 +38,7 @@ jobs:
           echo "Waiting for server... attempt $i/30"
           sleep 1
         done
-    
+
     - name: Test /healthz endpoint
       run: |
         echo "Testing /healthz endpoint..."
@@ -46,12 +46,12 @@ jobs:
         echo "Response: $response"
         echo "$response" | jq -e '.status == "ok"' || exit 1
         echo "$response" | jq -e '.version == "0.1.0"' || exit 1
-    
+
     - name: Test /api/health endpoint
       run: |
         echo "Testing /api/health endpoint..."
         curl -fsS http://127.0.0.1:5173/api/health | jq .
-    
+
     - name: Test /docs endpoint
       run: |
         echo "Testing /docs endpoint..."

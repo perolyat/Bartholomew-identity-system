@@ -39,7 +39,7 @@
 
 **Three-Layer Processing**:
 1. **Load**: Parse YAML → Validate against schema → Raise `IdentityLoadError` on failure
-2. **Model**: Convert to Pydantic types for type safety and validation  
+2. **Model**: Convert to Pydantic types for type safety and validation
 3. **Normalize**: Compute derived values (dynamic memory sizing, effective model parameters)
 
 **Policy Engine Pattern**: Each policy (model selection, tool use, safety) follows the same pattern:
@@ -75,7 +75,7 @@ data = orchestrator.handle_input(user_input)
 
 ## Development Workflows
 
-**Environment Setup**: 
+**Environment Setup**:
 ```powershell
 pip install -e .                    # Install in development mode
 # OR use the entry point:
@@ -96,7 +96,7 @@ barth explain Identity.yaml --task-type general --confidence 0.7
 barth health  # System health checks
 ```
 
-**Testing & Development**: 
+**Testing & Development**:
 - `D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe test_bartholomew.py` - Basic integration test with Ollama
 - `pytest tests/` - Full test suite with policy engine tests
 - `D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe chat.py` - Interactive chat interface for end-to-end testing
@@ -163,7 +163,7 @@ bartholomew_api_bridge_v0_1/
 └── ui/minimal/          # Basic web UI components
 ```
 
-**Test Organization**: 
+**Test Organization**:
 - `test_bartholomew.py` - Integration test using `chat.py` and real Ollama
 - `tests/test_policies.py` - Unit tests for policy engines
 - `chat.py` - Full-stack interactive test interface

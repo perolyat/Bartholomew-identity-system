@@ -3,8 +3,9 @@ State Manager
 -------------
 Maintains transient runtime state for the current session.
 """
+
 import uuid
-from typing import Dict, Any
+from typing import Any
 
 
 class StateManager:
@@ -12,7 +13,7 @@ class StateManager:
 
     def __init__(self):
         self.session_id = str(uuid.uuid4())
-        self.state: Dict[str, Any] = {}
+        self.state: dict[str, Any] = {}
 
     def set(self, key: str, value: Any):
         """Set a state value."""
@@ -26,6 +27,6 @@ class StateManager:
         """Clear all state values."""
         self.state.clear()
 
-    def export(self) -> Dict[str, Any]:
+    def export(self) -> dict[str, Any]:
         """Export current state and session ID."""
         return {"session_id": self.session_id, "state": self.state}

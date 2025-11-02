@@ -4,8 +4,9 @@ Prompt Composer
 Builds prompts for system-initiated generations (reflections, audits) with
 baked-in safety preambles and persona/values from Identity.yaml.
 """
+
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
 
 from ..models import Identity
 
@@ -13,10 +14,10 @@ from ..models import Identity
 def _build_safety_preamble(identity: Identity) -> str:
     """
     Build safety preamble from identity red lines and policies.
-    
+
     Args:
         identity: Identity configuration
-        
+
     Returns:
         Safety preamble text
     """
@@ -25,31 +26,33 @@ def _build_safety_preamble(identity: Identity) -> str:
         "",
         "You MUST adhere to the following red lines (never violate):",
     ]
-    
+
     for line in identity.red_lines:
         preamble_parts.append(f"- {line}")
-    
-    preamble_parts.extend([
-        "",
-        "Additional constraints:",
-        "- Respect user autonomy and privacy",
-        "- Be concise, factual, and empathetic",
-        "- Do not include PII beyond provided context",
-        "- If crisis signals detected, recommend support behaviors only",
-        "- Maintain professional boundaries",
-        ""
-    ])
-    
+
+    preamble_parts.extend(
+        [
+            "",
+            "Additional constraints:",
+            "- Respect user autonomy and privacy",
+            "- Be concise, factual, and empathetic",
+            "- Do not include PII beyond provided context",
+            "- If crisis signals detected, recommend support behaviors only",
+            "- Maintain professional boundaries",
+            "",
+        ],
+    )
+
     return "\n".join(preamble_parts)
 
 
 def _build_persona_context(identity: Identity) -> str:
     """
     Build persona/values context from identity.
-    
+
     Args:
         identity: Identity configuration
-        
+
     Returns:
         Persona context text
     """
@@ -58,45 +61,45 @@ def _build_persona_context(identity: Identity) -> str:
         "",
         f"Name: {identity.meta.name}",
     ]
-    
+
     # Add description if available
-    if hasattr(identity.meta, 'description') and identity.meta.description:
-        desc_lines = identity.meta.description.strip().split('\n')
+    if hasattr(identity.meta, "description") and identity.meta.description:
+        desc_lines = identity.meta.description.strip().split("\n")
         context_parts.append(f"Purpose: {desc_lines[0]}")
-    
+
     context_parts.extend(["", "Core values:"])
-    
+
     for value in identity.values_and_principles.core_values[:5]:  # Top 5
         context_parts.append(f"- {value}")
-    
+
     context_parts.extend(["", ""])
-    
+
     return "\n".join(context_parts)
 
 
 def compose_daily_reflection_prompt(
     identity: Identity,
-    metrics: Dict[str, Any],
+    metrics: dict[str, Any],
     memory_context: str,
     date: datetime,
-    timezone_str: str
+    timezone_str: str,
 ) -> str:
     """
     Compose a prompt for daily reflection generation.
-    
+
     Args:
         identity: Identity configuration
         metrics: Dict with water_ml, nudges_count, etc.
         memory_context: Recent memory context from ContextBuilder
         date: Date for reflection
         timezone_str: Timezone string
-        
+
     Returns:
         Complete prompt for LLM
     """
     safety_preamble = _build_safety_preamble(identity)
     persona_context = _build_persona_context(identity)
-    
+
     prompt = f"""{safety_preamble}
 
 {persona_context}
@@ -143,33 +146,33 @@ One sentence on continued support goals.
 
 Generate the reflection now:
 """
-    
+
     return prompt
 
 
 def compose_weekly_audit_prompt(
     identity: Identity,
-    weekly_scope: Dict[str, Any],
+    weekly_scope: dict[str, Any],
     memory_context: str,
     iso_week: int,
-    year: int
+    year: int,
 ) -> str:
     """
     Compose a prompt for weekly alignment audit generation.
-    
+
     Args:
         identity: Identity configuration
         weekly_scope: Dict with metrics/events for the week
         memory_context: Recent memory context
         iso_week: ISO week number
         year: Year
-        
+
     Returns:
         Complete prompt for LLM
     """
     safety_preamble = _build_safety_preamble(identity)
     persona_context = _build_persona_context(identity)
-    
+
     prompt = f"""{safety_preamble}
 
 {persona_context}
@@ -226,5 +229,5 @@ One paragraph on:
 
 Generate the audit now:
 """
-    
+
     return prompt

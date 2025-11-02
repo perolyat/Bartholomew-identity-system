@@ -200,10 +200,10 @@ from ..models import Identity, Decision
 
 def my_policy_check(identity: Identity, input_data: dict) -> Decision:
     rationale = ["path.to.config"]
-    
+
     # Your logic here
     result = {...}
-    
+
     return Decision(
         decision=result,
         rationale=rationale,
@@ -218,7 +218,7 @@ def my_policy_check(identity: Identity, input_data: dict) -> Decision:
 class MyAdapter:
     def __init__(self, identity_config):
         self.identity = identity_config
-    
+
     def execute(self, params):
         # Your implementation
         pass

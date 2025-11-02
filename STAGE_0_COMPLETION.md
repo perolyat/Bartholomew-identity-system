@@ -1,7 +1,7 @@
 # Stage 0 Complete: Bartholomew Kernel - Alive, Stable, and Dreaming
 
-**Status:** ✅ Complete  
-**Date:** 2025-10-30  
+**Status:** ✅ Complete
+**Date:** 2025-10-30
 **Version:** Brain v0.1 (Experience Kernel)
 
 ## What Was Accomplished
@@ -19,7 +19,7 @@
   - Initialization of state from persisted data
 
 ### 2. Alive (Proactive Loop)
-- ✅ **Nudge Pipeline**: 
+- ✅ **Nudge Pipeline**:
   - Planner emits structured nudge events
   - System consumer persists nudges to DB
   - Nudges respect policy constraints:
@@ -27,7 +27,7 @@
     - Max per day (6 prompts max)
     - Deduplication window (10 min)
     - Quiet hours (21:30-07:00 by default)
-- ✅ **State Hydration**: 
+- ✅ **State Hydration**:
   - `last_water_ts` initialized from DB on startup
   - Water logs stored in UTC
   - Planner queries DB for compliance checking
@@ -52,7 +52,7 @@
   - Persists to `reflections(kind='weekly_alignment_audit', pinned=True)`
   - Exports to `exports/audit_logs/week-YYYY-WW.md`
 
-- ✅ **Manual Triggers**: 
+- ✅ **Manual Triggers**:
   - Commands available for testing: `reflection_run_daily`, `reflection_run_weekly`
 
 ### 4. API Surface (Console-Ready)
@@ -171,5 +171,5 @@ Stage 0 is "brain only" - the following are future work:
 - ✅ API surface ready for console integration
 - ✅ Identity/policy contracts enforced
 
-**Stage 0: Brain - COMPLETE**  
+**Stage 0: Brain - COMPLETE**
 Ready for Stage 1: Console layer integration.

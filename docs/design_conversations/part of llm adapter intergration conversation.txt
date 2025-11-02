@@ -265,7 +265,7 @@ What to do:
 
 In VS Code, run your coding copilot (Cline, GitHub Copilot, or Replit Agent) and issue:
 
-Please audit and fix all linting and import errors across the project. 
+Please audit and fix all linting and import errors across the project.
 Prioritize code quality, organization, and Pydantic v2 compliance.
 Run:
 
@@ -826,9 +826,9 @@ Implement persistent, encrypted memory so Bartholomew can recall prior context a
 ---
 
 ## ✅ Phase 1 – Environment & Prep
-- [ ] Run **Lint Code (Ruff)** to ensure clean baseline  
-- [ ] Confirm `cryptography` installed → `pip install cryptography`  
-- [ ] Confirm write access to `~/.barth/` directory  
+- [ ] Run **Lint Code (Ruff)** to ensure clean baseline
+- [ ] Confirm `cryptography` installed → `pip install cryptography`
+- [ ] Confirm write access to `~/.barth/` directory
 
 ---
 
@@ -840,32 +840,32 @@ Implement persistent, encrypted memory so Bartholomew can recall prior context a
 | `memory/memory_manager.py` | High-level interface | ☐ |
 
 **Checklist**
-- [ ] Implement `init_db()` to auto-create DB/table  
-- [ ] Implement `save_message()` + `fetch_recent()`  
-- [ ] Add Fernet key generator at `~/.barth/memory.key`  
-- [ ] Implement `MemoryManager.remember()` + `.recall()`  
+- [ ] Implement `init_db()` to auto-create DB/table
+- [ ] Implement `save_message()` + `fetch_recent()`
+- [ ] Add Fernet key generator at `~/.barth/memory.key`
+- [ ] Implement `MemoryManager.remember()` + `.recall()`
 
 ---
 
 ## 🔐 Phase 3 – Encryption Validation
-- [ ] Run “Initialize Memory DB” task  
-- [ ] Add 2–3 messages via REPL test  
-- [ ] Verify ciphertext in `memory.sqlite` (not plain text)  
+- [ ] Run “Initialize Memory DB” task
+- [ ] Add 2–3 messages via REPL test
+- [ ] Verify ciphertext in `memory.sqlite` (not plain text)
 
 ---
 
 ## 🧪 Phase 4 – Tests
-- [ ] Write unit test `test_memory_manager.py`  
-- [ ] Ensure `pytest -v` passes all  
-- [ ] Run “Encrypt / Decrypt Smoke Test”  
+- [ ] Write unit test `test_memory_manager.py`
+- [ ] Ensure `pytest -v` passes all
+- [ ] Run “Encrypt / Decrypt Smoke Test”
 
 ---
 
 ## 🔄 Phase 5 – Chat Integration
-- [ ] Import `MemoryManager` in `chat.py`  
-- [ ] Store each user + assistant message  
-- [ ] Inject `context_window()` output into LLMAdapter  
-- [ ] Run manual test:  
+- [ ] Import `MemoryManager` in `chat.py`
+- [ ] Store each user + assistant message
+- [ ] Inject `context_window()` output into LLMAdapter
+- [ ] Run manual test:
   ```bash
   barth chat "Hello Bartholomew"
   barth chat "Do you remember me?"
@@ -887,11 +887,11 @@ Build adaptive tone and mode switching based on stored context.
 
 ## 🧩 Execution Flow
 
-1. Add the three `memory/*.py` files.  
-2. Save the `tasks.json` and `TODO-MemoryCore.md`.  
-3. In VS Code → “Run Task” → `Stage 1B – Full Memory Verification`.  
-4. Fix any test or import errors.  
-5. Once all checks pass, commit and tag the build.  
+1. Add the three `memory/*.py` files.
+2. Save the `tasks.json` and `TODO-MemoryCore.md`.
+3. In VS Code → “Run Task” → `Stage 1B – Full Memory Verification`.
+4. Fix any test or import errors.
+5. Once all checks pass, commit and tag the build.
 
 ---
 

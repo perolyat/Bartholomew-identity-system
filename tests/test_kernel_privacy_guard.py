@@ -1,8 +1,10 @@
 import asyncio
-import aiosqlite
 from pathlib import Path
 
+import aiosqlite
+
 from bartholomew.kernel.memory_store import MemoryStore
+
 
 DB_PATH = "data/test_privacy_guard.db"
 
@@ -40,10 +42,8 @@ async def run_test():
     if count == 0:
         print("✓ Verified: no memory stored after answering 'no'.")
     else:
-        print(
-            f"✗ ERROR: Found {count} row(s) for that key; "
-            f"expected 0 after 'no'."
-        )
+        print(f"✗ ERROR: Found {count} row(s) for that key; expected 0 after 'no'.")
+
 
 if __name__ == "__main__":
     asyncio.run(run_test())

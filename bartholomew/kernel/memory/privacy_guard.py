@@ -23,7 +23,7 @@ async def request_permission_to_store(text: str) -> bool:
     # Replace with UI or voice prompt later
     print(
         f'[Bartholomew] I detected something sensitive:\n"{text}"\n'
-        "Do you want me to remember this? (yes/no)"
+        "Do you want me to remember this? (yes/no)",
     )
     response = input("> ").strip().lower()
     return response in ("yes", "y")

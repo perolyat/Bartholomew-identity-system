@@ -24,14 +24,14 @@ def anyio_backend():
 def temp_db_path(tmp_path: Path):
     """
     Create a temporary database file path with WAL cleanup.
-    
+
     Uses pytest's tmp_path for proper isolation and automatically cleans up
     WAL auxiliary files (-wal/-shm) after each test. This ensures reliable
     teardown on Windows where file handles can cause PermissionError.
     """
     # Import here to avoid circular dependencies
     from bartholomew_api_bridge_v0_1.services.api import db_ctx, fs_helpers
-    
+
     p = tmp_path / "test.db"
     try:
         yield p
@@ -41,7 +41,7 @@ def temp_db_path(tmp_path: Path):
             db_ctx.wal_checkpoint_truncate(str(p))
         except Exception:
             pass  # DB may not exist yet
-        
+
         # Remove WAL auxiliary files
         for aux in fs_helpers.wal_aux_paths(p):
             fs_helpers.robust_unlink(aux)
@@ -51,14 +51,14 @@ def temp_db_path(tmp_path: Path):
 def db_conn(temp_db_path):
     """
     Create a database connection with proper WAL cleanup.
-    
+
     Uses the wal_db context manager which ensures:
     - WAL mode is enabled with proper pragmas
     - Connection is closed properly
     - Checkpoint(TRUNCATE) runs with a fresh connection
     """
     from bartholomew_api_bridge_v0_1.services.api import db_ctx
-    
+
     with db_ctx.wal_db(str(temp_db_path)) as conn:
         yield conn
 
@@ -67,12 +67,12 @@ def db_conn(temp_db_path):
 def temp_dir():
     """
     Create a temporary directory with Windows-compatible cleanup.
-    
+
     Handles Windows file locking issues where SQLite databases
     may remain locked briefly after connection closure.
     """
     import shutil
-    
+
     tmpdir = tempfile.mkdtemp()
     try:
         yield tmpdir
@@ -100,23 +100,23 @@ def temp_dir():
 def isolated_memory_manager(temp_dir):
     """
     Create a MemoryManager instance in an isolated temporary directory.
-    
+
     This ensures each test gets a fresh database without interference
     from other tests or previous runs.
     """
     from identity_interpreter import load_identity, normalize_identity
     from identity_interpreter.adapters.memory_manager import MemoryManager
-    
+
     identity = load_identity("Identity.yaml")
     identity = normalize_identity(identity)
-    
+
     mm = MemoryManager(identity, data_dir=temp_dir)
-    
+
     try:
         yield mm
     finally:
         # Ensure any open connections are closed
-        if hasattr(mm, '_conn') and mm._conn:
+        if hasattr(mm, "_conn") and mm._conn:
             mm._conn.close()
         del mm
         gc.collect()
@@ -126,7 +126,7 @@ def isolated_memory_manager(temp_dir):
 def ensure_cleanup():
     """
     Auto-run fixture to ensure proper cleanup after each test.
-    
+
     Forces garbage collection and brief pause to help Windows
     release file handles before the next test runs.
     """
@@ -141,15 +141,12 @@ def pytest_configure(config):
     """Configure pytest with custom markers and settings."""
     config.addinivalue_line(
         "markers",
-        "integration: marks tests as integration tests (may be slower)"
+        "integration: marks tests as integration tests (may be slower)",
     )
+    config.addinivalue_line("markers", "database: marks tests that use database connections")
     config.addinivalue_line(
         "markers",
-        "database: marks tests that use database connections"
-    )
-    config.addinivalue_line(
-        "markers",
-        "windows_quirk: marks tests that handle Windows-specific file issues"
+        "windows_quirk: marks tests that handle Windows-specific file issues",
     )
 
 
@@ -159,12 +156,11 @@ def pytest_collection_modifyitems(config, items):
         # Mark database tests
         if "db" in item.name.lower() or "database" in item.name.lower():
             item.add_marker(pytest.mark.database)
-        
+
         # Mark integration tests
-        if ("integration" in item.name.lower() or
-                "cold_boot" in item.name.lower()):
+        if "integration" in item.name.lower() or "cold_boot" in item.name.lower():
             item.add_marker(pytest.mark.integration)
-        
+
         # Mark tests that handle Windows file quirks
         if "cleanup" in item.name.lower() or "teardown" in item.name.lower():
             item.add_marker(pytest.mark.windows_quirk)

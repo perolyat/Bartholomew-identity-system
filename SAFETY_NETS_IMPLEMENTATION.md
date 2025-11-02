@@ -174,7 +174,7 @@ The indexing policy guard provides defense-in-depth:
 ## Future Enhancements
 
 Possible future improvements:
-1. Add metrics for `index_skip_total{reason="strong_only_policy"}` 
+1. Add metrics for `index_skip_total{reason="strong_only_policy"}`
 2. Support per-memory-type indexing policies
 3. Add admin API to toggle policy at runtime
 4. Extend to other indexing backends if added

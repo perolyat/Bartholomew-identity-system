@@ -1,9 +1,11 @@
-import time
-import tempfile
-import pathlib
 import os
+import pathlib
+import tempfile
+import time
+
 import pytest
 from fastapi.testclient import TestClient
+
 
 # Set env vars before importing app
 os.environ["BARTH_SPEED_FACTOR"] = "0.01"
@@ -20,9 +22,9 @@ def client():
         yield c
 
 
+@pytest.mark.smoke
 def test_liveness_endpoints(client):
-    for path in ("/api/liveness/ticks", "/api/liveness/nudges",
-                 "/api/liveness/reflections"):
+    for path in ("/api/liveness/ticks", "/api/liveness/nudges", "/api/liveness/reflections"):
         r = client.get(path)
         assert r.status_code == 200
         assert isinstance(r.json(), list)

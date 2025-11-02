@@ -4,12 +4,12 @@ Cold Boot and Integration Boundary Tests for Memory System
 Tests schema versioning, persistence, encryption, and API stability
 """
 
-import shutil
 import sqlite3
 import sys
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+
 
 # Add package to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -56,8 +56,7 @@ def test_schema_versioning(temp_dir):
         print("✅ Schema versioning is correctly set")
         return True
     else:
-        print(f"❌ Schema version mismatch: {version} != "
-              f"{CURRENT_SCHEMA_VERSION}")
+        print(f"❌ Schema version mismatch: {version} != {CURRENT_SCHEMA_VERSION}")
         return False
 
 
@@ -132,8 +131,7 @@ def test_cold_boot_reload(temp_dir):
     for turn in recent:
         if turn.id == test_id:
             found = True
-            print(f"  ✓ Found test conversation: "
-                  f"'{turn.user_input[:40]}...'")
+            print(f"  ✓ Found test conversation: '{turn.user_input[:40]}...'")
             break
 
     if found:
@@ -265,8 +263,7 @@ def test_stable_api_interface(temp_dir):
     # Test health_check (stable API)
     health = mm.health_check()
     health_success = "db" in health and "cipher" in health
-    print(f"  ✓ health_check: db={health['db']}, "
-          f"cipher={health['cipher']}")
+    print(f"  ✓ health_check: db={health['db']}, cipher={health['cipher']}")
 
     all_success = all(
         [
@@ -275,7 +272,7 @@ def test_stable_api_interface(temp_dir):
             context_success,
             cleanup_success,
             health_success,
-        ]
+        ],
     )
 
     if all_success:
@@ -294,9 +291,7 @@ def test_encryption_keystore_persistence(temp_dir):
     identity = normalize_identity(identity)
 
     # Check if encryption is enabled
-    encryption_enabled = identity.memory_policy.encryption.get(
-        "at_rest", False
-    )
+    encryption_enabled = identity.memory_policy.encryption.get("at_rest", False)
     print(f"  ✓ Encryption at rest: {encryption_enabled}")
 
     # First instance
@@ -339,6 +334,7 @@ def main():
     results = []
 
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         for test_name, test_func in tests:
             try:

@@ -2,10 +2,12 @@
 Summarization Engine for Bartholomew
 Implements automatic summarization for longer memory content
 """
+
 from __future__ import annotations
-import re
+
 import logging
-from typing import Optional
+import re
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +29,13 @@ AUTO_SUMMARIZE_KINDS = {
 class SummarizationEngine:
     """
     Orchestrates content summarization based on rules and heuristics
-    
+
     Supports three modes:
     - summary_only: Only the summary is stored
     - summary_also: Both original and summary are stored (default)
     - full_always: No summarization
     """
-    
+
     def __init__(
         self,
         length_threshold: int = LENGTH_THRESHOLD,
@@ -41,97 +43,91 @@ class SummarizationEngine:
     ) -> None:
         """
         Initialize summarization engine
-        
+
         Args:
             length_threshold: Minimum content length to trigger auto-summarization
             target_length: Target summary length in characters
         """
         self.length_threshold = length_threshold
         self.target_length = target_length
-    
-    def should_summarize(
-        self, meta: dict, value: str, kind: str
-    ) -> bool:
+
+    def should_summarize(self, meta: dict, value: str, kind: str) -> bool:
         """
         Determine if content should be summarized
-        
+
         Triggers when:
         - Explicit summarize: true in metadata AND mode != full_always
         - OR auto-trigger: kind in AUTO_KINDS AND length > threshold
-        
+
         Args:
             meta: Evaluated memory metadata from rules engine
             value: Memory content to potentially summarize
             kind: Memory kind/type
-            
+
         Returns:
             True if summarization should be applied
         """
         summary_mode = meta.get("summary_mode", DEFAULT_MODE)
-        
+
         # Never summarize if mode is full_always
         if summary_mode == "full_always":
             return False
-        
+
         # Explicit rule-based summarization
         if meta.get("summarize") is True:
             return True
-        
+
         # Auto-summarization for long content of certain kinds
         if kind in AUTO_SUMMARIZE_KINDS and len(value) > self.length_threshold:
             return True
-        
+
         return False
-    
-    def summarize(
-        self, value: str, target_length: Optional[int] = None
-    ) -> str:
+
+    def summarize(self, value: str, target_length: int | None = None) -> str:
         """
         Generate a summary of the content
-        
+
         Current implementation: Naive extractive summarizer
         - Splits into sentences
         - Takes first N sentences up to target length
         - Future: Can be upgraded to use LLM or advanced NLP
-        
+
         Args:
             value: Content to summarize
             target_length: Target summary length (defaults to engine setting)
-            
+
         Returns:
             Summary string
         """
         if not value or len(value) < 300:
             # Too short to meaningfully summarize
             return value
-        
+
         target = target_length or self.target_length
-        
+
         # Split into sentences using regex
         # Matches ., !, ? followed by space or end of string
-        sentences = re.split(r'(?<=[.!?])\s+', value)
-        
+        sentences = re.split(r"(?<=[.!?])\s+", value)
+
         summary = ""
         for sentence in sentences:
             # Check if adding this sentence would exceed target
             if summary and len(summary) + len(sentence) + 1 > target:
                 break
             summary += sentence + " "
-        
+
         result = summary.strip()
-        
+
         # If we got nothing or very little, just truncate
         if len(result) < 100:
             result = value[:target].strip()
             # Try to end at a word boundary
-            last_space = result.rfind(' ')
+            last_space = result.rfind(" ")
             if last_space > target // 2:
                 result = result[:last_space]
             result += "..."
-        
-        logger.debug(
-            f"Summarized {len(value)} chars to {len(result)} chars"
-        )
+
+        logger.debug(f"Summarized {len(value)} chars to {len(result)} chars")
         return result
 
 

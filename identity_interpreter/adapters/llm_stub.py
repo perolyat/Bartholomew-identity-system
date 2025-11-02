@@ -8,9 +8,11 @@ from typing import Any
 
 import requests
 
+
 # Try to import official ollama client
 try:
     from ollama import Client as OllamaClient
+
     HAS_OLLAMA_CLIENT = True
 except ImportError:
     HAS_OLLAMA_CLIENT = False
@@ -83,8 +85,7 @@ class LLMAdapter:
             response.raise_for_status()
             models = response.json().get("models", [])
             return any(
-                m.get("name") == ollama_model or
-                m.get("name", "").startswith(f"{ollama_model}:")
+                m.get("name") == ollama_model or m.get("name", "").startswith(f"{ollama_model}:")
                 for m in models
             )
         except Exception:
@@ -137,10 +138,7 @@ class LLMAdapter:
         self.current_model = ollama_model
 
         if not self._model_exists(ollama_model):
-            error_msg = (
-                f"[ERROR] Model '{ollama_model}' not found. "
-                f"Run: ollama pull {ollama_model}"
-            )
+            error_msg = f"[ERROR] Model '{ollama_model}' not found. Run: ollama pull {ollama_model}"
             return {
                 "response": error_msg,
                 "tokens_used": 0,
@@ -202,10 +200,7 @@ class LLMAdapter:
             }
 
         except requests.exceptions.ConnectionError:
-            error_msg = (
-                f"[ERROR] Could not connect to Ollama at "
-                f"{self.ollama_base_url}"
-            )
+            error_msg = f"[ERROR] Could not connect to Ollama at {self.ollama_base_url}"
             return {
                 "response": error_msg,
                 "tokens_used": 0,
@@ -215,9 +210,7 @@ class LLMAdapter:
                 "error": "connection_failed",
             }
         except requests.exceptions.Timeout:
-            error_msg = (
-                f"[ERROR] Request timed out for model {ollama_model}"
-            )
+            error_msg = f"[ERROR] Request timed out for model {ollama_model}"
             return {
                 "response": error_msg,
                 "tokens_used": 0,

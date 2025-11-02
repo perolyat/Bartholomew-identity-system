@@ -1,6 +1,8 @@
-import yaml
 import re
 from pathlib import Path
+
+import yaml
+
 
 class MemoryRulesEngine:
     def __init__(self, config_path="bartholomew/config/memory_rules.yaml"):
@@ -10,7 +12,7 @@ class MemoryRulesEngine:
         if not Path(path).exists():
             print("[Bartholomew] No memory rules config found — allowing all.")
             return {}
-        with open(path, "r") as f:
+        with open(path) as f:
             return yaml.safe_load(f)
 
     def evaluate(self, memory):

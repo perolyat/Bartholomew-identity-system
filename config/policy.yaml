@@ -24,3 +24,6 @@ indexing:
   # Optional stricter rule: do not index memories marked encrypt: strong
   # when this flag is enabled. Default: false (allows indexing encrypted content)
   disallow_strong_only: false
+parking_brake:
+  fail_closed: true
+  affected_components: [skills, sight, voice, scheduler]

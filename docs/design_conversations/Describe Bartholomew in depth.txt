@@ -555,12 +555,12 @@ class SelfModel:
                 "name": "Bartholomew",
                 "uuid": str(uuid.uuid4()),
                 "version": "0.1.0",
-                "created": datetime.utcnow().isoformat() + "Z",
+                "created": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "build_origin": "local",
                 "author": "Taylor Paul"
             },
             "heartbeat": {
-                "last_update": datetime.utcnow().isoformat() + "Z",
+                "last_update": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "tick_count": 0,
                 "status": "idle"
             },
@@ -581,7 +581,7 @@ class SelfModel:
 
     def heartbeat(self):
         """Update the timestamp and increment tick counter."""
-        self.data["heartbeat"]["last_update"] = datetime.utcnow().isoformat() + "Z"
+        self.data["heartbeat"]["last_update"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self.data["heartbeat"]["tick_count"] += 1
         save_json(STATE_FILE, self.data)
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any
+
 
 # Type definitions for kernel system
 
@@ -9,10 +11,10 @@ from typing import Any, Dict
 class Result:
     """
     Ergonomic result type for hybrid retrieval with rich introspection
-    
+
     Exposes normalized scores, boosts, and metadata for analysis and debugging.
     Used when calling retriever.retrieve(..., api="result").
-    
+
     Fields:
         mem_id: Memory ID
         score: Final fused score (after normalization, boosting, and fusion)
@@ -26,6 +28,7 @@ class Result:
         context_only: True if recall_policy is "context_only"
         metadata: Full memory metadata dict (id, kind, key, value, summary, ts)
     """
+
     mem_id: int
     score: float
     snippet: str
@@ -34,4 +37,4 @@ class Result:
     recency: float
     kind_boost: float
     context_only: bool
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)

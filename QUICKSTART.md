@@ -102,7 +102,7 @@ curl http://localhost:5173/internal/metrics
 **Production Deployment Options:**
 
 1. **Reverse Proxy IP Allowlist (Recommended)**
-   
+
    Nginx example:
    ```nginx
    location /internal/metrics {
@@ -123,18 +123,18 @@ curl http://localhost:5173/internal/metrics
    ```
 
 2. **Private Network Only**
-   
+
    Bind the API to a private interface and only allow Prometheus/sidecar access:
    ```bash
    # Bind to loopback or private network interface
    uvicorn app:app --host 127.0.0.1 --port 5173
-   
+
    # Or bind to private subnet
    uvicorn app:app --host 10.0.0.10 --port 5173
    ```
 
 3. **Prometheus Scrape Configuration**
-   
+
    Update your Prometheus config to scrape `/internal/metrics`:
    ```yaml
    scrape_configs:

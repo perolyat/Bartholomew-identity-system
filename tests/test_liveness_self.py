@@ -1,9 +1,12 @@
-import pytest
-from httpx import AsyncClient, ASGITransport
 from datetime import datetime
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app import app
 
 
+@pytest.mark.smoke
 @pytest.mark.anyio
 async def test_liveness_self_ok():
     transport = ASGITransport(app=app)

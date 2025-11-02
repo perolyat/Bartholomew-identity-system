@@ -165,13 +165,11 @@ class MemoryManager:
         except Exception as e:
             self.logger.error(f"Failed to initialize encryption: {e}")
             # Check if encryption is required
-            encryption_required = self.memory_policy.encryption.get(
-                "at_rest", False
-            )
+            encryption_required = self.memory_policy.encryption.get("at_rest", False)
             if encryption_required:
                 raise RuntimeError(
                     "Encryption is required but keystore initialization "
-                    f"failed: {e}. Ensure OS keystore is accessible."
+                    f"failed: {e}. Ensure OS keystore is accessible.",
                 )
             # Fallback to no encryption (development only)
             self.cipher = None
@@ -190,18 +188,13 @@ class MemoryManager:
             if version == 0:
                 # Fresh database - create v1 schema
                 self._create_schema_v1(conn)
-                conn.execute(
-                    f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"
-                )
-                self.logger.info(
-                    f"Initialized database schema v{CURRENT_SCHEMA_VERSION}"
-                )
+                conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION};")
+                self.logger.info(f"Initialized database schema v{CURRENT_SCHEMA_VERSION}")
             elif version < CURRENT_SCHEMA_VERSION:
                 # Migration needed
                 self._migrate_schema(conn, version, CURRENT_SCHEMA_VERSION)
                 self.logger.info(
-                    f"Migrated database from v{version} "
-                    f"to v{CURRENT_SCHEMA_VERSION}"
+                    f"Migrated database from v{version} to v{CURRENT_SCHEMA_VERSION}",
                 )
 
     def _create_schema_v1(self, conn):
@@ -225,23 +218,13 @@ class MemoryManager:
                 recall_policy TEXT,
                 expires_in TEXT
             )
-        """
+        """,
         )
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_modality ON memories(modality)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_timestamp "
-            "ON memories(timestamp)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_expires_at "
-            "ON memories(expires_at)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_anchor ON memories(anchor)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_modality ON memories(modality)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_expires_at ON memories(expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_anchor ON memories(anchor)")
 
     def _migrate_schema(self, conn, from_version: int, to_version: int):
         """Migrate database schema between versions"""
@@ -249,38 +232,25 @@ class MemoryManager:
             if v == 2:
                 # Add privacy-aware metadata columns
                 try:
-                    conn.execute(
-                        "ALTER TABLE memories ADD COLUMN "
-                        "privacy_class TEXT;"
-                    )
+                    conn.execute("ALTER TABLE memories ADD COLUMN privacy_class TEXT;")
                 except sqlite3.OperationalError:
                     pass  # Column already exists
                 try:
-                    conn.execute(
-                        "ALTER TABLE memories ADD COLUMN "
-                        "recall_policy TEXT;"
-                    )
+                    conn.execute("ALTER TABLE memories ADD COLUMN recall_policy TEXT;")
                 except sqlite3.OperationalError:
                     pass  # Column already exists
                 try:
-                    conn.execute(
-                        "ALTER TABLE memories ADD COLUMN "
-                        "expires_in TEXT;"
-                    )
+                    conn.execute("ALTER TABLE memories ADD COLUMN expires_in TEXT;")
                 except sqlite3.OperationalError:
                     pass  # Column already exists
             elif v == 3:
                 # Phase 2c: Add summary column
                 try:
-                    conn.execute(
-                        "ALTER TABLE memories ADD COLUMN summary TEXT;"
-                    )
+                    conn.execute("ALTER TABLE memories ADD COLUMN summary TEXT;")
                 except sqlite3.OperationalError:
                     pass  # Column already exists
             else:
-                raise RuntimeError(
-                    f"No migration path defined for version {v}"
-                )
+                raise RuntimeError(f"No migration path defined for version {v}")
         conn.execute(f"PRAGMA user_version = {to_version};")
 
     def _encrypt_content(self, content: str) -> str:
@@ -330,14 +300,12 @@ class MemoryManager:
             # Rule evaluation: check governance rules first
             memory_dict = memory.to_dict()
             evaluated = _rules_engine.evaluate(memory_dict)
-            
+
             # Check if storage is blocked by rules
             if not _rules_engine.should_store(evaluated):
-                self.logger.info(
-                    f"Memory blocked by governance rules: {memory.id}"
-                )
+                self.logger.info(f"Memory blocked by governance rules: {memory.id}")
                 return False
-            
+
             # Check if consent is required by rules
             if _rules_engine.requires_consent(evaluated):
                 try:
@@ -360,9 +328,7 @@ class MemoryManager:
                         )
                     else:
                         # Safe to use asyncio.run
-                        allowed = asyncio.run(
-                            request_permission_to_store(memory.content)
-                        )
+                        allowed = asyncio.run(request_permission_to_store(memory.content))
                 except Exception as e:
                     self.logger.error(f"Consent prompt failed: {e}")
                     return False
@@ -370,16 +336,15 @@ class MemoryManager:
                 if not allowed:
                     print("[Bartholomew] OK, I won't store that memory.")
                     return False
-            
+
             # Apply redaction if required by rules (Phase 2a)
             if evaluated.get("redact_strategy"):
                 memory.content = apply_redaction(memory.content, evaluated)
-                strategy = evaluated['redact_strategy']
+                strategy = evaluated["redact_strategy"]
                 self.logger.debug(
-                    f"Applied redaction strategy '{strategy}' "
-                    f"to memory {memory.id}"
+                    f"Applied redaction strategy '{strategy}' to memory {memory.id}",
                 )
-            
+
             # Inject enriched metadata from rules
             if evaluated.get("privacy_class"):
                 memory.privacy_class = evaluated["privacy_class"]
@@ -387,10 +352,10 @@ class MemoryManager:
                 memory.recall_policy = evaluated["recall_policy"]
             if evaluated.get("expires_in"):
                 memory.expires_in = evaluated["expires_in"]
-            
+
             # TODO Phase 2b: Enforce encryption based on evaluated["encrypt"]
             # TODO Phase 2c: Generate summary if evaluated["summarize"] is true
-            
+
             # Privacy guard fallback: check for sensitive content
             if is_sensitive(memory.content):
                 try:
@@ -413,9 +378,7 @@ class MemoryManager:
                         )
                     else:
                         # Safe to use asyncio.run
-                        allowed = asyncio.run(
-                            request_permission_to_store(memory.content)
-                        )
+                        allowed = asyncio.run(request_permission_to_store(memory.content))
                 except Exception as e:
                     self.logger.error(f"Consent prompt failed: {e}")
                     return False
@@ -593,8 +556,7 @@ class MemoryManager:
             now = datetime.now().isoformat()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
-                    "DELETE FROM memories WHERE expires_at IS NOT NULL "
-                    "AND expires_at < ?",
+                    "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",
                     (now,),
                 )
                 if cursor.rowcount > 0:
@@ -650,9 +612,7 @@ class MemoryManager:
         Stable API: Read memories with filtering
         Alias for retrieve_memories for cross-language consistency
         """
-        return self.retrieve_memories(
-            modality=modality, limit=limit, since=since, anchor=anchor
-        )
+        return self.retrieve_memories(modality=modality, limit=limit, since=since, anchor=anchor)
 
     def build_context(self, limit: int = 10) -> str:
         """
@@ -675,15 +635,12 @@ class MemoryManager:
             now = datetime.now().isoformat()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
-                    "DELETE FROM memories WHERE expires_at IS NOT NULL "
-                    "AND expires_at < ?",
+                    "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",
                     (now,),
                 )
                 count = cursor.rowcount or 0
                 if count > 0:
-                    self.logger.info(
-                        f"Cleaned up {count} expired memories"
-                    )
+                    self.logger.info(f"Cleaned up {count} expired memories")
                 return count
         except Exception as e:
             self.logger.error(f"Cleanup failed: {e}")

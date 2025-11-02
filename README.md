@@ -39,6 +39,47 @@ barth lint Identity.yaml
 barth explain Identity.yaml --task-type code --confidence 0.4
 ```
 
+## Getting Started (Development)
+
+### Environment Setup
+
+```bash
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
+
+# Linux/macOS
+python -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -U pip setuptools wheel
+pip install -e .
+pip install -r requirements.txt -r requirements-dev.txt
+```
+
+### Developer One-Liners
+
+```bash
+# Run tests
+pytest -q
+
+# Lint code
+ruff check .
+
+# Format code
+black .
+
+# Type check (optional)
+mypy .
+
+# Install pre-commit hooks
+pre-commit install
+
+# Run all hooks
+pre-commit run --all-files
+```
+
 ## Database Configuration
 
 Both the Kernel and API use a single SQLite database.
@@ -86,6 +127,23 @@ pytest -m windows_quirk   # Tests handling Windows file issues
 # Run tests with verbose output
 pytest -v
 ```
+
+### Smoke Tests
+
+Quick sanity checks for fast feedback:
+
+```bash
+# Run smoke tests (Windows)
+scripts\smoke.ps1
+
+# Run smoke tests (Linux/macOS)
+./scripts/smoke.sh
+
+# Or directly with pytest
+pytest -q -m smoke
+```
+
+Smoke tests verify core functionality and can run in seconds.
 
 ### Windows Testing Notes
 

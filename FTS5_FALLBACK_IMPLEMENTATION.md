@@ -14,7 +14,7 @@ The FTS5 availability probe and graceful fallback mechanism is fully implemented
 def fts5_available(conn: sqlite3.Connection) -> bool:
     """
     Runtime probe for FTS5 availability in SQLite.
-    
+
     Attempts to create a throwaway temp virtual table using FTS5.
     Returns True if FTS5 is available, False otherwise.
     """
@@ -39,15 +39,15 @@ _fts5_available_cache: Optional[bool] = None
 def _check_fts5_once(db_path: str) -> bool:
     """
     Check if FTS5 is available (cached after first check).
-    
+
     Opens a connection to the database and probes for FTS5 support.
     Result is cached to avoid repeated checks.
     """
     global _fts5_available_cache
-    
+
     if _fts5_available_cache is not None:
         return _fts5_available_cache
-    
+
     # Probe FTS5 availability
     try:
         conn = sqlite3.connect(db_path)
@@ -55,9 +55,9 @@ def _check_fts5_once(db_path: str) -> bool:
         conn.close()
     except Exception:
         available = False
-    
+
     _fts5_available_cache = available
-    
+
     if not available:
         logger.warning(
             "FTS5 not available; hybrid mode will operate vector-only "
@@ -65,7 +65,7 @@ def _check_fts5_once(db_path: str) -> bool:
         )
     else:
         logger.debug("FTS5 is available")
-    
+
     return available
 ```
 
@@ -111,7 +111,7 @@ elif resolved_mode == "hybrid" and not fts_ok:
 
 - **Interface Stability:** All retrievers expose `.retrieve(query, top_k, filters)` method
 
-- **Graceful Error Handling:** 
+- **Graceful Error Handling:**
   - `HybridRetriever._pull_fts_candidates()` catches exceptions and returns `[]`
   - Empty FTS candidates → pure vector retrieval
   - No crashes or exceptions propagated to callers
@@ -135,27 +135,27 @@ All 8 tests passing in `tests/test_retrieval_fts5_fallback.py`:
 
 1. **First probe (cached):**
    ```
-   WARNING bartholomew.kernel.retrieval:retrieval.py:59 
-   FTS5 not available; hybrid mode will operate vector-only 
+   WARNING bartholomew.kernel.retrieval:retrieval.py:59
+   FTS5 not available; hybrid mode will operate vector-only
    and fts mode will degrade to vector-only to keep API stable.
    ```
 
 2. **When FTS mode is requested:**
    ```
-   WARNING bartholomew.kernel.retrieval:retrieval.py:822 
+   WARNING bartholomew.kernel.retrieval:retrieval.py:822
    FTS mode requested but FTS5 unavailable; degrading to vector-only
    ```
 
 3. **When hybrid mode is requested:**
    ```
-   INFO bartholomew.kernel.retrieval:retrieval.py:827 
-   Hybrid mode with FTS5 unavailable; 
+   INFO bartholomew.kernel.retrieval:retrieval.py:827
+   Hybrid mode with FTS5 unavailable;
    will operate with vector-only (empty FTS candidates)
    ```
 
 **When FTS5 is available:**
 ```
-DEBUG bartholomew.kernel.retrieval:retrieval.py:63 
+DEBUG bartholomew.kernel.retrieval:retrieval.py:63
 FTS5 is available
 ```
 

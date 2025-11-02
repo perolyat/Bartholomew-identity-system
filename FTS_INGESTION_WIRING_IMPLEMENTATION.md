@@ -54,33 +54,33 @@ index_text = (
 async with aiosqlite.connect(self.db_path) as db:
     # Insert/update base row
     await db.execute("INSERT INTO memories(...) VALUES(...) ON CONFLICT DO UPDATE...")
-    
+
     # Get memory_id
     cursor = await db.execute("SELECT id FROM memories WHERE kind=? AND key=?", ...)
     row = await cursor.fetchone()
-    
+
     if row:
         result.memory_id = row[0]
         result.stored = True
-        
+
         # Phase 2e: Update FTS index in same transaction
         # CRITICAL: Tie FTS operations to same Tx as base row change
         fts_allowed = evaluated.get("fts_index", True)
-        
+
         if fts_allowed:
             # Ensure entry in map table
             await db.execute(
                 "INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (?)",
                 (result.memory_id,)
             )
-            
+
             # Delete prior FTS content for this rowid
             await db.execute(
                 "INSERT INTO memory_fts(memory_fts, rowid, value, summary) "
                 "VALUES ('delete', ?, '', '')",
                 (result.memory_id,)
             )
-            
+
             # Insert sanitized index_text (never raw/unredacted)
             await db.execute(
                 "INSERT INTO memory_fts(rowid, value, summary) VALUES (?, ?, NULL)",
@@ -97,7 +97,7 @@ async with aiosqlite.connect(self.db_path) as db:
                 "DELETE FROM memory_fts_map WHERE memory_id = ?",
                 (result.memory_id,)
             )
-    
+
     # Commit transaction (includes base row + FTS changes)
     await db.commit()
 ```
@@ -125,11 +125,11 @@ async with aiosqlite.connect(self.db_path) as db:
 async def delete_memory(self, kind: str, key: str) -> bool:
     """
     Delete a memory and its FTS index in a single transaction.
-    
+
     Args:
         kind: Memory kind
         key: Memory key
-        
+
     Returns:
         True if deleted, False if not found
     """
@@ -140,12 +140,12 @@ async def delete_memory(self, kind: str, key: str) -> bool:
             (kind, key)
         )
         row = await cursor.fetchone()
-        
+
         if not row:
             return False
-        
+
         memory_id = row[0]
-        
+
         # Delete FTS index entry in same transaction
         await db.execute(
             "INSERT INTO memory_fts(memory_fts, rowid, value, summary) "
@@ -156,10 +156,10 @@ async def delete_memory(self, kind: str, key: str) -> bool:
             "DELETE FROM memory_fts_map WHERE memory_id = ?",
             (memory_id,)
         )
-        
+
         # Delete base row (triggers will also fire for cleanup)
         await db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        
+
         await db.commit()
         return True
 ```

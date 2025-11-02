@@ -1,15 +1,17 @@
 """
 Test script to verify kernel is alive, stable, and dreaming.
 """
+
 import asyncio
 from datetime import datetime, timezone
+
 from bartholomew.kernel.daemon import KernelDaemon
 
 
 async def test_kernel_lifecycle():
     """Test kernel startup, operations, and shutdown."""
     print("=== Testing Kernel Lifecycle ===\n")
-    
+
     # Initialize kernel
     print("1. Starting kernel...")
     kd = KernelDaemon(
@@ -21,7 +23,7 @@ async def test_kernel_lifecycle():
     )
     await kd.start()
     print("   ✓ Kernel started\n")
-    
+
     # Test nudge persistence
     print("2. Testing nudge persistence...")
     await kd.mem.create_nudge(
@@ -33,7 +35,7 @@ async def test_kernel_lifecycle():
     )
     pending = await kd.mem.list_pending_nudges()
     print(f"   ✓ Created nudge, pending count: {len(pending)}\n")
-    
+
     # Test reflection trigger
     print("3. Testing daily reflection...")
     await kd.handle_command("reflection_run_daily")
@@ -44,7 +46,7 @@ async def test_kernel_lifecycle():
         print(f"   Content preview: {daily['content'][:100]}...\n")
     else:
         print("   ✗ No daily reflection found\n")
-    
+
     print("4. Testing weekly reflection...")
     await kd.handle_command("reflection_run_weekly")
     await asyncio.sleep(0.2)
@@ -54,12 +56,12 @@ async def test_kernel_lifecycle():
         print(f"   Content preview: {weekly['content'][:100]}...\n")
     else:
         print("   ✗ No weekly reflection found\n")
-    
+
     # Test graceful shutdown
     print("5. Testing graceful shutdown...")
     await kd.stop()
     print("   ✓ Kernel stopped cleanly\n")
-    
+
     print("=== All Tests Passed ===")
 
 

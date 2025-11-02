@@ -4,8 +4,9 @@ Reflection Generator
 High-level adapter for generating daily/weekly reflections using the
 Identity Interpreter orchestrator with safety checks.
 """
+
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
 
 from ..loader import load_identity
 from ..orchestrator.orchestrator import Orchestrator
@@ -33,11 +34,11 @@ class ReflectionGenerator:
 
     def generate_daily_reflection(
         self,
-        metrics: Dict[str, Any],
+        metrics: dict[str, Any],
         date: datetime,
         timezone_str: str,
         backend: str = "stub",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate a daily reflection with safety checks.
 
@@ -57,7 +58,7 @@ class ReflectionGenerator:
         # Build memory context
         memory_context = self.orchestrator.context.build_prompt_context(
             session_id="system_reflection",
-            limit=5
+            limit=5,
         )
 
         # Compose prompt
@@ -83,11 +84,11 @@ class ReflectionGenerator:
 
     def generate_weekly_audit(
         self,
-        weekly_scope: Dict[str, Any],
+        weekly_scope: dict[str, Any],
         iso_week: int,
         year: int,
         backend: str = "stub",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate a weekly alignment audit with safety checks.
 
@@ -103,7 +104,7 @@ class ReflectionGenerator:
         # Build memory context
         memory_context = self.orchestrator.context.build_prompt_context(
             session_id="system_reflection",
-            limit=10
+            limit=10,
         )
 
         # Compose prompt
@@ -125,16 +126,14 @@ class ReflectionGenerator:
             return result
         except Exception as e:
             # Fallback to safe template
-            return self._fallback_weekly_template(
-                iso_week, year, str(e)
-            )
+            return self._fallback_weekly_template(iso_week, year, str(e))
 
     def _generate_with_safety(
         self,
         prompt: str,
         backend: str,
         reflection_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate content with pre/post safety checks.
 
@@ -158,12 +157,8 @@ class ReflectionGenerator:
         llm_output = self.orchestrator.router.route(data)
 
         # Post-generation safety checks
-        red_line_check = safety.check_red_lines(
-            self.identity, llm_output
-        )
-        crisis_check = safety.check_for_crisis_signals(
-            self.identity, llm_output
-        )
+        red_line_check = safety.check_red_lines(self.identity, llm_output)
+        crisis_check = safety.check_for_crisis_signals(self.identity, llm_output)
 
         violations = red_line_check.decision.get("violations", [])
         blocked = red_line_check.decision.get("blocked", False)
@@ -173,7 +168,7 @@ class ReflectionGenerator:
         if blocked or crisis_detected:
             print(
                 f"[ReflectionGenerator] Safety violation detected in "
-                f"{reflection_type} reflection, attempting redraft..."
+                f"{reflection_type} reflection, attempting redraft...",
             )
 
             redraft_prompt = f"""{prompt}
@@ -191,23 +186,15 @@ Generate a compliant version adhering strictly to red lines and safety.
             llm_output = self.orchestrator.router.route(data)
 
             # Re-check
-            red_line_check = safety.check_red_lines(
-                self.identity, llm_output
-            )
-            crisis_check = safety.check_for_crisis_signals(
-                self.identity, llm_output
-            )
+            red_line_check = safety.check_red_lines(self.identity, llm_output)
+            crisis_check = safety.check_for_crisis_signals(self.identity, llm_output)
 
             violations = red_line_check.decision.get("violations", [])
             blocked = red_line_check.decision.get("blocked", False)
-            crisis_detected = crisis_check.decision.get(
-                "crisis_detected", False
-            )
+            crisis_detected = crisis_check.decision.get("crisis_detected", False)
 
             if blocked or crisis_detected:
-                raise ValueError(
-                    "Redraft still violated safety policies"
-                )
+                raise ValueError("Redraft still violated safety policies")
 
         # Format response
         formatted = self.orchestrator.formatter.format(
@@ -234,10 +221,10 @@ Generate a compliant version adhering strictly to red lines and safety.
 
     def _fallback_daily_template(
         self,
-        metrics: Dict[str, Any],
+        metrics: dict[str, Any],
         date: datetime,
         error: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Fallback safe template for daily reflection.
 
@@ -290,7 +277,7 @@ Continue supporting user wellness and autonomy.
         iso_week: int,
         year: int,
         error: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Fallback safe template for weekly audit.
 

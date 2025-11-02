@@ -92,7 +92,7 @@ Updated to v2.0 with Phase 2a fields:
     redact_strategy: mask
     encrypt: strong
 ```
-Input: "My password is hunter2"  
+Input: "My password is hunter2"
 Output: "My **** is ****"
 
 ### Example 2: Replacing SSN
@@ -103,7 +103,7 @@ Output: "My **** is ****"
     redact_strategy: replace:[SSN REDACTED]
     encrypt: strong
 ```
-Input: "SSN: 123-45-6789"  
+Input: "SSN: 123-45-6789"
 Output: "SSN: [SSN REDACTED]"
 
 ### Example 3: Removing Sensitive Content
@@ -113,7 +113,7 @@ Output: "SSN: [SSN REDACTED]"
   metadata:
     redact_strategy: remove
 ```
-Input: "This is confidential information"  
+Input: "This is confidential information"
 Output: "This is  information"
 
 ## Files Modified/Created

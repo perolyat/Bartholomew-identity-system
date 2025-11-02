@@ -67,7 +67,7 @@ javascript
 📊 6/6 core functionality tests passed
 
 ✅ Memory API endpoints exposed with stable interface
-✅ Schema versioning added to SQLite memory tables  
+✅ Schema versioning added to SQLite memory tables
 ✅ Encryption keys stored in persistent OS-level keystore
 ✅ Cold-boot test passes (memory reloads correctly)
 

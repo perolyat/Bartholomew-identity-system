@@ -56,7 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Unified retrieval factory**: `get_retriever(mode="hybrid"|"vector"|"fts")` 
+- **Parking Brake runtime safety gate**: Fail-closed mechanism for blocking component execution
+  - Scoped control: `global`, `skills`, `sight`, `voice`, `scheduler`
+  - Persistent state survives process restarts via SQLite `system_flags` table
+  - CLI commands: `bartholomew brake on/off/status`
+  - Audit trail logged to `safety.audit` memory kind
+  - Zero overhead when disengaged (default OFF)
+  - See docs/SAFETY_PARKING_BRAKE.md for full documentation
+- **Unified retrieval factory**: `get_retriever(mode="hybrid"|"vector"|"fts")`
   - Single entry point for all retrieval modes
   - Configuration precedence: explicit arg > BARTHO_RETRIEVAL_MODE env > kernel.yaml retrieval.mode > "hybrid"
   - Returns retrievers with unified `.retrieve(query, top_k, filters)` interface

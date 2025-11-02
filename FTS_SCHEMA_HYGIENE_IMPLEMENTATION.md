@@ -42,11 +42,11 @@ retrieval:
 def migrate_schema(self) -> None:
     """
     Migrate FTS schema to ensure rowid consistency.
-    
+
     Checks:
     1. Verifies FTS rowid == memory id consistency
     2. Rebuilds index if mismatches detected
-    
+
     Safe to call multiple times (idempotent).
     """
 ```
@@ -68,7 +68,7 @@ def migrate_schema(self) -> None:
 async def drive_fts_optimize(ctx: Any) -> Optional[Nudge]:
     """
     FTS optimize drive: run weekly FTS index optimization.
-    
+
     Runs INSERT INTO memory_fts(memory_fts) VALUES('optimize')
     to merge FTS segments and reduce fragmentation.
     """

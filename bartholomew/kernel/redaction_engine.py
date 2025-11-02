@@ -2,9 +2,10 @@
 Redaction Engine for Bartholomew
 Implements rule-based content redaction with multiple strategies
 """
-import re
+
 import logging
-from typing import Dict, Any
+import re
+from typing import Any
 
 
 logger = logging.getLogger(__name__)
@@ -13,11 +14,11 @@ logger = logging.getLogger(__name__)
 def mask_sensitive(text: str, pattern: str) -> str:
     """
     Mask sensitive content by replacing matches with asterisks
-    
+
     Args:
         text: Input text to redact
         pattern: Regex pattern to match sensitive content
-        
+
     Returns:
         Text with matches replaced by ****
     """
@@ -31,11 +32,11 @@ def mask_sensitive(text: str, pattern: str) -> str:
 def remove_sensitive(text: str, pattern: str) -> str:
     """
     Remove sensitive content by deleting matches
-    
+
     Args:
         text: Input text to redact
         pattern: Regex pattern to match sensitive content
-        
+
     Returns:
         Text with matches removed
     """
@@ -49,12 +50,12 @@ def remove_sensitive(text: str, pattern: str) -> str:
 def replace_sensitive(text: str, pattern: str, replacement: str) -> str:
     """
     Replace sensitive content with a custom string
-    
+
     Args:
         text: Input text to redact
         pattern: Regex pattern to match sensitive content
         replacement: String to replace matches with
-        
+
     Returns:
         Text with matches replaced by replacement string
     """
@@ -65,15 +66,15 @@ def replace_sensitive(text: str, pattern: str, replacement: str) -> str:
         return text
 
 
-def apply_redaction(text: str, rule: Dict[str, Any]) -> str:
+def apply_redaction(text: str, rule: dict[str, Any]) -> str:
     """
     Apply redaction to text based on rule configuration
-    
+
     Supports three redaction strategies:
     - mask: Replace matches with ****
     - remove: Delete matches entirely
     - replace:<text>: Replace matches with custom text
-    
+
     Args:
         text: Input text to redact
         rule: Rule dict containing 'content' (regex pattern) and
@@ -87,7 +88,7 @@ def apply_redaction(text: str, rule: Dict[str, Any]) -> str:
         ...         "redact_strategy": "mask"}
         >>> apply_redaction("SSN: 123-45-6789", rule)
         'SSN: ****'
-        
+
         >>> rule = {"content": r"password",
         ...         "redact_strategy": "replace:[REDACTED]"}
         >>> apply_redaction("password: hunter2", rule)
@@ -97,9 +98,9 @@ def apply_redaction(text: str, rule: Dict[str, Any]) -> str:
     if not pattern:
         # No pattern specified, return original text
         return text
-    
+
     strategy = rule.get("redact_strategy", "mask")
-    
+
     if strategy == "mask":
         return mask_sensitive(text, pattern)
     elif strategy == "remove":
@@ -111,8 +112,5 @@ def apply_redaction(text: str, rule: Dict[str, Any]) -> str:
         return replace_sensitive(text, pattern, replacement)
     else:
         # Unknown strategy - log warning and return original
-        logger.warning(
-            f"Unknown redaction strategy '{strategy}', "
-            f"returning original text"
-        )
+        logger.warning(f"Unknown redaction strategy '{strategy}', returning original text")
         return text

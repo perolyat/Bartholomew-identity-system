@@ -3,7 +3,8 @@ Response Formatter
 ------------------
 Formats LLM responses with optional emotion tags and tone shaping.
 """
-from typing import Dict, Any, Optional
+
+from typing import Any
 
 
 class ResponseFormatter:
@@ -16,7 +17,7 @@ class ResponseFormatter:
     def __init__(self, mode: str = "tags"):
         """
         Initialize the response formatter.
-        
+
         Args:
             mode: Format mode - "tags" (default) or "structured"
         """
@@ -25,19 +26,19 @@ class ResponseFormatter:
     def format(
         self,
         output: str,
-        tone: Optional[str] = None,
-        emotion: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        tone: str | None = None,
+        emotion: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
         """
         Format LLM output with tone and emotion annotations.
-        
+
         Args:
             output: Raw LLM output string
             tone: Optional tone identifier (neutral, empathetic, etc.)
             emotion: Optional emotion identifier (warm, neutral, etc.)
             metadata: Optional additional metadata
-            
+
         Returns:
             Formatted string (tags mode) or dict (structured mode)
         """
@@ -45,21 +46,16 @@ class ResponseFormatter:
             return self._format_structured(output, tone, emotion, metadata)
         return self._format_tags(output, tone, emotion)
 
-    def _format_tags(
-        self,
-        output: str,
-        tone: Optional[str],
-        emotion: Optional[str]
-    ) -> str:
+    def _format_tags(self, output: str, tone: str | None, emotion: str | None) -> str:
         """Format with bracket tags prepended to text."""
         tags = []
-        
+
         if tone and tone in self.TONES:
             tags.append(f"[tone: {tone}]")
-        
+
         if emotion and emotion in self.EMOTIONS:
             tags.append(f"[emotion: {emotion}]")
-        
+
         if tags:
             return f"{' '.join(tags)} {output}"
         return output
@@ -67,16 +63,16 @@ class ResponseFormatter:
     def _format_structured(
         self,
         output: str,
-        tone: Optional[str],
-        emotion: Optional[str],
-        metadata: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        tone: str | None,
+        emotion: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         """Format as structured dictionary."""
         return {
             "text": output,
             "tone": tone if tone in self.TONES else "neutral",
             "emotion": emotion if emotion in self.EMOTIONS else "neutral",
-            "metadata": metadata or {}
+            "metadata": metadata or {},
         }
 
     def set_mode(self, mode: str):

@@ -138,7 +138,7 @@ def simulate(
 def health():
     """Run system health checks"""
     from identity_interpreter.orchestrator.system_health import health_check
-    
+
     console.print()
     health_check()
     console.print()

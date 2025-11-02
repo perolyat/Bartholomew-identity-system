@@ -1,15 +1,17 @@
 """
 Unit tests for retrieval factory and FTS-only retriever
 """
-import pytest
+
 import sqlite3
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+
+import pytest
 
 from bartholomew.kernel.retrieval import (
-    get_retriever,
-    RetrievalFilters,
     FTSOnlyRetriever,
+    RetrievalFilters,
     VectorRetrieverAdapter,
+    get_retriever,
 )
 
 
@@ -63,28 +65,27 @@ def test_vector_adapter_delegates_to_query(mocker):
     # Create a mock for the underlying Retriever
     mock_retriever = mocker.Mock()
     mock_retriever.query.return_value = []
-    
+
     # Create adapter
     adapter = VectorRetrieverAdapter(mock_retriever)
-    
+
     # Call retrieve
     filters = RetrievalFilters(kinds=["event"])
     adapter.retrieve("test query", top_k=5, filters=filters)
-    
+
     # Assert query was called with correct args
-    mock_retriever.query.assert_called_once_with(
-        "test query", top_k=5, filters=filters
-    )
+    mock_retriever.query.assert_called_once_with("test query", top_k=5, filters=filters)
 
 
 def test_fts_only_empty_results(tmp_path):
     """FTS-only retriever returns empty list when no matches"""
     # Create temp database
     db_path = str(tmp_path / "test.db")
-    
+
     # Initialize schema
     conn = sqlite3.connect(db_path)
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT,
@@ -93,19 +94,21 @@ def test_fts_only_empty_results(tmp_path):
             summary TEXT,
             ts TEXT
         )
-    """)
+    """,
+    )
     conn.commit()
     conn.close()
-    
+
     # Initialize FTS
     from bartholomew.kernel.fts_client import FTSClient
+
     fts = FTSClient(db_path)
     fts.init_schema()
-    
+
     # Create retriever and search
     retriever = FTSOnlyRetriever(db_path)
     results = retriever.retrieve("nonexistent")
-    
+
     assert results == []
 
 
@@ -113,9 +116,10 @@ def test_fts_only_filters_by_kind(tmp_path):
     """FTS-only retriever respects kind filters"""
     # Create temp database with data
     db_path = str(tmp_path / "test.db")
-    
+
     conn = sqlite3.connect(db_path)
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT,
@@ -124,36 +128,35 @@ def test_fts_only_filters_by_kind(tmp_path):
             summary TEXT,
             ts TEXT
         )
-    """)
-    
+    """,
+    )
+
     # Insert test data
     now = datetime.now(UTC).isoformat()
     conn.execute(
         "INSERT INTO memories (kind, key, value, ts) VALUES (?, ?, ?, ?)",
-        ("event", "test1", "machine learning conference", now)
+        ("event", "test1", "machine learning conference", now),
     )
     conn.execute(
         "INSERT INTO memories (kind, key, value, ts) VALUES (?, ?, ?, ?)",
-        ("fact", "test2", "machine learning is awesome", now)
+        ("fact", "test2", "machine learning is awesome", now),
     )
     conn.commit()
     conn.close()
-    
+
     # Initialize FTS
     from bartholomew.kernel.fts_client import FTSClient
+
     fts = FTSClient(db_path)
     fts.init_schema()
-    
+
     # Rebuild index with our data
     fts.rebuild_index()
-    
+
     # Create retriever and search with kind filter
     retriever = FTSOnlyRetriever(db_path)
-    results = retriever.retrieve(
-        "machine",
-        filters=RetrievalFilters(kinds=["event"])
-    )
-    
+    results = retriever.retrieve("machine", filters=RetrievalFilters(kinds=["event"]))
+
     # Should only return the event, not the fact
     assert len(results) == 1
     assert results[0].kind == "event"
@@ -163,9 +166,10 @@ def test_fts_only_filters_by_timestamp(tmp_path):
     """FTS-only retriever respects timestamp filters"""
     # Create temp database with data
     db_path = str(tmp_path / "test.db")
-    
+
     conn = sqlite3.connect(db_path)
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT,
@@ -174,36 +178,38 @@ def test_fts_only_filters_by_timestamp(tmp_path):
             summary TEXT,
             ts TEXT
         )
-    """)
-    
+    """,
+    )
+
     # Insert test data with different timestamps
     old_ts = "2024-01-01T00:00:00+00:00"
     new_ts = "2024-12-01T00:00:00+00:00"
-    
+
     conn.execute(
         "INSERT INTO memories (kind, key, value, ts) VALUES (?, ?, ?, ?)",
-        ("event", "old", "old test data", old_ts)
+        ("event", "old", "old test data", old_ts),
     )
     conn.execute(
         "INSERT INTO memories (kind, key, value, ts) VALUES (?, ?, ?, ?)",
-        ("event", "new", "new test data", new_ts)
+        ("event", "new", "new test data", new_ts),
     )
     conn.commit()
     conn.close()
-    
+
     # Initialize FTS
     from bartholomew.kernel.fts_client import FTSClient
+
     fts = FTSClient(db_path)
     fts.init_schema()
     fts.rebuild_index()
-    
+
     # Search with after filter
     retriever = FTSOnlyRetriever(db_path)
     results = retriever.retrieve(
         "test",
-        filters=RetrievalFilters(after="2024-06-01T00:00:00+00:00")
+        filters=RetrievalFilters(after="2024-06-01T00:00:00+00:00"),
     )
-    
+
     # Should only return the new entry
     assert len(results) == 1
     assert results[0].memory_id == 2

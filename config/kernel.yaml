@@ -6,27 +6,27 @@ memory:
 
 retrieval:
   mode: "hybrid"  # Options: "hybrid", "vector", "fts"
-  
+
   # Candidate pool sizes (performance guardrails)
   fts_candidates: 200          # Number of FTS candidates to pull (N)
   vec_candidates: 200          # Number of vector candidates to pull (M)
   top_k: 20                    # Final fused results to return (K)
-  
+
   # FTS configuration
   fts_tokenizer: "porter"      # FTS5 tokenizer (porter, unicode61, ascii)
   fts_index_mode: "external"   # Index mode (external = external-content)
-  
+
   # Hybrid fusion settings
   fusion_strategy: "weighted"  # "weighted" or "rrf" (reciprocal rank fusion)
   hybrid_weights:
     fts: 0.6                   # Weight for FTS scores (normalized to sum=1.0)
     vector: 0.4                # Weight for vector scores
   rrf_k: 60                    # RRF denominator constant (if using rrf strategy)
-  
+
   # Recency boost (exponential decay)
   recency:
     half_life_days: 7          # Half-life for recency decay (1 week default)
-  
+
   # Kind-specific boost multipliers (applied to all retrieval scores)
   kind_boosts: {}              # Example: {"event": 1.2, "preference": 1.5}
 

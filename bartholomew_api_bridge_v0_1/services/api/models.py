@@ -1,22 +1,25 @@
-
 from pydantic import BaseModel
-from typing import Optional, List
+
 
 class ChatIn(BaseModel):
     message: str
 
+
 class ChatOut(BaseModel):
     reply: str
-    tone: Optional[str] = None
-    emotion: Optional[str] = None
+    tone: str | None = None
+    emotion: str | None = None
+
 
 class WaterLogIn(BaseModel):
     ml: int
-    timestamp: Optional[str] = None  # ISO8601
+    timestamp: str | None = None  # ISO8601
+
 
 class WaterTodayOut(BaseModel):
     date: str
     total_ml: int
+
 
 class ConversationItem(BaseModel):
     id: str
@@ -24,5 +27,6 @@ class ConversationItem(BaseModel):
     role: str
     content: str
 
+
 class ConversationList(BaseModel):
-    items: List[ConversationItem]
+    items: list[ConversationItem]

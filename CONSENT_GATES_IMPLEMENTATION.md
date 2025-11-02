@@ -70,7 +70,7 @@ November 1, 2025
 ### 1. never_store (allow_store=false)
 **Rule**: Memory should not exist at all
 **Gate Behavior**: Exclude from results (should not have embeddings anyway)
-**Examples**: 
+**Examples**:
 - Unknown speakers
 - Illegal content
 - Security camera footage
@@ -126,8 +126,8 @@ results = vector_store.search(query_vec, top_k=10)
 
 # Bypass gates (admin use only)
 all_results = vector_store.search(
-    query_vec, 
-    top_k=10, 
+    query_vec,
+    top_k=10,
     apply_consent_gate=False
 )
 ```

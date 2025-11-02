@@ -1,4 +1,3 @@
-
 import os
 import threading
 from contextlib import contextmanager
@@ -28,13 +27,13 @@ _local = threading.local()
 def get_conn():
     """
     Context manager for database connections with proper cleanup.
-    
+
     Uses the wal_db context manager which ensures:
     - WAL mode is enabled with proper pragmas
     - Connection is closed properly
     - Checkpoint(TRUNCATE) runs with a fresh connection
     - Windows file handles are released
-    
+
     This pattern ensures reliable cleanup of WAL auxiliary files
     on Windows where file locking can cause permission errors.
     """

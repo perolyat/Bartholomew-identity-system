@@ -259,72 +259,72 @@ Alright—drop the “is it alive?” debate. The job is to engineer the illusio
 
 Humans expect near-instant social responses. Hit these numbers:
 
-Turn-taking latency: end-to-end 200–500 ms from user stop → first audible/visible response. Stream tokens; never “think in silence.” (Edge inference + streaming recommended.) 
+Turn-taking latency: end-to-end 200–500 ms from user stop → first audible/visible response. Stream tokens; never “think in silence.” (Edge inference + streaming recommended.)
 Amazon Web Services, Inc.
 +1
 
-Human turn gaps: cross-cultural norms cluster around ~0–200 ms modes; delays feel inattentive. Design for sub-300 ms acknowledgments/backchannels. 
+Human turn gaps: cross-cultural norms cluster around ~0–200 ms modes; delays feel inattentive. Design for sub-300 ms acknowledgments/backchannels.
 Frontiers
 +1
 
-Pipeline guidance: minimize STT→LLM→TTS latency; measure TTFT; push TTS below 200 ms; benchmark and pick engines with proven low RTT. 
+Pipeline guidance: minimize STT→LLM→TTS latency; measure TTFT; push TTS below 200 ms; benchmark and pick engines with proven low RTT.
 GitHub
 
-Ship target: Sub-500 ms perceived response with streaming text + “typing”/audio backchannels, even while reasoning continues in the background. 
+Ship target: Sub-500 ms perceived response with streaming text + “typing”/audio backchannels, even while reasoning continues in the background.
 Amazon Web Services, Inc.
 
 2) Social Cues (Backchannels, Presence, “I’m here”)
 
-People treat media like social actors by default; exploit that with constant but subtle presence signals. 
+People treat media like social actors by default; exploit that with constant but subtle presence signals.
 Stanford University
 +1
 
-Backchannels: micro “mm-hm / got it / one sec…” as the model listens or thinks; boosts engagement and trust. 
+Backchannels: micro “mm-hm / got it / one sec…” as the model listens or thinks; boosts engagement and trust.
 Retell AI
 +1
 
-Typing indicators / live compose: increase co-presence and connection if done tastefully. Prefer progressive typing vs. vague dots. 
+Typing indicators / live compose: increase co-presence and connection if done tastefully. Prefer progressive typing vs. vague dots.
 jeffhuang.com
 +1
 
-Ship target: Always emit a micro-ack within <150 ms (cursor flash, orb pulse, ear-wiggle, “listening…”), then stream partial output with a typing indicator that shows progress. 
+Ship target: Always emit a micro-ack within <150 ms (cursor flash, orb pulse, ear-wiggle, “listening…”), then stream partial output with a typing indicator that shows progress.
 The Interaction Design Foundation
 
 3) Motion & Microinteractions (the “breathing” illusion)
 
-Make the UI feel organismic using Disney’s 12 principles + modern micro-interaction craft (squash/stretch, anticipation, follow-through). 
+Make the UI feel organismic using Disney’s 12 principles + modern micro-interaction craft (squash/stretch, anticipation, follow-through).
 Wikipedia
 +1
 
-Idle/heartbeat: ambient “breathing” animation with layered, low-amplitude motion; it signals attention without distraction. 
+Idle/heartbeat: ambient “breathing” animation with layered, low-amplitude motion; it signals attention without distraction.
 blog.animschool.edu
 
-Micro-feedback: taps, hovers, confirmations, successes with tasteful “juice” (Game Feel)—snappy easing, tiny screenshake, sound ticks. 
+Micro-feedback: taps, hovers, confirmations, successes with tasteful “juice” (Game Feel)—snappy easing, tiny screenshake, sound ticks.
 Leaderself
 +1
 
-Micro-interactions: treat every small action (mute, save, nudge) as a chance to show intent and state—this is where products feel alive. 
+Micro-interactions: treat every small action (mute, save, nudge) as a chance to show intent and state—this is where products feel alive.
 O'Reilly Media
 +1
 
-Ship target: Motion system with timing curves, overshoot caps, and 3–4 canonical micro-interactions (listen start, thinking, answer complete, error repair). 
+Ship target: Motion system with timing curves, overshoot caps, and 3–4 canonical micro-interactions (listen start, thinking, answer complete, error repair).
 Wikipedia
 
 4) Voice that Breathes (if/when you add audio)
 
-Prosody control: choose TTS with controllable pitch, energy, speaking rate; expose emotional styles and local emphasis tokens. Research shows prosody control materially lifts perceived naturalness. 
+Prosody control: choose TTS with controllable pitch, energy, speaking rate; expose emotional styles and local emphasis tokens. Research shows prosody control materially lifts perceived naturalness.
 SpringerLink
 +1
 
-Sketchable prosody: emerging work enables contour-level prosody guidance (prosodic “sketches”). Useful for signature lines/catchphrases. 
+Sketchable prosody: emerging work enables contour-level prosody guidance (prosodic “sketches”). Useful for signature lines/catchphrases.
 arXiv
 
-Ship target: At least 3 prosody presets (neutral, warm, upbeat) + sentence-level emphasis tags; keep utterances <12 seconds before a micro-pause/backchannel. 
+Ship target: At least 3 prosody presets (neutral, warm, upbeat) + sentence-level emphasis tags; keep utterances <12 seconds before a micro-pause/backchannel.
 CFILT
 
 5) Continuity & Memory = Rapport
 
-Lifelikeness collapses if every chat is “first contact.” Maintain episodic threads (“last night’s groceries,” “Caitlin call”) and do conversational repair (ask for clarifications like a human would). Literature on ECAs stresses rapport and continuity over raw realism. 
+Lifelikeness collapses if every chat is “first contact.” Maintain episodic threads (“last night’s groceries,” “Caitlin call”) and do conversational repair (ask for clarifications like a human would). Literature on ECAs stresses rapport and continuity over raw realism.
 ISCA Archive
 +1
 
@@ -332,42 +332,42 @@ Ship target: Minimal episodic memory schema (who/what/when/where/outcome + 1-lin
 
 6) Proactivity without Presumption (Anticipatory Design)
 
-Proactive = alive; presumptuous = annoying. Predict needs and offer, don’t force. Use lightweight prompts (“Want me to queue The Simpsons?”) and one-tap accepts. 
+Proactive = alive; presumptuous = annoying. Predict needs and offer, don’t force. Use lightweight prompts (“Want me to queue The Simpsons?”) and one-tap accepts.
 Lazarev Agency
 +2
 Professor Design
 +2
 
-Ship target: 2–3 anticipatory moments only (e.g., after driving: groceries reminder; after cooking: water intake log), each with a clear opt-out affordance. 
+Ship target: 2–3 anticipatory moments only (e.g., after driving: groceries reminder; after cooking: water intake log), each with a clear opt-out affordance.
 Lazarev Agency
 
 7) Avoid the Uncanny Pit
 
-Users get creeped out when appearance/voice ≈ human but behavior isn’t; choose a stylized, creature-like persona and keep claims humble. 
+Users get creeped out when appearance/voice ≈ human but behavior isn’t; choose a stylized, creature-like persona and keep claims humble.
 arXiv
 +1
 
 Guardrails
 
-Stylized avatar > photoreal face (especially early). 
+Stylized avatar > photoreal face (especially early).
 arXiv
 
 Be explicit about limits (“I might be wrong—here’s my guess”).
 
-Keep empathy cues grounded; over-empathizing text can backfire in stress contexts. 
+Keep empathy cues grounded; over-empathizing text can backfire in stress contexts.
 ScienceDirect
 
 8) Design Principles that Actually Move the Needle
 
-Media Equation leverage: manners, personality, roles—people respond socially to computers; calibrate tone and politeness. 
+Media Equation leverage: manners, personality, roles—people respond socially to computers; calibrate tone and politeness.
 Stanford University
 +1
 
-Game Feel over gimmicks: prioritize control responsiveness, audiovisual sync, and tangible feedback; tiny delighters beat giant features. 
+Game Feel over gimmicks: prioritize control responsiveness, audiovisual sync, and tangible feedback; tiny delighters beat giant features.
 Leaderself
 +1
 
-Status visibility: users relax when systems show state (“listening,” “thinking,” “fetching,” % complete). Micro-interaction literature puts this near the top. 
+Status visibility: users relax when systems show state (“listening,” “thinking,” “fetching,” % complete). Micro-interaction literature puts this near the top.
 The Interaction Design Foundation
 
 Concrete Build Plan (v0 → v1.0)
@@ -375,64 +375,64 @@ v0.1 “Breath”
 
 Presence loop (UI): idle breathing + listening pulse + thinking ripple + completion sparkle.
 
-Latency plumbing: stream tokens; show typing indicator + progress; sub-500 ms perceived response. 
+Latency plumbing: stream tokens; show typing indicator + progress; sub-500 ms perceived response.
 Amazon Web Services, Inc.
 
-Backchannels: text (“got it…”) and subtle ear-twitch/LED pulse while thinking. 
+Backchannels: text (“got it…”) and subtle ear-twitch/LED pulse while thinking.
 Retell AI
 
 v0.2 “Rapport”
 
 Episodic memory (SQLite/JSONL): {entity, when, where, why-it-matters}.
 
-Repair moves: “Do you mean A or B?” with quick-pick chips. 
+Repair moves: “Do you mean A or B?” with quick-pick chips.
 Communications of the ACM
 
 v0.3 “Motion Language”
 
-12-principle motion tokens: anticipation (pre-move), overshoot clamp, follow-through; apply to all affordances. 
+12-principle motion tokens: anticipation (pre-move), overshoot clamp, follow-through; apply to all affordances.
 Wikipedia
 
-Micro-interactions kit: success, error, save, nudge, confirm—each with haptic/audio tick. 
+Micro-interactions kit: success, error, save, nudge, confirm—each with haptic/audio tick.
 UX Design Institute
 
 v0.4 “Voice (Optional)”
 
-Prosody-aware TTS with 3 styles + emphasis tags; strict barge-in support; keep utterances chunked. 
+Prosody-aware TTS with 3 styles + emphasis tags; strict barge-in support; keep utterances chunked.
 SpringerLink
 
 v1.0 “Proactive but Polite”
 
-Anticipatory moments (3x): groceries reminder in car; dinner suggestions from pantry; water intake follow-up; always soft-ask. 
+Anticipatory moments (3x): groceries reminder in car; dinner suggestions from pantry; water intake follow-up; always soft-ask.
 Lazarev Agency
 
 Acceptance Tests (how you know it feels alive)
 
-T1 Latency: 95p response onset ≤ 500 ms; TTFT ≤ 200 ms with streaming. 
+T1 Latency: 95p response onset ≤ 500 ms; TTFT ≤ 200 ms with streaming.
 Amazon Web Services, Inc.
 
-T2 Presence: Users rate “feels present” ≥ 4/5 after adding typing/backchannels vs. baseline. 
+T2 Presence: Users rate “feels present” ≥ 4/5 after adding typing/backchannels vs. baseline.
 jeffhuang.com
 
-T3 Motion: 80% tasks: users can predict state from motion alone (no text), confirming readable animation grammar. 
+T3 Motion: 80% tasks: users can predict state from motion alone (no text), confirming readable animation grammar.
 Wikipedia
 
-T4 Rapport: Session 3: users recall Bartholomew referencing prior context at least once (measured via task scripts). 
+T4 Rapport: Session 3: users recall Bartholomew referencing prior context at least once (measured via task scripts).
 ISCA Archive
 
-T5 Comfort: Zero “uncanny” flags in post-study notes; persona described as “stylized” or “creature-like,” not “too human.” 
+T5 Comfort: Zero “uncanny” flags in post-study notes; persona described as “stylized” or “creature-like,” not “too human.”
 arXiv
 
 Implementation Cheatsheet (practical)
 
-Perceived speed > raw speed: stream + backchannel first, answer second. 
+Perceived speed > raw speed: stream + backchannel first, answer second.
 Amazon Web Services, Inc.
 
-Never be silent: some cue is always visible/audible when the system is active. 
+Never be silent: some cue is always visible/audible when the system is active.
 The Interaction Design Foundation
 
-Consistency beats realism: pick a stylized motion/voice palette and stick to it. 
+Consistency beats realism: pick a stylized motion/voice palette and stick to it.
 arXiv
 
-Small, dense joys: celebrate completions (subtle confetti/sonic “ding”)—but keep it restrained. 
+Small, dense joys: celebrate completions (subtle confetti/sonic “ding”)—but keep it restrained.
 Userpilot

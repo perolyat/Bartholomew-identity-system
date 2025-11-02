@@ -90,7 +90,10 @@ testpaths = ["tests", "."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --strict-markers"
+addopts = "-q -m 'not integration and not slow'"
 markers = [
+    "integration: long/slow external-ish tests",
+    "slow: expensive tests",
+    "smoke: fast sanity checks",
     "asyncio: mark test as async",
 ]

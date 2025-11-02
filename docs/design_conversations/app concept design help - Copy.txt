@@ -1503,7 +1503,7 @@ HUD Overlay Mockup
 
 Second-Screen Mockup
 
-If you’d like, I can now turn this into a single “Concept Contract” (copy-paste ready for Cline/Codex) that merges the architecture, UX, and constraints into one build brief. 
+If you’d like, I can now turn this into a single “Concept Contract” (copy-paste ready for Cline/Codex) that merges the architecture, UX, and constraints into one build brief.
 
 You said:
 Please generate the images here in chat, not behind links
@@ -1529,14 +1529,14 @@ Output image
 Output image
 Done — the images are now embedded directly above.
 
-Want me to roll everything into a single Concept Contract next, or keep expanding (e.g., concrete data schemas, prompt templates, or a minimal MVP file tree)? 
+Want me to roll everything into a single Concept Contract next, or keep expanding (e.g., concrete data schemas, prompt templates, or a minimal MVP file tree)?
 
 You said:
 The HUD design still looks very out dated, please try again for a more modern look
 ChatGPT said:
 Here’s the updated modernized HUD mockup — cleaner, flatter, with translucent panels and a sleeker style:
 
-Would you like me to redesign the second-screen mobile/tablet UI in this same modern flat aesthetic as well? 
+Would you like me to redesign the second-screen mobile/tablet UI in this same modern flat aesthetic as well?
 
 You said:
 You didn't generate any image that i can see, try again
@@ -1544,7 +1544,7 @@ ChatGPT said:
 Output image
 Here’s a refreshed modern HUD with a flatter, cleaner look and translucent cards — should now render directly above.
 
-Want me to apply this same aesthetic to the second-screen mobile/tablet UI next? 
+Want me to apply this same aesthetic to the second-screen mobile/tablet UI next?
 
 You said:
 Pleade try again, but research Tony Stark and his Iron Man systems, our builds UI and HUD should have the same look and feel
@@ -1557,7 +1557,7 @@ Iron-Man-inspired Desktop HUD (reticle, tactical chips, objectives, squad vitals
 
 Iron-Man-inspired Second-Screen (tabs, dialogue feed, objectives, controls)
 
-Want me to tweak the color palette (e.g., shift toward FRIDAY’s deeper blue, add amber warning layers), add radar pings/target brackets, or introduce a 3D avatar disk in the center ring? 
+Want me to tweak the color palette (e.g., shift toward FRIDAY’s deeper blue, add amber warning layers), add radar pings/target brackets, or introduce a 3D avatar disk in the center ring?
 
 You said:
 Those two images are exactly how our build should look and feel for the human end user
@@ -2529,7 +2529,7 @@ Fill .env from .env.example.
 
 Use scripts/*.ps1 to check deps, run, assemble build.
 
-If you want, I can also generate a minimal Tauri or Electron bootstrap next and drop it into apps/desktop/ so you can run the overlay out of the box. 
+If you want, I can also generate a minimal Tauri or Electron bootstrap next and drop it into apps/desktop/ so you can run the overlay out of the box.
 
 You said:
 Please generate the starter repo in chat
@@ -2818,7 +2818,7 @@ export const respond = (_:any)=>'Interrupt mage!';
 apps/desktop/src/services/memory/index.ts
 export const appendEvent = async (_:any)=>{};
 apps/desktop/src/services/plugins/index.ts
-export const loadPlugin = async (_id:string)=>({}); 
+export const loadPlugin = async (_id:string)=>({});
 apps/second-screen (stubs)
 apps/second-screen/src/screens/Dialogue.tsx
 export default function Dialogue(){return null}
@@ -8208,7 +8208,7 @@ Here’s a faithful mock of what you’ll see overlaying BG3—reticle center, o
 
 Download the image
 
-(If you want a version without the Streamer Mode tag, say the word and I’ll generate that variant too.) 
+(If you want a version without the Streamer Mode tag, say the word and I’ll generate that variant too.)
 
 You said:
 Rather than a heads up display that is always visible I think we should look at containing all of the user functionality within one Window or solid application with menus and working buttons rather then the HUD style, keep the colour scheme tho, ensure that the app still has all of the same functionalities and abilities, ensure that the application continues to run once the user minimises the app to their tasks bar while they play their game, gamers should be able to run it and then minimise it, with the system then being operable as if they were talking to a human being, the conversation and functions should flow without the user having to pause what they are doing in game to then operate the application manually
@@ -8318,7 +8318,7 @@ Download mockup image
 
 This design keeps the FRIDAY-style color scheme but moves all functionality into a single windowed application. When minimized, it continues listening and responding in the background, so the player never has to tab out of BG3.
 
-👉 Would you like me to expand this into additional tab mockups (Objectives, Party Vitals, Settings) so you can see the whole app flow? 
+👉 Would you like me to expand this into additional tab mockups (Objectives, Party Vitals, Settings) so you can see the whole app flow?
 
 You said:
 The app should also have its own audio voice output so that the application delivers intel as if it were a real human co-pilot
@@ -8427,7 +8427,7 @@ Save button to persist preferences.
 
 Download Settings mockup
 
-Would you like me to now mock up the Objectives and Party Vitals tabs in this same application style so the whole flow is visualized? 
+Would you like me to now mock up the Objectives and Party Vitals tabs in this same application style so the whole flow is visualized?
 
 You said:
 Yes please
@@ -8453,7 +8453,7 @@ Updates dynamically as the copilot tracks your party state.
 
 Download mockup image
 
-Would you like me to also mock up the Plugins tab so you can visualize how gamers would manage add-ons like OCR or knowledge packs? 
+Would you like me to also mock up the Plugins tab so you can visualize how gamers would manage add-ons like OCR or knowledge packs?
 
 You said:
 The application should also include a main dashboard that operates as the gamers command centre for using the app
@@ -8620,7 +8620,7 @@ Download Dashboard mockup
 
 This layout makes the app feel like a sci-fi command centre, optimized for touch monitors with large, glowing, tappable panels.
 
-👉 Would you like me to also show how the Dialogue tab looks in this same tile/touch style (full conversation history, scrollable, with mic indicator)? 
+👉 Would you like me to also show how the Dialogue tab looks in this same tile/touch style (full conversation history, scrollable, with mic indicator)?
 
 You said:
 I don't like that attempt, it looks like things are all on top of each other spread it out and make it look like it's on a touch capable PC screen
@@ -8716,7 +8716,7 @@ Download vertical dashboard mockup
 
 This should feel natural on a PC touch monitor — clean, spaced, scrollable, and intuitive.
 
-👉 Do you want me to also generate the Dialogue Tab mockup in this same vertical touch style (full chat history + voice activity indicator)? 
+👉 Do you want me to also generate the Dialogue Tab mockup in this same vertical touch style (full chat history + voice activity indicator)?
 
 You said:
 Yes please
@@ -8735,7 +8735,7 @@ Download Dialogue Tab mockup
 
 This gives the user a chat-like interface they can scroll with their finger, while Astra continues to talk out loud in real time.
 
-👉 Should I also create a Plugins Tab mockup (for OCR, knowledge packs, mods) so you can see how gamers would manage add-ons? 
+👉 Should I also create a Plugins Tab mockup (for OCR, knowledge packs, mods) so you can see how gamers would manage add-ons?
 
 You said:
 Yes please
@@ -8771,7 +8771,7 @@ Download Plugins Tab mockup
 
 This makes extending the copilot (with OCR, Discord sync, custom mods) as easy as tapping big tiles on a touch screen.
 
-👉 Would you like me to now put all the mockups together into a full app flow storyboard (Dashboard → Dialogue → Objectives → Party → Plugins → Settings) so you can see the entire experience in sequence? 
+👉 Would you like me to now put all the mockups together into a full app flow storyboard (Dashboard → Dialogue → Objectives → Party → Plugins → Settings) so you can see the entire experience in sequence?
 
 You said:
 Yes please
@@ -8793,7 +8793,7 @@ Download storyboard image
 
 This gives you a bird’s-eye view of how the whole app feels as you move through it on a touch-capable PC.
 
-👉 Do you want me to now expand this storyboard with example voice interaction flow (e.g., showing Astra’s spoken + text responses across multiple tabs as the user plays BG3)? 
+👉 Do you want me to now expand this storyboard with example voice interaction flow (e.g., showing Astra’s spoken + text responses across multiple tabs as the user plays BG3)?
 
 You said:
 Yes please
@@ -8887,7 +8887,7 @@ Download storyboard image
 
 This shows Astra behaving like a real-time human/AI copilot, with speech bubbles flowing naturally across the tabs while the UI updates.
 
-👉 Would you like me to now expand this into a minute-by-minute gameplay scenario storyboard (e.g., a 5-minute BG3 session with Astra guiding you through exploration → dialogue → combat → loot)? 
+👉 Would you like me to now expand this into a minute-by-minute gameplay scenario storyboard (e.g., a 5-minute BG3 session with Astra guiding you through exploration → dialogue → combat → loot)?
 
 You said:
 Yes please
@@ -8989,7 +8989,7 @@ Download gameplay storyboard
 
 This shows Astra acting as a live human/AI copilot, guiding the player with spoken advice + logged updates across all phases of play.
 
-👉 Would you like me to now expand this into a longer campaign arc storyboard (like an entire quest session, 20–30 minutes, with Astra evolving tone from exploration → boss fight → loot → roleplay)? 
+👉 Would you like me to now expand this into a longer campaign arc storyboard (like an entire quest session, 20–30 minutes, with Astra evolving tone from exploration → boss fight → loot → roleplay)?
 
 You said:
 Yes please
@@ -9307,42 +9307,42 @@ Thought for 24s
 Short answer: OpenAI’s Realtime API is the optimal single API to power this build.
 
 Why this is the best fit
-Speech-in, speech-out, low-latency in one connection (WebRTC/WebSocket) — perfect for a “copilot that talks back” while minimized. 
+Speech-in, speech-out, low-latency in one connection (WebRTC/WebSocket) — perfect for a “copilot that talks back” while minimized.
 OpenAI
 
-Native function (tool) calling so the voice agent can call your app’s actions (objectives, route hints, OCR toggles, Discord lookups) without glue code chains. 
+Native function (tool) calling so the voice agent can call your app’s actions (objectives, route hints, OCR toggles, Discord lookups) without glue code chains.
 OpenAI Platform
 +1
 
-Unified voice agent patterns in the official docs (voice agents via Realtime vs. manual STT+LLM+TTS chaining). 
+Unified voice agent patterns in the official docs (voice agents via Realtime vs. manual STT+LLM+TTS chaining).
 OpenAI Platform
 
-Supports persistent sessions for personality/memory and interruptions/barge-in UX typical of live copilots. 
+Supports persistent sessions for personality/memory and interruptions/barge-in UX typical of live copilots.
 OpenAI Platform
 
 How we’d wire it
-Client ↔ Realtime API: send mic audio stream; receive synthesized speech stream + tool calls over the same socket. 
+Client ↔ Realtime API: send mic audio stream; receive synthesized speech stream + tool calls over the same socket.
 OpenAI
 
-Tools you expose: set_mode, add_objective, read_party_vitals, toggle_streamer, enable_ocr, route_hint, etc. The model decides when to call them via function calling. 
+Tools you expose: set_mode, add_objective, read_party_vitals, toggle_streamer, enable_ocr, route_hint, etc. The model decides when to call them via function calling.
 OpenAI Platform
 
-Fallback path (offline/backup): local Whisper for STT + your preferred TTS if the network blips; swap back when Realtime is available. 
+Fallback path (offline/backup): local Whisper for STT + your preferred TTS if the network blips; swap back when Realtime is available.
 OpenAI Platform
 GitHub
 +1
 
 If you must deploy on Azure
-Azure OpenAI GPT-4o Realtime offers a similar experience (WebRTC/WebSocket). Note: currently labeled preview with caveats; fine for pilots, be cautious for production SLAs. 
+Azure OpenAI GPT-4o Realtime offers a similar experience (WebRTC/WebSocket). Note: currently labeled preview with caveats; fine for pilots, be cautious for production SLAs.
 Microsoft Learn
 
 When to not chain separate APIs
-Chaining STT → LLM → TTS adds latency and edge-case complexity (VAD timing, barge-in, double buffering). The Realtime API explicitly exists to avoid these issues by giving you one duplex stream with tool calling built-in. 
+Chaining STT → LLM → TTS adds latency and edge-case complexity (VAD timing, barge-in, double buffering). The Realtime API explicitly exists to avoid these issues by giving you one duplex stream with tool calling built-in.
 OpenAI Platform
 OpenAI
 
 TL;DR
-Use OpenAI Realtime API as your primary engine (speech ↔ speech + tools). Keep Whisper locally as a resilience fallback. If your infra requires Azure, you can target Azure OpenAI Realtime (preview) with the same design. 
+Use OpenAI Realtime API as your primary engine (speech ↔ speech + tools). Keep Whisper locally as a resilience fallback. If your infra requires Azure, you can target Azure OpenAI Realtime (preview) with the same design.
 OpenAI
 OpenAI Platform
 Microsoft Learn
@@ -9449,7 +9449,7 @@ Hardware integration concept (second screen, physical companion).
 👉 Which of these would you like me to expand next — Astra’s evolving personality/memory, the plugin ecosystem SDK, or the multi-player sync (party awareness across apps)?
 
 You said:
-Please expand upon all of these comprehensively 
+Please expand upon all of these comprehensively
 ChatGPT said:
 
 Thought for 31s
@@ -10064,8 +10064,8 @@ plugin.json
   "description": "Spoiler-safe lore nudges and quest hints for BG3.",
   "permissions": {
     "streams": ["ocr:journal", "state:mode"],
-    "intel": ["emit"], 
-    "storage": ["mem:read"], 
+    "intel": ["emit"],
+    "storage": ["mem:read"],
     "net": []
   },
   "capabilities": {
@@ -10775,7 +10775,7 @@ Respect "Streamer Mode" and spoiler settings in your logic.
 
 # 🧪 How to use this template
 
-1. Create a new folder and paste these files in place.  
+1. Create a new folder and paste these files in place.
 2. Run:
    ```bash
    npm i
@@ -13167,5 +13167,3 @@ Voice actor: calm, confident, human warmth.
 Astra’s in-app TTS voice interleaves with narrator to demonstrate “live feel.”
 
 ✅ This storyboard is cinematic, clear, and grounded in Astra’s actual features. It teaches problem → solution → trust → CTA in 2:30, perfect for YouTube, Steam page, or social trailers.
-
-
