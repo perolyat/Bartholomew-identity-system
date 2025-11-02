@@ -17,6 +17,7 @@ from scripts.backfill_fts import backfill_fts
 sys.path.insert(0, os.path.dirname(__file__))
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_backfill_smoke():
     """Test backfill script with sample data"""

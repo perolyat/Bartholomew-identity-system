@@ -42,7 +42,7 @@ def embeddings_stats(
     enabled = os.getenv("BARTHO_EMBED_ENABLED") == "1"
     console.print(
         f"Enabled: {'✓' if enabled else '✗'} "
-        + f"(BARTHO_EMBED_ENABLED={'1' if enabled else 'not set'})",
+        f"(BARTHO_EMBED_ENABLED={'1' if enabled else 'not set'})",
     )
 
     if not enabled:
@@ -156,7 +156,7 @@ def embeddings_rebuild_vss(
                 console.print(f"[red]✗ VSS extension not available: {e}[/red]")
                 console.print("\nVSS is optional. Install from:")
                 console.print("  https://github.com/asg017/sqlite-vss\n")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from None
 
             # Drop existing VSS table and triggers
             console.print("Dropping existing VSS table and triggers...")
@@ -237,17 +237,20 @@ def embeddings_rebuild_vss(
             console.print("\n[green]VSS rebuild complete![/green]\n")
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]\n")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @brake_app.command("on")
 def brake_on(
     scope: list[str] = typer.Option(
-        None,
-        "--scope",
+        default=None,
+        param_decls=["--scope"],
         help="Scopes to block (global, skills, sight, voice, scheduler)",
     ),
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(
+        default="data/bartholomew.db",
+        help="Path to database file",
+    ),
 ):
     """Engage parking brake (block specified scopes)"""
     from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake

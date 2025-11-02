@@ -54,6 +54,14 @@ always_keep:
       recall_policy: always
       encrypt: strong
 
+  - match:
+      kind: safety.audit
+    metadata:
+      privacy_class: user.safety
+      recall_policy: always
+      summarize: false
+      encrypt: standard
+
 ask_before_store:
   - match:
       content: "(?i)(password|bank|account number|two-factor|auth code)"

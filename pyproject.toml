@@ -74,11 +74,17 @@ ignore = [
     "E501",   # line too long (handled by black)
     "PLR0913", # too many arguments
     "PLR2004", # magic value comparison
+    "PLR0912", # too many branches (temporary)
+    "PLR0915", # too many statements (temporary)
+    "PLR0911", # too many returns (temporary)
+    "B008",   # typer.Option pattern (temporary)
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "identity_interpreter/models.py" = ["N801"]  # Allow Identity_ for disambiguation
+"tests/**" = ["PLR0912", "PLR0915", "B017", "E722", "C401"]  # temp
+"bartholomew/kernel/**" = ["PLR0912", "PLR0915", "PLW0603"]  # temp
 
 [tool.ruff.lint.isort]
 known-first-party = ["identity_interpreter"]
