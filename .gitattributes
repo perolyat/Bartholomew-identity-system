@@ -11,3 +11,7 @@
 # Windows scripts keep CRLF
 *.ps1 text eol=crlf
 *.bat text eol=crlf
+
+# Binary artifacts
+*.db binary
+*.sqlite binary

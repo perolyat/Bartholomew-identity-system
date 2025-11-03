@@ -70,6 +70,7 @@ select = [
     "ISC", # flake8-implicit-str-concat
     "PL",  # pylint
 ]
+# TODO(bartholomew:S1/S2): remove PLR09xx ignores after refactoring hot paths
 ignore = [
     "E501",   # line too long (handled by black)
     "PLR0913", # too many arguments
