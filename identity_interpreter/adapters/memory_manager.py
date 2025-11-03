@@ -10,7 +10,7 @@ import logging
 import os
 import sqlite3
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,7 @@ from bartholomew.kernel.memory.privacy_guard import (
 )
 from bartholomew.kernel.memory_rules import _rules_engine
 from bartholomew.kernel.redaction_engine import apply_redaction
+from bartholomew.kernel.time_utils import utc_now_iso
 
 
 # Schema version for migration management
@@ -284,7 +285,7 @@ class MemoryManager:
         if ttl_days is None:
             ttl_days = self.memory_policy.retention_rules.default_ttl_days
 
-        return datetime.now() + timedelta(days=ttl_days)
+        return datetime.now(timezone.utc) + timedelta(days=ttl_days)
 
     def store_memory(self, memory: MemoryEntry) -> bool:
         """
@@ -553,7 +554,7 @@ class MemoryManager:
     def _cleanup_expired_memories(self):
         """Remove expired memories"""
         try:
-            now = datetime.now().isoformat()
+            now = utc_now_iso()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",
@@ -632,7 +633,7 @@ class MemoryManager:
         Returns count of deleted memories
         """
         try:
-            now = datetime.now().isoformat()
+            now = utc_now_iso()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",

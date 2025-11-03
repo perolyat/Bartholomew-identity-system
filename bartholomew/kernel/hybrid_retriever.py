@@ -25,7 +25,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from bartholomew.kernel.db_ctx import set_wal_pragmas
@@ -758,7 +758,7 @@ class HybridRetriever:
             # Parse ISO timestamp
             ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             # Use provided now or current time
-            now_dt = now if now is not None else datetime.now(ts_dt.tzinfo or None)
+            now_dt = now if now is not None else datetime.now(ts_dt.tzinfo or timezone.utc)
 
             # Clamp age at 0 for future-dated items
             age_seconds = max(0.0, (now_dt - ts_dt).total_seconds())

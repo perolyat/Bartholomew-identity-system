@@ -4,9 +4,11 @@ Tracks alignment metrics and performance
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from bartholomew.kernel.time_utils import utc_now_iso
 
 
 class MetricsLogger:
@@ -39,7 +41,7 @@ class MetricsLogger:
             context: Optional context
         """
         entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utc_now_iso(),
             "metric": metric_name,
             "value": value,
             "context": context or {},
@@ -61,7 +63,7 @@ class MetricsLogger:
             rationale: Rationale paths
         """
         entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utc_now_iso(),
             "type": "decision",
             "decision_type": decision_type,
             "decision": decision,
@@ -74,7 +76,7 @@ class MetricsLogger:
         audit_dir = self.output_dir / "audit_logs"
         audit_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filepath = audit_dir / f"metrics_{timestamp}.jsonl"
 
         with open(filepath, "w", encoding="utf-8") as f:

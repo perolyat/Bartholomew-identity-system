@@ -6,7 +6,7 @@ Tests the full identity interpretation system with real Ollama backend
 
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -146,7 +146,7 @@ class BartholomewChat:
         # 8. Store in persistent memory
         conversation_turn = ConversationTurn(
             id=str(uuid.uuid4()),
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             user_input=user_input,
             ai_response=response_text,
             context={

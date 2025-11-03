@@ -5,7 +5,7 @@ Now integrated with comprehensive memory management
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +53,7 @@ class StorageAdapter:
             event_type: Type of event
             data: Event data
         """
-        timestamp = datetime.now()
+        timestamp = datetime.now(timezone.utc)
         entry = {
             "timestamp": timestamp.isoformat(),
             "event_type": event_type,
@@ -81,7 +81,7 @@ class StorageAdapter:
             content: Entry content
             metadata: Optional metadata
         """
-        timestamp = datetime.now()
+        timestamp = datetime.now(timezone.utc)
         entry = {
             "timestamp": timestamp.isoformat(),
             "type": entry_type,
@@ -111,7 +111,7 @@ class StorageAdapter:
         Returns:
             Path to snapshot file
         """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"session_{session_id}_{timestamp}.json"
         filepath = self.sessions_dir / filename
 
