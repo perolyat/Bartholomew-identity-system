@@ -173,7 +173,7 @@ class ConsentGate:
                 if memory_id not in consented_ids:
                     include = False
                     logger.debug(
-                        f"Excluding memory {memory_id}: " "requires_consent without consent record",
+                        f"Excluding memory {memory_id}: requires_consent without consent record",
                     )
 
             # Extract policy metadata

@@ -84,8 +84,17 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "identity_interpreter/models.py" = ["N801"]  # Allow Identity_ for disambiguation
-"tests/**" = ["PLR0912", "PLR0915", "B017", "E722", "C401"]  # temp
-"bartholomew/kernel/**" = ["PLR0912", "PLR0915", "PLW0603"]  # temp
+"tests/**" = ["PLC0415", "E402", "B017", "E722", "C401", "PLR0912", "PLR0915"]  # pragmatic test rules
+"scripts/**" = ["PLC0415"]  # Allow lazy imports in scripts
+"**/cli.py" = ["PLC0415"]  # Allow lazy imports in CLI tools for fast startup
+"conftest.py" = ["PLC0415"]  # Lazy imports in test fixtures
+"test_*.py" = ["PLC0415"]  # Lazy imports in root-level tests
+"cleanup_*.py" = ["PLC0415"]  # Lazy imports in utility scripts
+"bartholomew/kernel/**" = ["PLC0415", "PLR0912", "PLR0915", "PLW0603"]  # Lazy imports for optional deps + temp complexity
+"bartholomew_api_bridge_v0_1/**" = ["PLC0415", "PLW0603"]  # Lazy imports + global metrics
+"identity_interpreter/orchestrator/**" = ["PLC0415"]  # Lazy imports for optional dependencies
+"identity_interpreter/adapters/sight/**" = ["PLC0415"]  # Lazy imports for optional vision deps
+"identity_interpreter/adapters/voice_io/**" = ["PLC0415"]  # Lazy imports for optional audio deps
 
 [tool.ruff.lint.isort]
 known-first-party = ["identity_interpreter"]

@@ -171,7 +171,7 @@ class MemoryManager:
                 raise RuntimeError(
                     "Encryption is required but keystore initialization "
                     f"failed: {e}. Ensure OS keystore is accessible.",
-                )
+                ) from e
             # Fallback to no encryption (development only)
             self.cipher = None
 
@@ -318,7 +318,7 @@ class MemoryManager:
 
                     if loop and loop.is_running():
                         # Use sync fallback
-                        from identity_interpreter.adapters.consent_terminal import (  # noqa: E501
+                        from identity_interpreter.adapters.consent_terminal import (  # noqa: E501, PLC0415 (lazy import to avoid IO/curses overhead)
                             ConsentAdapter,
                         )
 
@@ -368,7 +368,7 @@ class MemoryManager:
 
                     if loop and loop.is_running():
                         # Use sync fallback to avoid nested loop issues
-                        from identity_interpreter.adapters.consent_terminal import (  # noqa: E501
+                        from identity_interpreter.adapters.consent_terminal import (  # noqa: E501, PLC0415 (lazy import to avoid IO/curses overhead)
                             ConsentAdapter,
                         )
 

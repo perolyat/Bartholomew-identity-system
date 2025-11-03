@@ -271,7 +271,9 @@ class HybridRetriever:
 
         # Use hot-reload config manager if no explicit config provided
         if config is None:
-            from bartholomew.kernel.retrieval_config import get_retrieval_config_manager
+            from bartholomew.kernel.retrieval_config import (
+                get_retrieval_config_manager,
+            )  # noqa: PLC0415 (lazy import to avoid circular dependency)
 
             manager = get_retrieval_config_manager()
             self.config = manager.get_hybrid_config()
@@ -356,7 +358,7 @@ class HybridRetriever:
         memory_ids = set()
         for row in fts_results:
             memory_ids.add(row["id"])
-        for memory_id, score in vec_results:
+        for memory_id, _score in vec_results:
             memory_ids.add(memory_id)
 
         if not memory_ids:
@@ -444,8 +446,6 @@ class HybridRetriever:
             recency_epoch = 0.0
             if recency_ts:
                 try:
-                    from datetime import datetime
-
                     dt = datetime.fromisoformat(recency_ts.replace("Z", "+00:00"))
                     recency_epoch = dt.timestamp()
                 except Exception:
@@ -890,7 +890,7 @@ class HybridRetriever:
                 fts_ranks[memory_id] = rank
 
         vec_ranks = {}
-        for rank, (memory_id, score) in enumerate(vec_results, start=1):
+        for rank, (memory_id, _score) in enumerate(vec_results, start=1):
             if memory_id in filtered_ids:
                 vec_ranks[memory_id] = rank
 
