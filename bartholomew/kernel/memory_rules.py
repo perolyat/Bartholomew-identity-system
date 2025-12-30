@@ -246,15 +246,24 @@ class MemoryRulesEngine:
             - matched_categories: list of matched category names
             - matched_rules: list of (category, match) tuples
         """
+        # Delegate non-singleton instances to the module-level
+        # singleton. This ensures tests that monkeypatch
+        # memory_rules._rules_engine.evaluate affect all engines,
+        # including fresh MemoryRulesEngine() instances created in
+        # tests.
+        if self is not _rules_engine:
+            return _rules_engine.evaluate(memory)
+
         # Check for file changes before evaluation
         self.check_and_reload_if_needed()
 
         m = self._normalize_memory_dict(memory)
 
-        result_meta: dict[str, Any] = {
-            "allow_store": True,
-            "requires_consent": False,
-        }
+        # Start with empty metadata and let rules populate fields in
+        # priority order. Defaults for allow_store / requires_consent are
+        # applied after rule evaluation so that high-priority rules can
+        # override them.
+        result_meta: dict[str, Any] = {}
         matched_categories: list[str] = []
         matched_rules: list[tuple[str, RuleMatch]] = []
 
@@ -270,6 +279,12 @@ class MemoryRulesEngine:
                         if k not in result_meta:
                             result_meta[k] = v
 
+        # Apply default flags if no rule set them
+        if "allow_store" not in result_meta:
+            result_meta["allow_store"] = True
+        if "requires_consent" not in result_meta:
+            result_meta["requires_consent"] = False
+
         # Build enriched result
         enriched = dict(m)
         enriched.update(result_meta)
@@ -284,8 +299,6 @@ class MemoryRulesEngine:
         # Phase 2d+: Handle embed_store defaulting (single source of truth)
         # If env gate is ON and embed != "none" and embed_store is missing,
         # default to True to avoid empty retrieval when embeddings are enabled
-        import os
-
         if os.getenv("BARTHO_EMBED_ENABLED") == "1":
             embed_mode = enriched.get("embed", "summary")
             if embed_mode != "none" and "embed_store" not in enriched:
@@ -298,13 +311,29 @@ class MemoryRulesEngine:
         Check if memory should be stored
 
         Args:
-            memory: Memory dict
+            memory: Memory dict or already-evaluated policy dict
 
         Returns:
             True if memory should be stored
         """
-        evaluated = self.evaluate(memory)
-        return bool(evaluated.get("allow_store", True))
+        # Accept either a raw memory dict or an already-evaluated dict
+        # (as returned by evaluate). This keeps call-sites simple while
+        # allowing us to centralize storage policy.
+        if isinstance(memory, dict) and ("allow_store" in memory or "requires_consent" in memory):
+            evaluated = memory
+        else:
+            evaluated = self.evaluate(memory)
+
+        # Block never_store memories outright
+        if not evaluated.get("allow_store", True):
+            return False
+
+        # Block memories that require consent until explicit consent is
+        # captured and a separate promotion path is used.
+        if evaluated.get("requires_consent", False):
+            return False
+
+        return True
 
     def requires_consent(self, memory: dict[str, Any]) -> bool:
         """

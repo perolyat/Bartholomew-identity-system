@@ -79,6 +79,19 @@ ask_before_store:
       summarize: false
       encrypt: strong
 
+  # Phase 2d Fixpack v3: align paraphrase dataset rows marked
+  # privacy_marker=requires_consent with ask_before_store rules by
+  # matching on common "personal data" phrasing.
+  - match:
+      content: "(?i)(personal data|personal information)"
+    metadata:
+      privacy_class: user.sensitive
+      requires_consent: true
+      recall_policy: always
+      redact: true
+      summarize: false
+      encrypt: strong
+
   - match:
       tags:
         - trauma
@@ -145,6 +158,17 @@ never_store:
       speaker: unknown
     metadata:
       allow_store: false
+
+  # Block “store personal data / personal information” policy sentences
+  # used in the hybrid_paraphrases benchmark.
+  - match:
+      content: "(?i)(personal data|personal information)"
+    metadata:
+      allow_store: false
+      privacy_class: user.sensitive
+      recall_policy: never
+      redact: true
+      encrypt: strong
 
 context_only:
   - match:

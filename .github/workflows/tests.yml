@@ -1,0 +1,65 @@
+name: Tests (Manual)
+
+# Manual-only workflow for S0.5
+# Enable on push/PR once Stage 1 stabilizes
+on:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run tests with coverage (gated by line >=70)
+        run: |
+          pytest --cov=bartholomew --cov-branch \
+                 --cov-report=term-missing:skip-covered \
+                 --cov-report=xml \
+                 --cov-fail-under=70
+
+      - name: Combine coverage and regenerate reports
+        if: always()
+        run: |
+          coverage combine || true
+          coverage xml -i
+          coverage html -i
+
+      # OPTIONAL: enforce branch >= 60% by parsing coverage.xml
+      - name: Enforce branch coverage >= 60% (optional)
+        if: always()
+        run: |
+          python - << 'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse('coverage.xml').getroot()
+          # coverage.py XML stores totals on the root <coverage> element's attributes
+          branch_rate = float(root.get('branch-rate') or root.get('line-rate') or 0.0)
+          if branch_rate < 0.60:
+            print(f"Branch coverage {branch_rate:.2%} < 60%")
+            sys.exit(1)
+          print(f"Branch coverage OK: {branch_rate:.2%}")
+          PY
+
+      - name: Upload coverage.xml artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+      - name: Upload HTML coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: htmlcov
+          path: htmlcov

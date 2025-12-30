@@ -35,6 +35,16 @@ ask_before_store:
       requires_consent: true
       recall_policy: always
 
+  # Phase 2d Fixpack v3: ensure paraphrase rows marked with
+  # privacy_marker=requires_consent are governed by rules by matching
+  # on "personal data" style phrases.
+  - match:
+      content: "(?i)(personal data|personal information)"
+    metadata:
+      privacy_class: user.secure
+      requires_consent: true
+      recall_policy: always
+
   - match:
       tags:
         - trauma

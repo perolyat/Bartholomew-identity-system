@@ -83,6 +83,20 @@ class SummarizationEngine:
 
         return False
 
+    def _truncate_fallback(self, value: str, target: int) -> str:
+        """Fallback truncation when sentence extraction is not useful.
+
+        Ensures we respect the target length (plus ellipsis) and try to
+        break on a word boundary when possible.
+        """
+        snippet = value[:target].rstrip()
+        # Prefer to cut on a word boundary if we have spaces and the
+        # boundary is not too early in the snippet.
+        last_space = snippet.rfind(" ")
+        if last_space > target // 2:
+            snippet = snippet[:last_space]
+        return snippet + "..."
+
     def summarize(self, value: str, target_length: int | None = None) -> str:
         """
         Generate a summary of the content
@@ -118,14 +132,11 @@ class SummarizationEngine:
 
         result = summary.strip()
 
-        # If we got nothing or very little, just truncate
-        if len(result) < 100:
-            result = value[:target].strip()
-            # Try to end at a word boundary
-            last_space = result.rfind(" ")
-            if last_space > target // 2:
-                result = result[:last_space]
-            result += "..."
+        # Fallback: if the extractive summary is very short or we effectively
+        # had a single giant sentence, truncate to the target and append
+        # an ellipsis.
+        if len(result) < 100 or (len(sentences) == 1 and len(value) > target):
+            result = self._truncate_fallback(value, target)
 
         logger.debug(f"Summarized {len(value)} chars to {len(result)} chars")
         return result

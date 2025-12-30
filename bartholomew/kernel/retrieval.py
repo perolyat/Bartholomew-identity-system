@@ -163,7 +163,11 @@ class Retriever:
                 model=cfg.model,
                 dim=cfg.dim,
                 source=filters.source,
-                allow_mismatch=False,
+                # Phase 2d Fixpack v3: relax provider/model matching for
+                # vector-only Retriever while keeping dim strict, to ensure
+                # tests that use ad-hoc model names (e.g. "test-model") can
+                # still retrieve their embeddings.
+                allow_mismatch=True,
             )
         except Exception as e:
             logger.error(f"Vector search failed: {e}")

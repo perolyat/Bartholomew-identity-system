@@ -9,7 +9,7 @@ from typing import Any
 import aiosqlite
 import numpy as np
 
-from bartholomew.kernel.encryption_engine import _encryption_engine
+from bartholomew.kernel import encryption_engine as _encryption_module
 from bartholomew.kernel.memory.privacy_guard import (
     is_sensitive,
     request_permission_to_store,
@@ -68,7 +68,11 @@ def _get_embedding_components(db_path: str):
     Lazy load embedding components
 
     Returns tuple of (embedding_engine, vector_store) or (None, None)
-    if embeddings not enabled or imports fail
+    if embeddings not enabled or imports fail.
+
+    Important: the vector store must always point at the same SQLite
+    database file as the owning MemoryStore, so we recreate the cached
+    instance when the db_path changes.
     """
     global _embedding_engine, _vector_store
 
@@ -79,14 +83,15 @@ def _get_embedding_components(db_path: str):
         return None, None
 
     try:
-        if _embedding_engine is None:
-            from bartholomew.kernel.embedding_engine import get_embedding_engine
+        from bartholomew.kernel.embedding_engine import get_embedding_engine
+        from bartholomew.kernel.vector_store import VectorStore
 
+        if _embedding_engine is None:
             _embedding_engine = get_embedding_engine()
 
-        if _vector_store is None:
-            from bartholomew.kernel.vector_store import VectorStore
-
+        # Recreate vector store if it doesn't exist yet or is bound to a
+        # different database path (tests use many temp DB files).
+        if _vector_store is None or getattr(_vector_store, "db_path", None) != db_path:
             _vector_store = VectorStore(db_path)
 
         return _embedding_engine, _vector_store
@@ -237,7 +242,7 @@ class MemoryStore:
         # Apply encryption if required by rules (Phase 2b)
         # Start with redacted_value, replace with encrypted if needed
         value_to_store = redacted_value
-        cipher = _encryption_engine.encrypt_for_policy(
+        cipher = _encryption_module._encryption_engine.encrypt_for_policy(
             redacted_value,
             evaluated,
             {"kind": kind, "key": key, "ts": ts},
@@ -248,7 +253,7 @@ class MemoryStore:
         # Encrypt summary if present and encryption is enabled
         cipher_summary = None
         if summary is not None:
-            cipher_summary = _encryption_engine.encrypt_for_policy(
+            cipher_summary = _encryption_module._encryption_engine.encrypt_for_policy(
                 summary,
                 evaluated,
                 {"kind": kind, "key": key + "::summary", "ts": ts},
@@ -634,6 +639,13 @@ class MemoryStore:
         evaluated = _rules_engine.evaluate(memory_dict)
 
         embed_mode = evaluated.get("embed", "summary")
+        if embed_mode != "none" and not can_index(evaluated):
+            logger.info(
+                "Vector embedding blocked by policy for memory %s in persist_embeddings_for",
+                memory_id,
+            )
+            embed_mode = "none"
+
         if embed_mode == "none":
             return 0
 
@@ -642,18 +654,33 @@ class MemoryStore:
             if embed_mode == "both":
                 sources = ["summary", "full"]
             elif embed_mode == "summary":
-                sources = ["summary"] if summary else []
-            else:  # full
+                sources = ["summary"]
+            else:  # "full"
                 sources = ["full"]
 
-        # Generate embeddings
-        texts_to_embed = []
-        sources_to_store = []
+        # Generate embeddings (with summary fallback semantics matching upsert_memory)
+        texts_to_embed: list[str] = []
+        sources_to_store: list[str] = []
 
         for src in sources:
-            if src == "summary" and summary:
-                texts_to_embed.append(summary)
-                sources_to_store.append("summary")
+            if src == "summary":
+                if summary:
+                    texts_to_embed.append(summary)
+                    sources_to_store.append("summary")
+                else:
+                    # Fallback: use stored value as a summary substitute (trimmed)
+                    global _summary_fallback_warned
+                    if not _summary_fallback_warned:
+                        logger.warning(
+                            "Summary missing for persist_embeddings_for; "
+                            "using stored value as summary fallback",
+                        )
+                        _summary_fallback_warned = True
+
+                    fallback_text = (value or "")[:500].strip()
+                    if fallback_text:
+                        texts_to_embed.append(fallback_text)
+                        sources_to_store.append("summary")
             elif src == "full":
                 texts_to_embed.append(value)
                 sources_to_store.append("full")

@@ -1,0 +1,22 @@
+[run]
+branch = True
+parallel = True
+source =
+    bartholomew
+omit =
+    */__init__.py
+    */__main__.py
+    tests/*
+    scripts/*
+    */migrations/*
+    */generated/*
+
+[report]
+show_missing = True
+skip_covered = True
+fail_under = 70
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    if __name__ == "__main__":
