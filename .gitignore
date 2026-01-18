@@ -80,3 +80,10 @@ data/**/*.db
 .coverage
 htmlcov/
 .tox/
+
+# Brainstorm intermediate artifacts
+logs/brainstorm/chunks/
+logs/brainstorm/extracted/
+logs/brainstorm/merged/
+logs/brainstorm/*VERBATIM*.md
+logs/brainstorm/*INDEX*.md
