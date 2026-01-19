@@ -126,7 +126,7 @@ class SummarizationEngine:
         summary = ""
         for sentence in sentences:
             # Check if adding this sentence would exceed target
-            if summary and len(summary) + len(sentence) + 1 > target:
+            if len(summary) + len(sentence) + 1 > target:
                 break
             summary += sentence + " "
 
