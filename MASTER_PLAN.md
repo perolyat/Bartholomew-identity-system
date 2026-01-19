@@ -26,11 +26,22 @@ Build a practical, privacy-preserving, consent-first cognitive architecture (“
    - Retention/TTL rules must be enforceable and testable.
 
 3. **Verification-first engineering**
-   - If it can’t be verified (tests/logs/replay), it’s not shipped.
+   - If it can't be verified (tests/logs/replay), it's not shipped.
    - Changes that alter interfaces/governance must update docs + tests.
 
 4. **No doc sprawl**
    - Canonical docs are the only SSOT: see links below.
+
+## Doc Governance
+
+All canonical documentation changes follow strict governance:
+
+1. **User approval required**: No doc or code changes are committed without explicit user authorization.
+2. **Change presentation**: Proposed changes must be shown via diff or summary before commit.
+3. **Traceability**: Each commit must map to an approved task or explicit user request.
+4. **Rollback readiness**: User can revert any change via `git checkout -- <files>` or `git revert <commit>`.
+
+See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHECKLISTS.md](CHECKLISTS.md) for commit authorization checklist.
 
 ## Canonical docs
 
@@ -252,13 +263,31 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 ## Next 3 Moves (always current)
 
 1. **Land SSOT docs (this change) + declare legacy docs**
-   - Make canonical docs the only SSOT; link out to existing “implementation notes” files.
+   - Make canonical docs the only SSOT; link out to existing "implementation notes" files.
 
 2. **Reinstate minimal CI** (or add it if missing in this snapshot)
    - Linux gates: format + lint + tests.
 
 3. **Fix the P0 non-environmental failing tests**
    - One fix per PR; add/adjust tests when a bug is fixed; avoid broad refactors.
+
+## Pending Approvals
+
+> **Status:** Tracks proposed changes through approval and commit lifecycle.
+>
+> **Process:** Agent proposes → User reviews → User approves → Commit is executed → Record in ledger
+>
+> **Rule:** Never mark anything as committed without a commit hash.
+
+### Pending (awaiting user approval)
+- *None* (last updated: 2026-01-19)
+
+### Approval Ledger
+Record of approved changes with commit tracking (max 5 entries):
+- *No entries yet*
+
+**Ledger format:**
+- YYYY-MM-DD — <short description> — Approved by <user> — Commit: <hash> (or **not yet committed**)
 
 ## Quality gates
 

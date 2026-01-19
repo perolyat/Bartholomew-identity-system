@@ -28,6 +28,8 @@ Mark each as **PASS** or **BLOCKED**.
 - [ ] Docs updated (canonical docs if behavior/interface changed)
 - [ ] Rollback note included for risky changes
 - [ ] No new bypass paths introduced (consent gate / parking brake)
+- [ ] User approval obtained for all doc/code changes before commit
+- [ ] Changes presented with clear diff/summary for review
 
 ## Release checklist (Stage gate)
 
@@ -36,6 +38,14 @@ Mark each as **PASS** or **BLOCKED**.
 - [ ] Audit log sanity check performed
 - [ ] Known issues documented (with explicit scope)
 
+## Commit authorization checklist
+
+Every `git commit` requires:
+- PASS/BLOCKED: User has explicitly reviewed proposed changes
+- PASS/BLOCKED: User has authorized the commit (verbal/written confirmation)
+- PASS/BLOCKED: No autonomous commits without human approval
+- PASS/BLOCKED: Changes align with stated task objectives
+- PASS/BLOCKED: Commit performer — commits are executed only after user approval, by the user or an explicitly supervised session
 
 ## Prompt hygiene (agent execution)
 - PASS/BLOCKED: Prompts do **not** paste huge transcripts.

@@ -65,8 +65,15 @@
 - **Date:** 2026-01-19
 
 ## Decision: Experience Kernel is a first-class subsystem
-- **Decision:** Treat “Experience Kernel” (self-model + narrator) as an explicit module with tests and interfaces.
+- **Decision:** Treat "Experience Kernel" (self-model + narrator) as an explicit module with tests and interfaces.
 - **Alternatives:** Implicitly spread identity/self logic across prompts and ad-hoc memory.
 - **Why:** Keeps continuity, growth, and persona coherent and testable.
 - **Consequences:** Requires interface spec + replay tests; changes count as governance-adjacent.
+- **Date:** 2026-01-19
+
+## Decision: User Approval Gate for all doc/code commits
+- **Decision:** No changes are merged or committed to the main branch without explicit user approval. This applies to canonical docs, implementation code, tests, and configuration.
+- **Alternatives:** Auto-commit on successful CI; trust agent to determine when changes are "safe"; review-only for high-risk changes.
+- **Why:** Maintains human-in-the-loop oversight; prevents unintended governance drift; ensures user understands impact of every change before it becomes permanent.
+- **Consequences:** Every proposed change must be presented for user review before `git commit`; workflows must include explicit approval checkpoints; agent must pause and request authorization rather than proceeding autonomously.
 - **Date:** 2026-01-19
