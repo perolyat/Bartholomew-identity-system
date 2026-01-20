@@ -343,108 +343,135 @@ class MemoryStore:
             # Commit transaction (includes base row + FTS changes)
             await db.commit()
 
-            # Phase 2d: Generate embeddings if enabled
-            embed_engine, vec_store = _get_embedding_components(self.db_path)
-            if embed_engine and vec_store and result.memory_id:
-                # Check if rule allows embedding
-                embed_mode = evaluated.get("embed", "summary")
-                # Phase 2d+: embed_store defaults to True when
-                # embed != 'none'
-                if "embed_store" in evaluated:
-                    embed_store = evaluated["embed_store"]
-                else:
-                    # Default: True if embeddings configured, else False
-                    embed_store = embed_mode != "none"
-
-                # Apply policy-based indexing guard for embeddings
-                if embed_mode != "none" and not can_index(evaluated):
-                    embed_mode = "none"
-                    logger.info(
-                        f"Vector embedding blocked by policy for memory {result.memory_id}",
-                    )
-
-                if embed_mode != "none":
-                    # Determine what to embed
-                    texts_to_embed = []
-                    sources = []
-
-                    # Use ORIGINAL values before encryption for embedding
-                    orig_value = memory_dict["value"]
-                    if evaluated.get("redact_strategy"):
-                        orig_value = apply_redaction(orig_value, evaluated)
-
-                    # Check if we have summary
-                    orig_summary = None
-                    if _summarization_engine.should_summarize(evaluated, orig_value, kind):
-                        orig_summary = _summarization_engine.summarize(orig_value)
-
-                    # Build texts list with fallback for missing summary
-                    if embed_mode in ("summary", "both"):
-                        if orig_summary:
-                            texts_to_embed.append(orig_summary)
-                            sources.append("summary")
-                        else:
-                            # Phase 2d+: Fallback to redacted content
-                            global _summary_fallback_warned
-                            if not _summary_fallback_warned:
-                                logger.warning(
-                                    "Summary missing for embedding; "
-                                    "using redacted content as fallback",
-                                )
-                                _summary_fallback_warned = True
-                            # Trim to ~500 chars as summary substitute
-                            fallback_text = orig_value[:500].strip()
-                            if fallback_text:
-                                texts_to_embed.append(fallback_text)
-                                sources.append("summary")
-
-                    if embed_mode in ("full", "both"):
-                        texts_to_embed.append(orig_value)
-                        sources.append("full")
-
-                    if texts_to_embed:
-                        try:
-                            # Embed texts
-                            vecs = embed_engine.embed_texts(texts_to_embed)
-
-                            if embed_store:
-                                # Record consent in async transaction
-                                await db.execute(
-                                    "INSERT OR IGNORE INTO memory_consent "
-                                    "(memory_id, source) VALUES (?, ?)",
-                                    (result.memory_id, "upsert_memory"),
-                                )
-                                await db.commit()
-                            else:
-                                # Compute-only: return as ephemeral
-                                for src, vec in zip(sources, vecs, strict=False):
-                                    result.ephemeral_embeddings.append((src, vec))
-                                logger.debug(
-                                    f"Computed {len(vecs)} ephemeral "
-                                    f"embedding(s) (not persisted)",
-                                )
-                                # Exit early for compute-only
-                                return result
-
-                            # Store embeddings after closing async context
-                            # to avoid database lock
-                            result._pending_embeddings = (vecs, sources)
-                        except Exception as e:
-                            logger.error(f"Failed to generate embeddings: {e}")
-
-        # Phase 2d: Persist embeddings outside async context
-        if hasattr(result, "_pending_embeddings"):
-            vecs, sources = result._pending_embeddings
-            try:
-                cfg = embed_engine.config
-                for src, vec in zip(sources, vecs, strict=False):
-                    vec_store.upsert(result.memory_id, vec, src, cfg.provider, cfg.model)
-                logger.debug(f"Stored {len(vecs)} embedding(s) for memory {result.memory_id}")
-            except Exception as e:
-                logger.error(f"Failed to persist embeddings: {e}")
-            delattr(result, "_pending_embeddings")
+        # Phase 2d: Generate and persist embeddings OUTSIDE async context
+        # This avoids database locking issues on Windows when VectorStore
+        # uses synchronous sqlite3 while aiosqlite connection was open.
+        await self._handle_embeddings(
+            result=result,
+            memory_dict=memory_dict,
+            evaluated=evaluated,
+            kind=kind,
+        )
 
         return result
+
+    async def _handle_embeddings(
+        self,
+        result: StoreResult,
+        memory_dict: dict,
+        evaluated: dict,
+        kind: str,
+    ) -> None:
+        """
+        Handle embedding generation and persistence OUTSIDE async context.
+
+        This method is called after the main database transaction is committed
+        to avoid database locking issues on Windows when VectorStore uses
+        synchronous sqlite3 connections.
+
+        Args:
+            result: StoreResult object to populate with embeddings
+            memory_dict: Original memory data (for embedding source text)
+            evaluated: Evaluated rules metadata
+            kind: Memory kind
+        """
+        global _summary_fallback_warned
+
+        if not result.memory_id:
+            return
+
+        # Get embedding components (this may create VectorStore schema)
+        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        if not embed_engine or not vec_store:
+            return
+
+        # Check if rule allows embedding
+        embed_mode = evaluated.get("embed", "summary")
+
+        # Phase 2d+: embed_store defaults to True when embed != 'none'
+        if "embed_store" in evaluated:
+            embed_store = evaluated["embed_store"]
+        else:
+            # Default: True if embeddings configured, else False
+            embed_store = embed_mode != "none"
+
+        # Apply policy-based indexing guard for embeddings
+        if embed_mode != "none" and not can_index(evaluated):
+            embed_mode = "none"
+            logger.info(
+                f"Vector embedding blocked by policy for memory {result.memory_id}",
+            )
+
+        if embed_mode == "none":
+            return
+
+        # Determine what to embed
+        texts_to_embed = []
+        sources = []
+
+        # Use ORIGINAL values before encryption for embedding
+        orig_value = memory_dict["value"]
+        if evaluated.get("redact_strategy"):
+            orig_value = apply_redaction(orig_value, evaluated)
+
+        # Check if we have summary
+        orig_summary = None
+        if _summarization_engine.should_summarize(evaluated, orig_value, kind):
+            orig_summary = _summarization_engine.summarize(orig_value)
+
+        # Build texts list with fallback for missing summary
+        if embed_mode in ("summary", "both"):
+            if orig_summary:
+                texts_to_embed.append(orig_summary)
+                sources.append("summary")
+            else:
+                # Phase 2d+: Fallback to redacted content
+                if not _summary_fallback_warned:
+                    logger.warning(
+                        "Summary missing for embedding; using redacted content as fallback",
+                    )
+                    _summary_fallback_warned = True
+                # Trim to ~500 chars as summary substitute
+                fallback_text = orig_value[:500].strip()
+                if fallback_text:
+                    texts_to_embed.append(fallback_text)
+                    sources.append("summary")
+
+        if embed_mode in ("full", "both"):
+            texts_to_embed.append(orig_value)
+            sources.append("full")
+
+        if not texts_to_embed:
+            return
+
+        try:
+            # Embed texts
+            vecs = embed_engine.embed_texts(texts_to_embed)
+
+            if not embed_store:
+                # Compute-only: return as ephemeral (don't persist)
+                for src, vec in zip(sources, vecs, strict=False):
+                    result.ephemeral_embeddings.append((src, vec))
+                logger.debug(
+                    f"Computed {len(vecs)} ephemeral embedding(s) (not persisted)",
+                )
+                return
+
+            # Record consent for embeddings
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "INSERT OR IGNORE INTO memory_consent (memory_id, source) VALUES (?, ?)",
+                    (result.memory_id, "upsert_memory"),
+                )
+                await db.commit()
+
+            # Persist embeddings (using synchronous VectorStore)
+            cfg = embed_engine.config
+            for src, vec in zip(sources, vecs, strict=False):
+                vec_store.upsert(result.memory_id, vec, src, cfg.provider, cfg.model)
+            logger.debug(f"Stored {len(vecs)} embedding(s) for memory {result.memory_id}")
+        except Exception as e:
+            logger.error(f"Failed to generate/persist embeddings: {e}")
 
     async def delete_memory(self, kind: str, key: str) -> bool:
         """

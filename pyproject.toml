@@ -107,9 +107,12 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-q -m 'not integration and not slow'"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: long/slow external-ish tests",
     "slow: expensive tests",
     "smoke: fast sanity checks",
     "asyncio: mark test as async",
+    "unit: fast unit tests",
 ]

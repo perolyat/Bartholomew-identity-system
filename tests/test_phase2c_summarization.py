@@ -381,7 +381,7 @@ class TestYAMLRulesIntegration:
             yaml_path = os.path.join("config", "memory_rules.yaml")
 
         if os.path.exists(yaml_path):
-            with open(yaml_path) as f:
+            with open(yaml_path, encoding="utf-8") as f:
                 content = f.read()
 
             # Check for summarization documentation
@@ -403,7 +403,7 @@ class TestYAMLRulesIntegration:
         if os.path.exists(yaml_path):
             import yaml
 
-            with open(yaml_path) as f:
+            with open(yaml_path, encoding="utf-8") as f:
                 config = yaml.safe_load(f)
 
             # Check for summary_mode in rules

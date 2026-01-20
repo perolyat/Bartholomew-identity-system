@@ -215,7 +215,7 @@ class TestRedactionYAMLRules:
         if os.path.exists(yaml_path):
             import yaml
 
-            with open(yaml_path) as f:
+            with open(yaml_path, encoding="utf-8") as f:
                 config = yaml.safe_load(f)
 
             # Check that redact section exists
@@ -245,7 +245,7 @@ class TestRedactionYAMLRules:
         if os.path.exists(yaml_path):
             import yaml
 
-            with open(yaml_path) as f:
+            with open(yaml_path, encoding="utf-8") as f:
                 config = yaml.safe_load(f)
 
             phase2a_fields_found = False

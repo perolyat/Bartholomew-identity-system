@@ -1,4 +1,6 @@
 pytest
+pytest-asyncio
+pytest-mock
 ruff
 black
 pre-commit
