@@ -104,7 +104,7 @@ class VectorStore:
                     self.vss_available = True
                     logger.info("sqlite-vss extension loaded successfully")
         except Exception as e:
-            logger.info(f"sqlite-vss not available ({e}), " "using brute-force cosine fallback")
+            logger.info(f"sqlite-vss not available ({e}), using brute-force cosine fallback")
             self.vss_available = False
 
     def _get_current_dim(self) -> int:

@@ -70,8 +70,8 @@ def ensure_schema(db_path: str) -> None:
 
         # Execute scheduler schema extensions
         # Use try/except for ALTER TABLE since columns may exist
-        for stmt in SCHEDULER_SCHEMA.split(";"):
-            stmt = stmt.strip()
+        for raw_stmt in SCHEDULER_SCHEMA.split(";"):
+            stmt = raw_stmt.strip()
             if not stmt:
                 continue
             try:

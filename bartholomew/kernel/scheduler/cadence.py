@@ -9,10 +9,10 @@ Supports two cadence types:
 import json
 import os
 import random
-from typing import Any, Union
+from typing import Any
 
 
-CadenceType = Union[tuple[str, int], tuple[str, int, int]]
+CadenceType = tuple[str, int] | tuple[str, int, int]
 
 
 def _speed_factor() -> float:

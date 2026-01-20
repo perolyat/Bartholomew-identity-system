@@ -137,7 +137,6 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    global _kernel
     if _kernel:
         await _kernel.stop()
 

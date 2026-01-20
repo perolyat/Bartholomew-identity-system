@@ -100,7 +100,7 @@ def calculate_hit_rate(results_list, queries, memory_map):
         # Check if any result is from same group (semantically similar)
         for result in results[:10]:
             # Find which group this memory belongs to
-            for (group_id, variant_idx), mem_id in memory_map.items():
+            for (group_id, _variant_idx), mem_id in memory_map.items():
                 if mem_id == result.memory_id and group_id == query_group:
                     hits += 1
                     break
