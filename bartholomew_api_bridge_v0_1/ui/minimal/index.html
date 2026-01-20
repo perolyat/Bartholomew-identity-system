@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html>
 <head>
@@ -7,27 +6,77 @@
   <title>Bartholomew • v0.1 Minimal UI</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; margin: 24px; background: #0b0f14; color: #e8f0fe; }
-    .row { display:flex; gap:8px; align-items:center; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
     .card { background:#111827; border:1px solid #1f2937; border-radius:14px; padding:16px; margin-bottom:16px; }
     button { border-radius:10px; border:1px solid #374151; background:#111827; color:#e8f0fe; padding:8px 12px; cursor:pointer; }
     button:hover { background:#1f2937; }
+    button.ack { border-color: #059669; color: #10b981; }
+    button.ack:hover { background: #064e3b; }
+    button.dismiss { border-color: #dc2626; color: #ef4444; }
+    button.dismiss:hover { background: #450a0a; }
     input, textarea { width:100%; border-radius:10px; border:1px solid #374151; background:#0b1220; color:#e8f0fe; padding:10px; }
     .badge { border:1px solid #374151; padding:4px 8px; border-radius:999px; font-size:12px; }
+    .badge.kernel-online { border-color: #059669; color: #10b981; }
+    .badge.kernel-offline { border-color: #dc2626; color: #ef4444; }
     #chatlog { max-height: 40vh; overflow:auto; white-space:pre-wrap; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px;}
+    .nudge-item { background: #1f2937; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+    .nudge-kind { color: #60a5fa; font-weight: 600; }
+    .nudge-msg { margin: 8px 0; }
+    .nudge-ts { font-size: 11px; color: #6b7280; }
+    .reflection-content { background: #0b1220; border-radius: 8px; padding: 12px; max-height: 200px; overflow: auto; white-space: pre-wrap; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+    .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; background: #1f2937; }
+    .tab.active { background: #374151; }
+    .empty-state { color: #6b7280; font-style: italic; padding: 12px; }
   </style>
 </head>
 <body>
   <h1>Bartholomew <span class="badge">v0.1</span></h1>
+
+  <!-- Health / Status -->
   <div class="card">
     <div class="row">
-      <div id="health" class="mono">health: pending…</div>
-      <button onclick="refreshHealth()">Refresh</button>
+      <span id="kernel-status" class="badge">kernel: checking…</span>
+      <span id="nudge-count" class="badge">nudges: …</span>
+      <span id="last-reflection" class="badge">reflection: …</span>
+      <button onclick="refreshHealth()">Refresh Status</button>
     </div>
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;color:#6b7280">Full health JSON</summary>
+      <div id="health" class="mono" style="margin-top:8px"></div>
+    </details>
   </div>
 
+  <!-- Stage 1: Nudges Panel -->
   <div class="card">
-    <h3>Chat</h3>
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">📌 Pending Nudges</h3>
+      <button onclick="refreshNudges()">Refresh</button>
+    </div>
+    <div id="nudges-list"></div>
+  </div>
+
+  <!-- Stage 1: Reflections Panel -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">📓 Reflections</h3>
+      <div class="row">
+        <button onclick="triggerReflection('daily')">Run Daily</button>
+        <button onclick="triggerReflection('weekly')">Run Weekly</button>
+      </div>
+    </div>
+    <div class="tabs">
+      <div class="tab active" onclick="showReflectionTab('daily')">Daily Journal</div>
+      <div class="tab" onclick="showReflectionTab('weekly')">Weekly Audit</div>
+    </div>
+    <div id="reflection-daily" class="reflection-content mono"></div>
+    <div id="reflection-weekly" class="reflection-content mono" style="display:none"></div>
+  </div>
+
+  <!-- Chat -->
+  <div class="card">
+    <h3>💬 Chat</h3>
     <div id="chatlog" class="mono"></div>
     <div class="row">
       <input id="msg" placeholder="Say something…" onkeydown="if(event.key==='Enter'){sendMsg()}"/>
@@ -35,8 +84,9 @@
     </div>
   </div>
 
+  <!-- Water (existing) -->
   <div class="card">
-    <h3>Water</h3>
+    <h3>💧 Water</h3>
     <div class="row">
       <button onclick="addWater(250)">+250ml</button>
       <button onclick="addWater(500)">+500ml</button>
@@ -47,33 +97,141 @@
 
   <script>
     const API = location.origin;
+    let currentReflectionTab = 'daily';
 
+    // === Health / Status ===
     async function refreshHealth(){
       try{
         const r = await fetch(API + "/api/health");
         const j = await r.json();
         document.getElementById("health").textContent = JSON.stringify(j, null, 2);
+
+        // Update kernel status badge
+        const kernelEl = document.getElementById("kernel-status");
+        if(j.kernel_online){
+          kernelEl.textContent = "kernel: online";
+          kernelEl.className = "badge kernel-online";
+        } else {
+          kernelEl.textContent = "kernel: offline";
+          kernelEl.className = "badge kernel-offline";
+        }
+
+        // Update nudge count badge
+        if(j.nudges_pending_count !== undefined){
+          document.getElementById("nudge-count").textContent = `nudges: ${j.nudges_pending_count}`;
+        }
+
+        // Update last reflection badge
+        if(j.last_daily_reflection){
+          const d = new Date(j.last_daily_reflection);
+          document.getElementById("last-reflection").textContent = `reflection: ${d.toLocaleDateString()}`;
+        }
       }catch(e){
         document.getElementById("health").textContent = "health failed: " + e;
+        document.getElementById("kernel-status").textContent = "kernel: error";
+        document.getElementById("kernel-status").className = "badge kernel-offline";
       }
     }
 
-    async function refreshWater(){
-      const r = await fetch(API + "/api/water/today");
-      const j = await r.json();
-      document.getElementById("total").textContent = `today: ${j.total_ml} ml`;
+    // === Stage 1: Nudges ===
+    async function refreshNudges(){
+      const listEl = document.getElementById("nudges-list");
+      try{
+        const r = await fetch(API + "/api/nudges/pending");
+        const j = await r.json();
+
+        if(!j.nudges || j.nudges.length === 0){
+          listEl.innerHTML = '<div class="empty-state">No pending nudges. You\'re all caught up! ✨</div>';
+          return;
+        }
+
+        listEl.innerHTML = j.nudges.map(n => `
+          <div class="nudge-item">
+            <div class="row" style="justify-content:space-between">
+              <span class="nudge-kind">${escapeHtml(n.kind || 'nudge')}</span>
+              <div class="row">
+                <button class="ack" onclick="ackNudge(${n.id})">✓ Ack</button>
+                <button class="dismiss" onclick="dismissNudge(${n.id})">✕ Dismiss</button>
+              </div>
+            </div>
+            <div class="nudge-msg">${escapeHtml(n.message || n.content || '')}</div>
+            <div class="nudge-ts">${n.ts || n.created_at || ''}</div>
+          </div>
+        `).join('');
+      }catch(e){
+        listEl.innerHTML = `<div class="empty-state">Failed to load nudges: ${escapeHtml(e.message)}</div>`;
+      }
     }
 
-    async function addWater(ml){
-      const r = await fetch(API + "/api/water/log", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ml})
-      });
-      const j = await r.json();
-      await refreshWater();
+    async function ackNudge(id){
+      try{
+        await fetch(API + `/api/nudges/${id}/ack`, { method: "POST" });
+        await refreshNudges();
+        await refreshHealth();
+      }catch(e){
+        alert("Failed to acknowledge nudge: " + e);
+      }
     }
 
+    async function dismissNudge(id){
+      try{
+        await fetch(API + `/api/nudges/${id}/dismiss`, { method: "POST" });
+        await refreshNudges();
+        await refreshHealth();
+      }catch(e){
+        alert("Failed to dismiss nudge: " + e);
+      }
+    }
+
+    // === Stage 1: Reflections ===
+    async function refreshReflections(){
+      await refreshReflection('daily');
+      await refreshReflection('weekly');
+    }
+
+    async function refreshReflection(kind){
+      const elId = `reflection-${kind}`;
+      const el = document.getElementById(elId);
+      try{
+        const endpoint = kind === 'daily' ? '/api/reflection/daily/latest' : '/api/reflection/weekly/latest';
+        const r = await fetch(API + endpoint);
+        if(r.status === 404){
+          el.innerHTML = `<div class="empty-state">No ${kind} reflection found yet.</div>`;
+          return;
+        }
+        const j = await r.json();
+        const ref = j.reflection || {};
+        el.textContent = ref.content || ref.body || JSON.stringify(ref, null, 2);
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Failed to load ${kind} reflection: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function triggerReflection(kind){
+      try{
+        const r = await fetch(API + `/api/reflection/run?kind=${kind}`, { method: "POST" });
+        const j = await r.json();
+        if(j.ok){
+          alert(`${kind} reflection triggered successfully!`);
+          await refreshReflections();
+          await refreshHealth();
+        } else {
+          alert(`Failed to trigger ${kind} reflection`);
+        }
+      }catch(e){
+        alert("Failed to trigger reflection: " + e);
+      }
+    }
+
+    function showReflectionTab(tab){
+      currentReflectionTab = tab;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelector(`.tab:nth-child(${tab === 'daily' ? 1 : 2})`).classList.add('active');
+      document.getElementById('reflection-daily').style.display = tab === 'daily' ? 'block' : 'none';
+      document.getElementById('reflection-weekly').style.display = tab === 'weekly' ? 'block' : 'none';
+    }
+
+    // === Chat ===
     async function sendMsg(){
       const el = document.getElementById("msg");
       const val = el.value.trim();
@@ -99,8 +257,41 @@
       el.scrollTop = el.scrollHeight;
     }
 
-    // initial
-    refreshHealth(); refreshWater();
+    // === Water ===
+    async function refreshWater(){
+      try{
+        const r = await fetch(API + "/api/water/today");
+        const j = await r.json();
+        document.getElementById("total").textContent = `today: ${j.total_ml} ml`;
+      }catch(e){
+        document.getElementById("total").textContent = "today: n/a";
+      }
+    }
+
+    async function addWater(ml){
+      try{
+        await fetch(API + "/api/water/log", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ml})
+        });
+        await refreshWater();
+      }catch(e){
+        console.error("Water log failed:", e);
+      }
+    }
+
+    // === Helpers ===
+    function escapeHtml(str){
+      if(!str) return '';
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // === Initial Load ===
+    refreshHealth();
+    refreshNudges();
+    refreshReflections();
+    refreshWater();
   </script>
 </body>
 </html>

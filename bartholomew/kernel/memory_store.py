@@ -10,6 +10,7 @@ import aiosqlite
 import numpy as np
 
 from bartholomew.kernel import encryption_engine as _encryption_module
+from bartholomew.kernel.chunking_engine import get_chunking_engine
 from bartholomew.kernel.memory.privacy_guard import (
     is_sensitive,
     request_permission_to_store,
@@ -115,6 +116,19 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_kind_key ON memories(kind, key);
 
+-- Phase 2f: Memory chunks for long content
+CREATE TABLE IF NOT EXISTS memory_chunks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  memory_id INTEGER NOT NULL,
+  seq INTEGER NOT NULL,           -- Chunk sequence number (0, 1, 2, ...)
+  token_start INTEGER NOT NULL,   -- Token offset start in original text
+  token_end INTEGER NOT NULL,     -- Token offset end in original text
+  text TEXT NOT NULL,             -- Chunk text content (redacted, pre-encryption)
+  FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE,
+  UNIQUE(memory_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_memory ON memory_chunks(memory_id);
+
 CREATE TABLE IF NOT EXISTS nudges (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
@@ -196,6 +210,12 @@ class MemoryStore:
             fts = FTSClient(self.db_path)
             fts.init_schema()
             logger.info("FTS5 schema initialized")
+
+            # Phase 2f: Initialize chunk FTS schema if chunking is enabled
+            chunking_engine = get_chunking_engine()
+            if chunking_engine.enabled:
+                fts.init_chunk_schema()
+                logger.info("Chunk FTS5 schema initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize FTS5 schema: {e}")
 
@@ -343,6 +363,15 @@ class MemoryStore:
             # Commit transaction (includes base row + FTS changes)
             await db.commit()
 
+        # Phase 2f: Handle chunking OUTSIDE async context (after main Tx)
+        # This creates chunks for long content and indexes them in FTS
+        await self._handle_chunking(
+            result=result,
+            redacted_value=redacted_value,
+            kind=kind,
+            evaluated=evaluated,
+        )
+
         # Phase 2d: Generate and persist embeddings OUTSIDE async context
         # This avoids database locking issues on Windows when VectorStore
         # uses synchronous sqlite3 while aiosqlite connection was open.
@@ -472,6 +501,94 @@ class MemoryStore:
             logger.debug(f"Stored {len(vecs)} embedding(s) for memory {result.memory_id}")
         except Exception as e:
             logger.error(f"Failed to generate/persist embeddings: {e}")
+
+    async def _handle_chunking(
+        self,
+        result: StoreResult,
+        redacted_value: str,
+        kind: str,
+        evaluated: dict,
+    ) -> None:
+        """
+        Handle chunking for long content OUTSIDE async context.
+
+        Phase 2f: Splits long content into overlapping chunks for better
+        FTS and vector indexing. Chunks are stored in memory_chunks table
+        and indexed in chunk_fts via database triggers.
+
+        Args:
+            result: StoreResult with memory_id
+            redacted_value: Redacted content (pre-encryption) to chunk
+            kind: Memory kind
+            evaluated: Rules evaluation result
+        """
+        if not result.memory_id:
+            return
+
+        # Check if chunking is allowed by policy
+        fts_allowed = evaluated.get("fts_index", True)
+        if fts_allowed and not can_index(evaluated):
+            fts_allowed = False
+
+        if not fts_allowed:
+            logger.debug(
+                f"Chunking skipped for memory {result.memory_id} (indexing blocked)",
+            )
+            return
+
+        # Get chunking engine
+        chunking_engine = get_chunking_engine()
+        if not chunking_engine.enabled:
+            return
+
+        # Check if this content should be chunked
+        if not chunking_engine.should_chunk(kind, redacted_value):
+            return
+
+        # Generate chunks
+        chunks = chunking_engine.chunk_text(redacted_value)
+        if len(chunks) <= 1:
+            # Single chunk = no benefit from chunking
+            return
+
+        # Store chunks (synchronously to avoid Windows locking issues)
+        import sqlite3
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA foreign_keys = ON")
+
+            # Delete existing chunks for this memory (upsert semantics)
+            conn.execute(
+                "DELETE FROM memory_chunks WHERE memory_id = ?",
+                (result.memory_id,),
+            )
+
+            # Insert new chunks (triggers will update chunk_fts)
+            for chunk in chunks:
+                conn.execute(
+                    "INSERT INTO memory_chunks "
+                    "(memory_id, seq, token_start, token_end, text) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        result.memory_id,
+                        chunk.seq,
+                        chunk.token_start,
+                        chunk.token_end,
+                        chunk.text,
+                    ),
+                )
+
+            conn.commit()
+            logger.info(
+                f"Stored {len(chunks)} chunks for memory {result.memory_id}",
+            )
+        except Exception as e:
+            logger.error(f"Failed to store chunks: {e}")
+        finally:
+            if conn:
+                conn.close()
 
     async def delete_memory(self, kind: str, key: str) -> bool:
         """

@@ -851,6 +851,9 @@ def get_retriever(
             filters=RetrievalFilters(kinds=["event"])
         )
     """
+    # Track if mode was explicitly provided (for degradation logic)
+    mode_explicit = mode is not None
+
     # Resolve configuration
     resolved_mode = _resolve_mode(mode)
     resolved_db_path = _resolve_db_path(db_path)
@@ -870,9 +873,11 @@ def get_retriever(
     # Check FTS5 availability (cached)
     fts_ok = _check_fts5_once(resolved_db_path)
 
-    # Degrade mode if FTS5 unavailable
-    if resolved_mode == "fts" and not fts_ok:
-        logger.warning("FTS mode requested but FTS5 unavailable; degrading to vector-only")
+    # Degrade mode if FTS5 unavailable, but ONLY if mode was NOT explicit
+    # When user explicitly requests a mode, honor it and let the retriever
+    # handle fallbacks internally (FTSOnlyRetriever has graceful fallbacks)
+    if resolved_mode == "fts" and not fts_ok and not mode_explicit:
+        logger.warning("FTS mode from config/env but FTS5 unavailable; degrading to vector-only")
         resolved_mode = "vector"
     elif resolved_mode == "hybrid" and not fts_ok:
         logger.info(

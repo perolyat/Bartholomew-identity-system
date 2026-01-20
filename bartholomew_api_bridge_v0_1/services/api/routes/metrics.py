@@ -36,33 +36,45 @@ KERNEL_UPTIME_SECONDS = None
 
 
 def _init_metrics_once():
-    """Initialize metrics collectors exactly once."""
+    """
+    Initialize metrics collectors exactly once.
+
+    Handles duplicate registration gracefully by catching ValueError
+    when metrics are already registered (can happen when module is
+    imported via different paths in tests).
+    """
     global _metrics_registered
     global KERNEL_TICKS_TOTAL, BARTHOLOMEW_TICKS_TOTAL, KERNEL_UPTIME_SECONDS
 
     if _metrics_registered:
         return
 
-    # Register metrics with shared registry
-    KERNEL_TICKS_TOTAL = Counter(
-        "kernel_ticks_total",
-        "Total number of kernel ticks observed by the API bridge, labeled by active drive.",
-        ["drive"],
-        registry=REGISTRY,
-    )
+    try:
+        # Register metrics with shared registry
+        KERNEL_TICKS_TOTAL = Counter(
+            "kernel_ticks_total",
+            "Total number of kernel ticks observed by the API bridge, labeled by active drive.",
+            ["drive"],
+            registry=REGISTRY,
+        )
 
-    BARTHOLOMEW_TICKS_TOTAL = Counter(
-        "bartholomew_ticks_total",
-        "Total number of Bartholomew ticks observed by the API bridge, labeled by active drive.",
-        ["drive"],
-        registry=REGISTRY,
-    )
+        BARTHOLOMEW_TICKS_TOTAL = Counter(
+            "bartholomew_ticks_total",
+            "Total number of Bartholomew ticks observed by the API bridge, "
+            "labeled by active drive.",
+            ["drive"],
+            registry=REGISTRY,
+        )
 
-    KERNEL_UPTIME_SECONDS = Gauge(
-        "kernel_uptime_seconds",
-        "Process uptime in seconds since API bridge start.",
-        registry=REGISTRY,
-    )
+        KERNEL_UPTIME_SECONDS = Gauge(
+            "kernel_uptime_seconds",
+            "Process uptime in seconds since API bridge start.",
+            registry=REGISTRY,
+        )
+    except ValueError:
+        # Metrics already registered (module re-imported via different path)
+        # This is expected in test environments; silently ignore
+        pass
 
     _metrics_registered = True
 

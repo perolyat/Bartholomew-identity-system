@@ -189,6 +189,51 @@ BEGIN
 END;
 """
 
+# Phase 2f: Chunk FTS Schema for external-content mode
+CHUNK_FTS_SCHEMA = """
+-- FTS5 virtual table for memory chunks in external-content mode
+-- References memory_chunks table, indexes chunk text
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
+    text,
+    content='memory_chunks',
+    content_rowid='id',
+    tokenize='{tokenizer}'
+);
+
+-- Mapping table to track chunk FTS index entries
+CREATE TABLE IF NOT EXISTS chunk_fts_map (
+    chunk_id INTEGER PRIMARY KEY,
+    memory_id INTEGER NOT NULL,
+    indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(chunk_id) REFERENCES memory_chunks(id) ON DELETE CASCADE,
+    FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_fts_map_memory
+    ON chunk_fts_map(memory_id);
+
+-- Triggers to keep chunk FTS index synchronized with memory_chunks table
+CREATE TRIGGER IF NOT EXISTS chunk_fts_insert AFTER INSERT ON memory_chunks
+BEGIN
+    INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
+    INSERT OR IGNORE INTO chunk_fts_map(chunk_id, memory_id)
+    VALUES (new.id, new.memory_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunk_fts_update AFTER UPDATE ON memory_chunks
+BEGIN
+    INSERT INTO chunk_fts(chunk_fts, rowid, text)
+    VALUES ('delete', old.id, old.text);
+    INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunk_fts_delete AFTER DELETE ON memory_chunks
+BEGIN
+    INSERT INTO chunk_fts(chunk_fts, rowid, text)
+    VALUES ('delete', old.id, old.text);
+    DELETE FROM chunk_fts_map WHERE chunk_id = old.id;
+END;
+"""
+
 
 class FTSClient:
     """
@@ -677,3 +722,259 @@ class FTSClient:
             memory_id: Memory ID to remove from index
         """
         self.delete(memory_id)
+
+    # =========================================================================
+    # Phase 2f: Chunk FTS Methods
+    # =========================================================================
+
+    def init_chunk_schema(self) -> None:
+        """
+        Initialize chunk FTS5 tables and triggers.
+
+        Creates the chunk_fts virtual table, chunk_fts_map tracking table,
+        and synchronization triggers. Safe to call multiple times.
+
+        Should be called after init_schema() when chunking is enabled.
+        """
+        schema = CHUNK_FTS_SCHEMA.format(tokenizer=self.tokenizer)
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            set_wal_pragmas(conn)
+            # FTS5 probe already done in init_schema
+            conn.executescript(schema)
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+        logger.info("Chunk FTS5 schema initialized")
+
+    def upsert_chunk(
+        self,
+        chunk_id: int,
+        memory_id: int,
+        text: str,
+    ) -> None:
+        """
+        Insert or update FTS index for a chunk.
+
+        Args:
+            chunk_id: Chunk ID (must exist in memory_chunks table)
+            memory_id: Parent memory ID
+            text: Chunk text content
+        """
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            set_wal_pragmas(conn)
+
+            # Ensure entry in map table
+            conn.execute(
+                "INSERT OR REPLACE INTO chunk_fts_map(chunk_id, memory_id) VALUES (?, ?)",
+                (chunk_id, memory_id),
+            )
+
+            # Delete old FTS entry if exists
+            conn.execute(
+                "INSERT INTO chunk_fts(chunk_fts, rowid, text) "
+                "SELECT 'delete', ?, text FROM chunk_fts WHERE rowid = ?",
+                (chunk_id, chunk_id),
+            )
+
+            # Insert new FTS entry
+            conn.execute(
+                "INSERT INTO chunk_fts(rowid, text) VALUES (?, ?)",
+                (chunk_id, text),
+            )
+
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+        logger.debug(f"Chunk FTS index updated for chunk {chunk_id}")
+
+    def delete_chunks_for_memory(self, memory_id: int) -> int:
+        """
+        Delete all chunk FTS entries for a memory.
+
+        Args:
+            memory_id: Parent memory ID
+
+        Returns:
+            Number of chunks deleted
+        """
+        conn = None
+        count = 0
+        try:
+            conn = sqlite3.connect(self.db_path)
+            set_wal_pragmas(conn)
+
+            # Get chunk IDs for this memory
+            cursor = conn.execute(
+                "SELECT chunk_id FROM chunk_fts_map WHERE memory_id = ?",
+                (memory_id,),
+            )
+            chunk_ids = [row[0] for row in cursor.fetchall()]
+
+            # Delete from FTS
+            for chunk_id in chunk_ids:
+                conn.execute(
+                    "INSERT INTO chunk_fts(chunk_fts, rowid, text) "
+                    "SELECT 'delete', ?, text FROM chunk_fts WHERE rowid = ?",
+                    (chunk_id, chunk_id),
+                )
+
+            # Delete from map
+            conn.execute(
+                "DELETE FROM chunk_fts_map WHERE memory_id = ?",
+                (memory_id,),
+            )
+
+            count = len(chunk_ids)
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+        logger.debug(f"Deleted {count} chunk FTS entries for memory {memory_id}")
+        return count
+
+    def search_chunks(
+        self,
+        query: str,
+        limit: int = 20,
+        offset: int = 0,
+        order_by_rank: bool = True,
+    ) -> list[dict[str, Any]]:
+        """
+        Search memory chunks using full-text search.
+
+        Returns chunk-level results with parent memory information.
+
+        Args:
+            query: FTS5 query string
+            limit: Maximum number of results (default: 20)
+            offset: Result offset for pagination
+            order_by_rank: If True, order by BM25 rank
+
+        Returns:
+            List of dicts with keys: chunk_id, memory_id, seq, text, rank,
+            snippet, memory_kind, memory_key, memory_ts
+        """
+        order_clause = "ORDER BY rank ASC" if order_by_rank else ""
+        force_fallback = os.getenv("BARTHO_FORCE_BM25_FALLBACK") == "1"
+
+        # Primary SQL using bm25 UDF
+        sql_bm25 = f"""
+            SELECT
+                c.id as chunk_id,
+                c.memory_id,
+                c.seq,
+                c.text,
+                bm25(chunk_fts) as rank,
+                snippet(chunk_fts, 0, '[', ']', ' … ', 12) as snippet,
+                m.kind as memory_kind,
+                m.key as memory_key,
+                m.ts as memory_ts
+            FROM chunk_fts
+            JOIN memory_chunks c ON chunk_fts.rowid = c.id
+            JOIN memories m ON c.memory_id = m.id
+            WHERE chunk_fts MATCH ?
+            {order_clause}
+            LIMIT ? OFFSET ?
+        """
+
+        # Fallback SQL using matchinfo
+        sql_fallback = f"""
+            SELECT
+                c.id as chunk_id,
+                c.memory_id,
+                c.seq,
+                c.text,
+                -rank_pcx(matchinfo(chunk_fts, 'pcx')) as rank,
+                snippet(chunk_fts, 0, '[', ']', ' … ', 12) as snippet,
+                m.kind as memory_kind,
+                m.key as memory_key,
+                m.ts as memory_ts
+            FROM chunk_fts
+            JOIN memory_chunks c ON chunk_fts.rowid = c.id
+            JOIN memories m ON c.memory_id = m.id
+            WHERE chunk_fts MATCH ?
+            {order_clause}
+            LIMIT ? OFFSET ?
+        """
+
+        conn = None
+        results = []
+        try:
+            conn = sqlite3.connect(self.db_path)
+            set_wal_pragmas(conn)
+            conn.row_factory = sqlite3.Row
+
+            if not force_fallback:
+                try:
+                    cursor = conn.execute(sql_bm25, (query, limit, offset))
+                    rows = cursor.fetchall()
+                    results = [dict(row) for row in rows]
+                except sqlite3.OperationalError as e:
+                    if "no such function: bm25" in str(e).lower():
+                        force_fallback = True
+                    else:
+                        raise
+
+            if force_fallback:
+                conn.create_function("rank_pcx", 1, _rank_pcx)
+                cursor = conn.execute(sql_fallback, (query, limit, offset))
+                rows = cursor.fetchall()
+                results = [dict(row) for row in rows]
+        finally:
+            if conn:
+                conn.close()
+
+        logger.debug(f"Chunk FTS search returned {len(results)} results")
+        return results
+
+    def rebuild_chunk_index(self) -> int:
+        """
+        Rebuild entire chunk FTS index from memory_chunks table.
+
+        Returns:
+            Number of chunks indexed
+        """
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            set_wal_pragmas(conn)
+
+            # Clear existing chunk FTS data
+            conn.execute("DELETE FROM chunk_fts")
+            conn.execute("DELETE FROM chunk_fts_map")
+
+            # Rebuild from memory_chunks table
+            conn.execute(
+                """
+                INSERT INTO chunk_fts(rowid, text)
+                SELECT id, text FROM memory_chunks
+                """,
+            )
+
+            conn.execute(
+                """
+                INSERT INTO chunk_fts_map(chunk_id, memory_id)
+                SELECT id, memory_id FROM memory_chunks
+                """,
+            )
+
+            cursor = conn.execute("SELECT COUNT(*) FROM chunk_fts_map")
+            count = cursor.fetchone()[0]
+
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+        logger.info(f"Chunk FTS index rebuilt: {count} chunks indexed")
+        return count

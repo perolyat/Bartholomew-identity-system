@@ -59,11 +59,13 @@ def mock_rules_engine():
 @pytest.mark.asyncio
 async def test_consent_gate_excludes_never_store(memory_store, consent_gate):
     """Test that never_store memories are excluded"""
-    # Store a memory that should be blocked (unknown speaker)
+    # Store a memory that should be blocked (contains illegal content pattern)
+    # The never_store rule in memory_rules.yaml matches content patterns like
+    # "illegal content" - we use this to trigger blocking
     result = await memory_store.upsert_memory(
         kind="chat",
-        key="unknown_message",
-        value="Message from unknown user",
+        key="blocked_message",
+        value="This contains illegal content that should be blocked",
         ts=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -104,6 +106,8 @@ async def test_consent_gate_excludes_unconsented_sensitive(memory_store, consent
 @pytest.mark.asyncio
 async def test_consent_gate_includes_consented_memory(memory_store, consent_gate):
     """Test that memories with consent are included"""
+    import aiosqlite
+
     # Store a memory
     result = await memory_store.upsert_memory(
         kind="user_profile",
@@ -114,8 +118,8 @@ async def test_consent_gate_includes_consented_memory(memory_store, consent_gate
 
     assert result.stored, "Memory should be stored"
 
-    # Grant consent
-    async with sqlite3.connect(memory_store.db_path) as db:
+    # Grant consent using aiosqlite (not sqlite3)
+    async with aiosqlite.connect(memory_store.db_path) as db:
         await db.execute(
             "INSERT OR IGNORE INTO memory_consent (memory_id, source) VALUES (?, ?)",
             (result.memory_id, "test"),
@@ -157,11 +161,7 @@ async def test_consent_gate_marks_context_only(memory_store, consent_gate):
 
 def test_fts_search_applies_consent_gate(temp_db):
     """Test that FTS search applies consent gate by default"""
-    # Initialize FTS
-    fts = FTSClient(temp_db)
-    fts.init_schema()
-
-    # Create test memories in database
+    # Create test memories in database FIRST (before FTS init)
     conn = sqlite3.connect(temp_db)
     conn.execute(
         """
@@ -175,21 +175,23 @@ def test_fts_search_applies_consent_gate(temp_db):
         )
     """,
     )
+    conn.commit()
+    conn.close()
+
+    # NOW initialize FTS (requires memories table to exist)
+    fts = FTSClient(temp_db)
+    fts.init_schema()
 
     # Insert test memories
+    conn = sqlite3.connect(temp_db)
+    now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO memories (id, kind, key, value, ts) VALUES (?, ?, ?, ?, ?)",
-        (1, "chat", "test1", "robot learning machine", datetime.now(timezone.utc).isoformat()),
+        (1, "chat", "test1", "robot learning machine", now),
     )
     conn.execute(
         "INSERT INTO memories (id, kind, key, value, ts) VALUES (?, ?, ?, ?, ?)",
-        (
-            2,
-            "user",
-            "sensitive",
-            "bank account password secret",
-            datetime.now(timezone.utc).isoformat(),
-        ),
+        (2, "user", "sensitive", "bank account password secret", now),
     )
     conn.commit()
 
@@ -209,11 +211,7 @@ def test_fts_search_applies_consent_gate(temp_db):
 
 def test_fts_search_without_consent_gate(temp_db):
     """Test that FTS search can bypass consent gate"""
-    # Initialize FTS
-    fts = FTSClient(temp_db)
-    fts.init_schema()
-
-    # Create test memory
+    # Create test memory table FIRST (before FTS init)
     conn = sqlite3.connect(temp_db)
     conn.execute(
         """
@@ -227,14 +225,19 @@ def test_fts_search_without_consent_gate(temp_db):
         )
     """,
     )
+    now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO memories (id, kind, key, value, ts) VALUES (?, ?, ?, ?, ?)",
-        (1, "chat", "test", "robot learning", datetime.now(timezone.utc).isoformat()),
+        (1, "chat", "test", "robot learning", now),
     )
     conn.commit()
+    conn.close()
+
+    # NOW initialize FTS (requires memories table)
+    fts = FTSClient(temp_db)
+    fts.init_schema()
 
     fts.upsert(1, "robot learning")
-    conn.close()
 
     # Search without consent gate
     results = fts.search("robot", apply_consent_gate=False)
