@@ -33,6 +33,39 @@ pytest -q -m smoke || pytest -q tests/test_stage0_alive.py
 
 ---
 
+### Stage 0.5 — Packaging & Architecture Fixes (NEW)
+
+> **Source:** Cline audit 2026-01-22 verifying ChatGPT repo analysis
+
+**Goal:** Ensure the package is installable, dependencies are canonical, and kernel runs headless without blocking on stdin.
+
+**Scope:**
+- Add missing `bartholomew/__init__.py` for package discoverability
+- Consolidate dependencies in `pyproject.toml` (add `numpy`, `cryptography`, `typer`, `rich`)
+- Fix malformed `safety.audit` rule in `memory_rules.yaml` to use `match:`/`metadata:` schema
+- Refactor `input()` out of `bartholomew/kernel/memory/privacy_guard.py`
+
+**Exit criteria:**
+- `pip install -e .` succeeds; `python -c "import bartholomew"` works
+- `pyproject.toml` contains all runtime deps; `requirements.txt` mirrors or is deprecated
+- All memory_rules.yaml rules use consistent `match:`/`metadata:` schema
+- No `input()` calls in kernel code; consent handled via event bus
+
+**Verify:**
+```bash
+pip install -e .
+python -c "import bartholomew"
+grep -r "input(" bartholomew/kernel/ | grep -v test  # should be empty
+pytest -q tests/test_memory_rules.py  # all rules parse
+```
+
+**Rollback:**
+```bash
+git checkout -- bartholomew/__init__.py pyproject.toml bartholomew/config/memory_rules.yaml bartholomew/kernel/memory/privacy_guard.py
+```
+
+---
+
 ### Stage 1 — Console/UI integration (Next product-facing slice)
 
 **Goal:** A minimal user-facing console or UI on top of the API bridge that can:
@@ -308,9 +341,15 @@ python -c "import json; from pathlib import Path; f = json.loads(Path('logs/brai
 
 ## Near-term milestone plan (recommended)
 
-1. **Canonical docs landed (SSOT)**
+> **Updated:** 2026-01-22 based on Cline audit
+
+1. **Stage 0.5: Packaging & Architecture Fixes** (NEW - immediate priority)
+   - Add `bartholomew/__init__.py`
+   - Consolidate deps in `pyproject.toml`
+   - Fix `memory_rules.yaml` malformed rule
+   - Refactor `input()` out of kernel
 2. **Linux CI green for P0 core**
-3. **Fix P0 logic bugs (summarization/encryption/embeddings/retrieval factory/metrics idempotency)**
+3. **Fix P0 logic bugs** (summarization/encryption/embeddings/retrieval factory/metrics idempotency)
 4. **Quarantine or parameterize platform-specific tests** (Windows file locking; SQLite/FTS limitations)
 5. **Stage 1 UI/console slice**
 

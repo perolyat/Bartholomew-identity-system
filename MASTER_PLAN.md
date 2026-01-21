@@ -110,18 +110,63 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
 
 > **Rule:** every item must have acceptance criteria + verification steps before it is started.
 
+### P0 — Packaging & Architecture (Pre-requisites)
+
+> **Source:** Cline audit 2026-01-22 verifying ChatGPT repo analysis
+
+0. **Missing package `__init__.py`**
+   - `bartholomew/` directory has no `__init__.py` file.
+   - **Acceptance:** `bartholomew/__init__.py` exists; `pip install -e .` succeeds.
+   - **Verify:** `python -c "import bartholomew"` works.
+   - **DoD:** File created, editable install tested.
+   - **Risk if skipped:** Package is not installable; imports fail.
+
+1. **Dependency consolidation to pyproject.toml**
+   - `pyproject.toml` missing runtime deps that exist in `requirements.txt`: `numpy`, `cryptography`.
+   - `typer`, `rich` used in CLI but not declared.
+   - **Acceptance:** `pyproject.toml` is single source of truth for all deps.
+   - **Verify:** `pip install .` installs all deps; no manual `requirements.txt` needed.
+   - **DoD:** All runtime deps in `[project.dependencies]`; `requirements.txt` mirrors or deprecated.
+   - **Risk if skipped:** Dependency drift; CI/CD failures.
+
+2. **Fix malformed memory_rules.yaml rule**
+   - The `safety.audit` rule in `always_keep` section lacks `match:`/`metadata:` structure:
+     ```yaml
+     # WRONG (current):
+     - kind: safety.audit
+       summarize: false
+     # CORRECT:
+     - match:
+         kind: safety.audit
+       metadata:
+         summarize: false
+     ```
+   - **Acceptance:** All rules use consistent `match:`/`metadata:` schema.
+   - **Verify:** Unit test confirms all rules are parsed by engine.
+   - **DoD:** Rule fixed; test added.
+   - **Risk if skipped:** Silent rule failures; safety.audit memories not governed.
+
+3. **Refactor `input()` out of kernel**
+   - `bartholomew/kernel/memory/privacy_guard.py` calls `input()` blocking on stdin.
+   - **Acceptance:** Kernel emits consent event via event bus; never calls `input()`.
+   - **Verify:** `grep -r "input(" bartholomew/kernel/` returns no matches (excluding tests).
+   - **DoD:** Consent flow uses event bus; UI/CLI handles user prompt.
+   - **Risk if skipped:** Headless/API deployments hang indefinitely.
+
+---
+
 ### P0 — Make the build trustworthy
-1. **Canonical SSOT docs (done in this repo snapshot)**
-   - **Acceptance:** canonical docs exist; cross-linked; “Next 3 Moves” current.
+5. **Canonical SSOT docs (done in this repo snapshot)**
+   - **Acceptance:** canonical docs exist; cross-linked; "Next 3 Moves" current.
    - **Verify:** open markdown; links resolve.
 
-2. **CI minimal gates (Linux)**
+6. **CI minimal gates (Linux)**
    - Make `pytest -q`, `ruff check .`, `black --check .` run in CI.
    - Quarantine platform-specific failures (Windows locking, SQLite build flags) into explicit markers.
    - **Acceptance:** CI green on Linux; quarantines documented.
    - **Verify:** GitHub Actions run; locally `ruff check . && black --check . && pytest -q`.
 
-3. **Fix non-environmental failing tests** called out in `docs/STATUS_2025-12-29.md`
+7. **Fix non-environmental failing tests** called out in `docs/STATUS_2025-12-29.md`
    - Summarization truncation fallback.
    - Encryption round-trip for envelopes.
    - Embedding persist lifecycle (`persist_embeddings_for`, `embed_store` defaults).
@@ -131,50 +176,50 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
    - **Verify:** `pytest -q` on Linux CI; replay the failing cases.
 
 ### P1 — Unified Persona Core (Experience Kernel) + personality packs
-4. **Experience Kernel MVP** (self-model + narrator)
-   - Minimal “self” state, narrator summarization, and reflection hooks wired into the kernel loop.
-   - **Acceptance:** kernel can produce a stable “about me” snapshot and a day/week reflection without leaking sensitive memory.
+8. **Experience Kernel MVP** (self-model + narrator)
+   - Minimal "self" state, narrator summarization, and reflection hooks wired into the kernel loop.
+   - **Acceptance:** kernel can produce a stable "about me" snapshot and a day/week reflection without leaking sensitive memory.
    - **Verify:** `pytest -q tests/test_experience_kernel.py` (to be added) + run a scenario replay.
 
-5. **Persona / Mentor Mode packs (config-driven)**
+9. **Persona / Mentor Mode packs (config-driven)**
    - System prompt packs (e.g., Calm Mentor / Coach / Gamer Ally) selectable via config/UI without code edits.
    - **Acceptance:** switching persona changes tone/constraints; logged in audit trail.
    - **Verify:** `pytest -q tests/test_persona_switching.py` + manual API smoke.
 
 ### P2 — Modularity: skill registry + a few safe starter skills
-6. **Skill manifest + registry** (local “marketplace” later)
-   - Standard manifest schema (id, purpose, permissions, data touched, risk class, tests).
-   - **Acceptance:** skills discoverable, loadable, and permission-scoped.
-   - **Verify:** `pytest -q tests/test_skill_registry.py`.
+10. **Skill manifest + registry** (local "marketplace" later)
+    - Standard manifest schema (id, purpose, permissions, data touched, risk class, tests).
+    - **Acceptance:** skills discoverable, loadable, and permission-scoped.
+    - **Verify:** `pytest -q tests/test_skill_registry.py`.
 
-7. **Starter skills (safe + reversible)**
-   - `tasks.basic` (add/list in SQLite)
-   - `notify.*` (log fallback)
-   - `calendar.draft_block` (draft-only; behind consent)
-   - **Acceptance:** end-to-end: prompt → decide → tool call (with consent) → persisted + audited.
-   - **Verify:** `pytest -q tests/test_end_to_end_tasks_and_audit.py`.
+11. **Starter skills (safe + reversible)**
+    - `tasks.basic` (add/list in SQLite)
+    - `notify.*` (log fallback)
+    - `calendar.draft_block` (draft-only; behind consent)
+    - **Acceptance:** end-to-end: prompt → decide → tool call (with consent) → persisted + audited.
+    - **Verify:** `pytest -q tests/test_end_to_end_tasks_and_audit.py`.
 
 ### P3 — Initiative engine (proactive nudges) and workflows
-8. **Scheduler-driven check-ins + workflows**
+12. **Scheduler-driven check-ins + workflows**
    - Morning/evening check-in; weekly review; “next best action” suggestion engine.
    - **Acceptance:** runs on schedule, respects quiet hours and parking brake; produces suggestions only (no Act).
    - **Verify:** `pytest -q tests/test_scheduler_checkins.py` + dry-run mode.
 
 ### P4 — Distributed being (cross-device) + voice adapters
-9. **Cross-device thin client (PWA) + auth**
-   - Token auth; shared session state; chat + timeline.
-   - **Acceptance:** same state visible from two clients; no unauthenticated access.
-   - **Verify:** integration tests + `curl` smoke.
+13. **Cross-device thin client (PWA) + auth**
+    - Token auth; shared session state; chat + timeline.
+    - **Acceptance:** same state visible from two clients; no unauthenticated access.
+    - **Verify:** integration tests + `curl` smoke.
 
-10. **Voice adapters (optional / graceful unavailable)**
-   - STT/TTS endpoints return “unavailable” when binaries missing.
-   - **Acceptance:** voice endpoints fail gracefully; do not crash kernel.
-   - **Verify:** `pytest -q tests/test_voice_adapters.py`.
+14. **Voice adapters (optional / graceful unavailable)**
+    - STT/TTS endpoints return "unavailable" when binaries missing.
+    - **Acceptance:** voice endpoints fail gracefully; do not crash kernel.
+    - **Verify:** `pytest -q tests/test_voice_adapters.py`.
 
 ### P5 — Embodiments (future)
-11. **Mode system + signals** (Work/Life/Game/Car)
-12. **Smart home integration** (read-only first)
-13. **Gaming overlays** (separate surface; strict privacy + safety review)
+15. **Mode system + signals** (Work/Life/Game/Car)
+16. **Smart home integration** (read-only first)
+17. **Gaming overlays** (separate surface; strict privacy + safety review)
 
 ---
 
@@ -262,14 +307,22 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 ## Next 3 Moves (always current)
 
-1. **Land SSOT docs (this change) + declare legacy docs**
-   - Make canonical docs the only SSOT; link out to existing "implementation notes" files.
+> **Updated:** 2026-01-22 based on Cline audit
 
-2. **Reinstate minimal CI** (or add it if missing in this snapshot)
-   - Linux gates: format + lint + tests.
+1. **Fix P0 packaging issues** (items 0–1)
+   - Add `bartholomew/__init__.py`
+   - Consolidate deps in `pyproject.toml` (add `numpy`, `cryptography`)
+   - **Verify:** `pip install -e . && python -c "import bartholomew"`
 
-3. **Fix the P0 non-environmental failing tests**
-   - One fix per PR; add/adjust tests when a bug is fixed; avoid broad refactors.
+2. **Fix malformed memory_rules.yaml + refactor `input()` out of kernel** (items 2–3)
+   - Fix `safety.audit` rule to use `match:`/`metadata:` schema
+   - Refactor `privacy_guard.py` to emit events instead of blocking on stdin
+   - **Verify:** grep for `input(` returns nothing; unit test confirms all rules parsed
+
+3. **CI minimal gates (Linux)** (items 5–7)
+   - Make `pytest -q`, `ruff check .`, `black --check .` run in CI
+   - Fix non-environmental failing tests from `docs/STATUS_2025-12-29.md`
+   - **Verify:** GitHub Actions green on Linux
 
 ## Pending Approvals
 
