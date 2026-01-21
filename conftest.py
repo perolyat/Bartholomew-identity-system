@@ -22,11 +22,13 @@ import pytest
 # These markers allow tests to be skipped on Windows while running on Linux CI.
 
 SKIP_WINDOWS_FTS = pytest.mark.skipif(
-    sys.platform == "win32", reason="FTS5/matchinfo not available in Windows Python SQLite build",
+    sys.platform == "win32",
+    reason="FTS5/matchinfo not available in Windows Python SQLite build",
 )
 
 SKIP_WINDOWS_FILE_LOCKING = pytest.mark.skipif(
-    sys.platform == "win32", reason="Windows file locking prevents cleanup during test",
+    sys.platform == "win32",
+    reason="Windows file locking prevents cleanup during test",
 )
 
 

@@ -1,0 +1,115 @@
+# =============================================================================
+# Notify Skill Manifest
+# =============================================================================
+# Send notifications and alerts to user
+# Part of Bartholomew Stage 4 starter skills
+
+skill_id: "notify"
+name: "Notification Manager"
+version: "1.0.0"
+description: "Send desktop notifications, queue alerts, and manage notification preferences"
+
+# Entry points
+entry_module: "bartholomew.skills.notify"
+entry_class: "NotifySkill"
+
+# Permissions
+permissions:
+  level: "auto"  # Notifications are low-risk
+  requires:
+    - "nudge.create"      # Can create nudges
+    - "nudge.read"        # Can check nudge status
+  sandbox:
+    filesystem: []
+    network: []           # No network access needed
+
+# Events this skill subscribes to
+subscriptions:
+  - channel: "alerts"
+    events: ["alert_requested", "priority_alert"]
+  - channel: "system"
+    events: ["quiet_hours_start", "quiet_hours_end"]
+
+# Events this skill can emit
+emits:
+  - channel: "alerts"
+    events: ["notification_sent", "notification_queued", "notification_dismissed"]
+
+# No dependencies
+depends_on: []
+
+# Auto-activate for alert contexts
+auto_activate_on:
+  - "alert_context"
+  - "notification"
+
+# Actions exposed by this skill
+actions:
+  - name: "send"
+    description: "Send a notification immediately (respects quiet hours)"
+    parameters:
+      - name: "message"
+        type: "string"
+        required: true
+        description: "Notification message"
+      - name: "title"
+        type: "string"
+        required: false
+        description: "Notification title"
+      - name: "priority"
+        type: "string"
+        required: false
+        description: "Priority: low, normal, high, urgent"
+      - name: "sound"
+        type: "boolean"
+        required: false
+        description: "Play notification sound"
+
+  - name: "queue"
+    description: "Queue a notification for later delivery"
+    parameters:
+      - name: "message"
+        type: "string"
+        required: true
+        description: "Notification message"
+      - name: "title"
+        type: "string"
+        required: false
+        description: "Notification title"
+      - name: "deliver_at"
+        type: "datetime"
+        required: false
+        description: "When to deliver (ISO 8601)"
+      - name: "deliver_after_quiet_hours"
+        type: "boolean"
+        required: false
+        description: "Wait until quiet hours end"
+
+  - name: "list_pending"
+    description: "List queued notifications"
+    parameters:
+      - name: "limit"
+        type: "integer"
+        required: false
+        description: "Maximum number to return"
+
+  - name: "cancel"
+    description: "Cancel a queued notification"
+    parameters:
+      - name: "notification_id"
+        type: "string"
+        required: true
+        description: "ID of notification to cancel"
+
+  - name: "get_quiet_hours"
+    description: "Get current quiet hours settings"
+    parameters: []
+
+  - name: "is_quiet_hours"
+    description: "Check if currently in quiet hours"
+    parameters: []
+
+# Metadata
+author: "system"
+license: "MIT"
+enabled: true

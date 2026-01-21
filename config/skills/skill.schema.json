@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://bartholomew.ai/schemas/skill.schema.json",
+  "title": "Skill Manifest",
+  "description": "Schema for Bartholomew skill manifests",
+  "type": "object",
+  "required": ["skill_id", "name", "version", "entry_module", "entry_class", "permissions"],
+  "properties": {
+    "skill_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Unique identifier for the skill (lowercase, underscores allowed)"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name for the skill"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version (e.g., 1.0.0)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Brief description of what the skill does"
+    },
+    "entry_module": {
+      "type": "string",
+      "description": "Python module path (e.g., bartholomew.skills.tasks)"
+    },
+    "entry_class": {
+      "type": "string",
+      "description": "Class name implementing SkillBase"
+    },
+    "permissions": {
+      "type": "object",
+      "required": ["level"],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["ask", "auto", "never"],
+          "description": "Default permission level for this skill"
+        },
+        "requires": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of required permissions (e.g., memory.write, nudge.create)"
+        },
+        "sandbox": {
+          "type": "object",
+          "properties": {
+            "filesystem": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Allowed filesystem paths"
+            },
+            "network": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Allowed network endpoints"
+            }
+          }
+        }
+      }
+    },
+    "subscriptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["channel"],
+        "properties": {
+          "channel": {"type": "string"},
+          "events": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      },
+      "description": "GlobalWorkspace channels this skill subscribes to"
+    },
+    "emits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["channel"],
+        "properties": {
+          "channel": {"type": "string"},
+          "events": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      },
+      "description": "Events this skill can emit"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Skill IDs this skill depends on"
+    },
+    "auto_activate_on": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Context tags that trigger auto-activation"
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "type"],
+              "properties": {
+                "name": {"type": "string"},
+                "type": {"type": "string"},
+                "required": {"type": "boolean", "default": false},
+                "description": {"type": "string"}
+              }
+            }
+          }
+        }
+      },
+      "description": "Actions this skill exposes"
+    },
+    "author": {
+      "type": "string",
+      "description": "Author or maintainer of the skill"
+    },
+    "license": {
+      "type": "string",
+      "description": "License for the skill"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the skill is enabled by default"
+    }
+  }
+}

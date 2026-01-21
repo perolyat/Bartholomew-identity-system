@@ -1,0 +1,170 @@
+# =============================================================================
+# Calendar Draft Skill Manifest
+# =============================================================================
+# Create draft calendar events with natural language parsing
+# Part of Bartholomew Stage 4 starter skills
+
+skill_id: "calendar_draft"
+name: "Calendar Draft"
+version: "1.0.0"
+description: "Create draft calendar events, parse natural language dates, and export to .ics format"
+
+# Entry points
+entry_module: "bartholomew.skills.calendar_draft"
+entry_class: "CalendarDraftSkill"
+
+# Permissions
+permissions:
+  level: "auto"  # Draft creation is low-risk (no external calendar integration)
+  requires:
+    - "memory.write"      # Can store draft events
+    - "memory.read"       # Can retrieve drafts
+  sandbox:
+    filesystem:
+      - "./data/calendar"
+      - "./exports/calendar"
+    network: []           # No external calendar APIs - privacy first
+
+# Events this skill subscribes to
+subscriptions:
+  - channel: "tasks"
+    events: ["task_created"]  # Can auto-create calendar blocks for tasks with due dates
+  - channel: "system"
+    events: ["daily_tick"]    # Check for upcoming events
+
+# Events this skill can emit
+emits:
+  - channel: "calendar"
+    events: ["event_drafted", "event_updated", "event_deleted", "event_exported", "event_reminder"]
+
+# No dependencies
+depends_on: []
+
+# Auto-activate for calendar/scheduling contexts
+auto_activate_on:
+  - "calendar_context"
+  - "scheduling"
+  - "meeting"
+
+# Actions exposed by this skill
+actions:
+  - name: "create"
+    description: "Create a draft calendar event"
+    parameters:
+      - name: "title"
+        type: "string"
+        required: true
+        description: "Event title"
+      - name: "start"
+        type: "string"
+        required: true
+        description: "Start time - can be natural language ('tomorrow at 3pm') or ISO 8601"
+      - name: "end"
+        type: "string"
+        required: false
+        description: "End time - defaults to start + 1 hour"
+      - name: "description"
+        type: "string"
+        required: false
+        description: "Event description"
+      - name: "location"
+        type: "string"
+        required: false
+        description: "Event location"
+      - name: "all_day"
+        type: "boolean"
+        required: false
+        description: "Is this an all-day event"
+      - name: "reminder_minutes"
+        type: "integer"
+        required: false
+        description: "Reminder before event (minutes)"
+
+  - name: "list"
+    description: "List draft calendar events"
+    parameters:
+      - name: "from_date"
+        type: "string"
+        required: false
+        description: "Start of date range"
+      - name: "to_date"
+        type: "string"
+        required: false
+        description: "End of date range"
+      - name: "limit"
+        type: "integer"
+        required: false
+        description: "Maximum number to return"
+
+  - name: "get"
+    description: "Get details of a specific event"
+    parameters:
+      - name: "event_id"
+        type: "string"
+        required: true
+        description: "ID of the event"
+
+  - name: "update"
+    description: "Update a draft event"
+    parameters:
+      - name: "event_id"
+        type: "string"
+        required: true
+        description: "ID of the event to update"
+      - name: "title"
+        type: "string"
+        required: false
+        description: "New title"
+      - name: "start"
+        type: "string"
+        required: false
+        description: "New start time"
+      - name: "end"
+        type: "string"
+        required: false
+        description: "New end time"
+      - name: "description"
+        type: "string"
+        required: false
+        description: "New description"
+      - name: "location"
+        type: "string"
+        required: false
+        description: "New location"
+
+  - name: "delete"
+    description: "Delete a draft event"
+    parameters:
+      - name: "event_id"
+        type: "string"
+        required: true
+        description: "ID of the event to delete"
+
+  - name: "export_ics"
+    description: "Export event(s) to .ics file"
+    parameters:
+      - name: "event_id"
+        type: "string"
+        required: false
+        description: "Single event ID to export (if not provided, exports all)"
+      - name: "from_date"
+        type: "string"
+        required: false
+        description: "Export events from this date"
+      - name: "to_date"
+        type: "string"
+        required: false
+        description: "Export events until this date"
+
+  - name: "parse_datetime"
+    description: "Parse natural language datetime string"
+    parameters:
+      - name: "text"
+        type: "string"
+        required: true
+        description: "Natural language datetime (e.g., 'tomorrow at 3pm', 'next Monday')"
+
+# Metadata
+author: "system"
+license: "MIT"
+enabled: true

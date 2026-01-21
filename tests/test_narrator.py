@@ -324,19 +324,36 @@ class TestNarratorEngineInit:
 
     def test_init_creates_database_schema(self):
         """Test that initialization creates the database schema."""
-        narrator = NarratorEngine()
+        import tempfile
+        from pathlib import Path
 
-        with sqlite3.connect(narrator._db_path) as conn:
-            # Check table exists
-            result = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='episodic_entries'",
-            ).fetchone()
-            assert result is not None
+        # Use a file-based DB so we can verify schema with a separate connection
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
 
-            # Check indexes exist
-            indexes = conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
-            index_names = [i[0] for i in indexes]
-            assert "idx_episodic_entries_timestamp" in index_names
+        try:
+            narrator = NarratorEngine(db_path=db_path)
+            assert narrator._db_path == db_path  # Use variable to silence lint
+
+            with sqlite3.connect(db_path) as conn:
+                # Check table exists
+                result = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='episodic_entries'",
+                ).fetchone()
+                assert result is not None
+
+                # Check indexes exist
+                indexes = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'",
+                ).fetchall()
+                index_names = [i[0] for i in indexes]
+                assert "idx_episodic_entries_timestamp" in index_names
+        finally:
+            # Clean up
+            try:
+                Path(db_path).unlink()
+            except PermissionError:
+                pass  # Windows file locking
 
 
 # =============================================================================

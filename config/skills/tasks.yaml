@@ -1,0 +1,141 @@
+# =============================================================================
+# Tasks Skill Manifest
+# =============================================================================
+# Create, track, and complete tasks with reminders
+# Part of Bartholomew Stage 4 starter skills
+
+skill_id: "tasks"
+name: "Task Manager"
+version: "1.0.0"
+description: "Create, track, and complete tasks with optional reminders and due dates"
+
+# Entry points
+entry_module: "bartholomew.skills.tasks"
+entry_class: "TasksSkill"
+
+# Permissions
+permissions:
+  level: "auto"  # Tasks are low-risk, auto-approve
+  requires:
+    - "memory.write"      # Can store task data
+    - "memory.read"       # Can retrieve tasks
+    - "nudge.create"      # Can create reminder nudges
+  sandbox:
+    filesystem:
+      - "./data/tasks"
+    network: []
+
+# Events this skill subscribes to
+subscriptions:
+  - channel: "tasks"
+    events: ["task_due", "task_reminder_check"]
+  - channel: "system"
+    events: ["daily_tick", "startup"]
+
+# Events this skill can emit
+emits:
+  - channel: "tasks"
+    events: ["task_created", "task_completed", "task_deleted", "task_updated", "task_overdue"]
+
+# No dependencies
+depends_on: []
+
+# Auto-activate when user mentions tasks
+auto_activate_on:
+  - "task_context"
+  - "productivity"
+
+# Actions exposed by this skill
+actions:
+  - name: "create"
+    description: "Create a new task"
+    parameters:
+      - name: "title"
+        type: "string"
+        required: true
+        description: "Task title"
+      - name: "description"
+        type: "string"
+        required: false
+        description: "Optional task description"
+      - name: "due_date"
+        type: "datetime"
+        required: false
+        description: "Optional due date (ISO 8601)"
+      - name: "priority"
+        type: "string"
+        required: false
+        description: "Priority level: low, medium, high"
+      - name: "tags"
+        type: "array"
+        required: false
+        description: "Optional tags for categorization"
+
+  - name: "list"
+    description: "List tasks with optional filters"
+    parameters:
+      - name: "status"
+        type: "string"
+        required: false
+        description: "Filter by status: pending, completed, overdue, all"
+      - name: "tags"
+        type: "array"
+        required: false
+        description: "Filter by tags"
+      - name: "limit"
+        type: "integer"
+        required: false
+        description: "Maximum number of tasks to return"
+
+  - name: "complete"
+    description: "Mark a task as complete"
+    parameters:
+      - name: "task_id"
+        type: "string"
+        required: true
+        description: "ID of the task to complete"
+
+  - name: "delete"
+    description: "Delete a task"
+    parameters:
+      - name: "task_id"
+        type: "string"
+        required: true
+        description: "ID of the task to delete"
+
+  - name: "update"
+    description: "Update task properties"
+    parameters:
+      - name: "task_id"
+        type: "string"
+        required: true
+        description: "ID of the task to update"
+      - name: "title"
+        type: "string"
+        required: false
+        description: "New title"
+      - name: "description"
+        type: "string"
+        required: false
+        description: "New description"
+      - name: "due_date"
+        type: "datetime"
+        required: false
+        description: "New due date"
+      - name: "priority"
+        type: "string"
+        required: false
+        description: "New priority"
+
+  - name: "get"
+    description: "Get details of a specific task"
+    parameters:
+      - name: "task_id"
+        type: "string"
+        required: true
+        description: "ID of the task"
+
+# Metadata
+author: "system"
+license: "MIT"
+enabled: true
