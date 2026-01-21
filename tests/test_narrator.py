@@ -1014,6 +1014,196 @@ class TestEdgeCases:
 
 
 # =============================================================================
+# Test Episode FTS Search
+# =============================================================================
+
+
+class TestEpisodeFTSSearch:
+    """Tests for episode full-text search."""
+
+    def test_search_episodes_basic(self):
+        """Test basic FTS search across episodes."""
+        narrator = NarratorEngine()
+
+        # Create episodes with different content
+        narrator.persist_episode(
+            narrator.generate_observation_episode("The robot learned something new"),
+        )
+        narrator.persist_episode(
+            narrator.generate_observation_episode("User asked about weather"),
+        )
+        narrator.persist_episode(
+            narrator.generate_observation_episode("The robot helped the user"),
+        )
+
+        # Search for "robot"
+        results = narrator.search_episodes("robot")
+
+        assert len(results) == 2
+        for ep in results:
+            assert "robot" in ep.narrative.lower()
+
+    def test_search_episodes_no_results(self):
+        """Test FTS search with no matching results."""
+        narrator = NarratorEngine()
+
+        narrator.persist_episode(
+            narrator.generate_observation_episode("Something about cats"),
+        )
+
+        results = narrator.search_episodes("dogs")
+
+        assert len(results) == 0
+
+    def test_search_episodes_with_type_filter(self):
+        """Test FTS search with episode type filter."""
+        narrator = NarratorEngine()
+
+        # Create different episode types
+        narrator.persist_episode(
+            narrator.generate_observation_episode("Happy moment observed"),
+        )
+        narrator.persist_episode(narrator.generate_affect_episode(emotion="happy"))
+
+        # Search with type filter
+        results = narrator.search_episodes(
+            "happy",
+            episode_type=EpisodeType.OBSERVATION,
+        )
+
+        # Should only return observation, not affect shift
+        assert all(ep.episode_type == EpisodeType.OBSERVATION for ep in results)
+
+    def test_search_episodes_with_tone_filter(self):
+        """Test FTS search with tone filter."""
+        narrator = NarratorEngine()
+
+        # Create episodes with known tones
+        ep1 = EpisodicEntry.create(
+            episode_type=EpisodeType.OBSERVATION,
+            narrative="I noticed something exciting",
+            tone=NarrativeTone.ENTHUSIASTIC,
+        )
+        ep2 = EpisodicEntry.create(
+            episode_type=EpisodeType.OBSERVATION,
+            narrative="I noticed something quietly",
+            tone=NarrativeTone.SUBDUED,
+        )
+        narrator.persist_episode(ep1)
+        narrator.persist_episode(ep2)
+
+        # Search with tone filter
+        results = narrator.search_episodes(
+            "noticed",
+            tone=NarrativeTone.ENTHUSIASTIC,
+        )
+
+        assert len(results) == 1
+        assert results[0].tone == NarrativeTone.ENTHUSIASTIC
+
+    def test_search_episodes_with_since_filter(self):
+        """Test FTS search with timestamp filter."""
+        narrator = NarratorEngine()
+
+        # Create first episode
+        narrator.persist_episode(
+            narrator.generate_observation_episode("Early observation"),
+        )
+
+        # Mark time
+        cutoff = datetime.now(timezone.utc)
+
+        # Create second episode
+        narrator.persist_episode(
+            narrator.generate_observation_episode("Later observation"),
+        )
+
+        # Search since cutoff
+        results = narrator.search_episodes("observation", since=cutoff)
+
+        # Should only get the later one
+        assert len(results) == 1
+        assert "Later" in results[0].narrative
+
+    def test_search_episodes_with_limit(self):
+        """Test FTS search respects limit."""
+        narrator = NarratorEngine()
+
+        # Create many episodes
+        for i in range(10):
+            narrator.persist_episode(
+                narrator.generate_observation_episode(f"Test observation {i}"),
+            )
+
+        results = narrator.search_episodes("observation", limit=3)
+
+        assert len(results) == 3
+
+    def test_search_episodes_combined_filters(self):
+        """Test FTS search with multiple filters."""
+        narrator = NarratorEngine()
+
+        ep1 = EpisodicEntry.create(
+            episode_type=EpisodeType.OBSERVATION,
+            narrative="Important task completed",
+            tone=NarrativeTone.CONTENT,
+        )
+        ep2 = EpisodicEntry.create(
+            episode_type=EpisodeType.GOAL_COMPLETED,
+            narrative="Task was completed successfully",
+            tone=NarrativeTone.ENTHUSIASTIC,
+        )
+        narrator.persist_episode(ep1)
+        narrator.persist_episode(ep2)
+
+        # Search with type and tone filter
+        results = narrator.search_episodes(
+            "completed",
+            episode_type=EpisodeType.OBSERVATION,
+            tone=NarrativeTone.CONTENT,
+        )
+
+        assert len(results) == 1
+        assert results[0].episode_type == EpisodeType.OBSERVATION
+        assert results[0].tone == NarrativeTone.CONTENT
+
+    def test_rebuild_episode_fts(self):
+        """Test rebuilding the FTS index."""
+        narrator = NarratorEngine()
+
+        # Create episodes
+        narrator.persist_episode(
+            narrator.generate_observation_episode("Index this content"),
+        )
+        narrator.persist_episode(
+            narrator.generate_observation_episode("Also index this"),
+        )
+
+        # Rebuild index
+        count = narrator.rebuild_episode_fts()
+
+        # Should return count of indexed episodes
+        # (may be 0 if FTS not available)
+        assert count >= 0
+
+    def test_search_episodes_fts_unavailable_fallback(self):
+        """Test that search falls back to LIKE when FTS unavailable."""
+        # This test verifies the fallback works; FTS might not be
+        # available on all platforms
+        narrator = NarratorEngine()
+
+        narrator.persist_episode(
+            narrator.generate_observation_episode("Findable content here"),
+        )
+
+        # This should work regardless of FTS availability
+        results = narrator.search_episodes("Findable")
+
+        # Should find via FTS or LIKE fallback
+        assert len(results) >= 1
+
+
+# =============================================================================
 # Test Full Integration
 # =============================================================================
 

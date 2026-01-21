@@ -9,8 +9,10 @@ import pytest
 
 from bartholomew.kernel.fts_client import FTSClient
 from bartholomew.kernel.memory_store import MemoryStore
+from conftest import SKIP_WINDOWS_FTS
 
 
+@SKIP_WINDOWS_FTS
 @pytest.mark.asyncio
 async def test_bm25_fallback_with_env_var():
     """Test FTS search works with forced fallback to matchinfo('pcx')"""
@@ -74,6 +76,7 @@ async def test_bm25_fallback_with_env_var():
             await store.close()
 
 
+@SKIP_WINDOWS_FTS
 @pytest.mark.asyncio
 async def test_fallback_ranking_order():
     """Test that fallback maintains reasonable ranking order"""
@@ -133,6 +136,7 @@ async def test_fallback_ranking_order():
             await store.close()
 
 
+@SKIP_WINDOWS_FTS
 @pytest.mark.asyncio
 async def test_fallback_boolean_queries():
     """Test fallback handles FTS5 boolean queries"""

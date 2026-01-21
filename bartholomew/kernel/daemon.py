@@ -9,11 +9,16 @@ import yaml
 from dateutil import tz
 
 from .event_bus import EventBus
+from .experience_kernel import ExperienceKernel
+from .global_workspace import EventType, GlobalWorkspace
 from .memory_store import MemoryStore
+from .narrator import NarratorEngine
 from .persona import load_persona
+from .persona_pack import PersonaPackManager
 from .planner import Planner
 from .policy import load_policy
 from .state_model import WorldState
+from .working_memory import WorkingMemoryManager
 
 
 class KernelDaemon:
@@ -36,6 +41,23 @@ class KernelDaemon:
         self.drives = yaml.safe_load(open(drives_path, encoding="utf-8"))
         self.planner = Planner(self.policy, self.drives, self.mem)
         self.state = WorldState()
+
+        # Stage 3: Experience Kernel modules
+        self.workspace = GlobalWorkspace()
+        self.experience = ExperienceKernel(
+            db_path=db_path,
+            workspace=self.workspace,
+        )
+        self.narrator = NarratorEngine(db_path=db_path, workspace=self.workspace)
+        self.working_memory = WorkingMemoryManager(
+            workspace=self.workspace,
+            kernel=self.experience,
+        )
+        self.persona_manager = PersonaPackManager(
+            experience_kernel=self.experience,
+            workspace=self.workspace,
+            db_path=db_path,
+        )
 
         # Task handles for lifecycle management
         self._tick_task = None
@@ -62,6 +84,20 @@ class KernelDaemon:
     async def start(self) -> None:
         await self.mem.init()
 
+        # Stage 3: Initialize experience kernel state
+        self._init_experience_kernel()
+
+        # Stage 3: Subscribe narrator to workspace events
+        self.narrator.subscribe_to_workspace()
+
+        # Stage 3: Emit startup event
+        self.workspace.publish(
+            channel="system",
+            event_type=EventType.SYSTEM_EVENT,
+            source="kernel_daemon",
+            payload={"event": "startup", "timestamp": datetime.now(timezone.utc).isoformat()},
+        )
+
         # Start background tasks
         self._tick_task = asyncio.create_task(self._system_tick())
         self._consumer_task = asyncio.create_task(self._system_consumer())
@@ -72,9 +108,70 @@ class KernelDaemon:
 
         self._scheduler_task = asyncio.create_task(run_scheduler(self))
 
+    def _init_experience_kernel(self) -> None:
+        """Initialize experience kernel from last snapshot or defaults."""
+        db_path = self.mem.db_path
+
+        try:
+            # Try to load last experience snapshot
+            snapshot = self.experience.load_last_snapshot()
+            if snapshot:
+                print("[Kernel] Restored experience state from last snapshot")
+            else:
+                print("[Kernel] Starting with fresh experience state")
+
+            # Try to load last working memory snapshot
+            wm_loaded = self.working_memory.load_last_snapshot(db_path)
+            if wm_loaded:
+                print("[Kernel] Restored working memory from last snapshot")
+            else:
+                print("[Kernel] Starting with empty working memory")
+
+            # Activate default persona if none active
+            if not self.persona_manager.get_active_pack_id():
+                packs = self.persona_manager.list_packs()
+                if packs:
+                    self.persona_manager.switch_pack(
+                        packs[0],
+                        trigger="startup",
+                    )
+                    print(f"[Kernel] Activated persona: {packs[0]}")
+        except Exception as e:
+            print(f"[Kernel] Experience kernel init warning: {e}")
+
     async def stop(self) -> None:
         """Gracefully stop the kernel daemon."""
-        tasks = [self._tick_task, self._consumer_task, self._dream_task, self._scheduler_task]
+        # Stage 3: Emit shutdown event
+        self.workspace.publish(
+            channel="system",
+            event_type=EventType.SYSTEM_EVENT,
+            source="kernel_daemon",
+            payload={
+                "event": "shutdown",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        # Stage 3: Persist experience snapshot
+        try:
+            self.experience.persist_snapshot()
+            print("[Kernel] Experience state persisted")
+        except Exception as e:
+            print(f"[Kernel] Failed to persist experience state: {e}")
+
+        # Stage 3: Persist working memory snapshot
+        try:
+            self.working_memory.persist_snapshot(self.mem.db_path)
+            print("[Kernel] Working memory state persisted")
+        except Exception as e:
+            print(f"[Kernel] Failed to persist working memory: {e}")
+
+        tasks = [
+            self._tick_task,
+            self._consumer_task,
+            self._dream_task,
+            self._scheduler_task,
+        ]
         for task in tasks:
             if task and not task.done():
                 task.cancel()
@@ -110,6 +207,13 @@ class KernelDaemon:
                 if self._is_quiet_hours(self.state.now):
                     await asyncio.sleep(self.interval)
                     continue
+
+                # Stage 3: Decay affect toward baseline each tick
+                self.experience.decay_affect(rate=0.02)
+
+                # Stage 3: Check for auto persona activation
+                context_tags = list(self.experience.get_context("tags") or [])
+                self.persona_manager.auto_activate_if_needed(context_tags)
 
                 action = await self.planner.decide(self.state)
                 if action:

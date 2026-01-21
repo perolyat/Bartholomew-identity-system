@@ -16,6 +16,7 @@ from bartholomew.kernel.fts_client import FTSClient
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.vector_store import VectorStore
+from conftest import SKIP_WINDOWS_FTS
 
 
 @pytest.fixture
@@ -159,6 +160,7 @@ async def test_consent_gate_marks_context_only(memory_store, consent_gate):
 # ============================================================================
 
 
+@SKIP_WINDOWS_FTS
 def test_fts_search_applies_consent_gate(temp_db):
     """Test that FTS search applies consent gate by default"""
     # Create test memories in database FIRST (before FTS init)
@@ -209,6 +211,7 @@ def test_fts_search_applies_consent_gate(temp_db):
     assert isinstance(results, list), "Should return list"
 
 
+@SKIP_WINDOWS_FTS
 def test_fts_search_without_consent_gate(temp_db):
     """Test that FTS search can bypass consent gate"""
     # Create test memory table FIRST (before FTS init)

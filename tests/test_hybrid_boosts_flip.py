@@ -14,6 +14,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from conftest import SKIP_WINDOWS_FTS
+
+
+# Skip all tests in this module on Windows (FTS5/matchinfo not available)
+pytestmark = SKIP_WINDOWS_FTS
+
 from bartholomew.kernel.hybrid_retriever import HybridRetrievalConfig, HybridRetriever
 
 

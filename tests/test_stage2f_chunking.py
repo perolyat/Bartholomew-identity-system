@@ -12,6 +12,8 @@ import tempfile
 
 import pytest
 
+from conftest import SKIP_WINDOWS_FTS
+
 
 @pytest.fixture
 def temp_db():
@@ -359,6 +361,7 @@ class TestChunkFTS:
         # May not exist if FTS5 not available
         # This is acceptable on some platforms
 
+    @SKIP_WINDOWS_FTS
     @pytest.mark.asyncio
     async def test_search_chunks(self, temp_db, long_content):
         """Test searching through chunks."""

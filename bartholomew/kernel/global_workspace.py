@@ -43,6 +43,7 @@ class EventType(Enum):
     SYSTEM_STARTUP = "system_startup"
     SYSTEM_SHUTDOWN = "system_shutdown"
     SYSTEM_ERROR = "system_error"
+    SYSTEM_EVENT = "system_event"
 
     # Memory events
     MEMORY_STORED = "memory_stored"

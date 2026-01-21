@@ -15,6 +15,12 @@ import tempfile
 import pytest
 import yaml
 
+from conftest import SKIP_WINDOWS_FTS
+
+
+# Skip all tests in this module on Windows (FTS5/matchinfo not available)
+pytestmark = SKIP_WINDOWS_FTS
+
 from bartholomew.kernel.db_ctx import wal_checkpoint_truncate
 from bartholomew.kernel.fts_client import FTSClient
 from bartholomew.kernel.memory_store import MemoryStore

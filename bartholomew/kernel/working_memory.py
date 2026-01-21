@@ -16,7 +16,9 @@ Key features:
 
 from __future__ import annotations
 
+import json
 import logging
+import sqlite3
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -667,7 +669,10 @@ class WorkingMemoryManager:
         Args:
             snapshot: Snapshot dictionary from snapshot()
         """
-        self._token_budget = snapshot.get("token_budget", self.DEFAULT_TOKEN_BUDGET)
+        self._token_budget = snapshot.get(
+            "token_budget",
+            self.DEFAULT_TOKEN_BUDGET,
+        )
 
         policy_value = snapshot.get("overflow_policy", "priority")
         try:
@@ -686,6 +691,169 @@ class WorkingMemoryManager:
         logger.debug(
             f"Restored working memory: {len(self._items)} items, {self._current_tokens} tokens",
         )
+
+    # =========================================================================
+    # Database Persistence
+    # =========================================================================
+
+    WM_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS working_memory_snapshots (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        token_budget INTEGER NOT NULL,
+        overflow_policy TEXT NOT NULL,
+        current_tokens INTEGER NOT NULL,
+        items_json TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+
+    def _ensure_db_schema(self, db_path: str) -> None:
+        """Ensure the working_memory_snapshots table exists."""
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(self.WM_SCHEMA)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def persist_snapshot(self, db_path: str) -> str:
+        """
+        Persist working memory state to database.
+
+        Args:
+            db_path: Path to SQLite database
+
+        Returns:
+            Snapshot ID
+        """
+        self._ensure_db_schema(db_path)
+
+        snapshot_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+
+        snap = self.snapshot()
+        items_json = json.dumps(snap["items"])
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO working_memory_snapshots
+                (id, timestamp, token_budget, overflow_policy,
+                 current_tokens, items_json, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    now.isoformat(),
+                    self._token_budget,
+                    self._overflow_policy.value,
+                    self._current_tokens,
+                    items_json,
+                    json.dumps({"item_count": len(self._items)}),
+                ),
+            )
+            conn.commit()
+            logger.info(
+                f"Persisted working memory snapshot {snapshot_id[:8]}... "
+                f"({len(self._items)} items, {self._current_tokens} tokens)",
+            )
+        finally:
+            conn.close()
+
+        return snapshot_id
+
+    def load_last_snapshot(self, db_path: str) -> bool:
+        """
+        Load most recent working memory snapshot from database.
+
+        Args:
+            db_path: Path to SQLite database
+
+        Returns:
+            True if snapshot was loaded, False if none found
+        """
+        self._ensure_db_schema(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """
+                SELECT * FROM working_memory_snapshots
+                ORDER BY timestamp DESC LIMIT 1
+                """,
+            ).fetchone()
+
+            if not row:
+                logger.debug("No working memory snapshot found")
+                return False
+
+            # Parse items from JSON
+            items_data = json.loads(row["items_json"])
+
+            # Build snapshot dict for restore()
+            snapshot = {
+                "token_budget": row["token_budget"],
+                "overflow_policy": row["overflow_policy"],
+                "current_tokens": row["current_tokens"],
+                "items": items_data,
+            }
+
+            self.restore(snapshot)
+            logger.info(
+                f"Loaded working memory from snapshot {row['id'][:8]}...",
+            )
+            return True
+
+        finally:
+            conn.close()
+
+    def get_snapshot_history(
+        self,
+        db_path: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Get recent snapshot history.
+
+        Args:
+            db_path: Path to SQLite database
+            limit: Maximum snapshots to return
+
+        Returns:
+            List of snapshot metadata dicts
+        """
+        self._ensure_db_schema(db_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, timestamp, token_budget, overflow_policy,
+                       current_tokens, metadata_json
+                FROM working_memory_snapshots
+                ORDER BY timestamp DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+            return [
+                {
+                    "id": row["id"],
+                    "timestamp": row["timestamp"],
+                    "token_budget": row["token_budget"],
+                    "overflow_policy": row["overflow_policy"],
+                    "current_tokens": row["current_tokens"],
+                    "metadata": json.loads(row["metadata_json"] or "{}"),
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
 
     # =========================================================================
     # Event Emission

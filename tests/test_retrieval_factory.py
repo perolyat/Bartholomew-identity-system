@@ -13,6 +13,7 @@ from bartholomew.kernel.retrieval import (
     VectorRetrieverAdapter,
     get_retriever,
 )
+from conftest import SKIP_WINDOWS_FTS
 
 
 def test_default_mode_hybrid_from_config():
@@ -77,6 +78,7 @@ def test_vector_adapter_delegates_to_query(mocker):
     mock_retriever.query.assert_called_once_with("test query", top_k=5, filters=filters)
 
 
+@SKIP_WINDOWS_FTS
 def test_fts_only_empty_results(tmp_path):
     """FTS-only retriever returns empty list when no matches"""
     # Create temp database
@@ -112,6 +114,7 @@ def test_fts_only_empty_results(tmp_path):
     assert results == []
 
 
+@SKIP_WINDOWS_FTS
 def test_fts_only_filters_by_kind(tmp_path):
     """FTS-only retriever respects kind filters"""
     # Create temp database with data
@@ -162,6 +165,7 @@ def test_fts_only_filters_by_kind(tmp_path):
     assert results[0].kind == "event"
 
 
+@SKIP_WINDOWS_FTS
 def test_fts_only_filters_by_timestamp(tmp_path):
     """FTS-only retriever respects timestamp filters"""
     # Create temp database with data

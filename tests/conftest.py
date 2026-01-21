@@ -6,11 +6,25 @@ parking brake helpers, and minimal storage shims for unit testing.
 """
 
 import json
+import platform
 from contextlib import contextmanager
 from dataclasses import dataclass
 
 import pytest
 from freezegun import freeze_time
+
+
+# ============================================================================
+# Windows FTS5/SQLite Skip Marker
+# ============================================================================
+# Windows Python builds often lack FTS5 with matchinfo() support.
+# These tests require FTS5 features not available on standard Windows builds.
+
+IS_WINDOWS = platform.system() == "Windows"
+SKIP_WINDOWS_FTS = pytest.mark.skipif(
+    IS_WINDOWS,
+    reason="FTS5/matchinfo not available on Windows Python builds",
+)
 
 
 @pytest.fixture

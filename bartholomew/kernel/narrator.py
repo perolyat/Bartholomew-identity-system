@@ -281,6 +281,44 @@ CREATE INDEX IF NOT EXISTS idx_episodic_entries_source_channel
 ON episodic_entries(source_channel);
 """
 
+# =============================================================================
+# Episode FTS Schema
+# =============================================================================
+
+EPISODE_FTS_SCHEMA = """
+-- FTS5 virtual table for episodic entry full-text search
+-- Indexes the narrative text for fast searching
+CREATE VIRTUAL TABLE IF NOT EXISTS episode_fts USING fts5(
+    narrative,
+    content='episodic_entries',
+    content_rowid='rowid',
+    tokenize='porter'
+);
+
+-- Trigger to add new episodes to FTS index
+CREATE TRIGGER IF NOT EXISTS episode_fts_insert AFTER INSERT ON episodic_entries
+BEGIN
+    INSERT INTO episode_fts(rowid, narrative)
+    VALUES (new.rowid, new.narrative);
+END;
+
+-- Trigger to update FTS on episode update
+CREATE TRIGGER IF NOT EXISTS episode_fts_update AFTER UPDATE ON episodic_entries
+BEGIN
+    INSERT INTO episode_fts(episode_fts, rowid, narrative)
+    VALUES ('delete', old.rowid, old.narrative);
+    INSERT INTO episode_fts(rowid, narrative)
+    VALUES (new.rowid, new.narrative);
+END;
+
+-- Trigger to remove deleted episodes from FTS
+CREATE TRIGGER IF NOT EXISTS episode_fts_delete AFTER DELETE ON episodic_entries
+BEGIN
+    INSERT INTO episode_fts(episode_fts, rowid, narrative)
+    VALUES ('delete', old.rowid, old.narrative);
+END;
+"""
+
 
 # =============================================================================
 # Narrative Templates
@@ -549,6 +587,11 @@ class NarratorEngine:
         """Initialize database schema for episodic entries."""
         with sqlite3.connect(self._db_path) as conn:
             conn.executescript(NARRATOR_SCHEMA)
+            # Initialize FTS schema (silently skip if FTS5 not available)
+            try:
+                conn.executescript(EPISODE_FTS_SCHEMA)
+            except sqlite3.OperationalError:
+                pass  # FTS5 not available
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get a database connection."""
@@ -1242,6 +1285,134 @@ class NarratorEngine:
         finally:
             self._close_if_not_persistent(conn)
         return count
+
+    # =========================================================================
+    # Full-Text Search
+    # =========================================================================
+
+    def search_episodes(
+        self,
+        query: str,
+        limit: int = 20,
+        episode_type: EpisodeType | None = None,
+        tone: NarrativeTone | None = None,
+        since: datetime | None = None,
+    ) -> list[EpisodicEntry]:
+        """
+        Full-text search across episodic entries.
+
+        Uses FTS5 MATCH syntax for queries. Returns episodes ranked
+        by relevance.
+
+        Args:
+            query: FTS5 query (e.g., "goal", "emotion AND happy")
+            limit: Maximum results to return
+            episode_type: Optional filter by episode type
+            tone: Optional filter by tone
+            since: Optional filter by timestamp
+
+        Returns:
+            List of matching EpisodicEntry objects, ranked by relevance
+        """
+        conn = self._get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+
+            # Build filters
+            filters = []
+            params: list[Any] = [query]
+
+            if episode_type:
+                filters.append("e.episode_type = ?")
+                params.append(episode_type.value)
+
+            if tone:
+                filters.append("e.tone = ?")
+                params.append(tone.value)
+
+            if since:
+                filters.append("e.timestamp >= ?")
+                params.append(since.isoformat())
+
+            filter_clause = ""
+            if filters:
+                filter_clause = "AND " + " AND ".join(filters)
+
+            params.append(limit)
+
+            # Try FTS5 search
+            sql = f"""
+                SELECT e.*
+                FROM episode_fts f
+                JOIN episodic_entries e ON f.rowid = e.rowid
+                WHERE f.narrative MATCH ?
+                {filter_clause}
+                ORDER BY rank
+                LIMIT ?
+            """
+
+            try:
+                rows = conn.execute(sql, params).fetchall()
+            except sqlite3.OperationalError:
+                # FTS not available, fall back to LIKE
+                like_pattern = f"%{query}%"
+                params_fallback: list[Any] = [like_pattern]
+
+                if episode_type:
+                    params_fallback.append(episode_type.value)
+                if tone:
+                    params_fallback.append(tone.value)
+                if since:
+                    params_fallback.append(since.isoformat())
+                params_fallback.append(limit)
+
+                filter_clause_fb = ""
+                if filters:
+                    filter_clause_fb = "AND " + " AND ".join(filters)
+
+                sql_fallback = f"""
+                    SELECT *
+                    FROM episodic_entries e
+                    WHERE e.narrative LIKE ?
+                    {filter_clause_fb}
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """
+                rows = conn.execute(sql_fallback, params_fallback).fetchall()
+
+        finally:
+            self._close_if_not_persistent(conn)
+
+        return [self._row_to_episode(row) for row in rows]
+
+    def rebuild_episode_fts(self) -> int:
+        """
+        Rebuild the episode FTS index from existing entries.
+
+        Returns:
+            Number of episodes indexed
+        """
+        conn = self._get_connection()
+        try:
+            # Delete existing FTS data
+            conn.execute("DELETE FROM episode_fts")
+
+            # Rebuild from episodic_entries
+            conn.execute(
+                """
+                INSERT INTO episode_fts(rowid, narrative)
+                SELECT rowid, narrative FROM episodic_entries
+            """,
+            )
+
+            count = conn.execute("SELECT COUNT(*) FROM episode_fts").fetchone()[0]
+            conn.commit()
+            return count
+        except sqlite3.OperationalError:
+            # FTS not available
+            return 0
+        finally:
+            self._close_if_not_persistent(conn)
 
     def _row_to_episode(self, row: sqlite3.Row) -> EpisodicEntry:
         """Convert a database row to EpisodicEntry."""

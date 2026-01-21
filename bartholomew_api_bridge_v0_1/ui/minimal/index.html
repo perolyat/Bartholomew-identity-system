@@ -14,7 +14,12 @@
     button.ack:hover { background: #064e3b; }
     button.dismiss { border-color: #dc2626; color: #ef4444; }
     button.dismiss:hover { background: #450a0a; }
-    input, textarea { width:100%; border-radius:10px; border:1px solid #374151; background:#0b1220; color:#e8f0fe; padding:10px; }
+    button.primary { border-color: #3b82f6; color: #60a5fa; }
+    button.primary:hover { background: #1e3a5f; }
+    button.active { background: #1e3a5f; border-color: #3b82f6; }
+    input, textarea, select { border-radius:10px; border:1px solid #374151; background:#0b1220; color:#e8f0fe; padding:10px; }
+    input, textarea { width:100%; }
+    select { padding: 8px 12px; }
     .badge { border:1px solid #374151; padding:4px 8px; border-radius:999px; font-size:12px; }
     .badge.kernel-online { border-color: #059669; color: #10b981; }
     .badge.kernel-offline { border-color: #dc2626; color: #ef4444; }
@@ -29,6 +34,67 @@
     .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; background: #1f2937; }
     .tab.active { background: #374151; }
     .empty-state { color: #6b7280; font-style: italic; padding: 12px; }
+
+    /* Stage 3 UI Styles */
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .sub-card { background: #1a2332; border-radius: 10px; padding: 12px; }
+    .sub-card h4 { margin: 0 0 12px 0; font-size: 13px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* Affect Sliders */
+    .affect-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .affect-label { width: 70px; font-size: 12px; color: #9ca3af; }
+    .affect-slider { flex: 1; height: 6px; background: #374151; border-radius: 3px; position: relative; cursor: pointer; }
+    .affect-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+    .affect-fill.valence { background: linear-gradient(90deg, #ef4444, #6b7280, #10b981); }
+    .affect-fill.arousal { background: linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899); }
+    .affect-fill.energy { background: linear-gradient(90deg, #6b7280, #f59e0b, #22c55e); }
+    .affect-value { width: 40px; font-size: 12px; text-align: right; color: #e8f0fe; }
+
+    /* Attention */
+    .attention-info { font-size: 13px; }
+    .attention-target { color: #60a5fa; font-weight: 600; }
+    .attention-type { color: #9ca3af; }
+    .attention-intensity { margin-top: 8px; }
+    .intensity-bar { height: 4px; background: #374151; border-radius: 2px; margin-top: 4px; }
+    .intensity-fill { height: 100%; background: #60a5fa; border-radius: 2px; transition: width 0.3s; }
+
+    /* Drives */
+    .drive-item { margin-bottom: 8px; }
+    .drive-header { display: flex; justify-content: space-between; align-items: center; }
+    .drive-name { font-size: 12px; color: #e8f0fe; }
+    .drive-value { font-size: 11px; color: #6b7280; }
+    .drive-bar { height: 6px; background: #374151; border-radius: 3px; margin-top: 4px; }
+    .drive-fill { height: 100%; background: #8b5cf6; border-radius: 3px; transition: width 0.3s; }
+
+    /* Goals */
+    .goal-tag { display: inline-flex; align-items: center; gap: 4px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 4px 8px; font-size: 12px; margin: 4px 4px 4px 0; }
+    .goal-tag button { padding: 2px 6px; font-size: 10px; }
+    .add-goal-form { display: flex; gap: 8px; margin-top: 8px; }
+    .add-goal-form input { flex: 1; padding: 6px 10px; font-size: 12px; }
+
+    /* Persona */
+    .persona-current { background: #1a2332; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+    .persona-name { font-size: 16px; font-weight: 600; color: #e8f0fe; }
+    .persona-desc { font-size: 13px; color: #9ca3af; margin-top: 4px; }
+    .persona-tone { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+    .tone-tag { background: #374151; border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #d1d5db; }
+    .persona-list { display: flex; gap: 8px; flex-wrap: wrap; }
+    .persona-btn { padding: 8px 16px; }
+    .persona-btn.active { background: #1e3a5f; border-color: #3b82f6; }
+
+    /* Episodes */
+    .episode-item { background: #1a2332; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+    .episode-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .episode-tone { font-size: 11px; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; }
+    .episode-tone.enthusiastic { background: #065f46; color: #10b981; }
+    .episode-tone.content { background: #1e3a5f; color: #60a5fa; }
+    .episode-tone.neutral { background: #374151; color: #9ca3af; }
+    .episode-tone.concerned { background: #7c2d12; color: #fb923c; }
+    .episode-tone.subdued { background: #1f2937; color: #6b7280; }
+    .episode-ts { font-size: 11px; color: #6b7280; }
+    .episode-narrative { font-size: 13px; line-height: 1.5; }
+    .episode-type { font-size: 10px; color: #6b7280; margin-top: 6px; }
+    .episode-filters { margin-bottom: 12px; }
   </style>
 </head>
 <body>
@@ -40,12 +106,126 @@
       <span id="kernel-status" class="badge">kernel: checking…</span>
       <span id="nudge-count" class="badge">nudges: …</span>
       <span id="last-reflection" class="badge">reflection: …</span>
+      <span id="wm-tokens" class="badge">WM: …</span>
       <button onclick="refreshHealth()">Refresh Status</button>
     </div>
     <details style="margin-top:12px">
       <summary style="cursor:pointer;color:#6b7280">Full health JSON</summary>
       <div id="health" class="mono" style="margin-top:8px"></div>
     </details>
+  </div>
+
+  <!-- Stage 3: Self-State Panel -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🧠 Self-State</h3>
+      <button onclick="refreshSelfState()">Refresh</button>
+    </div>
+    <div class="grid-3">
+      <!-- Affect -->
+      <div class="sub-card">
+        <h4>Affect</h4>
+        <div class="affect-row">
+          <span class="affect-label">Valence</span>
+          <div class="affect-slider" onclick="adjustAffect('valence', event)">
+            <div class="affect-fill valence" id="affect-valence-fill" style="width:50%"></div>
+          </div>
+          <span class="affect-value" id="affect-valence-val">0.0</span>
+        </div>
+        <div class="affect-row">
+          <span class="affect-label">Arousal</span>
+          <div class="affect-slider" onclick="adjustAffect('arousal', event)">
+            <div class="affect-fill arousal" id="affect-arousal-fill" style="width:50%"></div>
+          </div>
+          <span class="affect-value" id="affect-arousal-val">0.0</span>
+        </div>
+        <div class="affect-row">
+          <span class="affect-label">Energy</span>
+          <div class="affect-slider" onclick="adjustAffect('energy', event)">
+            <div class="affect-fill energy" id="affect-energy-fill" style="width:50%"></div>
+          </div>
+          <span class="affect-value" id="affect-energy-val">0.0</span>
+        </div>
+      </div>
+
+      <!-- Attention -->
+      <div class="sub-card">
+        <h4>Attention</h4>
+        <div class="attention-info">
+          <div><span class="attention-target" id="attention-target">idle</span></div>
+          <div><span class="attention-type" id="attention-type">diffuse</span></div>
+          <div class="attention-intensity">
+            <small>Intensity: <span id="attention-intensity-val">0.0</span></small>
+            <div class="intensity-bar">
+              <div class="intensity-fill" id="attention-intensity-fill" style="width:0%"></div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <button onclick="clearAttention()" style="font-size:11px;padding:4px 8px">Clear Focus</button>
+        </div>
+      </div>
+
+      <!-- Top Drives -->
+      <div class="sub-card">
+        <h4>Top Drives</h4>
+        <div id="drives-list">
+          <div class="empty-state">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Goals -->
+    <div style="margin-top:12px">
+      <h4 style="margin:0 0 8px 0;font-size:13px;color:#9ca3af">ACTIVE GOALS</h4>
+      <div id="goals-list" class="row" style="flex-wrap:wrap"></div>
+      <div class="add-goal-form">
+        <input id="new-goal" placeholder="Add a new goal..." onkeydown="if(event.key==='Enter'){addGoal()}"/>
+        <button onclick="addGoal()">+ Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stage 3: Persona Panel -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🎭 Persona</h3>
+      <button onclick="refreshPersona()">Refresh</button>
+    </div>
+    <div class="persona-current">
+      <div class="persona-name" id="persona-name">Loading...</div>
+      <div class="persona-desc" id="persona-desc"></div>
+      <div class="persona-tone" id="persona-tone"></div>
+    </div>
+    <div>
+      <small style="color:#6b7280">Switch to:</small>
+      <div class="persona-list" id="persona-list" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- Stage 3: Episodes Panel -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">📖 Recent Episodes</h3>
+      <button onclick="refreshEpisodes()">Refresh</button>
+    </div>
+    <div class="episode-filters row">
+      <select id="episode-filter" onchange="refreshEpisodes()" title="Filter episodes by type" aria-label="Filter episodes by type">
+        <option value="">All Types</option>
+        <option value="affect_shift">Affect Shift</option>
+        <option value="attention_focus">Attention Focus</option>
+        <option value="drive_activated">Drive Activated</option>
+        <option value="drive_satisfied">Drive Satisfied</option>
+        <option value="goal_added">Goal Added</option>
+        <option value="goal_completed">Goal Completed</option>
+        <option value="observation">Observation</option>
+        <option value="reflection">Reflection</option>
+      </select>
+      <span id="episode-count" style="color:#6b7280;font-size:12px"></span>
+    </div>
+    <div id="episodes-list">
+      <div class="empty-state">Loading episodes...</div>
+    </div>
   </div>
 
   <!-- Stage 1: Nudges Panel -->
@@ -131,6 +311,251 @@
         document.getElementById("kernel-status").textContent = "kernel: error";
         document.getElementById("kernel-status").className = "badge kernel-offline";
       }
+    }
+
+    // === Stage 3: Self-State ===
+    async function refreshSelfState(){
+      try{
+        const r = await fetch(API + "/api/self");
+        const j = await r.json();
+        const snap = j.snapshot || {};
+
+        // Update WM token badge
+        document.getElementById("wm-tokens").textContent = `WM: ${j.working_memory_tokens || 0} tokens`;
+
+        // Update affect
+        const affect = snap.affect || {};
+        updateAffect('valence', affect.valence || 0);
+        updateAffect('arousal', affect.arousal || 0);
+        updateAffect('energy', affect.energy || 0);
+
+        // Update attention
+        const attention = snap.attention || {};
+        document.getElementById("attention-target").textContent = attention.target || 'idle';
+        document.getElementById("attention-type").textContent = attention.type || 'diffuse';
+        const intensity = attention.intensity || 0;
+        document.getElementById("attention-intensity-val").textContent = intensity.toFixed(2);
+        document.getElementById("attention-intensity-fill").style.width = (intensity * 100) + '%';
+
+        // Update drives
+        await refreshDrives();
+
+        // Update goals
+        const goals = snap.active_goals || [];
+        renderGoals(goals);
+
+      }catch(e){
+        console.error("Self-state refresh failed:", e);
+      }
+    }
+
+    function updateAffect(dim, val){
+      // Convert from -1..1 to 0..1 for display (valence is -1 to 1, others are 0 to 1)
+      const displayVal = dim === 'valence' ? (val + 1) / 2 : val;
+      document.getElementById(`affect-${dim}-fill`).style.width = (displayVal * 100) + '%';
+      document.getElementById(`affect-${dim}-val`).textContent = val.toFixed(2);
+    }
+
+    async function adjustAffect(dim, event){
+      const rect = event.target.getBoundingClientRect();
+      const pct = (event.clientX - rect.left) / rect.width;
+      // Convert percentage to value
+      const val = dim === 'valence' ? (pct * 2 - 1) : pct;
+
+      try{
+        const body = {};
+        body[dim] = Math.max(-1, Math.min(1, val));
+        await fetch(API + "/api/self/affect", {
+          method: "PUT",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(body)
+        });
+        await refreshSelfState();
+      }catch(e){
+        console.error("Affect update failed:", e);
+      }
+    }
+
+    async function clearAttention(){
+      try{
+        await fetch(API + "/api/self/attention", { method: "DELETE" });
+        await refreshSelfState();
+      }catch(e){
+        console.error("Clear attention failed:", e);
+      }
+    }
+
+    async function refreshDrives(){
+      try{
+        const r = await fetch(API + "/api/self/drives/top?limit=5");
+        const j = await r.json();
+        const drives = j.drives || [];
+
+        if(drives.length === 0){
+          document.getElementById("drives-list").innerHTML = '<div class="empty-state">No drives</div>';
+          return;
+        }
+
+        document.getElementById("drives-list").innerHTML = drives.map(d => `
+          <div class="drive-item">
+            <div class="drive-header">
+              <span class="drive-name">${escapeHtml(d.drive_id || d.id)}</span>
+              <span class="drive-value">${(d.effective_activation || d.activation || 0).toFixed(2)}</span>
+            </div>
+            <div class="drive-bar">
+              <div class="drive-fill" style="width:${Math.min(100, (d.effective_activation || d.activation || 0) * 100)}%"></div>
+            </div>
+          </div>
+        `).join('');
+      }catch(e){
+        console.error("Drives refresh failed:", e);
+      }
+    }
+
+    function renderGoals(goals){
+      const el = document.getElementById("goals-list");
+      if(!goals || goals.length === 0){
+        el.innerHTML = '<span class="empty-state">No active goals</span>';
+        return;
+      }
+      el.innerHTML = goals.map(g => `
+        <span class="goal-tag">
+          ${escapeHtml(g)}
+          <button onclick="completeGoal('${escapeHtml(g)}')" title="Complete">✓</button>
+        </span>
+      `).join('');
+    }
+
+    async function addGoal(){
+      const input = document.getElementById("new-goal");
+      const goal = input.value.trim();
+      if(!goal) return;
+
+      try{
+        await fetch(API + "/api/self/goals?goal=" + encodeURIComponent(goal), { method: "POST" });
+        input.value = "";
+        await refreshSelfState();
+      }catch(e){
+        console.error("Add goal failed:", e);
+      }
+    }
+
+    async function completeGoal(goal){
+      try{
+        await fetch(API + "/api/self/goals/" + encodeURIComponent(goal), { method: "DELETE" });
+        await refreshSelfState();
+      }catch(e){
+        console.error("Complete goal failed:", e);
+      }
+    }
+
+    // === Stage 3: Persona ===
+    async function refreshPersona(){
+      try{
+        // Get current persona
+        const r = await fetch(API + "/api/persona/current");
+        const j = await r.json();
+
+        if(j.active && j.pack){
+          const pack = j.pack;
+          document.getElementById("persona-name").textContent = `${pack.name || pack.pack_id} (${pack.pack_id})`;
+          document.getElementById("persona-desc").textContent = pack.description || '';
+          const tones = pack.tone || [];
+          document.getElementById("persona-tone").innerHTML = tones.map(t =>
+            `<span class="tone-tag">${escapeHtml(t)}</span>`
+          ).join('');
+        } else {
+          document.getElementById("persona-name").textContent = 'No persona active';
+          document.getElementById("persona-desc").textContent = '';
+          document.getElementById("persona-tone").innerHTML = '';
+        }
+
+        // Get all personas
+        const r2 = await fetch(API + "/api/persona/list");
+        const j2 = await r2.json();
+        const packs = j2.packs || [];
+
+        document.getElementById("persona-list").innerHTML = packs.map(p => `
+          <button class="persona-btn ${p.is_active ? 'active' : ''}"
+                  onclick="switchPersona('${escapeHtml(p.pack_id)}')"
+                  ${p.is_active ? 'disabled' : ''}>
+            ${escapeHtml(p.name || p.pack_id)}
+          </button>
+        `).join('');
+
+      }catch(e){
+        console.error("Persona refresh failed:", e);
+        document.getElementById("persona-name").textContent = 'Error loading persona';
+      }
+    }
+
+    async function switchPersona(packId){
+      try{
+        await fetch(API + "/api/persona/switch", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ pack_id: packId, trigger: "ui_manual" })
+        });
+        await refreshPersona();
+        await refreshEpisodes(); // Switching persona may create an episode
+      }catch(e){
+        console.error("Persona switch failed:", e);
+        alert("Failed to switch persona: " + e);
+      }
+    }
+
+    // === Stage 3: Episodes ===
+    async function refreshEpisodes(){
+      const listEl = document.getElementById("episodes-list");
+      const filter = document.getElementById("episode-filter").value;
+
+      try{
+        let url = API + "/api/episodes/recent?limit=10";
+        if(filter){
+          url = API + `/api/episodes/by-type/${filter}?limit=10`;
+        }
+
+        const r = await fetch(url);
+        const j = await r.json();
+        const episodes = j.episodes || [];
+
+        document.getElementById("episode-count").textContent = `${j.count || episodes.length} episodes`;
+
+        if(episodes.length === 0){
+          listEl.innerHTML = '<div class="empty-state">No episodes yet. Episodes are created as Bartholomew experiences state changes.</div>';
+          return;
+        }
+
+        listEl.innerHTML = episodes.map(ep => `
+          <div class="episode-item">
+            <div class="episode-header">
+              <span class="episode-tone ${(ep.tone || 'neutral').toLowerCase()}">${escapeHtml(ep.tone || 'neutral')}</span>
+              <span class="episode-ts">${formatTimeAgo(ep.timestamp)}</span>
+            </div>
+            <div class="episode-narrative">${escapeHtml(ep.narrative || '')}</div>
+            <div class="episode-type">${escapeHtml(ep.episode_type || '')}</div>
+          </div>
+        `).join('');
+
+      }catch(e){
+        console.error("Episodes refresh failed:", e);
+        listEl.innerHTML = `<div class="empty-state">Failed to load episodes: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function formatTimeAgo(timestamp){
+      if(!timestamp) return '';
+      const now = new Date();
+      const then = new Date(timestamp);
+      const diffMs = now - then;
+      const diffMins = Math.floor(diffMs / 60000);
+
+      if(diffMins < 1) return 'just now';
+      if(diffMins < 60) return `${diffMins} min ago`;
+      const diffHours = Math.floor(diffMins / 60);
+      if(diffHours < 24) return `${diffHours} hr ago`;
+      const diffDays = Math.floor(diffHours / 24);
+      return `${diffDays} days ago`;
     }
 
     // === Stage 1: Nudges ===
@@ -289,9 +714,16 @@
 
     // === Initial Load ===
     refreshHealth();
+    refreshSelfState();
+    refreshPersona();
+    refreshEpisodes();
     refreshNudges();
     refreshReflections();
     refreshWater();
+
+    // === Auto-refresh ===
+    setInterval(refreshSelfState, 30000);  // Self-state every 30s
+    setInterval(refreshEpisodes, 60000);   // Episodes every 60s
   </script>
 </body>
 </html>

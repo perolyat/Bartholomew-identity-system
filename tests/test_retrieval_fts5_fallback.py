@@ -11,6 +11,12 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import SKIP_WINDOWS_FTS
+
+
+# Skip all tests in this module on Windows (FTS5/matchinfo not available)
+pytestmark = SKIP_WINDOWS_FTS
+
 from bartholomew.kernel.fts_client import fts5_available
 from bartholomew.kernel.retrieval import _check_fts5_once, get_retriever
 

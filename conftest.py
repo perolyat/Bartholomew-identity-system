@@ -7,11 +7,27 @@ compatibility where file deletion can fail due to lingering file handles.
 """
 
 import gc
+import sys
 import tempfile
 import time
 from pathlib import Path
 
 import pytest
+
+
+# ==============================================================================
+# Windows FTS Skip Markers
+# ==============================================================================
+# The Windows Python SQLite build typically lacks FTS5/matchinfo support.
+# These markers allow tests to be skipped on Windows while running on Linux CI.
+
+SKIP_WINDOWS_FTS = pytest.mark.skipif(
+    sys.platform == "win32", reason="FTS5/matchinfo not available in Windows Python SQLite build",
+)
+
+SKIP_WINDOWS_FILE_LOCKING = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows file locking prevents cleanup during test",
+)
 
 
 @pytest.fixture
