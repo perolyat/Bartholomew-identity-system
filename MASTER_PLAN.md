@@ -382,7 +382,7 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
 
 ---
 
-## Full test suite investigation — 38 failures → 9, fixed 2026-07-20
+## Full test suite investigation — 38 failures → 9 → 4, fixed 2026-07-20
 
 Follow-up to the FTS5/`sys.path` investigation above: went through every remaining failure
 in `pytest -q` (the full suite, not just `-m smoke`) one at a time. 29 were real, root-caused,
@@ -526,41 +526,51 @@ fix — documented individually below so nobody re-discovers them from scratch.
     (only ever read `retrieval.fts_tokenizer`) -- and they'd drifted apart. Added the same
     legacy fallback to `RetrievalConfigManager`.
 
-### Left unfixed -- require a design/product decision, not a mechanical fix (9 tests)
+### Round 2 fixes — the 3 design-decision items, resolved 2026-07-20
 
-- **`tests/test_bm25_udf_fallback.py`** (3 tests). The "matchinfo fallback" ranking mechanism
-  (`_rank_pcx()`, the `sql_fallback` query in `FTSClient.search()`, the
-  `BARTHO_FORCE_BM25_FALLBACK` test hook) is built on `matchinfo()`, which is an **FTS3/FTS4-only
-  function that FTS5 has never supported** -- confirmed with a bare `sqlite3` repro independent
-  of this project (`bm25()` works; `matchinfo()` fails identically, always, on any FTS5 table,
-  on this or presumably any SQLite build). `docs/STATUS_2025-12-29.md`'s claim that this is a
-  "Windows-only matchinfo support" issue is a misdiagnosis carried through the project's
-  history -- it's not platform-specific, the mechanism just doesn't work at all. Since `bm25()`
-  is FTS5's own always-present native ranking function, it's not obvious this "fallback" path
-  is ever actually reachable in real (non-test-forced) operation -- fixing it needs a decision
-  about what should happen instead: remove the fallback path entirely, or implement a different
-  ranking fallback. Not a call to make unilaterally.
+The 3 items below were left unfixed pending a product/design call (see original writeups,
+preserved in git history). The user made explicit decisions on all 3; implemented accordingly.
 
-- **`tests/test_fts_schema_hygiene.py::test_migrate_schema_fixes_rowid_mismatch`**. Deeper
-  version of the same FTS5-external-content-mode gotcha behind the fixes above:
-  `migrate_schema()`'s orphan-detection query (`SELECT ... FROM memory_fts f LEFT JOIN memories
-  m ON f.rowid = m.id WHERE m.id IS NULL`) queries `memory_fts` *without* a `MATCH` clause --
-  and a bare (non-`MATCH`) query against an external-content FTS5 table doesn't actually reflect
-  the FTS5 shadow index at all, it just proxies through to the `memories` content table. So this
-  detection mechanism can structurally never find real orphans; confirmed by direct testing
-  that manually-inserted orphaned rows (bypassing triggers) don't show up in the check. A real
-  fix means comparing `memory_fts_map` against `memories` instead (the same source-of-truth
-  pattern used throughout the fixes above) -- rewriting the core consistency-check algorithm,
-  not a quick patch.
+11. **`tests/test_bm25_udf_fallback.py`** (3 tests) — user decision: "implement a real
+    fallback" (not remove the fallback path, not just skip the tests). Replaced the broken
+    `matchinfo()`-based mechanism (`_rank_pcx()`, the old `sql_fallback` query) with a Python
+    term-frequency ranking (`_extract_query_terms()` + `_term_frequency_rank()` in
+    `fts_client.py`): the fallback SQL now just does `WHERE memory_fts MATCH ? ORDER BY m.id
+    DESC LIMIT ?` against a bounded candidate pool (`max(fetch_limit * 5, 100)`), and rank is
+    computed and sorted in Python, matching `bm25()`'s own "lower is better" convention. All 3
+    existing tests pass unchanged against the new implementation. Also fixed the identical bug
+    in `search_chunks()` (`-rank_pcx(matchinfo(chunk_fts, 'pcx'))`, calling the now-deleted
+    `_rank_pcx` — would have raised `NameError` if ever actually hit) with the same
+    term-frequency approach, found while doing this fix; no test previously exercised that path.
 
-- **`tests/test_retrieval_fts5_fallback.py::test_get_retriever_degrades_fts_mode_when_unavailable`**.
-  Contradicts a deliberate, already-documented design choice in `get_retriever()`: "When user
-  explicitly requests a mode, honor it and let the retriever handle fallbacks internally" --
-  i.e. explicit `mode="fts"` requests are *not* supposed to auto-degrade to vector-only even
-  when FTS5 is unavailable, by design (a sibling test,
-  `test_retrieval_factory.py::test_explicit_mode_overrides_env_and_config`, already codifies
-  and passes on this exact principle). This test appears to predate that design decision. Left
-  alone rather than picking a side.
+12. **`tests/test_fts_schema_hygiene.py::test_migrate_schema_fixes_rowid_mismatch`** — a
+    mechanical fix, not a design decision (the "left unfixed" writeup already fully specified
+    the correct approach). Rewrote `migrate_schema()` to compare `memory_fts_map` against
+    `memories` in both directions (orphaned map entries with no matching `memories` row;
+    `memories` rows with no `memory_fts_map` entry) instead of the broken `memory_fts` LEFT
+    JOIN, and call `rebuild_index()` (already fixed earlier to drop-and-recreate rather than
+    `DELETE`) when either mismatch is found. Rewrote the test's setup to create a mismatch this
+    approach can actually detect (a direct `INSERT INTO memory_fts_map` for a nonexistent
+    `memory_id`, via a connection that skips `set_wal_pragmas()`'s `PRAGMA foreign_keys = ON`
+    so the invalid reference can be inserted) — the old setup (direct `INSERT INTO memory_fts`)
+    tested a scenario that was structurally undetectable via portable SQL, which is exactly why
+    the original check could never work.
+
+13. **`tests/test_retrieval_fts5_fallback.py::test_get_retriever_degrades_fts_mode_when_unavailable`**
+    — user asked for a recommendation; recommended and implemented "honor explicit mode" (i.e.
+    keep `get_retriever()`'s current code as-is, per its own docstring and the sibling
+    `test_explicit_mode_overrides_env_and_config` in `test_retrieval_factory.py`). Rewrote the
+    outdated test to exercise the actual non-explicit path (`mode` resolved via
+    `BARTHO_RETRIEVAL_MODE` env var rather than passed as an argument — `get_retriever()`'s
+    `mode_explicit` tracking only covers the function argument, so an env/config-resolved
+    `"fts"` is still eligible to degrade) and added
+    `test_get_retriever_honors_explicit_fts_mode_when_unavailable` to codify the explicit-mode
+    behavior itself, which wasn't previously covered by any test.
+
+Verified: `pytest -q` on the four affected test files (34 tests) all pass; full `pytest -q`
+now shows exactly the 4 remaining known issues below (was 9), no regressions elsewhere.
+
+### Left unfixed -- explicitly deferred by user decision, not a mechanical fix (4 tests)
 
 - **`tests/integration/test_recency_flip_integration.py`** (2 tests). The recency-boost
   mechanism itself appears to work *correctly*, even strongly: instrumented both fusion modes
@@ -572,7 +582,7 @@ fix — documented individually below so nobody re-discovers them from scratch.
   of the time), the test doesn't count that as a win either, giving a 0-8% measured "flip rate"
   against a ≥70% threshold. Whether to widen `top_k`, change what counts as a "win," or
   something else is a call about the test's intended measurement, not a bug in the ranking code
-  -- left alone.
+  -- **user decision 2026-07-20: leave as a known issue for now.**
 
 - **`tests/integration/test_lexical_over_vector_on_rare_tokens.py`**,
   **`tests/integration/test_fts_unavailable_vector_quality.py`** (1 test each). Both are hybrid
@@ -581,11 +591,12 @@ fix — documented individually below so nobody re-discovers them from scratch.
   fixes above resolved the crashes underneath them. These read as genuine ranking/fusion-math
   quality gaps rather than crashes, but weren't root-caused to a specific line -- they'd need
   focused analysis of the score-normalization and fusion formulas in `hybrid_retriever.py`,
-  which is a separate, larger investigation from what's practical to fully trace in this pass.
+  which is a separate, larger investigation from what's practical to fully trace in this pass --
+  **user decision 2026-07-20: not now, leave documented as a known gap.**
 
 ### Verify
 ```bash
-pytest -q                          # 9 failures now (was 38)
+pytest -q                          # 4 failures now (was 9, was 38 originally)
 pytest -q -m smoke                 # unaffected, still green
 ```
 
@@ -677,9 +688,9 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 > **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s), the
 > dependency-pin/CI-install/test-hang follow-ups, the `consent_terminal.py` input() gap, and
-> the full-suite failure sweep (38 → 9) are all done. `pytest -q` itself is now the fast, fresh
-> "CI minimal gates" verify command; 9 known-remaining failures need product/design decisions
-> (see "Full test suite investigation" above), not more mechanical fixing.
+> the full-suite failure sweep (38 → 9 → 4) are all done. `pytest -q` itself is now the fast,
+> fresh "CI minimal gates" verify command; the 4 remaining known failures are explicitly
+> deferred by user decision (see "Full test suite investigation" above), not pending a call.
 
 1. ✅ ~~Fix P0 packaging issues (items 0–1)~~ — done 2026-07-20.
 2. ✅ ~~Fix malformed memory_rules.yaml + refactor `input()` out of kernel (items 2–3)~~ — done 2026-07-20.
@@ -692,11 +703,12 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 1. **CI minimal gates (Linux)** (remainder of items 5–6)
    - `pytest -q -m smoke`, `ruff check .`, `black --check .` already run in CI
      (`.github/workflows/pre-commit.yml`); not yet done: running the *full* `pytest -q` (not
-     just `-m smoke`) in CI, now that it's down to 9 known, documented failures instead of 38
-     undiagnosed ones.
-   - Decide what to do about the 9 documented-but-unfixed failures (see above) so CI can either
-     go fully green or explicitly quarantine them with a reason, rather than leaving `pytest -q`
-     red with no marker distinguishing "known, decided, deferred" from "new regression."
+     just `-m smoke`) in CI, now that it's down to 4 known, documented, and explicitly deferred
+     failures instead of 38 undiagnosed ones.
+   - The 4 remaining failures are deferred by explicit user decision (2026-07-20, see above),
+     not awaiting a call -- CI could quarantine them with `xfail`/a skip reason referencing this
+     doc so `pytest -q` goes green with a marker distinguishing "known, decided, deferred" from
+     "new regression," if/when that's wanted.
    - **Verify:** GitHub Actions green on Linux.
 
 ## Pending Approvals

@@ -150,22 +150,28 @@ async def test_migrate_schema_fixes_rowid_mismatch():
         # Close store to release locks
         await store.close()
 
-        # Manually create orphaned FTS entry (no matching memory)
+        # Manually create an orphaned memory_fts_map entry (a memory_id with
+        # no corresponding row in memories). memory_fts_map is what
+        # migrate_schema() actually checks -- a bare, non-MATCH SELECT
+        # against memory_fts itself proxies through to the memories content
+        # table rather than reflecting the real FTS5 shadow index, so it
+        # can't be used to detect an orphan this way (confirmed directly:
+        # such a SELECT mirrors the memories table's rowids regardless of
+        # what's really in the shadow index). This connection intentionally
+        # skips set_wal_pragmas() (which turns on foreign_keys) so the
+        # invalid reference can actually be inserted.
         conn = None
         try:
             conn = sqlite3.connect(db_path)
-            # Direct INSERT bypassing triggers
-            conn.execute(
-                "INSERT INTO memory_fts(rowid, value, summary) VALUES (9999, 'orphan', NULL)",
-            )
+            conn.execute("INSERT INTO memory_fts_map(memory_id) VALUES (9999)")
             conn.commit()
 
             # Verify mismatch exists
             cursor = conn.execute(
                 """
                 SELECT COUNT(*)
-                FROM memory_fts f
-                LEFT JOIN memories m ON f.rowid = m.id
+                FROM memory_fts_map fm
+                LEFT JOIN memories m ON fm.memory_id = m.id
                 WHERE m.id IS NULL
             """,
             )
@@ -187,8 +193,8 @@ async def test_migrate_schema_fixes_rowid_mismatch():
             cursor = conn.execute(
                 """
                 SELECT COUNT(*)
-                FROM memory_fts f
-                LEFT JOIN memories m ON f.rowid = m.id
+                FROM memory_fts_map fm
+                LEFT JOIN memories m ON fm.memory_id = m.id
                 WHERE m.id IS NULL
             """,
             )
