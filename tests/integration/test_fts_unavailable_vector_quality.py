@@ -97,13 +97,21 @@ def calculate_hit_rate(results_list, queries, memory_map):
     hits = 0
     for query_info, results in zip(queries, results_list, strict=False):
         query_group = query_info["group_id"]
-        # Check if any result is from same group (semantically similar)
+        # Check if any result is from same group (semantically similar).
+        # The inner `break` only exits the memory_map lookup for a single
+        # result -- without also breaking out of the `results` loop once a
+        # query has scored a hit, a query with several same-group matches
+        # in its top-10 counted multiple hits for itself, letting the
+        # overall rate exceed 100% (observed: 110-120%). Hit rate is a
+        # per-query yes/no measure, so stop at the first match per query.
         for result in results[:10]:
             # Find which group this memory belongs to
-            for (group_id, _variant_idx), mem_id in memory_map.items():
-                if mem_id == result.memory_id and group_id == query_group:
-                    hits += 1
-                    break
+            if any(
+                mem_id == result.memory_id and group_id == query_group
+                for (group_id, _variant_idx), mem_id in memory_map.items()
+            ):
+                hits += 1
+                break
 
     return hits / len(queries) if queries else 0.0
 

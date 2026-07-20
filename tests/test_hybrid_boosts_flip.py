@@ -131,7 +131,18 @@ class TestBoostsFlipRankings:
             assert ranked[1][0] == 1  # Memory 1 second
 
     def test_recency_boost_flips_top1_weighted(self):
-        """Recency boost should flip top-1 when base scores near-equal"""
+        """
+        Recency should flip top-1 when base scores near-equal
+
+        Recency is folded into fusion as its own normalized, weighted term
+        (see HybridRetriever._normalize_recency_scores()/_apply_boosts()'s
+        docstring) rather than multiplying the whole fused score the way it
+        used to -- the old, unbounded-multiplier design meant a couple of
+        weeks' age difference could produce >100x score ratios that
+        overrode relevance entirely, regardless of weight_fts/weight_vec
+        (see tests/integration/test_lexical_over_vector_on_rare_tokens.py).
+        This test now exercises the new, bounded path directly.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
 
@@ -190,11 +201,16 @@ class TestBoostsFlipRankings:
             conn.commit()
             conn.close()
 
-            # Configure with recency boost (7-day half-life)
+            # Configure with recency boost (7-day half-life) and a
+            # meaningful recency weight (mirrors config/kernel.yaml's
+            # production defaults)
             config = HybridRetrievalConfig(
                 fts_candidates=0,
                 vec_candidates=0,
                 half_life_hours=168.0,  # 7 days
+                weight_fts=0.6,
+                weight_vec=0.4,
+                weight_recency=0.15,
             )
             retriever = HybridRetriever(db_path, config=config)
 
@@ -206,26 +222,25 @@ class TestBoostsFlipRankings:
             metadata = retriever._load_metadata([1, 2])
             rules_data = {}
 
-            # Apply boosts
+            # Apply boosts (kind/rule only now -- recency is no longer
+            # multiplied in here)
             boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
                 rules_data,
             )
+            assert boosted_fts[1] == pytest.approx(0.51)
+            assert boosted_fts[2] == pytest.approx(0.50)
 
-            # Memory 1 (30 days old): significant decay
-            # At 30 days with 7-day half-life: 2^(-30/7) ≈ 0.046
-            # 0.51 * 0.046 ≈ 0.023
+            # Normalize recency across the candidate set: memory 2 (1 hour
+            # old) is by far the more recent of the two, so it gets the
+            # top of the [0, 1] normalized range
+            recency_scores = retriever._normalize_recency_scores({1, 2}, metadata)
+            assert recency_scores[2] > recency_scores[1]
 
-            # Memory 2 (1 hour old): minimal decay
-            # At 1 hour with 7-day half-life: 2^(-1/168) ≈ 0.996
-            # 0.50 * 0.996 ≈ 0.498
-
-            assert boosted_fts[2] > boosted_fts[1]
-
-            # Fuse
-            fused = retriever._fuse_weighted(boosted_fts, boosted_vec)
+            # Fuse, with recency as its own term
+            fused = retriever._fuse_weighted(boosted_fts, boosted_vec, recency_scores)
 
             # Clean up retriever connections for Windows
             del retriever
@@ -240,7 +255,14 @@ class TestBoostsFlipRankings:
             assert ranked[1][0] == 1  # Old memory second
 
     def test_combined_boosts_flip_top1(self):
-        """Combined kind + recency boosts should flip rankings"""
+        """
+        Combined kind (multiplicative) + recency (fused term) boosts
+        should flip rankings
+
+        Kind boost still applies within _apply_boosts() as a multiplier;
+        recency is folded into fusion separately -- see
+        test_recency_boost_flips_top1_weighted's docstring for why.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
 
@@ -304,6 +326,9 @@ class TestBoostsFlipRankings:
                 fts_candidates=0,
                 vec_candidates=0,
                 half_life_hours=168.0,
+                weight_fts=0.6,
+                weight_vec=0.4,
+                weight_recency=0.15,
                 kind_boosts={"preference": 1.3},
             )
             retriever = HybridRetriever(db_path, config=config)
@@ -315,7 +340,8 @@ class TestBoostsFlipRankings:
             metadata = retriever._load_metadata([1, 2])
             rules_data = {}
 
-            # Apply boosts
+            # Apply boosts (kind only -- recency is no longer multiplied
+            # in here)
             boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
@@ -323,12 +349,16 @@ class TestBoostsFlipRankings:
                 rules_data,
             )
 
-            # Memory 1: 0.55 * ~0.046 (recency) * 1.0 (kind) ≈ 0.025
-            # Memory 2: 0.50 * ~0.996 (recency) * 1.3 (kind) ≈ 0.647
+            # Memory 1 (general): 0.55 * 1.0 (no kind boost) = 0.55
+            # Memory 2 (preference): 0.50 * 1.3 (kind boost) = 0.65
+            assert boosted_fts[1] == pytest.approx(0.55)
+            assert boosted_fts[2] == pytest.approx(0.65)
 
-            assert boosted_fts[2] > boosted_fts[1]
+            # Memory 2 is also far more recent -> wins the recency term too
+            recency_scores = retriever._normalize_recency_scores({1, 2}, metadata)
+            assert recency_scores[2] > recency_scores[1]
 
-            fused = retriever._fuse_weighted(boosted_fts, boosted_vec)
+            fused = retriever._fuse_weighted(boosted_fts, boosted_vec, recency_scores)
 
             # Clean up retriever connections for Windows
             del retriever

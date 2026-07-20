@@ -21,6 +21,11 @@ retrieval:
   hybrid_weights:
     fts: 0.6                   # Weight for FTS scores (normalized to sum=1.0)
     vector: 0.4                # Weight for vector scores
+    recency: 0.15              # Weight for recency as its own fused term (see
+                                # HybridRetriever._normalize_recency_scores()) --
+                                # not a raw multiplier on the whole score, so a
+                                # strong exact-match/semantic hit can no longer
+                                # be completely overridden by age alone
   rrf_k: 60                    # RRF denominator constant (if using rrf strategy)
 
   # Recency boost (exponential decay)

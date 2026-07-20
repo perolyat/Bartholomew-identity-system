@@ -183,7 +183,15 @@ class TestRRF:
             assert boosted_fts[2] == pytest.approx(0.8)  # 0.8 * 1.0
 
     def test_combined_boosts(self):
-        """Recency, kind, and rule boosts should multiply together"""
+        """
+        Kind and rule boosts should multiply together
+
+        Recency is intentionally excluded from _apply_boosts()'s
+        multiplication now -- it's folded into fusion as its own
+        normalized, weighted term instead (see _apply_boosts()'s
+        docstring). boost_map still reports the raw recency value for
+        debug/introspection even though it's no longer applied here.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
 
@@ -203,18 +211,21 @@ class TestRRF:
 
             rules_data = {1: {"boost": 1.5}}
 
-            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
+            boosted_fts, boosted_vec, boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
                 rules_data,
             )
 
-            # Should be: 0.5 * recency_boost * 2.0 (kind) * 1.5 (rule)
-            # recency_boost ~= 1.0 for 1 hour ago
-            # Total: 0.5 * 1.0 * 2.0 * 1.5 = 1.5
-            assert boosted_fts[1] > 1.4  # Allow for recency variance
-            assert boosted_fts[1] < 1.6
+            # Kind (2.0) and rule (1.5) boosts multiply: 0.5 * 2.0 * 1.5 = 1.5
+            assert boosted_fts[1] == pytest.approx(1.5)
+            assert boosted_vec[1] == pytest.approx(1.5)
+
+            # Raw recency is still computed and reported for debug/
+            # introspection (~1.0 for 1 hour ago at a 7-day half-life),
+            # just no longer multiplied into the boosted scores above.
+            assert boost_map[1]["recency"] > 0.95
 
     def test_missing_kind_boost(self):
         """Unknown kind should get default boost of 1.0"""

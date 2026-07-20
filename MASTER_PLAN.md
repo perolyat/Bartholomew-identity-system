@@ -382,7 +382,7 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
 
 ---
 
-## Full test suite investigation — 38 failures → 9 → 4, fixed 2026-07-20
+## Full test suite investigation — 38 failures → 9 → 4 → 2, fixed 2026-07-20
 
 Follow-up to the FTS5/`sys.path` investigation above: went through every remaining failure
 in `pytest -q` (the full suite, not just `-m smoke`) one at a time. 29 were real, root-caused,
@@ -570,33 +570,97 @@ preserved in git history). The user made explicit decisions on all 3; implemente
 Verified: `pytest -q` on the four affected test files (34 tests) all pass; full `pytest -q`
 now shows exactly the 4 remaining known issues below (was 9), no regressions elsewhere.
 
-### Left unfixed -- explicitly deferred by user decision, not a mechanical fix (4 tests)
+### Round 3 fix — recency-boost fusion redesign, resolved 2026-07-20
 
-- **`tests/integration/test_recency_flip_integration.py`** (2 tests). The recency-boost
-  mechanism itself appears to work *correctly*, even strongly: instrumented both fusion modes
-  (weighted, RRF) directly and found recency demonstrably suppresses "old" duplicate memories
-  out of the top-5 results almost entirely (23/25 groups in one weighted-mode run; every group
-  in the RRF run). But the test's pass/fail logic only counts a "win" when *both* the old and
-  recent variant appear in the top-5 with recent ranked above old -- when recency does its job
-  well enough to push "old" out of the top-5 entirely (which is what's actually happening most
-  of the time), the test doesn't count that as a win either, giving a 0-8% measured "flip rate"
-  against a ≥70% threshold. Whether to widen `top_k`, change what counts as a "win," or
-  something else is a call about the test's intended measurement, not a bug in the ranking code
-  -- **user decision 2026-07-20: leave as a known issue for now.**
+The two ranking-quality gaps below (`test_lexical_over_vector_on_rare_tokens.py`,
+`test_fts_unavailable_vector_quality.py`) were previously documented as "genuine
+fusion-math quality gaps... not root-caused to a specific line." Root-caused this round:
+both were symptoms of the same underlying bug in `HybridRetriever`.
 
-- **`tests/integration/test_lexical_over_vector_on_rare_tokens.py`**,
-  **`tests/integration/test_fts_unavailable_vector_quality.py`** (1 test each). Both are hybrid
-  fusion *quality* assertions (e.g. "hybrid should be ≥70% as accurate as FTS alone on exact
-  rare-token queries," got 35.71%) that still fail after the query-sanitization and FTS5-bug
-  fixes above resolved the crashes underneath them. These read as genuine ranking/fusion-math
-  quality gaps rather than crashes, but weren't root-caused to a specific line -- they'd need
-  focused analysis of the score-normalization and fusion formulas in `hybrid_retriever.py`,
-  which is a separate, larger investigation from what's practical to fully trace in this pass --
-  **user decision 2026-07-20: not now, leave documented as a known gap.**
+14. **Recency boost multiplied the *entire* fused score per-memory instead of being weighted
+    into fusion** (2 tests: `test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens`,
+    `test_fts_unavailable_vector_quality.py::test_vector_quality_maintained_when_fts_unavailable`).
+    `_apply_boosts()` computed `total_boost = recency_boost * kind_boost * rule_boost` and
+    multiplied it onto *both* the normalized FTS and vector scores before fusion — so
+    `recency_boost` wasn't a tie-breaker, it was a multiplier on the whole relevance signal.
+    Instrumented a failing query directly (`BARTHO_RETRIEVAL_DEBUG=1`, `last_debug`): an exact
+    keyword match (`bm25_norm=1.0`, `vec_norm=0.0`) lost top-1 to a completely unrelated memory
+    (`bm25_norm=0.0`, random `vec_norm=0.68`) purely because the unrelated memory was ~20 days
+    "more recent" in the synthetic test corpus — at the default 7-day half-life, that's a ~7x
+    recency multiplier, which swamps the 0.6/0.4 FTS/vector weight split (a perfect FTS match
+    should only ever lose by this weighting if the other candidate's *vector* score is high
+    enough to overcome a 0.6-vs-≤0.4 gap on its own). Since real memories almost always have
+    *some* age difference, this meant recency could override actual relevance for essentially
+    any two-candidate comparison, not just deliberately-engineered edge cases — a real
+    production bug, not a test artifact.
+
+    User decision: fold recency into fusion as its own weighted term (rather than bounding/
+    compressing the existing multiplier). Implemented in `bartholomew/kernel/hybrid_retriever.py`:
+    - Added `HybridRetrievalConfig.weight_recency` (default `0.0` — opt-in, no behavior change
+      unless configured; `__post_init__` normalizes `weight_fts + weight_vec + weight_recency`
+      together).
+    - `_apply_boosts()` no longer multiplies `recency_boost` into `boosted_fts`/`boosted_vec` —
+      only `kind_boost * rule_boost` now (both left untouched; out of scope of this bug, and
+      `kind_boosts` defaults to empty so it's inert unless configured). `boost_map` still
+      reports the raw recency value for debug/introspection (`Result.recency`).
+    - Added `_normalize_recency_scores()`: min-maxes raw recency-decay values across the
+      candidate set, same pattern as the existing `_normalize_fts_scores()`/
+      `_normalize_vec_scores()` — turns "most recent of these candidates" into a `[0, 1]`
+      relative signal instead of an absolute value whose magnitude depends on wall-clock age.
+    - `_fuse_weighted()` gained an optional `recency_scores`/`weight_recency` term:
+      `fused = w_fts*s_fts + w_vec*s_vec + w_recency*s_recency`. Backward compatible (both
+      default to no contribution) for the several unit tests that call it with just FTS/vector
+      scores.
+    - `_fuse_rrf()` gained its own recency-rank term (`weight_recency / (k + recency_rank)`,
+      same `1/(k+rank)` shape as the existing FTS/vector RRF terms, so its contribution is
+      bounded the same way rather than an unbounded multiplier) — computed only when
+      `weight_recency > 0`, so the zero-weight default is byte-for-byte identical to the old
+      formula.
+    - `retrieval_config.py` gained loading for a new `retrieval.hybrid_weights.recency` key
+      (mirrors the existing `fts`/`vector` keys); `config/kernel.yaml` sets it to `0.15`
+      (normalizes to ~13% of the fused score alongside ~52%/~35% for FTS/vector).
+    - **Also fixed while investigating**: `tests/integration/test_fts_unavailable_vector_quality.py`'s
+      own `calculate_hit_rate()` helper had a loop bug — its inner `break` only exited the
+      `memory_map` lookup for a single result, not the `results` loop, so a query with several
+      same-group matches in its top-10 could count multiple hits for itself. Observed hit rates
+      of 110-120%, which is nonsensical for a rate. Fixed to count at most one hit per query.
+    - **Updated 3 existing unit tests that hard-coded the old multiplicative-recency contract**
+      as their expected behavior (`test_hybrid_boosts_flip.py::test_recency_boost_flips_top1_weighted`,
+      `test_hybrid_boosts_flip.py::test_combined_boosts_flip_top1`,
+      `test_hybrid_rrf.py::TestKindAndRuleBoosts::test_combined_boosts`) to exercise the new,
+      bounded path instead — they still demonstrate recency (and kind boosts) can flip
+      near-tied rankings, just no longer via an unbounded per-memory multiplier.
+    - **Also fixed**: `test_retrieval_hot_reload.py::test_config_manager_loads_defaults` was
+      silently loading the *real* `config/kernel.yaml` instead of testing dataclass defaults —
+      `RetrievalConfigManager._find_path()` falls back to relative `DEFAULT_CONFIG_PATHS` when
+      the passed-in path doesn't exist, and pytest runs from the repo root where that real file
+      exists. Previously masked because the real file's `fts`/`vector` weights happened to match
+      the test's hardcoded expectations; broken by adding `recency` to `config/kernel.yaml`
+      above. Fixed by monkeypatching `DEFAULT_CONFIG_PATHS` to `[]` for the duration of the test
+      so it actually exercises "no config file found."
+
+    Verified: both originally-failing tests now pass; full `pytest -q` re-run clean except the
+    2 already-deferred recency-flip tests below (no new regressions). The recency-flip tests'
+    measured flip rate changed as a side effect (0% → 40%/10%) since recency can no longer push
+    "old" completely out of the top-5 the way the unbounded multiplier did — still under
+    threshold, for a different reason than before, but the deferral decision (below) stands
+    unchanged.
+
+### Left unfixed -- explicitly deferred by user decision, not a mechanical fix (2 tests)
+
+- **`tests/integration/test_recency_flip_integration.py`** (2 tests). The test's pass/fail
+  logic only counts a "win" when *both* the old and recent variant appear in the top-5 with
+  recent ranked above old. After the recency-fusion fix above, the measured flip rate is
+  40% (weighted) / 10% (RRF) against a ≥70-75% threshold — recency still meaningfully
+  influences ranking (see `test_hybrid_boosts_flip.py`), just not strongly enough on this
+  specific synthetic corpus/threshold combination to clear the bar. Whether to widen `top_k`,
+  change what counts as a "win," retune `weight_recency`, or something else is a call about the
+  test's intended measurement/tuning target, not a bug -- **user decision 2026-07-20: leave as
+  a known issue for now.**
 
 ### Verify
 ```bash
-pytest -q                          # 4 failures now (was 9, was 38 originally)
+pytest -q                          # 2 failures now (was 4, was 9, was 38 originally)
 pytest -q -m smoke                 # unaffected, still green
 ```
 
@@ -688,8 +752,8 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 > **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s), the
 > dependency-pin/CI-install/test-hang follow-ups, the `consent_terminal.py` input() gap, and
-> the full-suite failure sweep (38 → 9 → 4) are all done. `pytest -q` itself is now the fast,
-> fresh "CI minimal gates" verify command; the 4 remaining known failures are explicitly
+> the full-suite failure sweep (38 → 9 → 4 → 2) are all done. `pytest -q` itself is now the fast,
+> fresh "CI minimal gates" verify command; the 2 remaining known failures are explicitly
 > deferred by user decision (see "Full test suite investigation" above), not pending a call.
 
 1. ✅ ~~Fix P0 packaging issues (items 0–1)~~ — done 2026-07-20.
@@ -703,9 +767,9 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 1. **CI minimal gates (Linux)** (remainder of items 5–6)
    - `pytest -q -m smoke`, `ruff check .`, `black --check .` already run in CI
      (`.github/workflows/pre-commit.yml`); not yet done: running the *full* `pytest -q` (not
-     just `-m smoke`) in CI, now that it's down to 4 known, documented, and explicitly deferred
+     just `-m smoke`) in CI, now that it's down to 2 known, documented, and explicitly deferred
      failures instead of 38 undiagnosed ones.
-   - The 4 remaining failures are deferred by explicit user decision (2026-07-20, see above),
+   - The 2 remaining failures are deferred by explicit user decision (2026-07-20, see above),
      not awaiting a call -- CI could quarantine them with `xfail`/a skip reason referencing this
      doc so `pytest -q` goes green with a marker distinguishing "known, decided, deferred" from
      "new regression," if/when that's wanted.
