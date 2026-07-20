@@ -464,11 +464,28 @@ fix — documented individually below so nobody re-discovers them from scratch.
      unconditionally, immediately before doing `DELETE FROM memories` (whose own trigger would
      run the same cleanup correctly, per the method's own code comment: "triggers will also
      fire for cleanup"). Removed the redundant manual step now that the trigger is fixed.
-   - **Caveat:** all of these fixes are in the schema *definition*
-     (`CREATE TRIGGER IF NOT EXISTS ...`), so they only apply to freshly-created databases.
-     Any already-existing database (including this repo's own tracked `data/barth.db`) keeps
-     its old, unguarded trigger definitions until something explicitly drops and recreates
-     them -- there's no migration path for that yet.
+   - **Update 2026-07-20 (PR #2 review):** a bot reviewer correctly flagged that the caveat
+     above was a real gap, not just a note -- `CREATE TRIGGER IF NOT EXISTS` alone never
+     upgrades an already-existing database's trigger bodies. Fixed: `init_schema()` and
+     `init_chunk_schema()` now explicitly `DROP TRIGGER IF EXISTS` every FTS trigger before
+     running the schema script, so `IF NOT EXISTS` always recreates them fresh with the
+     current definitions on every call, on any database. Also applied the same trigger guards
+     (`WHEN EXISTS`/`WHEN NOT EXISTS` against `chunk_fts_map`) to `chunk_fts_update`/
+     `chunk_fts_delete`, and the same `upsert()`-style pre-check to `upsert_chunk()` -- these
+     are `chunk_fts`'s exact mirror of the `memory_fts` bugs, found while responding to the
+     review, not previously caught by any test.
+   - **Second bot finding, also fixed:** `rebuild_index()`'s `memory_fts_map`-based check
+     (used to decide whether `DELETE FROM memory_fts` was safe to issue) assumes the map
+     always accurately reflects the real FTS5 index state. If it doesn't -- e.g. a database
+     from before the map table existed, or the map and index having drifted out of sync some
+     other way -- an empty map would wrongly skip the `DELETE`, leaving stale entries mixed in
+     with the fresh rebuild instead of properly clearing them. Fixed by dropping and
+     recreating the `memory_fts` table itself during rebuild instead of trying to introspect
+     its state first (a bare, non-`MATCH` query against an external-content FTS5 table can't
+     reliably tell you what's actually indexed -- established earlier in this investigation).
+     Same fix applied to `rebuild_chunk_index()`.
+   - Verified: full `pytest -q` unchanged before/after these follow-up fixes (still 9 known
+     failures, all pre-existing and already documented -- no regressions, no new passes).
 
 7. **`MemoryStore.delete_memory()` never enabled `PRAGMA foreign_keys`** (1 test:
    `tests/test_stage2f_chunking.py::test_delete_memory_cascades_to_chunks`). `foreign_keys` is a
