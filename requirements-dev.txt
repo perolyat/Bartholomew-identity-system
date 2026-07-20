@@ -5,3 +5,6 @@ ruff
 black
 pre-commit
 mypy
+httpx
+freezegun
+pytest-timeout

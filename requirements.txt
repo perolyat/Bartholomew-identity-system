@@ -1,5 +1,8 @@
 # Bartholomew dependencies - mirrors pyproject.toml
-fastapi>=0.104
+# Upper bound: fastapi>=0.121 pulls starlette>=1.0, a breaking major that
+# removes starlette.testclient's implicit httpx dependency. Re-verify this
+# ceiling before raising it.
+fastapi>=0.104,<0.121
 uvicorn[standard]>=0.24
 pydantic[email]>=2.6
 python-dateutil>=2.8
@@ -17,6 +20,7 @@ jsonschema>=4.25,<5
 typer>=0.15
 rich>=13.7
 requests>=2.31
+pytest-timeout>=2.3
 
 # Phase 2d: Vector embeddings (optional for production use)
 # sentence-transformers>=2.2.0  # Uncomment for real embeddings

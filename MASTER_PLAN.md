@@ -136,11 +136,26 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
      `identity_interpreter/adapters/llm_stub.py`), plus `pydantic`'s `EmailStr` needing the
      `email` extra (`identity_interpreter/models.py`). All four are now declared in both
      `pyproject.toml` and `requirements.txt`.
-   - **Known follow-up (not fixed here):** none of these deps have upper bounds, so a clean
-     install today pulls `fastapi==0.139.2`/`starlette==1.3.1`, which breaks
-     `starlette.testclient`. `requirements.lock` has known-good pins (`fastapi==0.120.1`,
-     `starlette==0.49.1`) but is UTF-16-encoded and not referenced by any setup doc, so it
-     isn't actually usable for reproducible installs yet.
+   - **Follow-up fixed 2026-07-20:** pinned `fastapi>=0.104,<0.121` in `pyproject.toml` and
+     `requirements.txt` (that ceiling keeps `starlette` on the `0.4x` line; `fastapi>=0.121`
+     pulls `starlette>=1.0`, which breaks `starlette.testclient`'s implicit `httpx`
+     dependency — reproduced and confirmed on a clean venv). Also re-encoded
+     `requirements.lock` from UTF-16 to UTF-8/LF so it's actually readable/usable, and added
+     `httpx`/`freezegun` to `requirements-dev.txt` (both were imported by tests but
+     undeclared, so a clean dev install couldn't even collect the test suite).
+   - **New follow-up found while fixing this (not fixed here):** with the dependency set
+     actually installing, `pytest -q -m smoke` (the full suite together, as CI's `lint-test`
+     job runs it) hangs rather than fails. Root cause (confirmed via `faulthandler` thread
+     dump): `tests/test_liveness_self.py` and `tests/test_stage0_alive.py` each start a full
+     `KernelDaemon` (with its own background scheduler thread) via FastAPI's `TestClient`
+     against the same default SQLite DB path; when both run in one pytest session their
+     scheduler threads deadlock on file locks during `TestClient.__exit__`'s shutdown
+     handshake. Added `pytest-timeout` (`timeout = 120`, `timeout_method = "thread"` in
+     `pyproject.toml`) as a safety net so this fails fast with a clear traceback instead of
+     hanging the CI job indefinitely — this does not fix the underlying lock contention, it
+     only stops it from being a silent multi-hour hang. Real fix needs each such test to use
+     an isolated `BARTH_DB_PATH` (e.g. a `tmp_path`-based fixture), which touches kernel
+     daemon test fixtures broadly enough that it's out of scope here.
 
 2. ✅ **Fix malformed memory_rules.yaml rule** — Fixed 2026-07-20.
    - The `safety.audit` rule in `always_keep` section lacks `match:`/`metadata:` structure:
