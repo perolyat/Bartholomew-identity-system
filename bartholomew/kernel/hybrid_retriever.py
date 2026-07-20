@@ -45,6 +45,24 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
+_FTS_UNSAFE_PUNCTUATION = re.compile(r"[.,!?;]")
+
+
+def _sanitize_fts_query(query: str) -> str:
+    """
+    Strip punctuation FTS5's query parser doesn't understand.
+
+    FTS5 parses the MATCH right-hand side as its own query grammar (quoted
+    phrases, AND/OR/NOT, field:value, NEAR, wildcards) rather than treating
+    it as a plain literal string. Sentence punctuation from natural-language
+    queries -- periods, commas, question marks, etc -- isn't part of that
+    grammar and raises "fts5: syntax error" if left in an unquoted query.
+    Stripped rather than quoting every token, so intentional structured-query
+    syntax (quotes, booleans, field:value) coming from callers still works.
+    """
+    return _FTS_UNSAFE_PUNCTUATION.sub(" ", query).strip()
+
+
 def _looks_lexical_query(query: str) -> bool:
     """
     Check if query appears to be lexical/keyword-based
@@ -527,7 +545,14 @@ class HybridRetriever:
     def _pull_fts_candidates(self, query: str) -> list[dict[str, Any]]:
         """Pull FTS candidates"""
         try:
-            results = self.fts.search(query, limit=self.config.fts_candidates, order_by_rank=True)
+            safe_query = _sanitize_fts_query(query)
+            if not safe_query:
+                return []
+            results = self.fts.search(
+                safe_query,
+                limit=self.config.fts_candidates,
+                order_by_rank=True,
+            )
             logger.debug(f"FTS returned {len(results)} candidates")
             return results
         except Exception as e:

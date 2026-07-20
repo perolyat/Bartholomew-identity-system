@@ -6,6 +6,7 @@ Implements SQLite-backed vector storage with optional sqlite-vss acceleration
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 
 import numpy as np
@@ -65,6 +66,9 @@ class VectorStore:
 
     def _init_schema(self) -> None:
         """Create vector embeddings table if not exists"""
+        parent_dir = os.path.dirname(self.db_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
             set_wal_pragmas(conn)
             conn.executescript(VECTOR_SCHEMA)

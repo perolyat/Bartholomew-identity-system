@@ -219,9 +219,9 @@ def test_fts_only_filters_by_timestamp(tmp_path):
     assert results[0].memory_id == 2
 
 
-def test_db_path_resolution_explicit():
+def test_db_path_resolution_explicit(tmp_path):
     """Explicit db_path should be used"""
-    retriever = get_retriever(db_path="custom/path.db")
+    retriever = get_retriever(db_path=str(tmp_path / "custom" / "path.db"))
     # Can't easily test the actual path without introspection,
     # but at least verify it doesn't raise
     assert retriever is not None

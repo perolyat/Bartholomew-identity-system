@@ -154,7 +154,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     summary,
     content='memories',
     content_rowid='id',
-    tokenize='{tokenizer}'
+    tokenize="{tokenizer}"
 );
 
 -- Mapping table to track FTS index entries
@@ -165,7 +165,16 @@ CREATE TABLE IF NOT EXISTS memory_fts_map (
     FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
 
--- Triggers to keep FTS index synchronized with memories table
+-- Triggers to keep FTS index synchronized with memories table.
+--
+-- memory_fts_map tracks which rowids are actually present in the memory_fts
+-- shadow index (populated by these triggers and by FTSClient.upsert()).
+-- Issuing FTS5's 'delete' special command for a rowid that was never
+-- actually indexed (e.g. a memories row written before this schema/these
+-- triggers existed) makes SQLite report "database disk image is malformed"
+-- -- a confusing error that doesn't mean anything is actually corrupt on
+-- disk. The UPDATE/DELETE triggers below are guarded on memory_fts_map so
+-- 'delete' is only issued for rows that are really there.
 CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memories
 BEGIN
     INSERT INTO memory_fts(rowid, value, summary)
@@ -174,6 +183,7 @@ BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS memory_fts_update AFTER UPDATE ON memories
+WHEN EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
 BEGIN
     INSERT INTO memory_fts(memory_fts, rowid, value, summary)
     VALUES ('delete', old.id, old.value, old.summary);
@@ -181,7 +191,16 @@ BEGIN
     VALUES (new.id, new.value, new.summary);
 END;
 
+CREATE TRIGGER IF NOT EXISTS memory_fts_update_backfill AFTER UPDATE ON memories
+WHEN NOT EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
+BEGIN
+    INSERT INTO memory_fts(rowid, value, summary)
+    VALUES (new.id, new.value, new.summary);
+    INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (new.id);
+END;
+
 CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memories
+WHEN EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
 BEGIN
     INSERT INTO memory_fts(memory_fts, rowid, value, summary)
     VALUES ('delete', old.id, old.value, old.summary);
@@ -197,7 +216,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     text,
     content='memory_chunks',
     content_rowid='id',
-    tokenize='{tokenizer}'
+    tokenize="{tokenizer}"
 );
 
 -- Mapping table to track chunk FTS index entries
@@ -665,8 +684,20 @@ class FTSClient:
         try:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
-            # Clear existing FTS data
-            conn.execute("DELETE FROM memory_fts")
+
+            # Only clear entries that are actually indexed (tracked via
+            # memory_fts_map -- see upsert()). DELETE FROM memory_fts on an
+            # external-content FTS5 table whose shadow index was never
+            # populated (e.g. rebuild_index() called for its documented
+            # "initial index population" use case, where memories rows
+            # already exist but were never indexed) raises "database disk
+            # image is malformed", a confusing SQLite/FTS5 error that
+            # doesn't mean the file is actually corrupt.
+            has_indexed_entries = (
+                conn.execute("SELECT 1 FROM memory_fts_map LIMIT 1").fetchone() is not None
+            )
+            if has_indexed_entries:
+                conn.execute("DELETE FROM memory_fts")
             conn.execute("DELETE FROM memory_fts_map")
 
             # Rebuild from memories table

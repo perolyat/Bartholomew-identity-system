@@ -134,7 +134,7 @@ class TestRRF:
 
             rules_data = {}
 
-            boosted_fts, boosted_vec = retriever._apply_boosts(
+            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
@@ -171,7 +171,7 @@ class TestRRF:
                 2: {"boost": 1.0},
             }
 
-            boosted_fts, boosted_vec = retriever._apply_boosts(
+            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
@@ -203,7 +203,7 @@ class TestRRF:
 
             rules_data = {1: {"boost": 1.5}}
 
-            boosted_fts, boosted_vec = retriever._apply_boosts(
+            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
@@ -231,7 +231,7 @@ class TestRRF:
 
             rules_data = {}
 
-            boosted_fts, boosted_vec = retriever._apply_boosts(
+            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
