@@ -210,6 +210,11 @@ class HybridRetrievalConfig:
     fusion_mode: str = "weighted"  # "weighted" or "rrf"
     weight_fts: float = 0.6
     weight_vec: float = 0.4
+    # Weight for recency as its own fused term (see _normalize_recency_scores
+    # / _fuse_weighted / _fuse_rrf). Defaults to 0.0 -- no behavior change
+    # unless a caller/config explicitly opts in -- since folding recency into
+    # fusion at all is a deliberate config choice, not a universal default.
+    weight_recency: float = 0.0
     rrf_k: int = 60  # RRF denominator constant
 
     # Boosting parameters
@@ -234,14 +239,16 @@ class HybridRetrievalConfig:
             raise ValueError(f"normalization must be 'minmax', got {self.normalization}")
 
         # Normalize weights to sum to 1.0
-        weight_sum = self.weight_fts + self.weight_vec
+        weight_sum = self.weight_fts + self.weight_vec + self.weight_recency
         if weight_sum > 0:
             self.weight_fts /= weight_sum
             self.weight_vec /= weight_sum
+            self.weight_recency /= weight_sum
         else:
-            # Default to equal weights if both are zero
+            # Default to equal weights if both fts/vec are zero
             self.weight_fts = 0.5
             self.weight_vec = 0.5
+            self.weight_recency = 0.0
 
 
 class HybridRetriever:
@@ -412,7 +419,26 @@ class HybridRetriever:
             now,
         )
 
+        # Step 7b: Normalize recency as its own fusion term (weighted mode
+        # only -- RRF computes its own recency ranking internally in
+        # _fuse_rrf). See _normalize_recency_scores()'s docstring for why
+        # this is normalized across the candidate set rather than used raw.
+        recency_scores = self._normalize_recency_scores(
+            set(fts_scores.keys()) | set(vec_scores.keys()),
+            memory_metadata,
+            now,
+        )
+
         t_fusion_start = time.perf_counter() if self.debug_enabled else 0
+
+        # Determine per-call weights for weighted fusion. Initialized here
+        # (rather than only inside the `else` below) so they're still
+        # defined -- as None, meaning "not applicable" -- if fusion_mode is
+        # "rrf" when _build_debug_info() reads them further down; RRF has
+        # its own, separate weighting inside _fuse_rrf().
+        call_weight_fts = None
+        call_weight_vec = None
+        call_weight_recency = None
 
         # Step 8: Fuse scores
         if fusion_mode == "rrf":
@@ -425,31 +451,48 @@ class HybridRetriever:
                 now,
             )
         else:
-            # Determine per-call weights for weighted fusion
-            call_weight_fts = None
-            call_weight_vec = None
-
             if weight_override is not None:
-                # Explicit override takes precedence
+                # Explicit override takes precedence, and takes full control
+                # of the fusion for this call -- weight_override predates
+                # weight_recency and its (fts, vec) shape has no way to
+                # express a recency component, so a caller using it is opting
+                # out of the config's recency weight for this call rather
+                # than getting it silently added back on top.
                 call_weight_fts, call_weight_vec = weight_override
+                call_weight_recency = 0.0
                 logger.debug(
                     f"Using explicit weight override: "
                     f"fts={call_weight_fts:.2f}, vec={call_weight_vec:.2f}",
                 )
             elif query_aware_weighting:
-                # Apply query-aware adjustment
-                call_weight_fts, call_weight_vec = _query_aware_weights(
+                # Apply query-aware adjustment. _query_aware_weights() only
+                # balances fts vs vec and returns a pair summing to 1.0 on
+                # its own (it has no notion of recency) -- rescale by
+                # (1 - weight_recency) so the three fused weights still sum
+                # to 1.0 once weight_recency is added back in, instead of
+                # recency silently becoming an "extra" ~0.13 on top of a
+                # full-strength fts+vec combination whenever a query is
+                # detected as lexical/semantic.
+                adj_fts, adj_vec = _query_aware_weights(
                     query,
                     self.config.weight_fts,
                     self.config.weight_vec,
                 )
-            # else: use default config weights (None will trigger fallback)
+                recency_share = self.config.weight_recency
+                call_weight_fts = adj_fts * (1 - recency_share)
+                call_weight_vec = adj_vec * (1 - recency_share)
+                call_weight_recency = recency_share
+            # else: use default config weights (None will trigger fallback,
+            # which is already internally consistent -- config's own three
+            # weights already sum to 1.0 via __post_init__)
 
             fused_scores = self._fuse_weighted(
                 boosted_fts,
                 boosted_vec,
+                recency_scores,
                 weight_fts=call_weight_fts,
                 weight_vec=call_weight_vec,
+                weight_recency=call_weight_recency,
             )
 
         t_fusion_end = time.perf_counter() if self.debug_enabled else 0
@@ -485,6 +528,7 @@ class HybridRetriever:
                 fusion_mode,
                 call_weight_fts,
                 call_weight_vec,
+                call_weight_recency,
                 t_fts_start,
                 t_fts_end,
                 t_vec_start,
@@ -804,18 +848,35 @@ class HybridRetriever:
         now: datetime | None = None,
     ) -> tuple[dict[int, float], dict[int, float], dict[int, dict]]:
         """
-        Apply recency, kind, and rule boosts to normalized scores
+        Apply kind and rule boosts to normalized scores
+
+        Recency is intentionally NOT applied here as a multiplier -- it's
+        folded into fusion as its own normalized, weighted term instead (see
+        _normalize_recency_scores() and _fuse_weighted()/_fuse_rrf()).
+        Applying it as a per-memory multiplier on the *entire* fused score
+        (the previous design) meant a difference of only a couple of weeks
+        at the default 7-day half-life could produce >100x score ratios
+        between candidates, completely overriding FTS/vector relevance
+        regardless of weight_fts/weight_vec -- confirmed via direct
+        instrumentation on
+        tests/integration/test_lexical_over_vector_on_rare_tokens.py, where
+        an exact keyword match (bm25_norm=1.0) lost to an unrelated memory
+        purely because it was ~20 days "older" in the synthetic corpus.
 
         Args:
             fts_scores: Normalized FTS scores
             vec_scores: Normalized vector scores
             metadata: Memory metadata
             rules_data: Rules evaluation results
-            now: Optional reference time for deterministic recency boost
+            now: Optional reference time, forwarded to boost_map's raw
+                recency value for deterministic debug output
 
         Returns:
             (boosted_fts_scores, boosted_vec_scores, boost_map)
-            boost_map contains per-memory_id boost breakdown for debug
+            boost_map contains per-memory_id boost breakdown for debug --
+            "recency" here is still the raw, un-normalized decay value
+            (informational / used by the api="result" debug output), even
+            though it's no longer multiplied into the returned scores.
         """
         # Union of all memory IDs
         all_ids = set(fts_scores.keys()) | set(vec_scores.keys())
@@ -835,8 +896,8 @@ class HybridRetriever:
             # Store for debug
             boost_map[memory_id] = {"recency": recency_boost, "kind": kind_boost}
 
-            # Combined boost
-            total_boost = recency_boost * kind_boost * rule_boost
+            # Combined boost (recency deliberately excluded -- see docstring)
+            total_boost = kind_boost * rule_boost
 
             # Apply to each source
             if memory_id in fts_scores:
@@ -847,25 +908,67 @@ class HybridRetriever:
 
         return boosted_fts, boosted_vec, boost_map
 
+    def _normalize_recency_scores(
+        self,
+        memory_ids: set[int],
+        metadata: dict[int, dict[str, Any]],
+        now: datetime | None = None,
+    ) -> dict[int, float]:
+        """
+        Min-max normalize raw recency-decay boosts across the candidate set.
+
+        Mirrors _normalize_fts_scores()/_normalize_vec_scores(): recency
+        becomes a relative "most recent of these candidates" signal in
+        [0, 1] instead of the raw exponential-decay value, whose absolute
+        magnitude depends on wall-clock age and can span many orders of
+        magnitude between candidates that are, relative to each other, only
+        weeks apart. Normalizing puts recency on the same [0, 1] footing as
+        the FTS/vector scores so weight_recency actually controls its
+        influence on the fused score instead of the raw decay value
+        dominating (or vanishing under) it.
+        """
+        if not memory_ids:
+            return {}
+
+        raw = {
+            mid: self._compute_recency_boost(metadata[mid].get(self.config.recency_field), now)
+            for mid in memory_ids
+        }
+
+        values = list(raw.values())
+        rmin, rmax = min(values), max(values)
+
+        if rmax > rmin:
+            return {mid: (v - rmin) / (rmax - rmin) for mid, v in raw.items()}
+        return dict.fromkeys(raw, 1.0)
+
     def _fuse_weighted(
         self,
         fts_scores: dict[int, float],
         vec_scores: dict[int, float],
+        recency_scores: dict[int, float] | None = None,
         weight_fts: float | None = None,
         weight_vec: float | None = None,
+        weight_recency: float | None = None,
     ) -> dict[int, float]:
         """
         Fuse scores using weighted average
 
-        fused = w_fts * s_fts + w_vec * s_vec
+        fused = w_fts * s_fts + w_vec * s_vec + w_recency * s_recency
 
-        Missing scores are treated as 0.0
+        Missing scores are treated as 0.0. recency_scores/weight_recency are
+        optional and default to no contribution (empty dict / config's
+        weight_recency, which itself defaults to 0.0), so existing
+        two-source callers are unaffected.
 
         Args:
             fts_scores: FTS scores by memory_id
             vec_scores: Vector scores by memory_id
+            recency_scores: Optional normalized recency scores by memory_id
+                (see _normalize_recency_scores())
             weight_fts: Optional FTS weight override for this call
             weight_vec: Optional vector weight override for this call
+            weight_recency: Optional recency weight override for this call
 
         Returns:
             Fused scores by memory_id
@@ -873,15 +976,18 @@ class HybridRetriever:
         # Use provided weights or fall back to config
         w_fts = weight_fts if weight_fts is not None else self.config.weight_fts
         w_vec = weight_vec if weight_vec is not None else self.config.weight_vec
+        w_recency = weight_recency if weight_recency is not None else self.config.weight_recency
+        recency_scores = recency_scores or {}
 
-        all_ids = set(fts_scores.keys()) | set(vec_scores.keys())
+        all_ids = set(fts_scores.keys()) | set(vec_scores.keys()) | set(recency_scores.keys())
 
         fused = {}
         for memory_id in all_ids:
             s_fts = fts_scores.get(memory_id, 0.0)
             s_vec = vec_scores.get(memory_id, 0.0)
+            s_recency = recency_scores.get(memory_id, 0.0)
 
-            fused[memory_id] = w_fts * s_fts + w_vec * s_vec
+            fused[memory_id] = w_fts * s_fts + w_vec * s_vec + w_recency * s_recency
 
         return fused
 
@@ -897,7 +1003,18 @@ class HybridRetriever:
         """
         Fuse scores using Reciprocal Rank Fusion (RRF) with boosts
 
-        RRF contribution per source: (1 / (k + rank)) * boosts
+        RRF contribution: 1/(k+fts_rank) + 1/(k+vec_rank) + weight_recency *
+        1/(k+recency_rank), then scaled by kind/rule boosts.
+
+        Recency contributes its own rank-based RRF term (candidates ranked
+        by raw recency, most-recent-first) rather than multiplying the
+        combined FTS+vector contribution the way kind/rule boosts still do
+        -- see _apply_boosts()'s docstring for why an unbounded per-memory
+        multiplier is the wrong shape for recency specifically. Scaled by
+        weight_recency (default 0.0 -- no behavior change unless
+        configured) rather than an implicit 1.0 like FTS/vector, since
+        RRF's fts/vec terms aren't otherwise weighted against each other
+        either.
 
         Args:
             fts_results: FTS results with ranks
@@ -919,18 +1036,36 @@ class HybridRetriever:
             if memory_id in filtered_ids:
                 vec_ranks[memory_id] = rank
 
-        # Compute RRF scores with boosts
         all_ids = set(fts_ranks.keys()) | set(vec_ranks.keys())
+
+        # Recency ranks (most-recent-first, memory_id as tie-breaker) over
+        # the same candidate set. Only computed when actually weighted in,
+        # so the zero-weight (default) case is a no-op, byte-for-byte
+        # matching the pre-fix RRF formula.
+        recency_ranks: dict[int, int] = {}
+        if self.config.weight_recency > 0 and all_ids:
+            recency_raw = {
+                mid: self._compute_recency_boost(metadata[mid].get(self.config.recency_field), now)
+                for mid in all_ids
+            }
+            for rank, mid in enumerate(
+                sorted(recency_raw, key=lambda m: (-recency_raw[m], m)),
+                start=1,
+            ):
+                recency_ranks[mid] = rank
+
+        # Compute RRF scores with boosts
         rrf_scores = {}
 
         for memory_id in all_ids:
             data = metadata[memory_id]
 
-            # Compute boosts
-            recency_boost = self._compute_recency_boost(data.get(self.config.recency_field), now)
+            # Kind/rule boosts still multiply the combined contribution --
+            # unrelated to the recency-domination bug this method's
+            # docstring describes, and left as-is.
             kind_boost = self.config.kind_boosts.get(data.get("kind", ""), 1.0)
             rule_boost = rules_data.get(memory_id, {}).get("boost", 1.0)
-            total_boost = recency_boost * kind_boost * rule_boost
+            total_boost = kind_boost * rule_boost
 
             # RRF contributions
             rrf_contrib = 0.0
@@ -940,6 +1075,11 @@ class HybridRetriever:
 
             if memory_id in vec_ranks:
                 rrf_contrib += 1.0 / (self.config.rrf_k + vec_ranks[memory_id])
+
+            if memory_id in recency_ranks:
+                rrf_contrib += self.config.weight_recency / (
+                    self.config.rrf_k + recency_ranks[memory_id]
+                )
 
             # Apply boost
             rrf_scores[memory_id] = rrf_contrib * total_boost
@@ -1020,6 +1160,7 @@ class HybridRetriever:
         fusion_mode: str,
         call_weight_fts: float | None,
         call_weight_vec: float | None,
+        call_weight_recency: float | None,
         t_fts_start: float,
         t_fts_end: float,
         t_vec_start: float,
@@ -1059,7 +1200,12 @@ class HybridRetriever:
         if fusion_mode == "weighted":
             w_fts = call_weight_fts if call_weight_fts is not None else self.config.weight_fts
             w_vec = call_weight_vec if call_weight_vec is not None else self.config.weight_vec
-            self.last_debug["weights_used"] = {"fts": w_fts, "vec": w_vec}
+            w_recency = (
+                call_weight_recency
+                if call_weight_recency is not None
+                else self.config.weight_recency
+            )
+            self.last_debug["weights_used"] = {"fts": w_fts, "vec": w_vec, "recency": w_recency}
 
         # Log timings
         logger.info(

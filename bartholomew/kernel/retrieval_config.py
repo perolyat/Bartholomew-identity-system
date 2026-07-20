@@ -117,6 +117,10 @@ class RetrievalConfigManager:
         weights = retrieval.get("hybrid_weights", {})
         weight_fts = float(weights.get("fts", 0.6))
         weight_vec = float(weights.get("vector", 0.4))
+        # Recency's weight as its own fused term (see
+        # HybridRetriever._normalize_recency_scores()). Defaults to 0.0 --
+        # opt-in via config, no behavior change for configs that don't set it.
+        weight_recency = float(weights.get("recency", 0.0))
 
         # Extract RRF constant
         rrf_k = int(retrieval.get("rrf_k", 60))
@@ -136,25 +140,33 @@ class RetrievalConfigManager:
         self._hybrid_config.fusion_mode = fusion_mode
         self._hybrid_config.weight_fts = weight_fts
         self._hybrid_config.weight_vec = weight_vec
+        self._hybrid_config.weight_recency = weight_recency
         self._hybrid_config.rrf_k = rrf_k
         self._hybrid_config.half_life_hours = half_life_hours
         self._hybrid_config.kind_boosts = kind_boosts
 
         # Re-normalize weights (handled by __post_init__ logic)
-        weight_sum = self._hybrid_config.weight_fts + self._hybrid_config.weight_vec
+        weight_sum = (
+            self._hybrid_config.weight_fts
+            + self._hybrid_config.weight_vec
+            + self._hybrid_config.weight_recency
+        )
         if weight_sum > 0:
             self._hybrid_config.weight_fts /= weight_sum
             self._hybrid_config.weight_vec /= weight_sum
+            self._hybrid_config.weight_recency /= weight_sum
         else:
             self._hybrid_config.weight_fts = 0.5
             self._hybrid_config.weight_vec = 0.5
+            self._hybrid_config.weight_recency = 0.0
 
         self._logger.debug(
             f"Loaded retrieval config: "
             f"fts_cand={fts_candidates}, vec_cand={vec_candidates}, "
             f"top_k={top_k}, fusion={fusion_mode}, "
             f"weights=({self._hybrid_config.weight_fts:.2f}, "
-            f"{self._hybrid_config.weight_vec:.2f}), "
+            f"{self._hybrid_config.weight_vec:.2f}, "
+            f"{self._hybrid_config.weight_recency:.2f}), "
             f"half_life={half_life_days}d, "
             f"tokenizer={self._fts_tokenizer}",
         )

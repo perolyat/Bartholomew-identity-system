@@ -19,8 +19,16 @@ from bartholomew.kernel.hybrid_retriever import HybridRetriever
 from bartholomew.kernel.retrieval_config import RetrievalConfigManager, get_retrieval_config_manager
 
 
-def test_config_manager_loads_defaults():
+def test_config_manager_loads_defaults(monkeypatch):
     """Config manager should load default values when no file exists"""
+    # _find_path() falls back to DEFAULT_CONFIG_PATHS (relative paths) when
+    # config_path doesn't exist -- without blanking that out, this test
+    # silently picks up the real project config/kernel.yaml (found relative
+    # to cwd, which pytest runs from the repo root) instead of exercising
+    # true dataclass defaults, since kernel.yaml happened to match the
+    # asserted values below.
+    monkeypatch.setattr(RetrievalConfigManager, "DEFAULT_CONFIG_PATHS", [])
+
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create manager with non-existent path
         manager = RetrievalConfigManager(
@@ -36,6 +44,7 @@ def test_config_manager_loads_defaults():
         assert config.fusion_mode == "weighted"
         assert abs(config.weight_fts - 0.6) < 0.01
         assert abs(config.weight_vec - 0.4) < 0.01
+        assert config.weight_recency == 0.0
 
 
 def test_config_manager_loads_from_yaml():
