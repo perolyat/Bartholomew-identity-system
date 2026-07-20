@@ -807,13 +807,24 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 5. ✅ ~~Fix non-environmental failing tests from `docs/STATUS_2025-12-29.md` (item 7)~~ — done
    2026-07-20; see "Full test suite investigation" above. `docs/STATUS_2025-12-29.md` itself is
    now stale/superseded on this topic and shouldn't be treated as current status.
+6. ✅ ~~CI minimal gates (Linux)~~ — done 2026-07-20. `pytest -q -m smoke`, `ruff check .`,
+   `black --check .` were already running in CI (`.github/workflows/pre-commit.yml`, the
+   latter two via the `pre-commit run --all-files` step); added a `Run full test suite`
+   step running plain `pytest -q` right after the smoke step, in the same `lint-test` job
+   (both Python 3.10 and 3.11). No quarantine/`xfail` markers needed — the full suite was
+   already fully green locally (see "Full test suite investigation" above) by the time this
+   landed, so there was nothing left to triage first.
+   - **Verify:** GitHub Actions green on Linux (`lint-test` job, both matrix legs).
 
-1. **CI minimal gates (Linux)** (remainder of items 5–6)
-   - `pytest -q -m smoke`, `ruff check .`, `black --check .` already run in CI
-     (`.github/workflows/pre-commit.yml`); not yet done: running the *full* `pytest -q` (not
-     just `-m smoke`) in CI. Now trivial to add — the full suite is fully green (was 38 failures),
-     so there's no longer a triage/quarantine step needed first.
-   - **Verify:** GitHub Actions green on Linux.
+## P0 status: complete (as of 2026-07-20)
+
+All P0 backlog items (0–7, "Packaging & Architecture" and "Make the build trustworthy") are
+done: packaging/dependency fixes, config bugs, blocking-`input()` refactors, the full
+38 → 0 test-failure sweep, and the full-suite CI gate above. The next gate
+("Green core on CI Linux" — see "Stage gates / milestones") is met pending a real CI run
+confirming the new `Run full test suite` step passes on GitHub Actions (should mirror the
+local, fully-green `pytest -q` result). Remaining work moves to P1 (Experience Kernel MVP)
+and beyond — see the Backlog above.
 
 ## Pending Approvals
 

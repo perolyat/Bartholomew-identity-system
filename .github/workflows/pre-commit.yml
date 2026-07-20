@@ -32,3 +32,5 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure
       - name: Run smoke tests
         run: pytest -q -m smoke
+      - name: Run full test suite
+        run: pytest -q
