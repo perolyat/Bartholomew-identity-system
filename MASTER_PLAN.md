@@ -143,19 +143,34 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
      `requirements.lock` from UTF-16 to UTF-8/LF so it's actually readable/usable, and added
      `httpx`/`freezegun` to `requirements-dev.txt` (both were imported by tests but
      undeclared, so a clean dev install couldn't even collect the test suite).
-   - **New follow-up found while fixing this (not fixed here):** with the dependency set
-     actually installing, `pytest -q -m smoke` (the full suite together, as CI's `lint-test`
-     job runs it) hangs rather than fails. Root cause (confirmed via `faulthandler` thread
-     dump): `tests/test_liveness_self.py` and `tests/test_stage0_alive.py` each start a full
-     `KernelDaemon` (with its own background scheduler thread) via FastAPI's `TestClient`
-     against the same default SQLite DB path; when both run in one pytest session their
-     scheduler threads deadlock on file locks during `TestClient.__exit__`'s shutdown
-     handshake. Added `pytest-timeout` (`timeout = 120`, `timeout_method = "thread"` in
-     `pyproject.toml`) as a safety net so this fails fast with a clear traceback instead of
-     hanging the CI job indefinitely — this does not fix the underlying lock contention, it
-     only stops it from being a silent multi-hour hang. Real fix needs each such test to use
-     an isolated `BARTH_DB_PATH` (e.g. a `tmp_path`-based fixture), which touches kernel
-     daemon test fixtures broadly enough that it's out of scope here.
+   - **New follow-up found while fixing this, root-caused and fixed 2026-07-20:** with the
+     dependency set actually installing, `pytest -q -m smoke` (the full suite together, as
+     CI's `lint-test` job runs it) hung rather than failed. `pytest-timeout` (`timeout = 120`,
+     `timeout_method = "thread"` in `pyproject.toml`) was added first as a safety net so this
+     fails fast with a clear traceback instead of hanging the CI job indefinitely.
+     Root cause (confirmed via `faulthandler` thread dump): `bartholomew_api_bridge_v0_1/
+     services/api/db.py` resolves `BARTH_DB_PATH` into a module-level `DB_PATH` constant the
+     moment that module is first imported; later `os.environ["BARTH_DB_PATH"] = ...`
+     assignments by other test modules (e.g. `tests/test_stage0_alive.py`'s own attempted
+     override) do nothing, because Python caches the already-imported module. Since
+     `tests/test_liveness_self.py` imports it first (alphabetically) without setting the env
+     var at all, every test in the session that starts the API app's `KernelDaemon` — each
+     with its own background scheduler thread — ended up sharing the real, git-tracked
+     `data/barth.db`. Their scheduler threads then deadlocked on file locks against that
+     shared (and, from repeated interrupted test runs, sometimes already-corrupted) file
+     during `TestClient.__exit__`'s shutdown handshake. Fixed by setting
+     `os.environ.setdefault("BARTH_DB_PATH", ...)` to a fresh temp path at the top of the
+     root `conftest.py`, which pytest always imports before collecting any test module —
+     guaranteeing the override is in place before `db.py` ever gets imported. Verified:
+     the previously-hanging pair now runs in ~3.5s, the full smoke suite in ~4s, and
+     `data/barth.db` is no longer touched by running the test suite at all.
+   - **Separate pre-existing failures noticed along the way (not fixed, unrelated):**
+     `tests/test_consent_gates.py::test_fts_search_without_consent_gate` (a
+     `sqlite3.DatabaseError: database disk image is malformed`) and all three tests in
+     `tests/test_metrics_production_mode.py` fail only when run alongside other API-app tests
+     in the same session (pass individually) — reproduced identically before and after this
+     fix, so they're a different cross-test global-state issue (the metrics one is likely the
+     Prometheus `CollectorRegistry` being shared/re-registered across tests).
 
 2. ✅ **Fix malformed memory_rules.yaml rule** — Fixed 2026-07-20.
    - The `safety.audit` rule in `always_keep` section lacks `match:`/`metadata:` structure:
