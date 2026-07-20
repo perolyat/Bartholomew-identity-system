@@ -599,7 +599,7 @@ class FTSClient:
 
             # Use fallback if bm25 failed or forced
             if force_fallback:
-                candidate_pool = max(fetch_limit * 5, 100)
+                candidate_pool = max((offset + fetch_limit) * 5, 100)
                 cursor = conn.execute(sql_fallback, (query, candidate_pool))
                 rows = cursor.fetchall()
                 results = [dict(row) for row in rows]
