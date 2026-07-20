@@ -382,6 +382,215 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
 
 ---
 
+## Full test suite investigation — 38 failures → 9, fixed 2026-07-20
+
+Follow-up to the FTS5/`sys.path` investigation above: went through every remaining failure
+in `pytest -q` (the full suite, not just `-m smoke`) one at a time. 29 were real, root-caused,
+fixed bugs (several were the *same* underlying bug recurring in different call sites). 9 are
+left deliberately unfixed because they require a design/product decision, not a mechanical
+fix — documented individually below so nobody re-discovers them from scratch.
+
+### Fixed (29 tests across 10 distinct bugs)
+
+1. **No OS keystore in headless/CI environments** (8 tests: `test_bartholomew.py`,
+   `test_cold_boot.py` x5, `test_memory_functionality.py` x2). `MemoryManager._init_encryption()`
+   correctly fails closed when encryption is required (`Identity.yaml`'s `encryption.at_rest:
+   true`) but no OS keystore backend is reachable (no D-Bus/Secret Service, no macOS Keychain,
+   no Windows Credential Manager) — that's the right production behavior, not a bug. The gap
+   was test infrastructure: nothing gave the test session a keystore stand-in. Added an
+   in-memory `keyring.backend.KeyringBackend` in root `conftest.py`, installed for the whole
+   session via `keyring.set_keyring(...)`. Side benefit: tests no longer write real encryption
+   keys into a developer's actual OS keychain when run locally on a machine that has one. Only
+   affects `identity_interpreter/adapters/memory_manager.py` (the `chat.py` CLI path) — the
+   FastAPI/Docker production path uses a completely separate, env-var-based key system
+   (`bartholomew.kernel.encryption_engine`) untouched by this.
+
+2. **`test_liveness_api.py` never triggers the app's startup lifespan** (3 tests). Used
+   `client = TestClient(app)` at module level instead of `with TestClient(app) as c:` — a bare
+   `TestClient` never runs FastAPI's startup/shutdown lifespan, so the kernel daemon (and the
+   schema it creates: `reflections`, `nudges`, etc tables) never started, and every query 404'd
+   with `no such table`. This bug predates today; it was masked before the `BARTH_DB_PATH`
+   test-isolation fix (previous section) because every test silently shared the real
+   `data/barth.db`, which already had those tables from real usage. Fixed by switching to the
+   same `with TestClient(app) as c:` fixture pattern already used correctly in
+   `tests/test_stage0_alive.py`.
+
+3. **`safety.audit` entries are correctly encrypted now, but a test reads them as plaintext**
+   (1 test: `tests/integration/test_parking_brake_integration.py::test_audit_trail_records_changes`).
+   Direct consequence of fixing the malformed `memory_rules.yaml` rule in the P0 pass (PR #1) --
+   that rule (`encrypt: standard` for `kind: safety.audit`) was silently never matching before
+   because it was malformed, so audit entries were accidentally stored as plaintext JSON. Now
+   that the rule correctly matches, entries are properly encrypted at rest (the *intended*
+   behavior), and the test's raw `sqlite3.connect(...).execute("SELECT ... FROM memories")` +
+   `json.loads(row[1])` broke because `row[1]` is now an encryption envelope, not plaintext.
+   Fixed the test to decrypt via `bartholomew.kernel.encryption_engine._encryption_engine
+   .try_decrypt_if_envelope(...)` before parsing.
+
+4. **`HybridRetriever._apply_boosts()` return-tuple mismatch** (7 tests across
+   `tests/test_hybrid_rrf.py` and `tests/test_hybrid_boosts_flip.py`). The method returns a
+   3-tuple `(boosted_fts, boosted_vec, boost_map)` -- its own internal caller already unpacks
+   3 values -- but these two test files still unpacked only 2, raising `ValueError: too many
+   values to unpack`. `boost_map` (a debug breakdown) was evidently added to the method after
+   these tests were written. Updated all 7 call sites to unpack 3 (`_boost_map` discarded,
+   unused).
+
+5. **FTS5 query-syntax crashes on free-text queries with punctuation** (contributed to several
+   of the retrieval/hybrid test failures). `HybridRetriever._pull_fts_candidates()` forwarded
+   natural-language queries straight into `FTSClient.search()`, which passes the string to
+   SQLite's FTS5 `MATCH` operator -- FTS5 parses that as its *own* query grammar (operators,
+   phrases, column filters), not literal text, so a bare `.` or `?` from ordinary sentence
+   punctuation raised `fts5: syntax error`. Added `_sanitize_fts_query()` (strips
+   `.,!?;` -- characters that are never meaningful FTS5 syntax) at exactly the boundary where
+   free text enters the FTS5 subsystem, so `FTSClient.search()` itself is untouched and still
+   honors its documented contract of accepting raw FTS5 query syntax (quoted phrases,
+   `AND`/`OR`/`NOT`, `field:value`) for callers who intend that.
+
+6. **`FTSClient.upsert()` / `rebuild_index()` / schema triggers issue FTS5's `'delete'`
+   special command for rowids that were never actually indexed** (recurring instance of the
+   bug already fixed in `upsert()` during the earlier PR #1 pass -- turned out to have three
+   more instances):
+   - `rebuild_index()` unconditionally ran `DELETE FROM memory_fts` before rebuilding, which is
+     exactly its own documented "initial index population" use case (content-table rows that
+     predate the index) -- i.e. it crashed on its own primary purpose. Fixed: only issue the
+     `DELETE` when `memory_fts_map` shows there's actually something indexed to clear.
+   - The `memory_fts_update` and `memory_fts_delete` triggers (fired automatically by SQLite on
+     any `UPDATE`/`DELETE` against `memories`) had the same unconditional `'delete'`-command
+     issue, just baked into SQL instead of Python. Fixed by adding
+     `WHEN EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)` guards, and splitting
+     `memory_fts_update` into that guarded version plus a `memory_fts_update_backfill` trigger
+     (`WHEN NOT EXISTS ...`) that just inserts instead of delete-then-insert for never-indexed
+     rows.
+   - `MemoryStore.delete_memory()` *also* issued this exact special command manually and
+     unconditionally, immediately before doing `DELETE FROM memories` (whose own trigger would
+     run the same cleanup correctly, per the method's own code comment: "triggers will also
+     fire for cleanup"). Removed the redundant manual step now that the trigger is fixed.
+   - **Update 2026-07-20 (PR #2 review):** a bot reviewer correctly flagged that the caveat
+     above was a real gap, not just a note -- `CREATE TRIGGER IF NOT EXISTS` alone never
+     upgrades an already-existing database's trigger bodies. Fixed: `init_schema()` and
+     `init_chunk_schema()` now explicitly `DROP TRIGGER IF EXISTS` every FTS trigger before
+     running the schema script, so `IF NOT EXISTS` always recreates them fresh with the
+     current definitions on every call, on any database. Also applied the same trigger guards
+     (`WHEN EXISTS`/`WHEN NOT EXISTS` against `chunk_fts_map`) to `chunk_fts_update`/
+     `chunk_fts_delete`, and the same `upsert()`-style pre-check to `upsert_chunk()` -- these
+     are `chunk_fts`'s exact mirror of the `memory_fts` bugs, found while responding to the
+     review, not previously caught by any test.
+   - **Second bot finding, also fixed:** `rebuild_index()`'s `memory_fts_map`-based check
+     (used to decide whether `DELETE FROM memory_fts` was safe to issue) assumes the map
+     always accurately reflects the real FTS5 index state. If it doesn't -- e.g. a database
+     from before the map table existed, or the map and index having drifted out of sync some
+     other way -- an empty map would wrongly skip the `DELETE`, leaving stale entries mixed in
+     with the fresh rebuild instead of properly clearing them. Fixed by dropping and
+     recreating the `memory_fts` table itself during rebuild instead of trying to introspect
+     its state first (a bare, non-`MATCH` query against an external-content FTS5 table can't
+     reliably tell you what's actually indexed -- established earlier in this investigation).
+     Same fix applied to `rebuild_chunk_index()`.
+   - Verified: full `pytest -q` unchanged before/after these follow-up fixes (still 9 known
+     failures, all pre-existing and already documented -- no regressions, no new passes).
+
+7. **`MemoryStore.delete_memory()` never enabled `PRAGMA foreign_keys`** (1 test:
+   `tests/test_stage2f_chunking.py::test_delete_memory_cascades_to_chunks`). `foreign_keys` is a
+   per-connection SQLite setting, not persistent in the database file; this method opened its
+   own fresh `aiosqlite.connect()` without setting it, so `memory_chunks`' `ON DELETE CASCADE`
+   silently never fired on that connection -- chunks were orphaned instead of cascade-deleted.
+   Added `await db.execute("PRAGMA foreign_keys = ON")`. Only fixed this one call site; the
+   codebase has roughly ten other `aiosqlite.connect()` blocks in this file that weren't
+   audited for the same gap (none are currently failing a test, so out of scope here, but worth
+   a dedicated pass).
+
+8. **`VectorStore` didn't create its DB's parent directory** (1 test:
+   `tests/test_retrieval_factory.py::test_db_path_resolution_explicit`). Given an explicit
+   `db_path` whose parent directory doesn't exist yet, `sqlite3.connect()` raised
+   `unable to open database file`. `bartholomew_api_bridge_v0_1/services/api/db.py` already
+   handles this (`os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)`); `VectorStore` didn't.
+   Added the same. Also fixed the test itself, which used a hardcoded relative path
+   (`"custom/path.db"`) with no `tmp_path` -- it was writing a real `custom/` directory into the
+   repo's working tree on every run (same class of hygiene issue as `data/barth.db` getting
+   mutated by test runs, fixed earlier). Switched to `tmp_path`.
+
+9. **FTS5 `tokenize=` directive: single-quoted outer value can't contain a `tokenchars`
+   argument** (1 test: `tests/test_fts_schema_hygiene.py::test_tokenizer_config_with_args`).
+   Confirmed independent of this project's code with a bare `sqlite3`/FTS5 repro:
+   `tokenize='unicode61 tokenchars .-@_'` is a parse error; FTS5 requires the `tokenchars`
+   *value* itself to be single-quoted (`tokenchars '.-@_'`), which then can't nest inside an
+   outer single-quoted SQL string. Fixed by switching the schema template's outer quoting to
+   double quotes (`tokenize="{tokenizer}"` -- confirmed this doesn't affect the plain `porter`
+   tokenizer case already in production use) and fixing the test's config value to include the
+   required inner quoting. No real config in this repo currently uses `fts_tokenizer_args` with
+   `tokenchars`, so this was a test-only gap, not something affecting production.
+
+10. **`RetrievalConfigManager` doesn't support the legacy `fts.tokenizer` config location**
+    (1 test: `tests/test_retrieval_hot_reload.py::test_config_manager_tokenizer_backward_compat`).
+    There are two independent tokenizer-config-loading implementations in the codebase --
+    `fts_client.py`'s `_load_tokenizer_config()` (supports both `retrieval.fts_tokenizer` and
+    legacy `fts.tokenizer`) and `retrieval_config.py`'s `RetrievalConfigManager._load_config()`
+    (only ever read `retrieval.fts_tokenizer`) -- and they'd drifted apart. Added the same
+    legacy fallback to `RetrievalConfigManager`.
+
+### Left unfixed -- require a design/product decision, not a mechanical fix (9 tests)
+
+- **`tests/test_bm25_udf_fallback.py`** (3 tests). The "matchinfo fallback" ranking mechanism
+  (`_rank_pcx()`, the `sql_fallback` query in `FTSClient.search()`, the
+  `BARTHO_FORCE_BM25_FALLBACK` test hook) is built on `matchinfo()`, which is an **FTS3/FTS4-only
+  function that FTS5 has never supported** -- confirmed with a bare `sqlite3` repro independent
+  of this project (`bm25()` works; `matchinfo()` fails identically, always, on any FTS5 table,
+  on this or presumably any SQLite build). `docs/STATUS_2025-12-29.md`'s claim that this is a
+  "Windows-only matchinfo support" issue is a misdiagnosis carried through the project's
+  history -- it's not platform-specific, the mechanism just doesn't work at all. Since `bm25()`
+  is FTS5's own always-present native ranking function, it's not obvious this "fallback" path
+  is ever actually reachable in real (non-test-forced) operation -- fixing it needs a decision
+  about what should happen instead: remove the fallback path entirely, or implement a different
+  ranking fallback. Not a call to make unilaterally.
+
+- **`tests/test_fts_schema_hygiene.py::test_migrate_schema_fixes_rowid_mismatch`**. Deeper
+  version of the same FTS5-external-content-mode gotcha behind the fixes above:
+  `migrate_schema()`'s orphan-detection query (`SELECT ... FROM memory_fts f LEFT JOIN memories
+  m ON f.rowid = m.id WHERE m.id IS NULL`) queries `memory_fts` *without* a `MATCH` clause --
+  and a bare (non-`MATCH`) query against an external-content FTS5 table doesn't actually reflect
+  the FTS5 shadow index at all, it just proxies through to the `memories` content table. So this
+  detection mechanism can structurally never find real orphans; confirmed by direct testing
+  that manually-inserted orphaned rows (bypassing triggers) don't show up in the check. A real
+  fix means comparing `memory_fts_map` against `memories` instead (the same source-of-truth
+  pattern used throughout the fixes above) -- rewriting the core consistency-check algorithm,
+  not a quick patch.
+
+- **`tests/test_retrieval_fts5_fallback.py::test_get_retriever_degrades_fts_mode_when_unavailable`**.
+  Contradicts a deliberate, already-documented design choice in `get_retriever()`: "When user
+  explicitly requests a mode, honor it and let the retriever handle fallbacks internally" --
+  i.e. explicit `mode="fts"` requests are *not* supposed to auto-degrade to vector-only even
+  when FTS5 is unavailable, by design (a sibling test,
+  `test_retrieval_factory.py::test_explicit_mode_overrides_env_and_config`, already codifies
+  and passes on this exact principle). This test appears to predate that design decision. Left
+  alone rather than picking a side.
+
+- **`tests/integration/test_recency_flip_integration.py`** (2 tests). The recency-boost
+  mechanism itself appears to work *correctly*, even strongly: instrumented both fusion modes
+  (weighted, RRF) directly and found recency demonstrably suppresses "old" duplicate memories
+  out of the top-5 results almost entirely (23/25 groups in one weighted-mode run; every group
+  in the RRF run). But the test's pass/fail logic only counts a "win" when *both* the old and
+  recent variant appear in the top-5 with recent ranked above old -- when recency does its job
+  well enough to push "old" out of the top-5 entirely (which is what's actually happening most
+  of the time), the test doesn't count that as a win either, giving a 0-8% measured "flip rate"
+  against a ≥70% threshold. Whether to widen `top_k`, change what counts as a "win," or
+  something else is a call about the test's intended measurement, not a bug in the ranking code
+  -- left alone.
+
+- **`tests/integration/test_lexical_over_vector_on_rare_tokens.py`**,
+  **`tests/integration/test_fts_unavailable_vector_quality.py`** (1 test each). Both are hybrid
+  fusion *quality* assertions (e.g. "hybrid should be ≥70% as accurate as FTS alone on exact
+  rare-token queries," got 35.71%) that still fail after the query-sanitization and FTS5-bug
+  fixes above resolved the crashes underneath them. These read as genuine ranking/fusion-math
+  quality gaps rather than crashes, but weren't root-caused to a specific line -- they'd need
+  focused analysis of the score-normalization and fusion formulas in `hybrid_retriever.py`,
+  which is a separate, larger investigation from what's practical to fully trace in this pass.
+
+### Verify
+```bash
+pytest -q                          # 9 failures now (was 38)
+pytest -q -m smoke                 # unaffected, still green
+```
+
+---
+
 ## Echo Integration Roadmap (Brainstorm-Derived Features)
 
 > **Source:** Extracted from 81 design conversations (logs/brainstorm/)
@@ -467,17 +676,27 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 ## Next 3 Moves (always current)
 
 > **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s), the
-> dependency-pin/CI-install/test-hang follow-ups, and the `consent_terminal.py` input()
-> gap are all done. Moving to CI minimal gates as the next open item.
+> dependency-pin/CI-install/test-hang follow-ups, the `consent_terminal.py` input() gap, and
+> the full-suite failure sweep (38 → 9) are all done. `pytest -q` itself is now the fast, fresh
+> "CI minimal gates" verify command; 9 known-remaining failures need product/design decisions
+> (see "Full test suite investigation" above), not more mechanical fixing.
 
 1. ✅ ~~Fix P0 packaging issues (items 0–1)~~ — done 2026-07-20.
 2. ✅ ~~Fix malformed memory_rules.yaml + refactor `input()` out of kernel (items 2–3)~~ — done 2026-07-20.
 3. ✅ ~~Pin the dependency set, fix the CI install step, fix the test DB-path hang~~ — done 2026-07-20.
 4. ✅ ~~Fix `identity_interpreter/adapters/consent_terminal.py`'s blocking `input()`~~ — done 2026-07-20.
+5. ✅ ~~Fix non-environmental failing tests from `docs/STATUS_2025-12-29.md` (item 7)~~ — done
+   2026-07-20; see "Full test suite investigation" above. `docs/STATUS_2025-12-29.md` itself is
+   now stale/superseded on this topic and shouldn't be treated as current status.
 
-1. **CI minimal gates (Linux)** (items 5–7)
-   - Make `pytest -q`, `ruff check .`, `black --check .` run in CI.
-   - Fix non-environmental failing tests from `docs/STATUS_2025-12-29.md`.
+1. **CI minimal gates (Linux)** (remainder of items 5–6)
+   - `pytest -q -m smoke`, `ruff check .`, `black --check .` already run in CI
+     (`.github/workflows/pre-commit.yml`); not yet done: running the *full* `pytest -q` (not
+     just `-m smoke`) in CI, now that it's down to 9 known, documented failures instead of 38
+     undiagnosed ones.
+   - Decide what to do about the 9 documented-but-unfixed failures (see above) so CI can either
+     go fully green or explicitly quarantine them with a reason, rather than leaving `pytest -q`
+     red with no marker distinguishing "known, decided, deferred" from "new regression."
    - **Verify:** GitHub Actions green on Linux.
 
 ## Pending Approvals

@@ -40,7 +40,10 @@ async def test_tokenizer_config_with_args():
         config = {
             "retrieval": {
                 "fts_tokenizer": "unicode61",
-                "fts_tokenizer_args": "remove_diacritics 2 tokenchars .-@_",
+                # FTS5's tokenize directive requires a quoted argument value
+                # for tokenchars when it contains characters like these --
+                # "tokenchars .-@_" (no quotes) is a parse error.
+                "fts_tokenizer_args": "remove_diacritics 2 tokenchars '.-@_'",
             },
         }
 
@@ -53,7 +56,7 @@ async def test_tokenizer_config_with_args():
         original_load = fts_module._load_tokenizer_config
 
         def mock_load():
-            return "unicode61 remove_diacritics 2 tokenchars .-@_"
+            return "unicode61 remove_diacritics 2 tokenchars '.-@_'"
 
         fts_module._load_tokenizer_config = mock_load
 

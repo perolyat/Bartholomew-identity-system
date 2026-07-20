@@ -13,6 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import keyring.backend
 import pytest
 
 
@@ -26,6 +27,41 @@ import pytest
 # each other. Setting it here, at conftest.py import time, guarantees it's in
 # place before pytest imports any test module.
 os.environ.setdefault("BARTH_DB_PATH", str(Path(tempfile.mkdtemp()) / "test-session.db"))
+
+
+class _InMemoryTestKeyring(keyring.backend.KeyringBackend):
+    """In-process keyring backend for tests, not for product use.
+
+    identity_interpreter.adapters.memory_manager.MemoryManager stores its
+    encryption key via the OS keystore (keyring.get_password/set_password),
+    and correctly fails closed (raises) when encryption is required but no
+    keystore backend is available -- headless/CI environments have no
+    D-Bus/Secret Service, macOS Keychain, or Windows Credential Manager, so
+    every MemoryManager-constructing test failed with "Encryption is
+    required but keystore initialization failed". Installing this backend
+    for the whole test session avoids that, and as a side benefit stops
+    tests from writing real encryption keys into a developer's actual OS
+    keychain under a shared service name when run locally on a machine that
+    does have a working one.
+    """
+
+    priority = 1  # keyring's own default backend has priority 0
+
+    def __init__(self):
+        super().__init__()
+        self._store: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service, username):
+        return self._store.get((service, username))
+
+    def set_password(self, service, username, password):
+        self._store[(service, username)] = password
+
+    def delete_password(self, service, username):
+        self._store.pop((service, username), None)
+
+
+keyring.set_keyring(_InMemoryTestKeyring())
 
 
 # ==============================================================================

@@ -243,10 +243,15 @@ def test_audit_trail_records_changes(temp_db):
     # Should have at least 2 audit entries (engage + disengage)
     assert len(rows) >= 2
 
-    # Verify content (entries are JSON strings)
+    # Verify content. safety.audit entries are encrypted at rest per
+    # memory_rules.yaml (encrypt: standard), so decrypt before parsing.
     import json
 
-    audit_actions = [json.loads(row[1])["action"] for row in rows]
+    from bartholomew.kernel.encryption_engine import _encryption_engine
+
+    audit_actions = [
+        json.loads(_encryption_engine.try_decrypt_if_envelope(row[1]))["action"] for row in rows
+    ]
     assert "engaged" in audit_actions
     assert "disengaged" in audit_actions
 

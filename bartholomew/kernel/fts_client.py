@@ -154,7 +154,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     summary,
     content='memories',
     content_rowid='id',
-    tokenize='{tokenizer}'
+    tokenize="{tokenizer}"
 );
 
 -- Mapping table to track FTS index entries
@@ -165,7 +165,16 @@ CREATE TABLE IF NOT EXISTS memory_fts_map (
     FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
 
--- Triggers to keep FTS index synchronized with memories table
+-- Triggers to keep FTS index synchronized with memories table.
+--
+-- memory_fts_map tracks which rowids are actually present in the memory_fts
+-- shadow index (populated by these triggers and by FTSClient.upsert()).
+-- Issuing FTS5's 'delete' special command for a rowid that was never
+-- actually indexed (e.g. a memories row written before this schema/these
+-- triggers existed) makes SQLite report "database disk image is malformed"
+-- -- a confusing error that doesn't mean anything is actually corrupt on
+-- disk. The UPDATE/DELETE triggers below are guarded on memory_fts_map so
+-- 'delete' is only issued for rows that are really there.
 CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memories
 BEGIN
     INSERT INTO memory_fts(rowid, value, summary)
@@ -174,6 +183,7 @@ BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS memory_fts_update AFTER UPDATE ON memories
+WHEN EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
 BEGIN
     INSERT INTO memory_fts(memory_fts, rowid, value, summary)
     VALUES ('delete', old.id, old.value, old.summary);
@@ -181,13 +191,38 @@ BEGIN
     VALUES (new.id, new.value, new.summary);
 END;
 
+CREATE TRIGGER IF NOT EXISTS memory_fts_update_backfill AFTER UPDATE ON memories
+WHEN NOT EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
+BEGIN
+    INSERT INTO memory_fts(rowid, value, summary)
+    VALUES (new.id, new.value, new.summary);
+    INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (new.id);
+END;
+
 CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memories
+WHEN EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
 BEGIN
     INSERT INTO memory_fts(memory_fts, rowid, value, summary)
     VALUES ('delete', old.id, old.value, old.summary);
     DELETE FROM memory_fts_map WHERE memory_id = old.id;
 END;
 """
+
+# Names of triggers defined in FTS_SCHEMA / CHUNK_FTS_SCHEMA, dropped and
+# recreated on every init so schema changes reach already-existing databases
+# (see init_schema()/init_chunk_schema()).
+_MEMORY_FTS_TRIGGERS = (
+    "memory_fts_insert",
+    "memory_fts_update",
+    "memory_fts_update_backfill",
+    "memory_fts_delete",
+)
+_CHUNK_FTS_TRIGGERS = (
+    "chunk_fts_insert",
+    "chunk_fts_update",
+    "chunk_fts_update_backfill",
+    "chunk_fts_delete",
+)
 
 # Phase 2f: Chunk FTS Schema for external-content mode
 CHUNK_FTS_SCHEMA = """
@@ -197,7 +232,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     text,
     content='memory_chunks',
     content_rowid='id',
-    tokenize='{tokenizer}'
+    tokenize="{tokenizer}"
 );
 
 -- Mapping table to track chunk FTS index entries
@@ -211,7 +246,9 @@ CREATE TABLE IF NOT EXISTS chunk_fts_map (
 CREATE INDEX IF NOT EXISTS idx_chunk_fts_map_memory
     ON chunk_fts_map(memory_id);
 
--- Triggers to keep chunk FTS index synchronized with memory_chunks table
+-- Triggers to keep chunk FTS index synchronized with memory_chunks table.
+-- Same 'delete'-on-unindexed-rowid hazard as memory_fts's triggers above;
+-- guarded the same way, against chunk_fts_map.
 CREATE TRIGGER IF NOT EXISTS chunk_fts_insert AFTER INSERT ON memory_chunks
 BEGIN
     INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
@@ -220,13 +257,22 @@ BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS chunk_fts_update AFTER UPDATE ON memory_chunks
+WHEN EXISTS (SELECT 1 FROM chunk_fts_map WHERE chunk_id = old.id)
 BEGIN
     INSERT INTO chunk_fts(chunk_fts, rowid, text)
     VALUES ('delete', old.id, old.text);
     INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
 END;
 
+CREATE TRIGGER IF NOT EXISTS chunk_fts_update_backfill AFTER UPDATE ON memory_chunks
+WHEN NOT EXISTS (SELECT 1 FROM chunk_fts_map WHERE chunk_id = old.id)
+BEGIN
+    INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
+    INSERT OR IGNORE INTO chunk_fts_map(chunk_id, memory_id) VALUES (new.id, new.memory_id);
+END;
+
 CREATE TRIGGER IF NOT EXISTS chunk_fts_delete AFTER DELETE ON memory_chunks
+WHEN EXISTS (SELECT 1 FROM chunk_fts_map WHERE chunk_id = old.id)
 BEGIN
     INSERT INTO chunk_fts(chunk_fts, rowid, text)
     VALUES ('delete', old.id, old.text);
@@ -287,6 +333,14 @@ class FTSClient:
 
         Creates the memory_fts virtual table, memory_fts_map tracking table,
         and synchronization triggers. Safe to call multiple times (idempotent).
+
+        Trigger bodies are dropped and recreated on every call (rather than
+        left alone via CREATE TRIGGER IF NOT EXISTS) so that a database
+        created by an older version of this schema always picks up the
+        current trigger definitions -- e.g. the memory_fts_map guards added
+        to memory_fts_update/memory_fts_delete. IF NOT EXISTS alone would
+        silently leave a pre-existing database on the old, unguarded
+        trigger bodies forever.
         """
         schema = FTS_SCHEMA.format(tokenizer=self.tokenizer)
 
@@ -296,6 +350,8 @@ class FTSClient:
             set_wal_pragmas(conn)
             # Ensure this Python/SQLite build supports FTS5
             self._probe_fts5(conn)
+            for trigger in _MEMORY_FTS_TRIGGERS:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
             conn.executescript(schema)
             conn.commit()
         finally:
@@ -665,8 +721,24 @@ class FTSClient:
         try:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
-            # Clear existing FTS data
-            conn.execute("DELETE FROM memory_fts")
+
+            # Drop and recreate memory_fts itself rather than trying to
+            # DELETE its contents. An external-content FTS5 table's actual
+            # shadow-index state can't be reliably introspected via ordinary
+            # SQL (a bare SELECT without MATCH just proxies through to the
+            # memories content table, not the real index) -- so there's no
+            # safe way to know in advance whether DELETE FROM memory_fts is
+            # a no-op or would hit a genuinely inconsistent index
+            # ("database disk image is malformed", a confusing SQLite/FTS5
+            # error that doesn't mean the file is actually corrupt).
+            # memory_fts_map can't be trusted as a stand-in for that check
+            # either -- it can be empty while the real index still has
+            # stale entries (e.g. a database from before the map table
+            # existed) -- so dropping and recreating the table sidesteps the
+            # question entirely: guaranteed empty, no stale entries can
+            # survive a rebuild either way.
+            conn.execute("DROP TABLE IF EXISTS memory_fts")
+            conn.executescript(FTS_SCHEMA.format(tokenizer=self.tokenizer))
             conn.execute("DELETE FROM memory_fts_map")
 
             # Rebuild from memories table
@@ -752,6 +824,9 @@ class FTSClient:
         and synchronization triggers. Safe to call multiple times.
 
         Should be called after init_schema() when chunking is enabled.
+
+        Trigger bodies are dropped and recreated on every call; see
+        init_schema()'s docstring for why.
         """
         schema = CHUNK_FTS_SCHEMA.format(tokenizer=self.tokenizer)
 
@@ -760,6 +835,8 @@ class FTSClient:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
             # FTS5 probe already done in init_schema
+            for trigger in _CHUNK_FTS_TRIGGERS:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
             conn.executescript(schema)
             conn.commit()
         finally:
@@ -787,18 +864,30 @@ class FTSClient:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
 
+            # Only issue the FTS5 'delete' command for chunks already
+            # indexed (per chunk_fts_map, checked before it's mutated
+            # below) -- see upsert()'s comment for why an unconditional
+            # 'delete' is unsafe.
+            already_indexed = (
+                conn.execute(
+                    "SELECT 1 FROM chunk_fts_map WHERE chunk_id = ?",
+                    (chunk_id,),
+                ).fetchone()
+                is not None
+            )
+
             # Ensure entry in map table
             conn.execute(
                 "INSERT OR REPLACE INTO chunk_fts_map(chunk_id, memory_id) VALUES (?, ?)",
                 (chunk_id, memory_id),
             )
 
-            # Delete old FTS entry if exists
-            conn.execute(
-                "INSERT INTO chunk_fts(chunk_fts, rowid, text) "
-                "SELECT 'delete', ?, text FROM chunk_fts WHERE rowid = ?",
-                (chunk_id, chunk_id),
-            )
+            if already_indexed:
+                conn.execute(
+                    "INSERT INTO chunk_fts(chunk_fts, rowid, text) "
+                    "SELECT 'delete', ?, text FROM chunk_fts WHERE rowid = ?",
+                    (chunk_id, chunk_id),
+                )
 
             # Insert new FTS entry
             conn.execute(
@@ -966,8 +1055,10 @@ class FTSClient:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
 
-            # Clear existing chunk FTS data
-            conn.execute("DELETE FROM chunk_fts")
+            # Drop and recreate chunk_fts itself rather than DELETE its
+            # contents -- see rebuild_index()'s docstring for why.
+            conn.execute("DROP TABLE IF EXISTS chunk_fts")
+            conn.executescript(CHUNK_FTS_SCHEMA.format(tokenizer=self.tokenizer))
             conn.execute("DELETE FROM chunk_fts_map")
 
             # Rebuild from memory_chunks table

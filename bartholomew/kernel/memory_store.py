@@ -602,6 +602,11 @@ class MemoryStore:
             True if deleted, False if not found
         """
         async with aiosqlite.connect(self.db_path) as db:
+            # foreign_keys is a per-connection setting, not persistent in the
+            # DB file -- without it the memory_chunks ON DELETE CASCADE (and
+            # any other FK cascade) silently never fires on this connection.
+            await db.execute("PRAGMA foreign_keys = ON")
+
             # Look up memory_id
             cursor = await db.execute("SELECT id FROM memories WHERE kind=? AND key=?", (kind, key))
             row = await cursor.fetchone()
@@ -611,15 +616,11 @@ class MemoryStore:
 
             memory_id = row[0]
 
-            # Delete FTS index entry in same transaction
-            await db.execute(
-                "INSERT INTO memory_fts(memory_fts, rowid, value, "
-                "summary) VALUES ('delete', ?, '', '')",
-                (memory_id,),
-            )
-            await db.execute("DELETE FROM memory_fts_map WHERE memory_id = ?", (memory_id,))
-
-            # Delete base row (triggers will also fire for cleanup)
+            # Delete base row. The memory_fts_delete trigger handles FTS
+            # index + memory_fts_map cleanup (guarded so it's a no-op for
+            # rows that were never actually indexed); doing it again here
+            # manually and unconditionally would risk the same "database
+            # disk image is malformed" FTS5 misuse that guard exists for.
             await db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
 
             await db.commit()

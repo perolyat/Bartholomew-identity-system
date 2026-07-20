@@ -103,7 +103,7 @@ class TestBoostsFlipRankings:
             rules_data = {}
 
             # Apply boosts
-            boosted_fts, boosted_vec = retriever._apply_boosts(
+            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
@@ -207,7 +207,7 @@ class TestBoostsFlipRankings:
             rules_data = {}
 
             # Apply boosts
-            boosted_fts, boosted_vec = retriever._apply_boosts(
+            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,
@@ -316,7 +316,7 @@ class TestBoostsFlipRankings:
             rules_data = {}
 
             # Apply boosts
-            boosted_fts, boosted_vec = retriever._apply_boosts(
+            boosted_fts, boosted_vec, _boost_map = retriever._apply_boosts(
                 fts_scores,
                 vec_scores,
                 metadata,

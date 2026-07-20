@@ -96,8 +96,14 @@ class RetrievalConfigManager:
         vec_candidates = int(retrieval.get("vec_candidates", 200))
         top_k = int(retrieval.get("top_k", 20))
 
-        # Extract FTS settings
-        self._fts_tokenizer = retrieval.get("fts_tokenizer", "porter")
+        # Extract FTS settings. retrieval.fts_tokenizer is the current
+        # location; fts.tokenizer is legacy backward-compat (mirrors
+        # fts_client.py's _load_tokenizer_config() resolution order).
+        legacy_fts = data.get("fts", {}) or {}
+        self._fts_tokenizer = retrieval.get("fts_tokenizer") or legacy_fts.get(
+            "tokenizer",
+            "porter",
+        )
         self._fts_index_mode = retrieval.get("fts_index_mode", "external")
 
         # Extract hybrid fusion settings
