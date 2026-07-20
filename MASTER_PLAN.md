@@ -335,15 +335,46 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
    - **Verify:** `pytest -q` on Linux CI; replay the failing cases.
 
 ### P1 — Unified Persona Core (Experience Kernel) + personality packs
-8. **Experience Kernel MVP** (self-model + narrator)
-   - Minimal "self" state, narrator summarization, and reflection hooks wired into the kernel loop.
+8. ✅ **Experience Kernel MVP** (self-model + narrator) — mostly already built; gaps closed 2026-07-20.
+   - **Correction to this doc (2026-07-20):** this item, `ROADMAP.md`'s "Stage 3", `INTERFACES.md`'s
+     "Experience Kernel (proposed)" section, and `TEST_MATRIX.md` all describe this as
+     future/not-started work. That was stale — the actual code already has a full implementation:
+     `bartholomew/kernel/experience_kernel.py` (self-model: drives/affect/attention/goals/context +
+     snapshot persistence), `bartholomew/kernel/narrator.py` (episodic memory + daily/weekly
+     reflection narratives), `global_workspace.py`/`working_memory.py`/`persona_pack.py` (all wired
+     together), `daemon.py` (instantiates all of it, runs a daily/weekly reflection scheduler), and a
+     REST API (`/api/self`, `/api/episodes/*`, `/api/persona/*`). ~320 existing tests across 7 files
+     (`test_experience_kernel.py`, `test_narrator.py`, `test_stage3_integration.py`,
+     `test_reflection_generation.py`, `test_persona_pack.py`, `test_working_memory.py`,
+     `test_global_workspace.py`) — confirmed all passing before touching anything.
    - **Acceptance:** kernel can produce a stable "about me" snapshot and a day/week reflection without leaking sensitive memory.
-   - **Verify:** `pytest -q tests/test_experience_kernel.py` (to be added) + run a scenario replay.
+   - **Verify:** `pytest -q tests/test_experience_kernel.py` (already exists) + run a scenario replay
+     (`tests/test_stage3_integration.py::TestFullLifecycle` is the closest existing precedent; a
+     dedicated replay harness still doesn't exist as of 2026-07-20 -- see below).
+   - **Gaps found and fixed 2026-07-20** (see "Experience Kernel MVP: bug fix + privacy gap" below
+     for full detail):
+     1. A live, silently-swallowed `AttributeError` in `daemon.py`'s tick loop meant affect never
+        decayed and persona auto-activation / the planner's `decide()` never ran, in production,
+        since the moment Stage 3 landed.
+     2. `INTERFACES.md`'s documented contract ("self_snapshot" = "safe-to-share description";
+        retrieved memories must be "filtered by consent/privacy") wasn't actually implemented for
+        this subsystem -- `episodic_entries`/`experience_snapshots` bypass `ConsentGate`/
+        `memory_rules.py`/`redaction_engine.py` entirely, and `NarratorConfig.redact_personal_data`
+        was declared in config but never checked anywhere.
+   - **Not yet done, deliberately out of scope for this pass:** a dedicated "scenario replay" test
+     harness (distinct from `TestFullLifecycle`); reconciling the two non-unified reflection
+     pipelines (`daemon.py`'s LLM+safety-checked `ReflectionGenerator` vs. `narrator.py`'s
+     template-based `generate_*_reflection_narrative`); a date-range query against the `memories`
+     table itself for narrator/reflection use (currently only `episodic_entries` supports this).
 
 9. **Persona / Mentor Mode packs (config-driven)**
    - System prompt packs (e.g., Calm Mentor / Coach / Gamer Ally) selectable via config/UI without code edits.
    - **Acceptance:** switching persona changes tone/constraints; logged in audit trail.
-   - **Verify:** `pytest -q tests/test_persona_switching.py` + manual API smoke.
+   - **Verify:** `pytest -q tests/test_persona_pack.py` (this doc previously cited a nonexistent
+     `tests/test_persona_switching.py` -- corrected 2026-07-20) + manual API smoke.
+   - **Status (2026-07-20):** also appears already implemented (`bartholomew/kernel/persona_pack.py`,
+     `PersonaPackManager`, wired into `daemon.py`; `tests/test_persona_pack.py` exists and passes) --
+     not independently re-verified against this item's specific acceptance criteria in this pass.
 
 ### P2 — Modularity: skill registry + a few safe starter skills
 10. **Skill manifest + registry** (local "marketplace" later)
@@ -708,6 +739,102 @@ fix above):
 pytest -q                          # 0 failures (was 2, was 4, was 9, was 38 originally)
 pytest -q -m smoke                 # unaffected, still green
 ```
+
+---
+
+## Experience Kernel MVP: bug fix + privacy gap — fixed 2026-07-20
+
+Started work on P1 ("Experience Kernel MVP") expecting a greenfield build. Research first (per
+this doc's own governance rule -- see Doc Governance -- and standard practice: investigate before
+implementing) surfaced that the feature already exists in code, just undocumented as such (see the
+backlog correction above). Two real, concrete gaps were found and fixed instead of building from
+scratch.
+
+### Bug 1: silently-swallowed `AttributeError` disabled the kernel's entire tick loop
+
+**Symptom:** none visible -- this was found by code inspection, not a failing test. No existing
+test runs the daemon's real tick loop to completion with a long-enough window to hit it.
+
+**Root cause:** `daemon.py`'s `_system_tick()` called `self.experience.decay_affect(rate=0.02)` --
+but `ExperienceKernel` has no `decay_affect` method, only `decay_affect_to_baseline(delta_seconds:
+float = 60.0)`. This raised `AttributeError` on *every single tick* (default every 15s) since
+Stage 3 landed. A broad `except Exception as e: print(...)` around the whole tick body swallowed
+it silently -- and because the exception aborted the `try` block partway through, **every line
+after it in the same block never ran either**: `self.persona_manager.auto_activate_if_needed(...)`
+and `await self.planner.decide(self.state)`. In production, this meant affect never decayed toward
+baseline, persona auto-activation never fired, and the planner was never consulted on a tick --
+the tick loop's entire real work was dead code.
+
+**Fix:** `self.experience.decay_affect_to_baseline(delta_seconds=self.interval)` (the daemon's own
+tick interval, matching the parameter's semantics).
+
+**Verify:** `pytest -q tests/test_stage3_integration.py::TestDaemonIntegration` (2 tests) --
+passed before and after (they were passing "by accident," never having exercised the code past the
+crash); full `pytest -q` unaffected.
+
+### Bug 2: `INTERFACES.md`'s privacy contract for this subsystem was never implemented
+
+**Symptom:** none visible via tests (no test asserted on this either way) -- found via direct
+reasoning about the acceptance criterion ("without leaking sensitive memory") plus confirming
+`NarratorConfig.redact_personal_data` (loaded from `Identity.yaml`'s
+`narrator_episodic_layer.logs.redact_personal_data: true`) had zero call sites checking it anywhere
+in `narrator.py`.
+
+**Root cause:** `episodic_entries` (Narrator) and `experience_snapshots` (Experience Kernel) are
+maintained via their own plain `sqlite3` schema/queries, entirely bypassing the pipeline that
+protects everything in the `memories` table (`ConsentGate`, `memory_rules.py`, `redaction_engine.py`).
+Episode narratives aren't built from raw `memories` rows (confirmed: they're built from
+GlobalWorkspace event payloads and template strings) -- but several fields *are* arbitrary,
+caller-supplied free text with no redaction of their own: `ExperienceKernel.set_attention()`'s
+`target`, `add_goal()`/`complete_goal()`'s `goal`, `update_affect()`'s `emotion`, `set_context()`'s
+string `value`s, and `NarratorEngine`'s own `generate_observation_episode()`/
+`generate_reflection_episode()` `content` params. Any of these can end up verbatim in a persisted,
+exportable daily/weekly reflection narrative or in `GET /api/self`'s "safe-to-share" snapshot.
+
+**Fix:**
+- Added `redact_pii(text)` to `redaction_engine.py` -- deliberately **not** reusing
+  `bartholomew.kernel.memory.privacy_guard.SENSITIVE_KEYWORDS` (name/address/location/phone/email/
+  bank/password/routine/health/private/account). That list is a *consent-prompt* trigger (a human
+  confirms before storing, so false positives are cheap); this needed *silent, automatic*
+  redaction with no human in the loop, and those keywords are also just ordinary vocabulary a
+  wellness-focused assistant's own self-model legitimately uses constantly -- confirmed directly:
+  reusing that list broke two existing tests by mangling "Answer health question" into
+  "Answer **** question" and "user question about health" into "...about ****". Narrowed to
+  matching only concrete, unambiguous PII *shapes* instead (email addresses, phone numbers,
+  SSN-pattern digit groups) -- fewer false positives for content this subsystem is expected to
+  legitimately handle.
+- `ExperienceKernel`: `set_attention()`, `update_affect()`, `add_goal()`/`complete_goal()` (redacted
+  consistently on both sides so a caller's raw text still matches for removal),
+  `set_context()` (string values only) now redact unconditionally -- no existing config toggle for
+  this at the Experience Kernel level, and `self_snapshot()`/`GET /api/self` are documented as
+  "safe-to-share" with no legitimate reason to expose raw PII there.
+- `NarratorEngine`: added a `_redact()` helper gated by the existing `NarratorConfig.redact_personal_data`
+  flag (now actually doing something), applied to the free-text fields in
+  `generate_affect_episode`/`generate_attention_episode`/`generate_goal_added_episode`/
+  `generate_goal_completed_episode`/`generate_observation_episode`/`generate_reflection_episode`.
+  Redundant with the Experience Kernel-level redaction for event-sourced fields (defense in depth,
+  harmless since redaction is idempotent) but is the only protection for the two narrator-only
+  entry points (`generate_observation_episode`/`generate_reflection_episode`) that don't route
+  through Experience Kernel at all.
+
+**Verify:**
+```bash
+pytest -q tests/test_narrator.py::TestPIIRedaction tests/test_narrator.py::TestReflectionNarratives::test_daily_reflection_redacts_pii
+pytest -q tests/test_experience_kernel.py::TestExperienceKernelPIIRedaction
+pytest -q                          # full suite still fully green (0 failures)
+```
+
+### Not done in this pass (explicitly out of scope, noted above in the backlog item)
+
+- No dedicated "scenario replay" test harness (the acceptance criterion's "run a scenario replay"
+  step) -- `test_stage3_integration.py::TestFullLifecycle` is the closest existing precedent.
+- The two non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs. `narrator.py`'s
+  `generate_*_reflection_narrative`) were not reconciled -- both still exist independently.
+- No date-range query against the `memories` table itself was added for narrator/reflection use
+  (only `episodic_entries` supports this today); if a future reflection feature needs to summarize
+  actual stored memories rather than kernel-internal episodes, that query would need to be written
+  and would need to route through `ConsentGate` filtering, which nothing does automatically outside
+  `retrieval.py`'s code paths.
 
 ---
 

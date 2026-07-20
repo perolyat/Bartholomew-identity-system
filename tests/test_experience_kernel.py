@@ -609,6 +609,75 @@ class TestExperienceKernelContext:
 
 
 # =============================================================================
+# ExperienceKernel PII Redaction Tests
+# =============================================================================
+
+
+class TestExperienceKernelPIIRedaction:
+    """
+    Tests that free-text fields are redacted before entering self_snapshot()
+    (documented in INTERFACES.md as a "safe-to-share description" -- these
+    fields have no consent-gate/redaction pipeline of their own, unlike the
+    memories table).
+    """
+
+    def test_set_attention_redacts_target(self):
+        kernel = ExperienceKernel()
+        kernel.set_attention(
+            target="user's email is bob@example.com",
+            focus_type="user_input",
+        )
+        assert "bob@example.com" not in kernel.get_attention().focus_target
+
+    def test_update_affect_redacts_emotion(self):
+        kernel = ExperienceKernel()
+        kernel.update_affect(emotion="thinking about SSN 123-45-6789")
+        assert "123-45-6789" not in kernel.get_affect().dominant_emotion
+
+    def test_add_goal_redacts_goal(self):
+        kernel = ExperienceKernel()
+        kernel.add_goal("call 555-123-4567 back")
+        assert not any("555-123-4567" in g for g in kernel.get_active_goals())
+
+    def test_complete_goal_matches_redacted_form(self):
+        """
+        complete_goal() must redact its argument the same way add_goal()
+        did, so a caller passing the same raw text to both still matches
+        and removes the goal.
+        """
+        kernel = ExperienceKernel()
+        raw_goal = "email bob@example.com the update"
+        kernel.add_goal(raw_goal)
+        assert kernel.complete_goal(raw_goal) is True
+        assert kernel.get_active_goals() == []
+
+    def test_set_context_redacts_string_value(self):
+        kernel = ExperienceKernel()
+        kernel.set_context("note", "contact bob@example.com")
+        assert "bob@example.com" not in kernel.get_context("note")
+
+    def test_set_context_leaves_non_string_values_alone(self):
+        kernel = ExperienceKernel()
+        kernel.set_context("count", 42)
+        kernel.set_context("items", ["a", "b"])
+        assert kernel.get_context("count") == 42
+        assert kernel.get_context("items") == ["a", "b"]
+
+    def test_redaction_leaves_benign_text_unchanged(self):
+        """
+        Ordinary wellness/self-model vocabulary must not be mangled by
+        this unconditional redaction -- confirms it matches only concrete
+        PII shapes, not the broad memory.privacy_guard.SENSITIVE_KEYWORDS
+        consent-prompt list (words like "health" are core, legitimate
+        vocabulary here, not leaks). Regression check: this exact phrase
+        previously broke when redaction reused that keyword list.
+        """
+        kernel = ExperienceKernel()
+        kernel.set_attention(target="user question about health", focus_type="user_input")
+        assert kernel.get_attention().focus_target == "user question about health"
+
+
+# =============================================================================
 # ExperienceKernel Self Snapshot Tests
 # =============================================================================
 

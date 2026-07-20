@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from bartholomew.kernel.redaction_engine import redact_pii
+
 
 if TYPE_CHECKING:
     from bartholomew.kernel.experience_kernel import AffectState, ExperienceKernel
@@ -762,6 +764,20 @@ class NarratorEngine:
         self._episode_counter += 1
         return templates[self._episode_counter % len(templates)]
 
+    def _redact(self, text: str | None) -> str | None:
+        """
+        Redact PII from free text before it enters a persisted, exportable
+        narrative (episodic_entries / daily-weekly reflection exports have
+        no consent-gate integration of their own -- see redact_pii()'s
+        docstring). Gated by NarratorConfig.redact_personal_data (from
+        Identity.yaml's narrator_episodic_layer.logs.redact_personal_data)
+        so this config flag actually does something -- previously declared
+        but never applied anywhere.
+        """
+        if not self._config.redact_personal_data:
+            return text
+        return redact_pii(text)
+
     # =========================================================================
     # Episode Generation
     # =========================================================================
@@ -791,6 +807,7 @@ class NarratorEngine:
             emotion = affect_snapshot.get("dominant_emotion", "different")
         else:
             emotion = emotion or "different"
+        emotion = self._redact(emotion)
 
         # Select and format template
         templates = NarrativeTemplates.AFFECT_SHIFT.get(
@@ -834,6 +851,7 @@ class NarratorEngine:
             target = event.payload.get("target", "something new")
         else:
             target = target or "a new focus"
+        target = self._redact(target)
 
         # Select and format template
         templates = NarrativeTemplates.ATTENTION_FOCUS.get(
@@ -973,6 +991,7 @@ class NarratorEngine:
             goal = event.payload.get("goal", "a new objective")
         else:
             goal = goal or "a new objective"
+        goal = self._redact(goal)
 
         # Select and format template
         templates = NarrativeTemplates.GOAL_ADDED.get(
@@ -1016,6 +1035,7 @@ class NarratorEngine:
             goal = event.payload.get("goal", "my objective")
         else:
             goal = goal or "my objective"
+        goal = self._redact(goal)
 
         # Select and format template
         templates = NarrativeTemplates.GOAL_COMPLETED.get(
@@ -1053,6 +1073,7 @@ class NarratorEngine:
         """
         tone = self.determine_tone()
         affect_snapshot = self.get_affect_snapshot()
+        content = self._redact(content)
 
         # Select and format template
         templates = NarrativeTemplates.OBSERVATION.get(
@@ -1090,6 +1111,7 @@ class NarratorEngine:
         """
         tone = self.determine_tone()
         affect_snapshot = self.get_affect_snapshot()
+        content = self._redact(content)
 
         return EpisodicEntry.create(
             episode_type=EpisodeType.REFLECTION,

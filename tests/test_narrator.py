@@ -906,6 +906,89 @@ class TestReflectionNarratives:
         assert "Goals set: 2" in narrative
         assert "Goals completed: 1" in narrative
 
+    def test_daily_reflection_redacts_pii(self):
+        """
+        Daily reflection narratives must not leak PII from episode content.
+
+        episodic_entries has no consent-gate/redaction pipeline of its own
+        (unlike the memories table) -- this is the acceptance-criterion
+        check for INTERFACES.md's "Experience Kernel" contract ("never
+        fabricate sensitive facts" / self_snapshot as "safe-to-share").
+        """
+        narrator = NarratorEngine()
+
+        narrator.persist_episode(
+            narrator.generate_observation_episode(
+                content="Noted that user's email is bob@example.com and SSN 123-45-6789",
+            ),
+        )
+
+        narrative = narrator.generate_daily_reflection_narrative()
+
+        assert "bob@example.com" not in narrative
+        assert "123-45-6789" not in narrative
+
+
+# =============================================================================
+# Test PII Redaction
+# =============================================================================
+
+
+class TestPIIRedaction:
+    """Tests for automatic PII redaction in episode narratives."""
+
+    def test_affect_episode_redacts_emotion(self):
+        narrator = NarratorEngine()
+        episode = narrator.generate_affect_episode(emotion="thinking about bob@example.com")
+        assert "bob@example.com" not in episode.narrative
+        assert "bob@example.com" not in episode.metadata["emotion"]
+
+    def test_attention_episode_redacts_target(self):
+        narrator = NarratorEngine()
+        episode = narrator.generate_attention_episode(target="user's SSN 123-45-6789")
+        assert "123-45-6789" not in episode.narrative
+        assert "123-45-6789" not in episode.metadata["target"]
+
+    def test_goal_added_episode_redacts_goal(self):
+        narrator = NarratorEngine()
+        episode = narrator.generate_goal_added_episode(goal="call 555-123-4567 back")
+        assert "555-123-4567" not in episode.narrative
+
+    def test_goal_completed_episode_redacts_goal(self):
+        narrator = NarratorEngine()
+        episode = narrator.generate_goal_completed_episode(goal="emailed bob@example.com")
+        assert "bob@example.com" not in episode.narrative
+
+    def test_observation_episode_redacts_content(self):
+        narrator = NarratorEngine()
+        episode = narrator.generate_observation_episode(content="SSN is 123-45-6789")
+        assert "123-45-6789" not in episode.narrative
+
+    def test_reflection_episode_redacts_content(self):
+        narrator = NarratorEngine()
+        episode = narrator.generate_reflection_episode(content="contact: bob@example.com")
+        assert "bob@example.com" not in episode.narrative
+
+    def test_redaction_disabled_via_config(self):
+        """redact_personal_data=False should leave content untouched."""
+        config = NarratorConfig(redact_personal_data=False)
+        narrator = NarratorEngine(config=config)
+        episode = narrator.generate_observation_episode(content="SSN is 123-45-6789")
+        assert "123-45-6789" in episode.narrative
+
+    def test_redaction_leaves_benign_text_unchanged(self):
+        """
+        Ordinary wellness/self-model vocabulary must not be mangled --
+        confirms redact_pii() matches only concrete PII shapes, not the
+        broad memory.privacy_guard.SENSITIVE_KEYWORDS consent-prompt list
+        (words like "health"/"routine" are core, legitimate vocabulary
+        here, not leaks).
+        """
+        narrator = NarratorEngine()
+        episode = narrator.generate_goal_added_episode(goal="Answer health question")
+        assert episode.narrative.count("****") == 0
+        assert "health" in episode.metadata["goal"]
+
 
 # =============================================================================
 # Test Singleton Pattern
