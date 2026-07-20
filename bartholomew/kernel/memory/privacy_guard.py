@@ -33,6 +33,11 @@ def set_consent_handler(handler: ConsentHandler | None) -> None:
     _consent_handler = handler
 
 
+def get_consent_handler() -> ConsentHandler | None:
+    """Return the currently registered consent handler, if any."""
+    return _consent_handler
+
+
 def is_sensitive(text: str) -> bool:
     return any(keyword in text.lower() for keyword in SENSITIVE_KEYWORDS)
 

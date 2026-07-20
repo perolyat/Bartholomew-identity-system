@@ -206,13 +206,21 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
      headless-hang risk. `chat.py` (the interactive terminal entrypoint) registers a
      stdin-prompting handler at startup so its UX is unchanged; the FastAPI kernel daemon
      registers nothing and now fails closed instead of hanging.
-   - **Known follow-up (not fixed here):** `identity_interpreter/adapters/consent_terminal.py`
-     (`ConsentAdapter.request_consent`) has the same blocking-`input()` shape and is reachable
-     from `identity_interpreter/adapters/memory_manager.py` when called from *within* a
-     running event loop (e.g. from an API request) — actually the more dangerous case, since
-     it would freeze the whole event loop rather than just one coroutine. It's outside
-     `bartholomew/kernel/`, so it wasn't in scope of this item's grep-based acceptance
-     criterion, but it should get the same treatment.
+   - **Follow-up fixed 2026-07-20:** `identity_interpreter/adapters/consent_terminal.py`
+     (`ConsentAdapter.request_consent`) had the same blocking-`input()` shape and was
+     reachable from `identity_interpreter/adapters/memory_manager.py` when called from
+     *within* a running event loop (e.g. from an API request) — actually the more dangerous
+     case, since it would freeze the whole event loop rather than just one coroutine. It was
+     outside `bartholomew/kernel/`, so out of scope of this item's grep-based acceptance
+     criterion, but got the same treatment now: `privacy_guard` gained
+     `get_consent_handler()`, and `ConsentAdapter.request_consent()` now calls that
+     registered handler synchronously instead of `input()` — same registered handler as the
+     async path (`chat.py`'s stdin prompt still works via it), same fail-closed default with
+     no handler registered, and fails closed rather than blocking if a misconfigured async
+     handler is ever registered (can't safely `await` from this synchronous, already-in-a-loop
+     call site). Session-scoped consent caching (`session_consents`) is unchanged. Verified:
+     imports cleanly, `pytest -q -k consent` and `pytest -m smoke` show no new failures beyond
+     the two pre-existing ones already on record above.
 
 ---
 
@@ -368,25 +376,16 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 ## Next 3 Moves (always current)
 
-> **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s) are done;
-> moving to the reproducibility + CI gaps they exposed during verification.
+> **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s), the
+> dependency-pin/CI-install/test-hang follow-ups, and the `consent_terminal.py` input()
+> gap are all done. Moving to CI minimal gates as the next open item.
 
 1. ✅ ~~Fix P0 packaging issues (items 0–1)~~ — done 2026-07-20.
 2. ✅ ~~Fix malformed memory_rules.yaml + refactor `input()` out of kernel (items 2–3)~~ — done 2026-07-20.
+3. ✅ ~~Pin the dependency set, fix the CI install step, fix the test DB-path hang~~ — done 2026-07-20.
+4. ✅ ~~Fix `identity_interpreter/adapters/consent_terminal.py`'s blocking `input()`~~ — done 2026-07-20.
 
-1. **Pin/verify the dependency set the project actually installs**
-   - Fresh installs currently drift to `fastapi==0.139.2`/`starlette==1.3.1`, which breaks
-     `starlette.testclient`; `requirements.lock` has known-good pins but is UTF-16-encoded
-     and unreferenced by any setup doc.
-   - **Verify:** fresh venv, `pip install -e . -r requirements-dev.txt`, `pytest -q -m smoke`
-     collects and runs without dependency errors.
-
-2. **Move the `input()` fix's remaining gap to `identity_interpreter/adapters/consent_terminal.py`**
-   - Same blocking-`input()` shape as the now-fixed `privacy_guard.py`, but reachable from
-     *inside* a running event loop via `memory_manager.py`, which would freeze the whole
-     loop rather than just one coroutine.
-
-3. **CI minimal gates (Linux)** (items 5–7)
+1. **CI minimal gates (Linux)** (items 5–7)
    - Make `pytest -q`, `ruff check .`, `black --check .` run in CI.
    - Fix non-environmental failing tests from `docs/STATUS_2025-12-29.md`.
    - **Verify:** GitHub Actions green on Linux.

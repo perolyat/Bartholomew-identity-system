@@ -1,12 +1,25 @@
 """
-Consent Adapter for terminal-based user prompts
+Consent Adapter for user prompts, routed through the shared kernel consent handler
 """
 
+import inspect
 from typing import Any
+
+from bartholomew.kernel.memory.privacy_guard import get_consent_handler
 
 
 class ConsentAdapter:
-    """Terminal-based consent prompting"""
+    """Consent prompting via the shared kernel consent handler.
+
+    Callers use this specifically when they're already inside a running event
+    loop, so this must never block on stdin itself -- doing so would freeze
+    the whole loop, not just one coroutine. It delegates to whatever handler
+    is registered with bartholomew.kernel.memory.privacy_guard.set_consent_handler()
+    (e.g. chat.py registers a terminal prompt for interactive CLI use) and
+    calls it synchronously. With no handler registered, or a handler that
+    returns an awaitable (which can't be safely awaited from this synchronous,
+    already-in-a-loop context), requests fail closed (denied).
+    """
 
     def __init__(self, identity_config: Any):
         """
@@ -39,16 +52,16 @@ class ConsentAdapter:
         if scope == "per_session" and action in self.session_consents:
             return self.session_consents[action]
 
-        # Terminal prompt
-        print("\n=== CONSENT REQUIRED ===")
-        print(f"Action: {action}")
+        prompt = f"Action: {action}"
         if details:
-            print(f"Details: {details}")
-        print(f"Scope: {scope}")
+            prompt += f"\nDetails: {details}"
 
-        # Real user input
-        response = input("Allow? (y/n): ").strip().lower()
-        granted = response in ("y", "yes")
+        handler = get_consent_handler()
+        if handler is None:
+            granted = False
+        else:
+            result = handler(prompt)
+            granted = False if inspect.isawaitable(result) else bool(result)
 
         if scope == "per_session":
             self.session_consents[action] = granted
