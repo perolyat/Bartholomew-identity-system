@@ -17,13 +17,18 @@ from freezegun import freeze_time
 # ============================================================================
 # Windows FTS5/SQLite Skip Marker
 # ============================================================================
-# Windows Python builds often lack FTS5 with matchinfo() support.
+# Windows Python builds may lack full FTS5 support.
 # These tests require FTS5 features not available on standard Windows builds.
+#
+# Historical note: this used to be described as an "FTS5/matchinfo" issue.
+# matchinfo() is actually unsupported by FTS5 everywhere, on any platform --
+# not a Windows-specific limitation (see bartholomew/kernel/fts_client.py,
+# which no longer uses matchinfo() at all for exactly this reason).
 
 IS_WINDOWS = platform.system() == "Windows"
 SKIP_WINDOWS_FTS = pytest.mark.skipif(
     IS_WINDOWS,
-    reason="FTS5/matchinfo not available on Windows Python builds",
+    reason="FTS5 support may be incomplete on Windows Python builds",
 )
 
 

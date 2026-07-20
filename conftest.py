@@ -67,12 +67,17 @@ keyring.set_keyring(_InMemoryTestKeyring())
 # ==============================================================================
 # Windows FTS Skip Markers
 # ==============================================================================
-# The Windows Python SQLite build typically lacks FTS5/matchinfo support.
+# The Windows Python SQLite build may lack full FTS5 support.
 # These markers allow tests to be skipped on Windows while running on Linux CI.
+#
+# Historical note: this used to be described as an "FTS5/matchinfo" issue.
+# matchinfo() is actually unsupported by FTS5 everywhere, on any platform --
+# not a Windows-specific limitation (see bartholomew/kernel/fts_client.py,
+# which no longer uses matchinfo() at all for exactly this reason).
 
 SKIP_WINDOWS_FTS = pytest.mark.skipif(
     sys.platform == "win32",
-    reason="FTS5/matchinfo not available in Windows Python SQLite build",
+    reason="FTS5 support may be incomplete in Windows Python SQLite builds",
 )
 
 SKIP_WINDOWS_FILE_LOCKING = pytest.mark.skipif(

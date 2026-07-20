@@ -10,8 +10,8 @@ table, enabling fast full-text search with ranking and highlighting.
 
 import logging
 import os
+import re
 import sqlite3
-import struct
 from typing import Any
 
 import yaml
@@ -22,61 +22,41 @@ from bartholomew.kernel.db_ctx import set_wal_pragmas
 logger = logging.getLogger(__name__)
 
 
-def _rank_pcx(matchinfo_blob: bytes) -> float:
+_FTS5_QUERY_OPERATORS = re.compile(r"\b(AND|OR|NOT|NEAR)\b", re.IGNORECASE)
+_NON_WORD_CHARS = re.compile(r"[^\w\s]")
+
+
+def _extract_query_terms(query: str) -> list[str]:
     """
-    Compute approximate BM25-like ranking using matchinfo('pcx').
+    Extract a rough bag of literal search terms from an FTS5 query string.
 
-    Fallback ranking function when bm25 UDF is not available.
-
-    The matchinfo('pcx') format provides:
-    - p: number of matchable phrases in query
-    - c: number of user-defined columns
-    - x: array of 3*p*c values (hits_this_row, hits_all_rows, docs_with_hits)
-
-    This computes a simplified tf-idf-like score:
-    score = sum(hits_this_row / (docs_with_hits + 1)) across all terms/columns
-
-    Args:
-        matchinfo_blob: Binary matchinfo blob from FTS5
-
-    Returns:
-        Float score (higher is better)
+    Not a full FTS5 query parser -- just strips boolean operators and
+    punctuation to get words to count for _term_frequency_rank() below.
+    FTS5's own query engine (via the MATCH clause) still does the actual
+    boolean/phrase/NEAR matching that decides which rows qualify; this only
+    ever affects the order results come back in.
     """
-    if not matchinfo_blob:
+    cleaned = _NON_WORD_CHARS.sub(" ", _FTS5_QUERY_OPERATORS.sub(" ", query))
+    return [t.lower() for t in cleaned.split() if t]
+
+
+def _term_frequency_rank(value: str | None, summary: str | None, terms: list[str]) -> float:
+    """
+    Simple term-frequency ranking used when the bm25() UDF is unavailable.
+
+    FTS5 has no ranking aux function besides bm25() itself to fall back to --
+    matchinfo() (used by a previous version of this fallback) is an FTS3/
+    FTS4-only function that FTS5 has never supported, confirmed independent
+    of this codebase; it always raised "unable to use function matchinfo in
+    the requested context" regardless of platform. Lower is better here,
+    matching bm25()'s own convention (bm25's raw scores are negative --
+    more negative is a better match).
+    """
+    if not terms:
         return 0.0
-
-    try:
-        # Unpack native-endian 32-bit unsigned ints
-        num_ints = len(matchinfo_blob) // 4
-        ints = struct.unpack(f"{num_ints}I", matchinfo_blob)
-
-        if len(ints) < 2:
-            return 0.0
-
-        p, c = ints[0], ints[1]
-        idx = 2
-        score = 0.0
-
-        # Iterate over phrases and columns
-        for _ in range(p):
-            for _ in range(c):
-                if idx + 2 >= len(ints):
-                    break
-
-                hits_this_row = ints[idx]
-                # hits_all_rows = ints[idx + 1]  # Not used in simple scoring
-                docs_with_hits = ints[idx + 2]
-                idx += 3
-
-                # Simple tf-idf-like: term frequency weighted by inverse
-                # document frequency (rarer terms score higher)
-                if docs_with_hits > 0:
-                    score += float(hits_this_row) / (docs_with_hits + 1)
-
-        return score
-    except Exception as e:
-        logger.debug(f"Failed to compute rank_pcx: {e}")
-        return 0.0
+    text = f"{value or ''} {summary or ''}".lower()
+    count = sum(text.count(t) for t in terms)
+    return -float(count)
 
 
 def fts5_available(conn: sqlite3.Connection) -> bool:
@@ -369,8 +349,18 @@ class FTSClient:
 
         This is a self-healing migration that:
         1. Ensures memory_fts_map exists
-        2. Verifies FTS rowid == memory id consistency
+        2. Verifies memory_fts_map == memories consistency
         3. Rebuilds index if mismatches detected
+
+        Consistency is checked against memory_fts_map rather than memory_fts
+        itself. A bare, non-MATCH SELECT against an external-content FTS5
+        table (memory_fts is one -- content='memories') proxies through to
+        the content table instead of reflecting the real FTS5 shadow index,
+        so a LEFT JOIN like "memory_fts f ... WHERE m.id IS NULL" can never
+        find a mismatch regardless of the index's actual state. memory_fts_map
+        is a plain table this class maintains as the authoritative record of
+        what's actually indexed, so it's compared against memories in both
+        directions instead.
 
         Safe to call multiple times (idempotent).
         """
@@ -379,50 +369,43 @@ class FTSClient:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
 
-            # Check for rowid mismatches (orphaned FTS entries)
-            cursor = conn.execute(
-                """
-                SELECT 1
-                FROM memory_fts f
-                LEFT JOIN memories m ON f.rowid = m.id
-                WHERE m.id IS NULL
-                LIMIT 1
-            """,
+            orphaned_map_entries = (
+                conn.execute(
+                    """
+                    SELECT 1
+                    FROM memory_fts_map fm
+                    LEFT JOIN memories m ON fm.memory_id = m.id
+                    WHERE m.id IS NULL
+                    LIMIT 1
+                """,
+                ).fetchone()
+                is not None
             )
 
-            has_mismatch = cursor.fetchone() is not None
-
-            if has_mismatch:
-                logger.warning("FTS rowid mismatch detected, rebuilding index...")
-
-                # Clear and rebuild
-                conn.execute("DELETE FROM memory_fts")
-                conn.execute("DELETE FROM memory_fts_map")
-
+            unindexed_memories = (
                 conn.execute(
                     """
-                    INSERT INTO memory_fts(rowid, value, summary)
-                    SELECT id, value, summary FROM memories
+                    SELECT 1
+                    FROM memories m
+                    LEFT JOIN memory_fts_map fm ON m.id = fm.memory_id
+                    WHERE fm.memory_id IS NULL
+                    LIMIT 1
                 """,
-                )
-
-                conn.execute(
-                    """
-                    INSERT INTO memory_fts_map(memory_id)
-                    SELECT id FROM memories
-                """,
-                )
-
-                conn.commit()
-                logger.info("FTS index rebuilt for rowid consistency")
-            else:
-                logger.debug("FTS schema migration: no action needed")
-
+                ).fetchone()
+                is not None
+            )
         except Exception as e:
             logger.warning(f"FTS schema migration check failed: {e}")
+            return
         finally:
             if conn:
                 conn.close()
+
+        if orphaned_map_entries or unindexed_memories:
+            logger.warning("FTS index mismatch detected, rebuilding index...")
+            self.rebuild_index()
+        else:
+            logger.debug("FTS schema migration: no action needed")
 
     def upsert(self, memory_id: int, value: str, summary: str | None = None) -> None:
         """
@@ -572,9 +555,12 @@ class FTSClient:
             LIMIT ? OFFSET ?
         """
 
-        # Fallback SQL using matchinfo('pcx')
-        # Note: Negation to maintain "lower is better" ordering
-        sql_fallback = f"""
+        # Fallback SQL when the bm25() UDF is unavailable. No ranking
+        # function in the query itself -- FTS5 has no ranking aux function
+        # besides bm25() to fall back to (see _term_frequency_rank's
+        # docstring) -- rank is computed in Python below from a bounded
+        # candidate pool instead.
+        sql_fallback = """
             SELECT
                 m.id,
                 m.kind,
@@ -582,13 +568,12 @@ class FTSClient:
                 m.value,
                 m.summary,
                 m.ts,
-                -rank_pcx(matchinfo(memory_fts, 'pcx')) as rank,
                 snippet(memory_fts, 0, '[', ']', ' … ', 8) as snippet
             FROM memory_fts
             JOIN memories m ON memory_fts.rowid = m.id
             WHERE memory_fts MATCH ?
-            {order_clause}
-            LIMIT ? OFFSET ?
+            ORDER BY m.id DESC
+            LIMIT ?
         """
 
         conn = None
@@ -607,19 +592,25 @@ class FTSClient:
                 except sqlite3.OperationalError as e:
                     # Check if error is due to missing bm25 function
                     if "no such function: bm25" in str(e).lower():
-                        logger.info("bm25 UDF not available, using matchinfo fallback")
+                        logger.info("bm25 UDF not available, using term-frequency fallback")
                         force_fallback = True
                     else:
                         raise
 
             # Use fallback if bm25 failed or forced
             if force_fallback:
-                # Register Python rank_pcx function
-                conn.create_function("rank_pcx", 1, _rank_pcx)
-
-                cursor = conn.execute(sql_fallback, (query, fetch_limit, offset))
+                candidate_pool = max(fetch_limit * 5, 100)
+                cursor = conn.execute(sql_fallback, (query, candidate_pool))
                 rows = cursor.fetchall()
                 results = [dict(row) for row in rows]
+
+                query_terms = _extract_query_terms(query)
+                for r in results:
+                    r["rank"] = _term_frequency_rank(r.get("value"), r.get("summary"), query_terms)
+
+                if order_by_rank:
+                    results.sort(key=lambda r: r["rank"])
+                results = results[offset : offset + fetch_limit]
         finally:
             if conn:
                 conn.close()
@@ -993,14 +984,16 @@ class FTSClient:
             LIMIT ? OFFSET ?
         """
 
-        # Fallback SQL using matchinfo
-        sql_fallback = f"""
+        # Fallback SQL when the bm25() UDF is unavailable. Same approach as
+        # search()'s fallback -- see _term_frequency_rank's docstring for why
+        # there's no ranking function in the SQL itself; rank is computed in
+        # Python below from a bounded candidate pool instead.
+        sql_fallback = """
             SELECT
                 c.id as chunk_id,
                 c.memory_id,
                 c.seq,
                 c.text,
-                -rank_pcx(matchinfo(chunk_fts, 'pcx')) as rank,
                 snippet(chunk_fts, 0, '[', ']', ' … ', 12) as snippet,
                 m.kind as memory_kind,
                 m.key as memory_key,
@@ -1009,8 +1002,8 @@ class FTSClient:
             JOIN memory_chunks c ON chunk_fts.rowid = c.id
             JOIN memories m ON c.memory_id = m.id
             WHERE chunk_fts MATCH ?
-            {order_clause}
-            LIMIT ? OFFSET ?
+            ORDER BY c.id DESC
+            LIMIT ?
         """
 
         conn = None
@@ -1032,10 +1025,18 @@ class FTSClient:
                         raise
 
             if force_fallback:
-                conn.create_function("rank_pcx", 1, _rank_pcx)
-                cursor = conn.execute(sql_fallback, (query, limit, offset))
+                candidate_pool = max((limit + offset) * 5, 100)
+                cursor = conn.execute(sql_fallback, (query, candidate_pool))
                 rows = cursor.fetchall()
                 results = [dict(row) for row in rows]
+
+                query_terms = _extract_query_terms(query)
+                for r in results:
+                    r["rank"] = _term_frequency_rank(r.get("text"), None, query_terms)
+
+                if order_clause:
+                    results.sort(key=lambda r: r["rank"])
+                results = results[offset : offset + limit]
         finally:
             if conn:
                 conn.close()

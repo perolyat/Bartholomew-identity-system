@@ -90,8 +90,20 @@ def test_check_fts5_once_caches_result():
         assert isinstance(result1, bool)
 
 
-def test_get_retriever_degrades_fts_mode_when_unavailable():
-    """get_retriever should degrade fts mode to vector when FTS5 unavailable"""
+def test_get_retriever_degrades_fts_mode_when_unavailable(monkeypatch):
+    """
+    get_retriever should degrade fts mode to vector when FTS5 unavailable,
+    but only when that mode came from config/env, not an explicit argument.
+
+    get_retriever()'s mode_explicit tracking (mode_explicit = mode is not
+    None) only covers the function argument -- resolving "fts" via
+    BARTHO_RETRIEVAL_MODE or kernel.yaml is not "explicit" by that
+    definition, so it's still eligible to degrade. An explicit
+    mode="fts" argument is deliberately honored instead (see
+    test_explicit_mode_overrides_env_and_config in test_retrieval_factory.py
+    and get_retriever()'s own docstring/comments) -- FTSOnlyRetriever has
+    its own graceful internal fallback for that case.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -109,6 +121,8 @@ def test_get_retriever_degrades_fts_mode_when_unavailable():
             )
             conn.close()
 
+            monkeypatch.setenv("BARTHO_RETRIEVAL_MODE", "fts")
+
             # Mock FTS5 as unavailable
             with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
                 mock.return_value = False
@@ -118,11 +132,52 @@ def test_get_retriever_degrades_fts_mode_when_unavailable():
 
                 retrieval._fts5_available_cache = None
 
-                # Request FTS mode
-                retriever = get_retriever(mode="fts", db_path=db_path)
+                # Request default mode (resolves to "fts" via env var, not
+                # an explicit argument)
+                retriever = get_retriever(db_path=db_path)
 
                 # Should degrade to vector mode
                 assert type(retriever).__name__ == "VectorRetrieverAdapter"
+        finally:
+            _cleanup_db_connections(db_path)
+
+
+def test_get_retriever_honors_explicit_fts_mode_when_unavailable():
+    """
+    An explicit mode="fts" argument is honored even when FTS5 is
+    unavailable -- not auto-degraded to vector-only. FTSOnlyRetriever has
+    its own graceful internal fallback for that case; get_retriever()'s
+    degradation logic deliberately only applies when the mode was resolved
+    from config/env, not passed explicitly (see get_retriever()'s docstring
+    and test_explicit_mode_overrides_env_and_config in
+    test_retrieval_factory.py).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test.db")
+
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE memories (
+                    id INTEGER PRIMARY KEY,
+                    kind TEXT, key TEXT,
+                    value TEXT, summary TEXT, ts TEXT
+                )
+            """,
+            )
+            conn.close()
+
+            with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
+                mock.return_value = False
+
+                from bartholomew.kernel import retrieval
+
+                retrieval._fts5_available_cache = None
+
+                retriever = get_retriever(mode="fts", db_path=db_path)
+
+                assert type(retriever).__name__ == "FTSOnlyRetriever"
         finally:
             _cleanup_db_connections(db_path)
 
