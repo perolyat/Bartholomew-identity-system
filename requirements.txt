@@ -1,7 +1,7 @@
 # Bartholomew dependencies - mirrors pyproject.toml
 fastapi>=0.104
 uvicorn[standard]>=0.24
-pydantic>=2.6
+pydantic[email]>=2.6
 python-dateutil>=2.8
 tzdata>=2023.3
 sqlalchemy>=2.0
@@ -13,6 +13,10 @@ keyring>=24.0
 cryptography>=42.0
 pytest-asyncio>=0.21.0
 numpy>=2.1,<3
+jsonschema>=4.25,<5
+typer>=0.15
+rich>=13.7
+requests>=2.31
 
 # Phase 2d: Vector embeddings (optional for production use)
 # sentence-transformers>=2.2.0  # Uncomment for real embeddings

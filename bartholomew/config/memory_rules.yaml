@@ -54,10 +54,12 @@ always_keep:
       recall_policy: always
       encrypt: strong
 
-  - kind: safety.audit
-    summarize: false
-    encrypt: standard
-    recall_policy: always_keep
+  - match:
+      kind: safety.audit
+    metadata:
+      summarize: false
+      encrypt: standard
+      recall_policy: always
 
 ask_before_store:
   - match:

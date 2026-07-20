@@ -114,28 +114,41 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
 
 > **Source:** Cline audit 2026-01-22 verifying ChatGPT repo analysis
 
-0. **Missing package `__init__.py`**
+0. ✅ **Missing package `__init__.py`** — Fixed 2026-07-20.
    - `bartholomew/` directory has no `__init__.py` file.
    - **Acceptance:** `bartholomew/__init__.py` exists; `pip install -e .` succeeds.
    - **Verify:** `python -c "import bartholomew"` works.
    - **DoD:** File created, editable install tested.
    - **Risk if skipped:** Package is not installable; imports fail.
+   - **Note:** also added `bartholomew/kernel/memory/__init__.py`, which had the same
+     implicit-namespace-package gap.
 
-1. **Dependency consolidation to pyproject.toml**
+1. ✅ **Dependency consolidation to pyproject.toml** — Fixed 2026-07-20.
    - `pyproject.toml` missing runtime deps that exist in `requirements.txt`: `numpy`, `cryptography`.
    - `typer`, `rich` used in CLI but not declared.
    - **Acceptance:** `pyproject.toml` is single source of truth for all deps.
    - **Verify:** `pip install .` installs all deps; no manual `requirements.txt` needed.
    - **DoD:** All runtime deps in `[project.dependencies]`; `requirements.txt` mirrors or deprecated.
    - **Risk if skipped:** Dependency drift; CI/CD failures.
+   - **Note:** verification (fresh venv install + test collection) also turned up two more
+     undeclared runtime imports not in the original audit: `jsonschema` (used by
+     `identity_interpreter/loader.py`) and `requests` (used by
+     `identity_interpreter/adapters/llm_stub.py`), plus `pydantic`'s `EmailStr` needing the
+     `email` extra (`identity_interpreter/models.py`). All four are now declared in both
+     `pyproject.toml` and `requirements.txt`.
+   - **Known follow-up (not fixed here):** none of these deps have upper bounds, so a clean
+     install today pulls `fastapi==0.139.2`/`starlette==1.3.1`, which breaks
+     `starlette.testclient`. `requirements.lock` has known-good pins (`fastapi==0.120.1`,
+     `starlette==0.49.1`) but is UTF-16-encoded and not referenced by any setup doc, so it
+     isn't actually usable for reproducible installs yet.
 
-2. **Fix malformed memory_rules.yaml rule**
+2. ✅ **Fix malformed memory_rules.yaml rule** — Fixed 2026-07-20.
    - The `safety.audit` rule in `always_keep` section lacks `match:`/`metadata:` structure:
      ```yaml
-     # WRONG (current):
+     # WRONG (was):
      - kind: safety.audit
        summarize: false
-     # CORRECT:
+     # CORRECT (now):
      - match:
          kind: safety.audit
        metadata:
@@ -145,13 +158,31 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
    - **Verify:** Unit test confirms all rules are parsed by engine.
    - **DoD:** Rule fixed; test added.
    - **Risk if skipped:** Silent rule failures; safety.audit memories not governed.
+   - **Note:** the rule's `recall_policy` value was also `always_keep` (a copy of the
+     section name) instead of `always` (the value every other rule in the file uses) —
+     fixed to `always` at the same time. No automated "all rules parse" test was added;
+     verification was a one-off script confirming every rule has `match`/`metadata`.
 
-3. **Refactor `input()` out of kernel**
+3. ✅ **Refactor `input()` out of kernel** — Fixed 2026-07-20.
    - `bartholomew/kernel/memory/privacy_guard.py` calls `input()` blocking on stdin.
    - **Acceptance:** Kernel emits consent event via event bus; never calls `input()`.
    - **Verify:** `grep -r "input(" bartholomew/kernel/` returns no matches (excluding tests).
    - **DoD:** Consent flow uses event bus; UI/CLI handles user prompt.
    - **Risk if skipped:** Headless/API deployments hang indefinitely.
+   - **Note on implementation:** rather than wiring the existing `EventBus` (which has no
+     shared instance reachable from this module), `privacy_guard` now exposes
+     `set_consent_handler(handler)` — a pluggable sync/async callback. With no handler
+     registered it fails closed (denies) instead of blocking, which is what fixes the
+     headless-hang risk. `chat.py` (the interactive terminal entrypoint) registers a
+     stdin-prompting handler at startup so its UX is unchanged; the FastAPI kernel daemon
+     registers nothing and now fails closed instead of hanging.
+   - **Known follow-up (not fixed here):** `identity_interpreter/adapters/consent_terminal.py`
+     (`ConsentAdapter.request_consent`) has the same blocking-`input()` shape and is reachable
+     from `identity_interpreter/adapters/memory_manager.py` when called from *within* a
+     running event loop (e.g. from an API request) — actually the more dangerous case, since
+     it would freeze the whole event loop rather than just one coroutine. It's outside
+     `bartholomew/kernel/`, so it wasn't in scope of this item's grep-based acceptance
+     criterion, but it should get the same treatment.
 
 ---
 
@@ -307,22 +338,28 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 ## Next 3 Moves (always current)
 
-> **Updated:** 2026-01-22 based on Cline audit
+> **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s) are done;
+> moving to the reproducibility + CI gaps they exposed during verification.
 
-1. **Fix P0 packaging issues** (items 0–1)
-   - Add `bartholomew/__init__.py`
-   - Consolidate deps in `pyproject.toml` (add `numpy`, `cryptography`)
-   - **Verify:** `pip install -e . && python -c "import bartholomew"`
+1. ✅ ~~Fix P0 packaging issues (items 0–1)~~ — done 2026-07-20.
+2. ✅ ~~Fix malformed memory_rules.yaml + refactor `input()` out of kernel (items 2–3)~~ — done 2026-07-20.
 
-2. **Fix malformed memory_rules.yaml + refactor `input()` out of kernel** (items 2–3)
-   - Fix `safety.audit` rule to use `match:`/`metadata:` schema
-   - Refactor `privacy_guard.py` to emit events instead of blocking on stdin
-   - **Verify:** grep for `input(` returns nothing; unit test confirms all rules parsed
+1. **Pin/verify the dependency set the project actually installs**
+   - Fresh installs currently drift to `fastapi==0.139.2`/`starlette==1.3.1`, which breaks
+     `starlette.testclient`; `requirements.lock` has known-good pins but is UTF-16-encoded
+     and unreferenced by any setup doc.
+   - **Verify:** fresh venv, `pip install -e . -r requirements-dev.txt`, `pytest -q -m smoke`
+     collects and runs without dependency errors.
+
+2. **Move the `input()` fix's remaining gap to `identity_interpreter/adapters/consent_terminal.py`**
+   - Same blocking-`input()` shape as the now-fixed `privacy_guard.py`, but reachable from
+     *inside* a running event loop via `memory_manager.py`, which would freeze the whole
+     loop rather than just one coroutine.
 
 3. **CI minimal gates (Linux)** (items 5–7)
-   - Make `pytest -q`, `ruff check .`, `black --check .` run in CI
-   - Fix non-environmental failing tests from `docs/STATUS_2025-12-29.md`
-   - **Verify:** GitHub Actions green on Linux
+   - Make `pytest -q`, `ruff check .`, `black --check .` run in CI.
+   - Fix non-environmental failing tests from `docs/STATUS_2025-12-29.md`.
+   - **Verify:** GitHub Actions green on Linux.
 
 ## Pending Approvals
 
