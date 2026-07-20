@@ -7,12 +7,25 @@ compatibility where file deletion can fail due to lingering file handles.
 """
 
 import gc
+import os
 import sys
 import tempfile
 import time
 from pathlib import Path
 
 import pytest
+
+
+# bartholomew_api_bridge_v0_1/services/api/db.py resolves BARTH_DB_PATH into a
+# module-level DB_PATH constant the moment that module is first imported, and
+# every later import reuses the cached module (env var changes after that do
+# nothing). Several test modules import it without setting BARTH_DB_PATH
+# first, so without this they'd silently fall through to the real,
+# git-tracked data/barth.db -- sharing one file across every test in the
+# session (contending, and getting mutated/corrupted by test runs) instead of
+# each other. Setting it here, at conftest.py import time, guarantees it's in
+# place before pytest imports any test module.
+os.environ.setdefault("BARTH_DB_PATH", str(Path(tempfile.mkdtemp()) / "test-session.db"))
 
 
 # ==============================================================================

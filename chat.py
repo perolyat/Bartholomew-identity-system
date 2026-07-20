@@ -13,6 +13,7 @@ from pathlib import Path
 # Add the package to path for development
 sys.path.insert(0, str(Path(__file__).parent))
 
+from bartholomew.kernel.memory.privacy_guard import set_consent_handler
 from identity_interpreter import load_identity, normalize_identity
 from identity_interpreter.adapters.llm_stub import LLMAdapter
 from identity_interpreter.adapters.memory_manager import ConversationTurn
@@ -26,6 +27,15 @@ from identity_interpreter.policies import (
 )
 
 
+def _terminal_consent_handler(text: str) -> bool:
+    """Prompt on stdin for consent to store sensitive content. Interactive CLI only."""
+    print(
+        f'[Bartholomew] I detected something sensitive:\n"{text}"\n'
+        "Do you want me to remember this? (yes/no)",
+    )
+    return input("> ").strip().lower() in ("yes", "y")
+
+
 class BartholomewChat:
     """Simple chat interface for Bartholomew AI companion"""
 
@@ -36,6 +46,11 @@ class BartholomewChat:
         # Generate session ID for this conversation
         self.session_id = str(uuid.uuid4())[:8]
         print(f"📝 Session ID: {self.session_id}")
+
+        # This is an interactive terminal, so it's safe to prompt on stdin for
+        # sensitive-content consent. Headless callers (API/kernel daemon) leave
+        # this unset and fail closed instead.
+        set_consent_handler(_terminal_consent_handler)
 
         # Load and normalize identity
         self.identity = load_identity(identity_path)

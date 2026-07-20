@@ -901,35 +901,15 @@ class MemoryStore:
         _embedding_engine = None
         _vector_store = None
 
-        # Checkpoint WAL files to ensure database is clean
+        # Checkpoint WAL files to ensure database is clean. Uses this
+        # package's own db_ctx (not the API bridge's near-identical copy --
+        # reaching into bartholomew_api_bridge_v0_1 via a sys.path.insert(0, ...)
+        # hack, as this used to, permanently shadows the top-level "app"
+        # module for the rest of the process, since bartholomew_api_bridge_v0_1/
+        # services/api/ itself contains a file named app.py).
         try:
-            import sqlite3
-
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.close()
-        except Exception as e:
-            logger.debug(f"WAL checkpoint failed: {e}")
-
-        # Try alternate checkpoint method from API bridge
-        try:
-            import os
-            import sys
-
-            sys.path.insert(
-                0,
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "..",
-                    "..",
-                    "bartholomew_api_bridge_v0_1",
-                    "services",
-                    "api",
-                ),
-            )
-            from db_ctx import wal_checkpoint_truncate
+            from bartholomew.kernel.db_ctx import wal_checkpoint_truncate
 
             wal_checkpoint_truncate(self.db_path)
-        except Exception:
-            # Best-effort cleanup
-            pass
+        except Exception as e:
+            logger.debug(f"WAL checkpoint failed: {e}")

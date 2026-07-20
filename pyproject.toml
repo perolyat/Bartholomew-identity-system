@@ -13,9 +13,12 @@ requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
 dependencies = [
-    "fastapi>=0.104",
+    # Upper bound: fastapi>=0.121 pulls starlette>=1.0, a breaking major that
+    # removes starlette.testclient's implicit httpx dependency. Re-verify this
+    # ceiling before raising it.
+    "fastapi>=0.104,<0.121",
     "uvicorn[standard]>=0.24",
-    "pydantic>=2.6",
+    "pydantic[email]>=2.6",
     "python-dateutil>=2.8",
     "tzdata>=2023.3",
     "sqlalchemy>=2.0",
@@ -24,6 +27,12 @@ dependencies = [
     "pyyaml>=6.0.1",
     "prometheus_client>=0.20.0",
     "keyring>=24.0",
+    "numpy>=2.1,<3",
+    "cryptography>=42.0",
+    "jsonschema>=4.25,<5",
+    "typer>=0.15",
+    "rich>=13.7",
+    "requests>=2.31",
 ]
 
 [project.scripts]
@@ -109,6 +118,14 @@ python_functions = ["test_*"]
 addopts = "-q -m 'not integration and not slow'"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Safety net, not a fix: tests that spin up a KernelDaemon (its own background
+# scheduler thread) via FastAPI's TestClient share the default SQLite DB path,
+# so running more than one in the same session can deadlock on file locks
+# during shutdown. "thread" method is required here because the hang is a
+# cross-thread wait (main thread blocked on a TestClient shutdown portal call
+# into a daemon thread) that plain SIGALRM won't reliably interrupt.
+timeout = 120
+timeout_method = "thread"
 markers = [
     "integration: long/slow external-ish tests",
     "slow: expensive tests",

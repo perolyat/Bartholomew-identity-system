@@ -12,8 +12,6 @@ Stage 3 metrics include:
 - Persona: switches, active persona
 """
 
-import os
-import sys
 import time
 
 from fastapi import APIRouter, Request, Response
@@ -24,21 +22,7 @@ from prometheus_client import (
     generate_latest,
 )
 
-
-# Import the shared metrics registry
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "..",
-        "..",
-        "..",
-        "bartholomew",
-        "kernel",
-    ),
-)
-from metrics_registry import get_metrics_registry  # noqa: E402
+from bartholomew.kernel.metrics_registry import get_metrics_registry
 
 
 router = APIRouter(tags=["metrics"])

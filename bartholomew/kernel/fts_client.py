@@ -385,16 +385,33 @@ class FTSClient:
         try:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
+
+            # memory_fts_map is this class's own record of which rowids are
+            # actually present in the memory_fts index. Only issue the FTS5
+            # 'delete' command when it's a real update -- issuing 'delete'
+            # for a rowid that was never actually indexed (e.g. a memories
+            # row inserted before init_schema()/triggers existed, so it was
+            # never backfilled) makes SQLite report "database disk image is
+            # malformed", even though nothing on disk is actually corrupt.
+            already_indexed = (
+                conn.execute(
+                    "SELECT 1 FROM memory_fts_map WHERE memory_id = ?",
+                    (memory_id,),
+                ).fetchone()
+                is not None
+            )
+
+            if already_indexed:
+                # Delete old FTS entry before re-inserting
+                conn.execute(
+                    "INSERT INTO memory_fts(memory_fts, rowid, value, summary) "
+                    "SELECT 'delete', ?, value, summary FROM memory_fts "
+                    "WHERE rowid = ?",
+                    (memory_id, memory_id),
+                )
+
             # Ensure entry in map table
             conn.execute("INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (?)", (memory_id,))
-
-            # Delete old FTS entry if exists
-            conn.execute(
-                "INSERT INTO memory_fts(memory_fts, rowid, value, summary) "
-                "SELECT 'delete', ?, value, summary FROM memory_fts "
-                "WHERE rowid = ?",
-                (memory_id, memory_id),
-            )
 
             # Insert new FTS entry
             conn.execute(

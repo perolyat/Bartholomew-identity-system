@@ -33,7 +33,7 @@ pytest -q -m smoke || pytest -q tests/test_stage0_alive.py
 
 ---
 
-### Stage 0.5 — Packaging & Architecture Fixes (NEW)
+### Stage 0.5 — Packaging & Architecture Fixes ✅ (Complete 2026-07-20)
 
 > **Source:** Cline audit 2026-01-22 verifying ChatGPT repo analysis
 
@@ -63,6 +63,19 @@ pytest -q tests/test_memory_rules.py  # all rules parse
 ```bash
 git checkout -- bartholomew/__init__.py pyproject.toml bartholomew/config/memory_rules.yaml bartholomew/kernel/memory/privacy_guard.py
 ```
+
+**Evidence:** all four exit criteria verified against a clean venv on 2026-07-20 (see
+`MASTER_PLAN.md` P0 items 0–3 for per-item notes). Two gaps found during verification,
+carried forward rather than fixed here:
+- The dependency audit that scoped this stage missed `jsonschema`, `requests`, and
+  `pydantic[email]` — also added, but the underlying process gap (nothing catches
+  undeclared imports until a fresh install fails) is unaddressed.
+- `identity_interpreter/adapters/consent_terminal.py` has the same blocking-`input()`
+  shape as the fixed `privacy_guard.py`; out of this stage's stated scope
+  (`bartholomew/kernel/` only) but should get the same fix.
+- No automated "all `memory_rules.yaml` rules parse" test was added (the stated `pytest -q
+  tests/test_memory_rules.py` verify command references a test file that doesn't exist);
+  verified instead with a one-off script.
 
 ---
 
