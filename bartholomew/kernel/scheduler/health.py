@@ -42,20 +42,7 @@ def get_system_metrics(db_path: str) -> dict[str, Any]:
 
     # Query pending nudges count
     try:
-        # Import here to avoid circular dependency
-        sys.path.insert(
-            0,
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "..",
-                "..",
-                "bartholomew_api_bridge_v0_1",
-                "services",
-                "api",
-            ),
-        )
-        from db_ctx import wal_db
+        from bartholomew.kernel.db_ctx import wal_db
 
         with wal_db(db_path, timeout=5.0) as conn:
             cur = conn.execute("SELECT COUNT(*) FROM nudges WHERE status='pending'")

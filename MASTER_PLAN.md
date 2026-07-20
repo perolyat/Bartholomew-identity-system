@@ -164,13 +164,103 @@ See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
      guaranteeing the override is in place before `db.py` ever gets imported. Verified:
      the previously-hanging pair now runs in ~3.5s, the full smoke suite in ~4s, and
      `data/barth.db` is no longer touched by running the test suite at all.
-   - **Separate pre-existing failures noticed along the way (not fixed, unrelated):**
-     `tests/test_consent_gates.py::test_fts_search_without_consent_gate` (a
-     `sqlite3.DatabaseError: database disk image is malformed`) and all three tests in
-     `tests/test_metrics_production_mode.py` fail only when run alongside other API-app tests
-     in the same session (pass individually) — reproduced identically before and after this
-     fix, so they're a different cross-test global-state issue (the metrics one is likely the
-     Prometheus `CollectorRegistry` being shared/re-registered across tests).
+   - **Follow-up noticed along the way, root-caused and fixed 2026-07-20 (see below):**
+     `tests/test_consent_gates.py::test_fts_search_without_consent_gate` and all three tests
+     in `tests/test_metrics_production_mode.py` were failing for two entirely unrelated
+     reasons — see "FTS5 external-content `upsert()` bug" and "`sys.path` self-pollution"
+     below.
+
+## FTS5 external-content `upsert()` bug and `sys.path` self-pollution — fixed 2026-07-20
+
+Investigated two test failures the docs (`docs/STATUS_2025-12-29.md`) attributed to
+Windows-only FTS5/environment quirks. Both reproduced identically on Linux and were real
+logic bugs, not platform noise — the doc's diagnosis was stale/wrong for the current code.
+
+### Bug 1: `FTSClient.upsert()` corrupts SQLite's FTS5 view for never-indexed rows
+
+**Symptom:** `tests/test_consent_gates.py::test_fts_search_without_consent_gate` failed with
+`sqlite3.DatabaseError: database disk image is malformed` — a genuinely confusing SQLite
+error that does *not* mean the file is actually corrupt on disk.
+
+**Root cause:** `FTSClient.upsert()` unconditionally issued FTS5's special `'delete'` command
+(`INSERT INTO memory_fts(memory_fts, rowid, ...) SELECT 'delete', ...`) for every rowid,
+regardless of whether that rowid had ever actually been indexed. In external-content FTS5
+mode, creating the virtual table does *not* backfill rows that already exist in the content
+table (`memories`) — so a `memories` row inserted before `FTSClient.init_schema()` ran (or via
+any path that bypasses the sync triggers) has no corresponding entries in the FTS5 shadow
+tables. Issuing `'delete'` for such a rowid is a genuine SQLite/FTS5 misuse this build reports
+as "database disk image is malformed" — confirmed with a minimal, project-independent repro
+outside pytest entirely (bare `sqlite3`, no project code).
+
+**Fix:** `upsert()` now checks `memory_fts_map` (the class's own bookkeeping table, already
+populated exactly on real inserts by both `upsert()` and the sync triggers) before issuing
+`'delete'`, and skips it for rows that were never indexed.
+
+**Verify:** `pytest -q tests/test_consent_gates.py` — 9 passed, 1 skipped (was 1 failed).
+
+### Bug 2: two more instances of permanent `sys.path` self-pollution (broke `test_metrics_production_mode.py`, likely much more)
+
+**Symptom:** All three `tests/test_metrics_production_mode.py` tests failed with
+`ImportError: attempted relative import with no known parent package` inside
+`bartholomew_api_bridge_v0_1/services/api/app.py`'s `from . import db_ctx` — but *only* when
+run after certain other tests in the same session; passed in isolation.
+
+**Root cause:** `bartholomew_api_bridge_v0_1/services/api/routes/metrics.py` (imported as
+soon as the API app is, i.e. by nearly every API-app test) did, at module import time:
+```python
+sys.path.insert(0, ".../bartholomew/kernel")
+from metrics_registry import get_metrics_registry
+```
+`sys.path.insert(0, ...)` here is never undone, so it poisons `sys.path` for the rest of the
+process. Once `bartholomew/kernel/` is on `sys.path[0]`, a later bare `from app import app`
+anywhere in the same process can resolve to
+`bartholomew_api_bridge_v0_1/services/api/app.py` loaded as a *disconnected top-level* module
+(shadowing the real `app.py` at repo root, since that directory also happens to contain a
+file named `app.py`) — and a module loaded that way has no package context, so its own
+relative import (`from . import db_ctx`) fails immediately. Confirmed with a minimal repro
+(bare `sys.path.insert` + `from app import app`, no test framework involved) that reproduces
+the exact error.
+
+Worse: `bartholomew/kernel/` also contains `types.py`. The same pollution mechanism means any
+later bare `import types` anywhere in the process — including deep inside the stdlib
+(`dataclasses`, `enum`, `typing`, etc. all do this) — could silently resolve to this project's
+`bartholomew.kernel.types` module instead of Python's real `types` module. This is a strong
+candidate for at least some of the ~20 other FTS/hybrid/retrieval test failures already on
+record as "pre-existing, not investigated" (several show `ValueError`/`sqlite3.OperationalError`
+with no obvious connection to FTS at all) — not confirmed as the cause of all of them, but
+worth checking before assuming they're something else.
+
+Found two instances of this same anti-pattern (a bare `sys.path.insert(0, <dir>)` with no
+corresponding removal, used to reach a sibling package without a proper dotted import) and
+fixed both — replaced with the proper package-qualified import, since both targets
+(`bartholomew.kernel.metrics_registry`, `bartholomew.kernel.db_ctx`) were already reachable
+that way:
+- `bartholomew_api_bridge_v0_1/services/api/routes/metrics.py` — inserted `bartholomew/kernel/`
+  to reach `metrics_registry` (this is the one that broke the tests above).
+- `bartholomew/kernel/scheduler/health.py` — inserted `bartholomew_api_bridge_v0_1/services/api/`
+  to reach `db_ctx.wal_db`, duplicating `bartholomew.kernel.db_ctx.wal_db`, which already exists.
+
+A **third** instance was already fixed as part of the earlier `input()` follow-up work today,
+for an unrelated reason (it also duplicated a kernel-local helper instead of using it) —
+`bartholomew/kernel/memory_store.py`'s `MemoryStore.close()` inserted
+`bartholomew_api_bridge_v0_1/services/api/` to reach a second copy of
+`wal_checkpoint_truncate`, when `bartholomew.kernel.db_ctx.wal_checkpoint_truncate` (the
+kernel's own copy, explicitly written "to avoid coupling to the API layer") already did the
+same thing plus the Windows-handle-release step the duplicate lacked calling correctly.
+
+A **fourth** instance remains, deliberately not fixed: `scripts/hybrid_search.py` (a
+standalone CLI demo script, not imported anywhere in the test suite) inserts the repo root
+onto `sys.path[0]`. Lower risk (the repo root doesn't contain files that shadow stdlib/common
+module names the way `bartholomew/kernel/` and `bartholomew_api_bridge_v0_1/services/api/`
+do), and out of the test suite's reachable import graph, so left alone.
+
+**Verify:**
+```bash
+pytest -q -k "consent or privacy or memory_rules or phase2 or metrics or stage1"
+# 129 passed, 2 skipped (was 126 passed, 3 failed, 2 skipped)
+pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
+           # already-larger, not-yet-investigated FTS/hybrid/encryption body of work)
+```
 
 2. ✅ **Fix malformed memory_rules.yaml rule** — Fixed 2026-07-20.
    - The `safety.audit` rule in `always_keep` section lacks `match:`/`metadata:` structure:

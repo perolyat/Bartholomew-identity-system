@@ -6,17 +6,13 @@ Reuses canonical schema from MemoryStore and extends with scheduler tables.
 """
 
 import json
-import os
-import sys
 from typing import Any
 
 # Import wal_db context manager
 from bartholomew.kernel.db_ctx import wal_db
 
-
 # Import canonical schema from MemoryStore
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))  # noqa: E402
-from kernel.memory_store import SCHEMA as MEMORY_STORE_SCHEMA
+from bartholomew.kernel.memory_store import SCHEMA as MEMORY_STORE_SCHEMA
 
 
 # Scheduler-specific schema extensions
