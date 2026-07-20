@@ -625,7 +625,7 @@ class MemoryStore:
 
             await db.commit()
             logger.debug(
-                f"Deleted memory {kind}/{key} (id={memory_id}) with FTS cleanup in same Tx"
+                f"Deleted memory {kind}/{key} (id={memory_id}) with FTS cleanup in same Tx",
             )
             return True
 
