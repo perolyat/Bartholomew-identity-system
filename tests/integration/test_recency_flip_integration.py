@@ -20,16 +20,74 @@ from bartholomew.kernel.vector_store import VectorStore
 from tests.helpers.synthetic import create_synthetic_embeddings
 
 
+# One distinct topic per group. Deliberately real, everyday-sounding nouns
+# (not e.g. "group N" appended to shared boilerplate -- see
+# create_recency_corpus()'s docstring for why that mattered) and screened to
+# avoid bartholomew.kernel.memory.privacy_guard.SENSITIVE_KEYWORDS (name,
+# address, location, phone, email, bank, password, routine, health, private,
+# account), which would otherwise route storage through a consent gate that
+# fails closed with no handler registered in these tests.
+_RECENCY_TOPICS = [
+    "kitchen renovation budget",
+    "weekend hiking trail conditions",
+    "quarterly sales report format",
+    "car maintenance scheduling",
+    "book club reading list",
+    "garden watering schedule",
+    "home office desk setup",
+    "family vacation itinerary",
+    "grocery delivery preferences",
+    "exercise schedule plan",
+    "pet feeding schedule",
+    "language learning app choice",
+    "bicycle repair shop recommendation",
+    "piano lesson schedule",
+    "coffee brewing method",
+    "tax filing deadline reminder",
+    "houseplant watering frequency",
+    "podcast subscription list",
+    "laptop backup schedule",
+    "recipe box organization",
+    "community meeting time",
+    "photo album sorting project",
+    "wine cellar temperature settings",
+    "volunteer shift signup",
+    "home wifi network settings",
+]
+
+
 def create_recency_corpus(num_groups: int = 25, variants_per_group: int = 2, seed: int = 42):
     """
     Create corpus with near-duplicate memories at different timestamps
 
-    Each group has 2 variants: one old, one recent. Text is identical
-    or nearly identical, embeddings are near-equal.
+    Each group has 2 variants: one old, one recent, on a distinct topic
+    (see _RECENCY_TOPICS) -- both variants of a group share identical text,
+    only the timestamp differs.
+
+    Each group previously shared ~95% identical boilerplate text
+    ("... in group N. Dark mode enabled...") differing only by a trailing
+    group number. That made different groups nearly indistinguishable to
+    FTS/vector relevance, so a query barely favored its own group's
+    documents over the other 24 near-duplicate groups -- recency (even
+    correctly, modestly weighted) ended up promoting *other* groups'
+    "recent" variants above a query's own group entirely, rather than
+    resolving the intra-group old-vs-recent tie it's actually meant to.
+    Confirmed directly: a group-0 query's top-5 often didn't contain group
+    0's own "old" variant at all, crowded out by other groups' "recent"
+    variants instead. Distinct topics per group give FTS/vector relevance a
+    real per-group signal, so the only genuine close call left is the one
+    this test is actually about: a group's own old variant vs its own
+    recent variant.
 
     Returns:
-        List of dicts with 'group_id', 'text', 'kind', 'key', 'ts'
+        List of dicts with 'group_id', 'variant', 'text', 'kind', 'key', 'ts'
     """
+    if num_groups > len(_RECENCY_TOPICS):
+        raise ValueError(
+            f"num_groups={num_groups} exceeds the {len(_RECENCY_TOPICS)} distinct "
+            "topics available in _RECENCY_TOPICS",
+        )
+
     corpus = []
     base_now = datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -40,11 +98,8 @@ def create_recency_corpus(num_groups: int = 25, variants_per_group: int = 2, see
         # Recent variant: 1 hour ago
         ts_recent = (base_now - timedelta(hours=1)).isoformat()
 
-        # Text is same or minimal variation
-        text = (
-            f"User preference for theme configuration in group {group_id}. "
-            f"Dark mode enabled with accent color blue."
-        )
+        topic = _RECENCY_TOPICS[group_id]
+        text = f"User preference update regarding {topic}. Latest settings confirmed and saved."
 
         corpus.append(
             {
@@ -90,6 +145,7 @@ async def test_recency_boost_flips_rankings_weighted():
 
         # Ingest memories
         memory_map = {}  # (group_id, variant) -> memory_id
+        group_text = {}  # group_id -> shared text (both variants use it)
         for item in corpus:
             result = await store.upsert_memory(
                 kind=item["kind"],
@@ -98,6 +154,7 @@ async def test_recency_boost_flips_rankings_weighted():
                 ts=item["ts"],
             )
             memory_map[(item["group_id"], item["variant"])] = result.memory_id
+            group_text[item["group_id"]] = item["text"]
 
         await store.close()
 
@@ -120,11 +177,17 @@ async def test_recency_boost_flips_rankings_weighted():
         # Query each group's text
         os.environ["BARTHO_DB_PATH"] = db_path
 
-        # Use hybrid retriever with recency enabled
+        # Use hybrid retriever with recency enabled. weight_recency mirrors
+        # config/kernel.yaml's production default (0.15) -- recency needs to
+        # be explicitly opted into fusion now (see HybridRetrievalConfig's
+        # weight_recency default of 0.0); leaving it unset here would make
+        # this test of recency's ranking effect exercise a config with no
+        # recency influence at all.
         config = HybridRetrievalConfig(
             fusion_mode="weighted",
             weight_fts=0.5,
             weight_vec=0.5,
+            weight_recency=0.15,
             half_life_hours=168,  # 7 days
         )
 
@@ -133,11 +196,7 @@ async def test_recency_boost_flips_rankings_weighted():
 
         recent_wins = 0
         for group_id in range(25):
-            query = (
-                f"User preference for theme configuration in "
-                f"group {group_id}. "
-                f"Dark mode enabled with accent color blue."
-            )
+            query = group_text[group_id]
 
             try:
                 results = retriever.retrieve(query, top_k=5)
@@ -193,6 +252,7 @@ async def test_recency_boost_flips_rankings_rrf():
 
         # Ingest memories
         memory_map = {}
+        group_text = {}
         for item in corpus:
             result = await store.upsert_memory(
                 kind=item["kind"],
@@ -201,6 +261,7 @@ async def test_recency_boost_flips_rankings_rrf():
                 ts=item["ts"],
             )
             memory_map[(item["group_id"], item["variant"])] = result.memory_id
+            group_text[item["group_id"]] = item["text"]
 
         await store.close()
 
@@ -222,19 +283,23 @@ async def test_recency_boost_flips_rankings_rrf():
         # Query each group's text
         os.environ["BARTHO_DB_PATH"] = db_path
 
-        # Use hybrid retriever with RRF and recency
-        config = HybridRetrievalConfig(fusion_mode="rrf", rrf_k=60, half_life_hours=168)  # 7 days
+        # Use hybrid retriever with RRF and recency. weight_recency mirrors
+        # config/kernel.yaml's production default -- see
+        # test_recency_boost_flips_rankings_weighted's comment for why it
+        # needs to be set explicitly now.
+        config = HybridRetrievalConfig(
+            fusion_mode="rrf",
+            rrf_k=60,
+            weight_recency=0.15,
+            half_life_hours=168,  # 7 days
+        )
 
         retriever = get_retriever(mode="hybrid", db_path=db_path)
         retriever.config = config
 
         recent_wins = 0
         for group_id in range(20):
-            query = (
-                f"User preference for theme configuration in "
-                f"group {group_id}. "
-                f"Dark mode enabled with accent color blue."
-            )
+            query = group_text[group_id]
 
             try:
                 results = retriever.retrieve(query, top_k=5)
@@ -292,6 +357,7 @@ async def test_recency_disabled_no_flip():
 
         # Ingest memories
         memory_map = {}
+        group_text = {}
         for item in corpus:
             result = await store.upsert_memory(
                 kind=item["kind"],
@@ -300,6 +366,7 @@ async def test_recency_disabled_no_flip():
                 ts=item["ts"],
             )
             memory_map[(item["group_id"], item["variant"])] = result.memory_id
+            group_text[item["group_id"]] = item["text"]
 
         await store.close()
 
@@ -333,11 +400,7 @@ async def test_recency_disabled_no_flip():
 
         recent_wins = 0
         for group_id in range(15):
-            query = (
-                f"User preference for theme configuration in "
-                f"group {group_id}. "
-                f"Dark mode enabled with accent color blue."
-            )
+            query = group_text[group_id]
 
             try:
                 results = retriever.retrieve(query, top_k=5)

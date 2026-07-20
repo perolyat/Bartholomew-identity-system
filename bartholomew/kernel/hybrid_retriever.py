@@ -431,6 +431,15 @@ class HybridRetriever:
 
         t_fusion_start = time.perf_counter() if self.debug_enabled else 0
 
+        # Determine per-call weights for weighted fusion. Initialized here
+        # (rather than only inside the `else` below) so they're still
+        # defined -- as None, meaning "not applicable" -- if fusion_mode is
+        # "rrf" when _build_debug_info() reads them further down; RRF has
+        # its own, separate weighting inside _fuse_rrf().
+        call_weight_fts = None
+        call_weight_vec = None
+        call_weight_recency = None
+
         # Step 8: Fuse scores
         if fusion_mode == "rrf":
             fused_scores = self._fuse_rrf(
@@ -442,25 +451,40 @@ class HybridRetriever:
                 now,
             )
         else:
-            # Determine per-call weights for weighted fusion
-            call_weight_fts = None
-            call_weight_vec = None
-
             if weight_override is not None:
-                # Explicit override takes precedence
+                # Explicit override takes precedence, and takes full control
+                # of the fusion for this call -- weight_override predates
+                # weight_recency and its (fts, vec) shape has no way to
+                # express a recency component, so a caller using it is opting
+                # out of the config's recency weight for this call rather
+                # than getting it silently added back on top.
                 call_weight_fts, call_weight_vec = weight_override
+                call_weight_recency = 0.0
                 logger.debug(
                     f"Using explicit weight override: "
                     f"fts={call_weight_fts:.2f}, vec={call_weight_vec:.2f}",
                 )
             elif query_aware_weighting:
-                # Apply query-aware adjustment
-                call_weight_fts, call_weight_vec = _query_aware_weights(
+                # Apply query-aware adjustment. _query_aware_weights() only
+                # balances fts vs vec and returns a pair summing to 1.0 on
+                # its own (it has no notion of recency) -- rescale by
+                # (1 - weight_recency) so the three fused weights still sum
+                # to 1.0 once weight_recency is added back in, instead of
+                # recency silently becoming an "extra" ~0.13 on top of a
+                # full-strength fts+vec combination whenever a query is
+                # detected as lexical/semantic.
+                adj_fts, adj_vec = _query_aware_weights(
                     query,
                     self.config.weight_fts,
                     self.config.weight_vec,
                 )
-            # else: use default config weights (None will trigger fallback)
+                recency_share = self.config.weight_recency
+                call_weight_fts = adj_fts * (1 - recency_share)
+                call_weight_vec = adj_vec * (1 - recency_share)
+                call_weight_recency = recency_share
+            # else: use default config weights (None will trigger fallback,
+            # which is already internally consistent -- config's own three
+            # weights already sum to 1.0 via __post_init__)
 
             fused_scores = self._fuse_weighted(
                 boosted_fts,
@@ -468,6 +492,7 @@ class HybridRetriever:
                 recency_scores,
                 weight_fts=call_weight_fts,
                 weight_vec=call_weight_vec,
+                weight_recency=call_weight_recency,
             )
 
         t_fusion_end = time.perf_counter() if self.debug_enabled else 0
@@ -503,6 +528,7 @@ class HybridRetriever:
                 fusion_mode,
                 call_weight_fts,
                 call_weight_vec,
+                call_weight_recency,
                 t_fts_start,
                 t_fts_end,
                 t_vec_start,
@@ -1134,6 +1160,7 @@ class HybridRetriever:
         fusion_mode: str,
         call_weight_fts: float | None,
         call_weight_vec: float | None,
+        call_weight_recency: float | None,
         t_fts_start: float,
         t_fts_end: float,
         t_vec_start: float,
@@ -1173,7 +1200,12 @@ class HybridRetriever:
         if fusion_mode == "weighted":
             w_fts = call_weight_fts if call_weight_fts is not None else self.config.weight_fts
             w_vec = call_weight_vec if call_weight_vec is not None else self.config.weight_vec
-            self.last_debug["weights_used"] = {"fts": w_fts, "vec": w_vec}
+            w_recency = (
+                call_weight_recency
+                if call_weight_recency is not None
+                else self.config.weight_recency
+            )
+            self.last_debug["weights_used"] = {"fts": w_fts, "vec": w_vec, "recency": w_recency}
 
         # Log timings
         logger.info(

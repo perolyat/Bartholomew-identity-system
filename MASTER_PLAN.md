@@ -382,7 +382,7 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
 
 ---
 
-## Full test suite investigation — 38 failures → 9 → 4 → 2, fixed 2026-07-20
+## Full test suite investigation — 38 failures → 9 → 4 → 2 → 0, fixed 2026-07-20
 
 Follow-up to the FTS5/`sys.path` investigation above: went through every remaining failure
 in `pytest -q` (the full suite, not just `-m smoke`) one at a time. 29 were real, root-caused,
@@ -646,21 +646,66 @@ both were symptoms of the same underlying bug in `HybridRetriever`.
     threshold, for a different reason than before, but the deferral decision (below) stands
     unchanged.
 
-### Left unfixed -- explicitly deferred by user decision, not a mechanical fix (2 tests)
+### Round 4 fix — recency-flip integration tests, resolved 2026-07-20
 
-- **`tests/integration/test_recency_flip_integration.py`** (2 tests). The test's pass/fail
-  logic only counts a "win" when *both* the old and recent variant appear in the top-5 with
-  recent ranked above old. After the recency-fusion fix above, the measured flip rate is
-  40% (weighted) / 10% (RRF) against a ≥70-75% threshold — recency still meaningfully
-  influences ranking (see `test_hybrid_boosts_flip.py`), just not strongly enough on this
-  specific synthetic corpus/threshold combination to clear the bar. Whether to widen `top_k`,
-  change what counts as a "win," retune `weight_recency`, or something else is a call about the
-  test's intended measurement/tuning target, not a bug -- **user decision 2026-07-20: leave as
-  a known issue for now.**
+User decision: don't leave these deferred, dig in and fix properly. Root-caused (not a call
+about test intent after all — a real corpus/config bug, same investigative depth as the round 3
+fix above):
+
+15. **`tests/integration/test_recency_flip_integration.py`** (2 tests, `test_recency_boost_flips_rankings_weighted`
+    and `..._rrf`). Two independent bugs stacked on top of each other:
+    - **The corpus made all 25 groups look nearly identical to FTS/vector relevance.**
+      `create_recency_corpus()` built every group's text as shared boilerplate
+      ("...in group N. Dark mode enabled with accent color blue.") differing only by a trailing
+      group number. Since a query's own group barely stood out from the other 24 near-duplicate
+      groups, even a correctly-bounded recency signal ended up promoting *other* groups' "recent"
+      documents above a query's own group's "old" document, rather than resolving the intra-group
+      old-vs-recent tie the test is actually about. Confirmed by labeling and printing actual
+      top-5 results directly: a group-0 query's top-5 often didn't contain group 0's own "old"
+      variant *at all* — it was crowded out by e.g. `g10-recent`, `g5-recent`, `g19-recent`
+      instead (both "old" and "recent" need to co-occur in the top-5 for the test's win-counting
+      to count anything). Fixed by giving each group a genuinely distinct topic (25 unrelated,
+      everyday nouns in `_RECENCY_TOPICS`) instead of a shared sentence with a number appended —
+      now the only real ambiguity left for a query is its own group's old vs. recent variant, as
+      intended. (One topic candidate, "workout routine plan", tripped
+      `bartholomew.kernel.memory.privacy_guard.SENSITIVE_KEYWORDS`'s `"routine"` entry, which
+      fails closed on a consent gate with no handler registered in tests — screened the final
+      topic list against that keyword list.)
+    - **The tests' own hand-constructed `HybridRetrievalConfig` never set `weight_recency`**,
+      so — after the round 3 fix above made recency's fusion weight opt-in (default `0.0`) —
+      these tests were exercising a config with *zero* recency influence at all, regardless of
+      `half_life_hours`. Fixed by setting `weight_recency=0.15` in both tests' configs, mirroring
+      `config/kernel.yaml`'s production default.
+    - With both fixed together: weighted mode measures 100% flip rate (was 0%, threshold ≥75%),
+      RRF measures 75% (was 0%, threshold ≥70%) — both comfortably clear their existing
+      thresholds, so the thresholds themselves didn't need changing. `test_recency_disabled_no_flip`
+      (the third, already-passing test in the same file, used as a control) still measures 60%
+      with recency genuinely disabled (`half_life_hours=0.0`), safely under its `<80%` bound.
+
+    Also found and fixed while investigating the ranking-quality gap above (round 3's own
+    follow-up, not part of the recency-flip corpus fix): `retrieve()`'s query-aware weighting
+    path passed `recency_scores` into `_fuse_weighted()` without an explicit per-call
+    `weight_recency`, so `_query_aware_weights()`'s fts/vec pair (already normalized to sum to
+    1.0 on its own) plus the config's `weight_recency` on top could sum to >1.0 whenever a query
+    was detected as lexical/semantic — silently underweighting recency relative to what
+    `config/kernel.yaml` specifies, and leaving `weight_override` callers unable to fully opt out
+    of the config's recency contribution for a single call. Flagged by automated PR review (Codex)
+    on PR #4; fixed by rescaling the query-aware fts/vec pair by `(1 - weight_recency)` and by
+    having `weight_override` calls explicitly zero out recency for that call (an override caller
+    predates `weight_recency`'s existence and has no way to express a recency component in its
+    2-tuple, so it now gets exactly what it asks for instead of an uninvited extra ~13%). Also
+    fixed a related, previously-dormant bug in the same code while touching it: `call_weight_fts`/
+    `call_weight_vec` were only ever assigned inside the weighted-fusion branch, so an RRF-mode
+    call with `BARTHO_RETRIEVAL_DEBUG=1` would hit `NameError` building the debug info — no
+    existing test exercises that combination, so it was never caught. Moved the initialization
+    above the `if fusion_mode == "rrf"` branch.
+
+    Verified: full `pytest -q` is now **fully green — 0 known failures** (was 2, was 4, was 9,
+    was 38 originally). `ruff check` clean.
 
 ### Verify
 ```bash
-pytest -q                          # 2 failures now (was 4, was 9, was 38 originally)
+pytest -q                          # 0 failures (was 2, was 4, was 9, was 38 originally)
 pytest -q -m smoke                 # unaffected, still green
 ```
 
@@ -752,9 +797,8 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 > **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s), the
 > dependency-pin/CI-install/test-hang follow-ups, the `consent_terminal.py` input() gap, and
-> the full-suite failure sweep (38 → 9 → 4 → 2) are all done. `pytest -q` itself is now the fast,
-> fresh "CI minimal gates" verify command; the 2 remaining known failures are explicitly
-> deferred by user decision (see "Full test suite investigation" above), not pending a call.
+> the full-suite failure sweep (38 → 9 → 4 → 2 → 0) are all done. `pytest -q` is now fully
+> green with no known-deferred failures left — see "Full test suite investigation" above.
 
 1. ✅ ~~Fix P0 packaging issues (items 0–1)~~ — done 2026-07-20.
 2. ✅ ~~Fix malformed memory_rules.yaml + refactor `input()` out of kernel (items 2–3)~~ — done 2026-07-20.
@@ -767,12 +811,8 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 1. **CI minimal gates (Linux)** (remainder of items 5–6)
    - `pytest -q -m smoke`, `ruff check .`, `black --check .` already run in CI
      (`.github/workflows/pre-commit.yml`); not yet done: running the *full* `pytest -q` (not
-     just `-m smoke`) in CI, now that it's down to 2 known, documented, and explicitly deferred
-     failures instead of 38 undiagnosed ones.
-   - The 2 remaining failures are deferred by explicit user decision (2026-07-20, see above),
-     not awaiting a call -- CI could quarantine them with `xfail`/a skip reason referencing this
-     doc so `pytest -q` goes green with a marker distinguishing "known, decided, deferred" from
-     "new regression," if/when that's wanted.
+     just `-m smoke`) in CI. Now trivial to add — the full suite is fully green (was 38 failures),
+     so there's no longer a triage/quarantine step needed first.
    - **Verify:** GitHub Actions green on Linux.
 
 ## Pending Approvals
