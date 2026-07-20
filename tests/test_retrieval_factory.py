@@ -3,7 +3,7 @@ Unit tests for retrieval factory and FTS-only retriever
 """
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -135,7 +135,7 @@ def test_fts_only_filters_by_kind(tmp_path):
     )
 
     # Insert test data
-    now = datetime.now(UTC).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO memories (kind, key, value, ts) VALUES (?, ?, ?, ?)",
         ("event", "test1", "machine learning conference", now),
