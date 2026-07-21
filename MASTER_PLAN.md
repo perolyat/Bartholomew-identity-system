@@ -318,6 +318,50 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
 
 ---
 
+## Retrieval consent-enforcement bug: `requires_consent` memories excluded unconditionally — fixed 2026-07-21
+
+**Symptom:** none reported — found by reading `bartholomew/kernel/retrieval.py` and
+`hybrid_retriever.py` while investigating Runtime Convergence gaps; two `# TODO: Check
+memory_consent table` comments (`retrieval.py:318`, `hybrid_retriever.py:719`) were the tell.
+
+**Root cause:** three retriever classes each ran their own rules-engine pass over
+`requires_consent` memories and excluded them unconditionally, regardless of the real
+`memory_consent` table — `Retriever._should_include()` and `FTSOnlyRetriever._evaluate_rules()`
+in `retrieval.py`, and `HybridRetriever._evaluate_rules()` in `hybrid_retriever.py` (the
+vector-only, FTS-only, and hybrid retrieval modes respectively — i.e. all three). This
+duplicated, weaker logic sat *on top of* `FTSClient.search()`/`VectorStore.search()`'s own
+`apply_consent_gate=True` default, which correctly reads `memory_consent` via
+`ConsentGate.get_consented_memory_ids()` one layer down. Net effect: a memory a user had
+genuinely consented to (a real `memory_consent` row, e.g. from `MemoryStore.upsert_memory()`'s
+embedding flow) already passed the lower-level `ConsentGate` check, then got silently
+re-excluded by the retriever's own redundant pass anyway. Fail-closed (no privacy leak) but the
+consent-granting feature was non-functional for retrieval in all three modes — this project's
+own privacy-first non-negotiable ("Consent gating for 'ask before store' classes... must be
+enforceable and testable") wasn't actually true for the retrieval side of consent.
+
+**Fix:** all three methods now accept a `consented_ids: set[int]` (loaded once per
+call via `ConsentGate(db_path).get_consented_memory_ids()`, matching the existing pattern
+`ConsentGate.filter_memory_ids()` already uses) and only exclude a `requires_consent` memory
+when its ID isn't in that set — reusing the one authoritative consent-check
+(`ConsentGate`/`memory_consent` table) instead of a fourth reimplementation. Defaults to the
+old fail-closed behavior when no `consented_ids` is passed, so nothing regresses for any
+caller that doesn't opt in.
+
+**Acceptance:** a `requires_consent` memory with a real `memory_consent` row is retrievable
+in all three modes; one without a row stays excluded; `never_store` (`allow_store=false`)
+memories stay excluded regardless of consent.
+
+**Verify:** `pytest -q tests/test_retrieval_consent_enforcement.py tests/test_consent_gates.py
+tests/test_fts_search.py tests/test_hybrid_boosts_flip.py tests/test_hybrid_fusion_math.py
+tests/test_hybrid_recency.py tests/test_hybrid_rrf.py tests/test_hybrid_tiebreakers.py
+tests/test_retrieval_factory.py tests/test_retrieval_fts5_fallback.py
+tests/test_retrieval_hot_reload.py tests/test_kernel_privacy_guard.py
+tests/test_phase2d_embeddings.py tests/test_working_memory.py test_memory_functionality.py` —
+all passed locally (clean venv; see item 11.6's note on the sandbox's system-Python
+`cryptography` conflict, unrelated to this change).
+
+---
+
 ### P0 — Make the build trustworthy
 5. **Canonical SSOT docs (done in this repo snapshot)**
    - **Acceptance:** canonical docs exist; cross-linked; "Next 3 Moves" current.
