@@ -125,6 +125,7 @@ async def startup():
         persona_path="config/persona.yaml",
         policy_path="config/policy.yaml",
         drives_path="config/drives.yaml",
+        identity_path="Identity.yaml",
     )
     await _kernel.start()
 

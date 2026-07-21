@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import policy_engine
 from .memory.privacy_guard import get_consent_handler
 from .redaction_engine import redact_pii
 from .skill_base import SkillBase, SkillContext, SkillResult, SkillState
@@ -29,6 +30,8 @@ from .skill_permissions import PERMISSION_CATEGORIES, PermissionChecker, get_per
 
 
 if TYPE_CHECKING:
+    from identity_interpreter.identity_context import IdentityContext
+
     from .experience_kernel import ExperienceKernel
     from .global_workspace import GlobalWorkspace, WorkspaceEvent
     from .memory_store import MemoryStore
@@ -121,6 +124,7 @@ class SkillRegistry:
         working_memory: WorkingMemoryManager | None = None,
         memory_store: MemoryStore | None = None,
         permission_checker: PermissionChecker | None = None,
+        identity_context: IdentityContext | None = None,
     ) -> None:
         """
         Initialize skill registry.
@@ -133,6 +137,17 @@ class SkillRegistry:
             working_memory: WorkingMemoryManager reference
             memory_store: MemoryStore reference
             permission_checker: Permission checker instance
+            identity_context: Optional IdentityContext (see
+                bartholomew.kernel.policy_engine). When provided,
+                execute_action() also consults the Executive's tool-use
+                Policy Decision for the skill_id, in addition to the
+                existing manifest-permission/parking-brake checks -- closing
+                the "Identity.yaml governs only chat" gap (MASTER_PLAN.md's
+                "P2.5 -- Runtime Convergence", item 11.2). When None (the
+                default), this check is skipped entirely -- matching this
+                class's existing pattern for other optional resources (see
+                _is_blocked_by_brake()) -- so callers that don't wire an
+                Identity Context see no behavior change.
         """
         self._skills_dir = Path(skills_dir)
         self._db_path = db_path
@@ -140,6 +155,7 @@ class SkillRegistry:
         self._kernel = kernel
         self._working_memory = working_memory
         self._memory_store = memory_store
+        self._identity_context = identity_context
 
         # Permission checker
         self._permission_checker = permission_checker or get_permission_checker(db_path=db_path)
@@ -542,6 +558,24 @@ class SkillRegistry:
                 params,
                 SkillResult.fail("Blocked by parking brake (scope=skills)"),
             )
+
+        # Executive Policy Decision: consult the same IdentityContext-derived
+        # tool-use policy scheduler drives consult (see
+        # bartholomew.kernel.policy_engine and scheduler/loop.py's
+        # _run_drive()). Skipped entirely if no IdentityContext was wired in
+        # (see __init__'s docstring) -- this is additive, not a replacement
+        # for the manifest-permission/parking-brake checks above.
+        if self._identity_context is not None:
+            policy_decision = policy_engine.evaluate_tool_policy(self._identity_context, skill_id)
+            if not policy_decision.allowed:
+                return self._finish(
+                    skill_id,
+                    action,
+                    params,
+                    SkillResult.fail(
+                        f"Denied by Identity policy: {policy_decision.reason}",
+                    ),
+                )
 
         # Resolve any "ask"-level permissions the manifest requires before
         # executing (see _resolve_permissions()'s docstring).

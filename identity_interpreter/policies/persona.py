@@ -1,11 +1,29 @@
 """
 Persona policy engine
 Shapes tone, style, and adaptive behavior
+
+DEPRECATED (2026-07-21, MASTER_PLAN.md "P2.5 -- Runtime Convergence" / item 11.1):
+this module is not the authoritative persona/tone implementation. That's
+`bartholomew.kernel.persona_pack.PersonaPackManager`, which is wired into
+`NarratorEngine`/`ExperienceKernel` for the live kernel. This module remains
+in use only by `identity_interpreter/cli.py`'s `explain` command and
+`chat.py`'s standalone script -- do not add new callers. It will be removed
+once those two callers are migrated to the authoritative persona system (see
+DECISIONS.md's "One authority per architectural concept" entry).
 """
 
+import warnings
 from typing import Any
 
 from ..models import Identity
+
+
+_DEPRECATION_MSG = (
+    "identity_interpreter.policies.persona.get_persona_config() is deprecated; "
+    "the authoritative persona system is "
+    "bartholomew.kernel.persona_pack.PersonaPackManager. See MASTER_PLAN.md's "
+    "'P2.5 -- Runtime Convergence' item 11.1."
+)
 
 
 def get_persona_config(
@@ -22,6 +40,7 @@ def get_persona_config(
     Returns:
         Dict with persona traits, tone, and style for context
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     persona = identity.persona
 
     # Base configuration

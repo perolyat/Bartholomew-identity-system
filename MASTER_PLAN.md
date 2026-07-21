@@ -556,19 +556,40 @@ No exceptions. Not even chat.
     - **Verify:** full `pytest -q` stays green; no new callers added to a deprecated module
       after this point.
 
-11.2. **Identity Context -> Executive -> Policy Decision**
+11.2. **Identity Context -> Executive -> Policy Decision** — ✅ implemented 2026-07-21
+    (skill-execution only; scope corrected from the original scheduler-drive plan — see below)
     - Identity does not answer "what should I do?" — it answers "who am I?" It publishes a
       declarative **Identity Context** (values, red lines, behavioral constraints,
       preferences, communication style, risk profile, decision heuristics, goals). The
       **Executive** consumes that context and is what constructs the actual **Policy
       Decision** — not Identity, and not the Kernel parsing YAML directly.
-    - Closes the "`Identity.yaml` governs only chat" gap: a Policy Decision derived from the
-      same Identity Context must be consulted by skill-execution and the scheduler, not just
-      the chat pipeline.
-    - **Acceptance:** a single skill-execution path and a single scheduler-drive both
-      demonstrably respect an `Identity.yaml` red-line/tool-use rule change.
-    - **Verify:** new test asserting scheduler + skill-execution consult the same Policy
-      Decision source for a shared example rule.
+    - Closes the "`Identity.yaml` governs only chat" gap for skill execution: added
+      `identity_interpreter/identity_context.py` (`IdentityContext` +
+      `build_identity_context()`) and `bartholomew/kernel/policy_engine.py`
+      (`PolicyDecision` + `evaluate_tool_policy()`). `SkillRegistry.execute_action()` now
+      consults it via an optional `identity_context` constructor param (default `None` — no
+      behavior change unless wired). `daemon.py` gained an optional `identity_path` param that
+      loads `Identity.yaml` once and shares the built context; the live API bridge
+      (`bartholomew_api_bridge_v0_1/services/api/app.py`) wires it in by default.
+    - **Corrected during implementation (real regression found and reverted):** the original
+      plan also wired `scheduler/loop.py`'s `_run_drive()` to the same
+      `evaluate_tool_policy()` check, using each drive's `task_id` (e.g. `"self_check"`)
+      against `Identity.yaml`'s `tool_use.allowlist`. This was a category error — internal
+      scheduler drives are kernel self-maintenance functions, not "tools" in the
+      `tool_use.allowlist` sense, and the real `Identity.yaml`'s allowlist (`web_fetch`,
+      `browser_action`) never includes drive task_ids. Wiring it this way denied every
+      scheduler drive by default in production the moment `identity_path` was passed, and the
+      scheduler's retry loop doesn't back off on denial (a denied, 0-duration drive is
+      immediately re-due) — this busy-looped and starved the asyncio event loop badly enough
+      that the live FastAPI app never answered its first `/healthz` request. Caught by the
+      `smoke` CI check on PR #10, reproduced locally (`uvicorn app:app` hangs with
+      `curl: (7) Failed to connect`), root-caused, and fixed by removing the scheduler-side
+      check entirely — the Policy Decision mechanism applies to skill/capability execution,
+      not the scheduler's internal drives.
+    - **Acceptance:** a single skill-execution path demonstrably respects an `Identity.yaml`
+      tool-use rule change (allowlisting/de-allowlisting a skill_id flips
+      `SkillRegistry.execute_action()`'s outcome for that skill).
+    - **Verify:** `pytest -q tests/test_runtime_convergence_policy.py`.
 
 11.3. **Runtime Contract as a code seam**
     - The Observation -> Interpretation -> Executive -> Governance -> Capability -> Execution
