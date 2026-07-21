@@ -2,7 +2,9 @@
 
 > How to run quality checks locally and what CI enforces.
 >
-> **Last updated:** 2026-01-19
+> **Last updated:** 2026-07-21 (pre-commit.yml's description corrected — a "Run full test
+> suite: pytest -q" step was added 2026-07-20, per MASTER_PLAN.md's "Next 3 Moves" item 6, and
+> this doc was never updated to mention it)
 
 ## GitHub Actions Workflows
 
@@ -16,12 +18,15 @@
 - **Actions:**
   - `pre-commit run --all-files --show-diff-on-failure` (format, lint, security)
   - `pytest -q -m smoke` (fast sanity checks)
+  - `pytest -q` (full test suite — every test file under the default collection root, no
+    `-k`/path filter; this is what actually runs every test added this session)
 
 **What it catches:**
 - Code formatting issues (black)
 - Linting issues (ruff)
 - Security issues (detect-private-key, etc.)
 - Fast smoke test failures
+- Any full-suite regression (not just smoke-tagged tests)
 
 ### 2. smoke.yml ✅ AUTO-RUN
 
