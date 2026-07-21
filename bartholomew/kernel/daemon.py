@@ -186,6 +186,17 @@ class KernelDaemon:
             # Try to load last experience snapshot
             snapshot = self.experience.load_last_snapshot()
             if snapshot:
+                # Real, previously-live bug (found 2026-07-21 while writing a
+                # scenario-replay test): load_last_snapshot() only loads and
+                # returns a SelfSnapshot -- it never applies it. This code
+                # printed "Restored experience state from last snapshot" on
+                # every boot while actually leaving drives/affect/attention/
+                # active_goals at their fresh-instance defaults, silently
+                # discarding restore_from_snapshot()'s entire purpose. Same
+                # bug class as the 2026-07-20 "silently-swallowed
+                # AttributeError" fix in this module -- a log message that
+                # was never actually true.
+                self.experience.restore_from_snapshot(snapshot)
                 print("[Kernel] Restored experience state from last snapshot")
             else:
                 print("[Kernel] Starting with fresh experience state")

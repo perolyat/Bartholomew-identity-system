@@ -801,6 +801,46 @@ No exceptions. Not even chat.
       tests/test_narrator.py tests/test_stage1_api_endpoints.py` — 140 passed (no
       regressions).
 
+11.9. **Scenario replay test harness + a real restart-persistence bug it found** —
+    ✅ implemented 2026-07-21
+    - Closes the "dedicated scenario replay test harness (distinct from `tests/
+      test_stage3_integration.py::TestFullLifecycle`)" item this backlog previously marked
+      deliberately out of scope. `TestFullLifecycle` hand-wires individual kernel modules
+      together directly; `tests/test_scenario_replay.py` instead drives a real `KernelDaemon`
+      through the actual `run_chat_through_runtime_contract()` seam across one continuous
+      multi-turn session (chat -> goal added -> a later turn referencing both the goal and a
+      prior turn's own content -> persona switch observed next turn -> parking brake blocking
+      and recovering -> daily reflection capturing the real episode -> a simulated restart).
+    - **A real, previously-live bug found while writing it:** `daemon.py`'s
+      `_init_experience_kernel()` called `self.experience.load_last_snapshot()`, printed
+      `"[Kernel] Restored experience state from last snapshot"`, and then did nothing else with
+      the result — `load_last_snapshot()` only loads and returns a `SelfSnapshot`; applying it
+      is a separate method, `ExperienceKernel.restore_from_snapshot()`, that nothing was
+      calling. Every daemon restart silently reset drives/affect/attention/active_goals to
+      fresh-instance defaults while logging that it had restored them — the log message was
+      never true. (`WorkingMemoryManager.load_last_snapshot()`'s equivalent path was already
+      correct — it calls `self.restore(snapshot)` internally — so this bug was isolated to
+      `ExperienceKernel`.) Same bug class as the 2026-07-20 "silently-swallowed `AttributeError`
+      disabled the kernel's entire tick loop" fix in this same file (see "Experience Kernel
+      MVP: bug fix + privacy gap" below) — another log message asserting something the code
+      didn't actually do.
+    - **Fix:** one line — `_init_experience_kernel()` now calls
+      `self.experience.restore_from_snapshot(snapshot)` before printing the (now-true) message.
+    - **Also confirmed, not a bug:** `PersonaPackManager` has no persisted "active pack" state
+      at all (`persona_switch_log` is an audit trail, not restorable state) — every boot
+      intentionally activates the default pack via `_init_experience_kernel()`'s own "activate
+      default if none active" logic. The scenario test asserts this explicitly rather than
+      assuming persona should survive restart.
+    - **Acceptance:** a goal added before a simulated restart (`persist_snapshot()` + a second
+      `KernelDaemon` instance against the same db) is present in
+      `daemon2.experience.get_active_goals()` and is referenced in a post-restart chat turn's
+      prompt.
+    - **Verify:** `pytest -q tests/test_scenario_replay.py` — 2 passed locally;
+      `pytest -q tests/test_stage3_integration.py tests/test_experience_kernel.py
+      tests/test_stage0_alive.py tests/test_reflection_narrative_integration.py
+      tests/test_runtime_contract_chat_seam.py tests/test_api_chat_runtime_contract.py
+      test_kernel_alive.py` — 96 passed (no regressions).
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

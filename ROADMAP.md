@@ -156,7 +156,10 @@ this subsystem — episodic entries and self-model snapshots bypassed `ConsentGa
 - Persona packs switchable via config/UI and recorded in audit logs. ✅ (`persona_pack.py`,
   `PersonaPackManager`; not independently re-verified against this exact criterion this round)
 - New unit + integration tests for kernel/persona. ✅ (already exist, see correction above)
-- **Still open:** a dedicated "scenario replay" test (see `MASTER_PLAN.md`).
+- A dedicated "scenario replay" test — ✅ added 2026-07-21 (`tests/test_scenario_replay.py`;
+  see `MASTER_PLAN.md` item 11.9). Found and fixed a real restart-persistence bug in the
+  process: `ExperienceKernel` state (goals/affect/attention/drives) was never actually
+  restored on daemon restart despite a log line claiming it was.
 - The two non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs.
   `narrator.py`'s episodic-narrative generators) — ✅ reconciled 2026-07-21, additively:
   `daemon.py`'s daily/weekly reflection generation now appends `narrator.py`'s real
