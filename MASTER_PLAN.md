@@ -46,6 +46,7 @@ See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHEC
 ## Canonical docs
 
 - **MASTER_PLAN.md** (this doc)
+- [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md) — the canonical answer to "how does Bartholomew think?"
 - [ROADMAP.md](ROADMAP.md)
 - [DECISIONS.md](DECISIONS.md)
 - [RISKS.md](RISKS.md)
@@ -642,15 +643,21 @@ No exceptions. Not even chat.
     - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
       tests/test_api_chat_runtime_contract.py`.
 
-11.5. **Author `COGNITIVE_RUNTIME.md`**
+11.5. **Author `COGNITIVE_RUNTIME.md`** — ✅ implemented 2026-07-21
     - The canonical document defining the cognitive loop, runtime invariants, the ownership
       table, and the execution/observation/reflection/memory lifecycles, plus governance
-      checkpoints — the answer to "how does Bartholomew think?" Written during this milestone
-      (not before); added to the Canonical docs list once it exists.
+      checkpoints — the answer to "how does Bartholomew think?" Added to the Canonical docs
+      list above.
+    - Documents, honestly, which Runtime Contract stages are implemented vs. not yet (a
+      table, per surface — chat vs. voice/sight vs. scheduler), and explicitly records why
+      scheduler drives are excluded from the Identity Policy Decision (item 11.2's
+      regression), rather than presenting the target architecture as already fully realized.
     - A later, separate document, `ARCHITECTURAL_INVARIANTS.md` (Principle Zero, Principle
       One, one authority per concept, fail-closed, memory is consent-gated, every decision is
       explainable, etc. — the rules meant to survive any future rewrite) is noted here as a
       *future* addition after this milestone, not part of it.
+    - **Verify:** read `COGNITIVE_RUNTIME.md`; cross-check its file:line citations against
+      the current codebase.
 
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
