@@ -2,11 +2,25 @@
 Tests for MASTER_PLAN.md's "P2.5 -- Runtime Convergence" item 11.2:
 Identity Context -> Executive -> Policy Decision.
 
-Proves skill-execution (SkillRegistry.execute_action()) and a scheduler
-drive (_run_drive()) both consult the same IdentityContext-derived Policy
-Decision (bartholomew.kernel.policy_engine.evaluate_tool_policy()) for a
-shared example tool-use rule -- closing the "Identity.yaml governs only
-chat" gap the P2.5 architectural audit found.
+Proves skill-execution (SkillRegistry.execute_action()) consults an
+IdentityContext-derived Policy Decision
+(bartholomew.kernel.policy_engine.evaluate_tool_policy()) -- closing the
+"Identity.yaml governs only chat" gap the P2.5 architectural audit found.
+
+Note: an earlier version of this change also wired scheduler/loop.py's
+_run_drive() to the same check, using each drive's task_id (e.g.
+"self_check") as the "tool name" against Identity.yaml's tool_use.allowlist.
+That was reverted -- internal scheduler drives are kernel self-maintenance
+functions, not "tools" in the tool_use.allowlist sense, and Identity.yaml's
+real allowlist (web_fetch, browser_action) never includes drive task_ids.
+Gating drives on it denied every drive by default in production, and the
+scheduler's retry loop doesn't back off on denial (0-duration failures are
+immediately re-due), which busy-loops and starves the asyncio event loop --
+reproduced locally as the exact cause of a smoke-test hang (uvicorn never
+answers /healthz). See DECISIONS.md's "Identity publishes a declarative
+Identity Context..." entry for the corrected scope: the Executive's Policy
+Decision applies to skill/capability execution, not the scheduler's
+internal drives.
 """
 
 from __future__ import annotations
@@ -19,7 +33,6 @@ import pytest
 
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.policy_engine import evaluate_tool_policy
-from bartholomew.kernel.scheduler.loop import _run_drive
 from bartholomew.kernel.skill_permissions import reset_permission_checker
 from bartholomew.kernel.skill_registry import SkillRegistry, reset_skill_registry
 from identity_interpreter.identity_context import IdentityContext
@@ -50,23 +63,8 @@ def reset_singletons():
     reset_permission_checker()
 
 
-class MockSchedulerCtx:
-    """Minimal stand-in for KernelDaemon, matching _run_drive()'s needs."""
-
-    class MockMem:
-        def __init__(self, db_path: str) -> None:
-            self.db_path = db_path
-
-    def __init__(self, db_path: str, identity_context: IdentityContext | None) -> None:
-        self.mem = self.MockMem(db_path)
-        self.identity_context = identity_context
-
-
 DENY_CONTEXT = IdentityContext(tool_use_default_allowed=False, tool_use_allowlist=[])
-ALLOW_CONTEXT = IdentityContext(
-    tool_use_default_allowed=False,
-    tool_use_allowlist=["tasks", "self_check"],
-)
+ALLOW_CONTEXT = IdentityContext(tool_use_default_allowed=False, tool_use_allowlist=["tasks"])
 
 
 class TestPolicyEngine:
@@ -125,87 +123,15 @@ class TestSkillExecutionConsultsPolicyDecision:
 
         assert result.success is True
 
+    async def test_rule_change_flips_the_same_execution_path(self, temp_db):
+        """A single IdentityContext rule change flips the same skill-execution
+        outcome, because it's read through the same evaluate_tool_policy()."""
+        registry_before = SkillRegistry(db_path=temp_db, identity_context=DENY_CONTEXT)
+        await registry_before.load_skill("tasks")
+        before = await registry_before.execute_action("tasks", "create", {"title": "x"})
+        assert before.success is False
 
-@pytest.mark.asyncio
-class TestSchedulerDriveConsultsPolicyDecision:
-    async def test_denied_when_not_allowlisted(self, temp_db):
-        ctx = MockSchedulerCtx(temp_db, DENY_CONTEXT)
-
-        async def drive_fn(_ctx):
-            return "ran"
-
-        result, success = await _run_drive(ctx, "self_check", drive_fn)
-
-        assert result is None
-        assert success == 0
-
-    async def test_allowed_when_allowlisted(self, temp_db):
-        ctx = MockSchedulerCtx(temp_db, ALLOW_CONTEXT)
-
-        async def drive_fn(_ctx):
-            return "ran"
-
-        result, success = await _run_drive(ctx, "self_check", drive_fn)
-
-        assert result == "ran"
-        assert success == 1
-
-    async def test_skipped_entirely_when_no_identity_context_wired(self, temp_db):
-        """No behavior change for callers that don't opt in (identity_context=None)."""
-        ctx = MockSchedulerCtx(temp_db, None)
-
-        async def drive_fn(_ctx):
-            return "ran"
-
-        result, success = await _run_drive(ctx, "self_check", drive_fn)
-
-        assert result == "ran"
-        assert success == 1
-
-
-@pytest.mark.asyncio
-class TestSharedPolicySource:
-    """
-    The acceptance criterion itself: a single skill-execution path and a
-    single scheduler-drive both demonstrably respect the same Identity.yaml
-    tool-use rule change, because both consult the same
-    bartholomew.kernel.policy_engine.evaluate_tool_policy() with the same
-    IdentityContext -- not two independent, potentially-diverging checks.
-    """
-
-    async def test_rule_change_flips_both_paths_together(self, temp_db):
-        # Before: neither "tasks" (a skill) nor "self_check" (a scheduler
-        # drive) is allowlisted -- both denied.
-        before = IdentityContext(tool_use_default_allowed=False, tool_use_allowlist=[])
-
-        registry = SkillRegistry(db_path=temp_db, identity_context=before)
-        await registry.load_skill("tasks")
-        skill_result = await registry.execute_action("tasks", "create", {"title": "x"})
-
-        async def drive_fn(_ctx):
-            return "ran"
-
-        ctx = MockSchedulerCtx(temp_db, before)
-        drive_result, drive_success = await _run_drive(ctx, "self_check", drive_fn)
-
-        assert skill_result.success is False
-        assert drive_success == 0
-
-        # After: the *same* rule change (allowlisting both names) flips
-        # *both* paths, because they read the same IdentityContext through
-        # the same policy_engine function.
-        after = IdentityContext(
-            tool_use_default_allowed=False,
-            tool_use_allowlist=["tasks", "self_check"],
-        )
-
-        registry2 = SkillRegistry(db_path=temp_db, identity_context=after)
-        await registry2.load_skill("tasks")
-        skill_result2 = await registry2.execute_action("tasks", "create", {"title": "y"})
-
-        ctx2 = MockSchedulerCtx(temp_db, after)
-        drive_result2, drive_success2 = await _run_drive(ctx2, "self_check", drive_fn)
-
-        assert skill_result2.success is True
-        assert drive_success2 == 1
-        assert drive_result2 == "ran"
+        registry_after = SkillRegistry(db_path=temp_db, identity_context=ALLOW_CONTEXT)
+        await registry_after.load_skill("tasks")
+        after = await registry_after.execute_action("tasks", "create", {"title": "y"})
+        assert after.success is True

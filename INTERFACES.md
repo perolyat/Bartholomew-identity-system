@@ -179,24 +179,40 @@ permission denial, or brake block). Starter skills: `tasks` (auto),
 integration). See `tests/test_skill_registry.py` and
 `tests/test_end_to_end_tasks_and_audit.py`.
 
-## Identity Context / Policy Decision contract (planned)
+## Identity Context / Policy Decision contract — implemented for skill execution 2026-07-21
 
 **Purpose:** Close the gap the 2026-07-21 architectural audit found — `Identity.yaml`
-currently governs only the chat path (via `identity_interpreter`'s pipeline); the autonomous
-kernel/scheduler/skill-execution path never consults it. See MASTER_PLAN.md's "P2.5 — Runtime
+governed only the chat path (via `identity_interpreter`'s pipeline); the autonomous
+kernel/skill-execution path never consulted it. See MASTER_PLAN.md's "P2.5 — Runtime
 Convergence" and DECISIONS.md's "Identity publishes a declarative Identity Context..." entry
-for the full rationale. **Nothing described below exists yet** — this section sketches the
-target shape for that milestone.
+for the full rationale.
 
-**Identity Context** — produced by `identity_interpreter`, declarative only (answers "who is
-Bartholomew," never "what should I do right now"): values, red lines, behavioral constraints,
-preferences, communication style, risk profile, decision heuristics, goals. Extends/replaces
-the role `identity_interpreter.models.Decision` partially plays today.
+**Identity Context** (`identity_interpreter/identity_context.py`) — produced by
+`identity_interpreter`, declarative only (answers "who is Bartholomew," never "what should I
+do right now"): `core_values`, `red_lines`, `tool_use_default_allowed`,
+`tool_use_allowlist`, `tool_use_consent_prompts`.
 
-**Policy Decision** — constructed by the Executive (`bartholomew/kernel/daemon.py`,
-`planner.py`, `scheduler/loop.py`) from an Identity Context, not by Identity itself and not by
-the Kernel parsing `Identity.yaml` directly.
+**Policy Decision** (`bartholomew/kernel/policy_engine.py`) — constructed by the Executive via
+`evaluate_tool_policy(context, tool_name)` from an Identity Context, not by Identity itself
+and not by the Kernel parsing `Identity.yaml` directly.
 
-**Consumers (planned):** `SkillRegistry.execute_action()`, `scheduler/loop.py`'s
-`_run_drive()`, and the chat pipeline all consult the same Policy Decision uniformly — today
-only the chat pipeline (`identity_interpreter/orchestrator/orchestrator.py`) does.
+**Consumers:** `SkillRegistry.execute_action()` consults `evaluate_tool_policy()` via an
+optional `identity_context` constructor param (`None` by default — no behavior change unless
+wired). `daemon.py`'s optional `identity_path` param loads `Identity.yaml` once via
+`identity_interpreter.loader.load_identity()` and shares the built context; the live API
+bridge (`bartholomew_api_bridge_v0_1/services/api/app.py`) passes
+`identity_path="Identity.yaml"` by default.
+
+**Not a consumer (by design, not oversight):** `scheduler/loop.py`'s `_run_drive()` does
+**not** consult this — internal scheduler drives (`self_check`, `curiosity_probe`, etc.) are
+kernel self-maintenance functions, not "tools" in `tool_use.allowlist`'s sense. An earlier
+version wired this in and it was a real regression (denied every drive by default, busy-looped
+the scheduler, and starved the event loop badly enough that the live app never answered
+`/healthz`) — see DECISIONS.md's "`tool_use.allowlist` gates skill/capability execution, not
+scheduler drives" entry.
+
+**Still planned:** the chat pipeline (`identity_interpreter/orchestrator/orchestrator.py`)
+does not yet consult this shared Policy Decision either — it has its own, separate
+parking-brake-only check (see the Skill Registry section above).
+
+See `tests/test_runtime_convergence_policy.py`.
