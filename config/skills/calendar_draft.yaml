@@ -15,7 +15,13 @@ entry_class: "CalendarDraftSkill"
 
 # Permissions
 permissions:
-  level: "auto"  # Draft creation is low-risk (no external calendar integration)
+  # Backlog item 11 explicitly calls for calendar.draft_block to be
+  # "draft-only; behind consent" -- was "auto" (auto-granted at load,
+  # no consent), which contradicted that. Consent is resolved once per
+  # session via the registered consent handler (see
+  # SkillRegistry._resolve_permissions()); no external calendar
+  # integration exists regardless (drafts + .ics export only).
+  level: "ask"
   requires:
     - "memory.write"      # Can store draft events
     - "memory.read"       # Can retrieve drafts

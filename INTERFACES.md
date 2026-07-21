@@ -151,15 +151,30 @@ caller-supplied free-text fields listed above, not a memories-table leak.
 **Performance:**
 - Must complete within planner loop budget (see PERF_BUDGETS).
 
-## Skill manifest (proposed)
+## Skill manifest — implemented (this section previously said "proposed"; corrected 2026-07-21)
 
 **Purpose:** Make skills modular, permission-scoped, and testable.
 
-**Fields (minimum):**
-- `id`, `version`, `description`
-- `risk_class` (low/med/high)
-- `permissions_required` (ask/auto/never)
-- `data_touched` (kinds)
-- `tests` (paths)
+**Fields:** `config/skills/*.yaml` (`skill_id`, `version`, `description`,
+`entry_module`/`entry_class`, `permissions.level` (`auto`/`ask`/`never`) +
+`permissions.requires`, `subscriptions`, `emits`, `actions`). See
+`bartholomew/kernel/skill_manifest.py` for the full schema.
 
-**Contract:** Skill functions must declare inputs/outputs, side-effects, and rollback notes.
+**Contract:** `bartholomew.kernel.skill_base.SkillBase` — skills subclass it
+and implement `initialize()`/`shutdown()`/`execute(action, params)`, returning
+a `SkillResult` (`ok`/`fail`/`denied`).
+
+**Wiring (`bartholomew/kernel/skill_registry.py`, `daemon.py`,
+`planner.py`):** `KernelDaemon` constructs one `SkillRegistry`, wired into
+`Planner.handle_skill_request()` — the "prompt → decide → tool call →
+persisted + audited" path. `SkillRegistry.execute_action()` is the single
+choke-point every skill execution flows through: checks the global
+`ParkingBrake`'s `"skills"` scope (fails closed on error), resolves
+`"ask"`-level permissions via the same consent-handler mechanism used for
+memory-write consent (`bartholomew.kernel.memory.privacy_guard`,
+session-scoped grants only), executes the skill, then writes an audit
+record to `skill_action_audit` regardless of outcome (success, failure,
+permission denial, or brake block). Starter skills: `tasks` (auto),
+`notify` (auto), `calendar_draft` (ask — draft-only, no external calendar
+integration). See `tests/test_skill_registry.py` and
+`tests/test_end_to_end_tasks_and_audit.py`.
