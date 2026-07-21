@@ -743,6 +743,36 @@ No exceptions. Not even chat.
       .`; the sandbox's system Python has an unrelated pre-existing `cryptography` package
       conflict blocking `pip install -e .` directly, unrelated to this change).
 
+11.7. **Wire recent conversation history into chat's Interpretation stage; found and flagged
+    a 5th duplicated-memory-injection concept** — ✅ implemented 2026-07-21
+    - Closes a gap item 11.4 didn't: goals/persona reached the prompt, but no prior turn's
+      own *content* did. `runtime_contract.py`'s `_build_interpretation()` now also folds in
+      `daemon.working_memory.get_context_string()` (called before this turn's own Reflection
+      write, so it only ever contains prior turns) — a chat turn can now genuinely answer "what
+      did I just tell you?" using only what a prior turn wrote into Working Memory.
+    - **Found while investigating:** `identity_interpreter.orchestrator.context_builder.
+      ContextBuilder` was clearly *meant* to be the thing injecting prior conversational memory
+      into chat's prompt (backed by `identity_interpreter/adapters/memory_manager.py`'s
+      `MemoryManager`, which itself has two stale `# TODO Phase 2b/2c` comments for encryption/
+      summarization). Traced it and confirmed it's dead code in production: `ContextBuilder`
+      only builds a `MemoryManager` when given a non-`None identity_config`, and
+      `bartholomew_api_bridge_v0_1/services/api/app.py` constructs `Orchestrator()` with none
+      — so `build_prompt_context()` always returns `""` today. This is a fifth duplicated
+      concept (conversational-memory injection) beyond the four item 11.1 already found, just
+      never exercised at runtime so it never surfaced as a behavioral conflict. Documented
+      in-place (module docstrings in both files) rather than adding a formal ownership-table
+      row for a concept this narrow; the authoritative implementation is now `runtime_contract.
+      py` + `WorkingMemoryManager`, per COGNITIVE_RUNTIME.md's ownership table's existing
+      "Experience" entry. Did not implement the stale TODOs — see the docstring note explaining
+      why (the authoritative Memory Substrate, `bartholomew.kernel.memory_store.MemoryStore`,
+      already does both, live).
+    - **Acceptance:** a second chat turn's prompt contains a prior turn's own raw content
+      (not just goals/persona) — proven by
+      `test_second_turn_prompt_references_first_turns_own_content`.
+    - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
+      tests/test_api_chat_runtime_contract.py tests/test_runtime_convergence_policy.py
+      tests/test_working_memory.py` — 25 passed locally.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

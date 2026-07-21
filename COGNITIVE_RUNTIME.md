@@ -163,9 +163,16 @@ ownership entry above refers to the durable SQLite backbone all three ultimately
 1. **Working Memory** (`working_memory.py`, `WorkingMemoryManager`) — short-term, token-budgeted
    (`OverflowPolicy`-governed eviction, priority decay, attention boosting). This is what
    chat's Reflection stage writes to (`daemon.working_memory.add(...)`), and what
-   `runtime_contract.py`'s Interpretation stage reads back (`get_active_goals()` /
-   `get_active_pack_id()` indirectly via the Experience Kernel / persona manager). Persisted
-   via `persist_snapshot()` / restored via `load_last_snapshot()` around daemon start/stop.
+   `runtime_contract.py`'s Interpretation stage reads back — `get_active_goals()` /
+   `get_active_pack_id()` (via the Experience Kernel / persona manager), and, as of
+   2026-07-21, `get_context_string()` directly, so a later chat turn's prompt can reference an
+   earlier turn's own content, not just goals/persona (item 11.7). This is also the
+   authoritative replacement for `identity_interpreter.orchestrator.context_builder.
+   ContextBuilder`'s conversational-memory injection, which is dead code in production (see
+   that module's docstring) — a fifth duplicated-concept pair beyond item 11.1's original four,
+   just never exercised at runtime because nothing wires an `identity_config` into
+   `Orchestrator()` today. Persisted via `persist_snapshot()` / restored via
+   `load_last_snapshot()` around daemon start/stop.
 
 2. **Experience Kernel self-model** (`experience_kernel.py`, `ExperienceKernel`) — drives,
    affect, attention, active goals, situational context; decays/updates every tick
@@ -208,7 +215,7 @@ exists today:
 | 3 | Does every execution pass through the same Governance path? | **Partial** | All five live call sites share the same `ParkingBrake` class, but scopes differ by surface. The Identity Context → Policy Decision check (item 11.2) is now wired for both skill execution and chat's Governance stage (2026-07-21) — chat's only exemption is plain-conversation `CandidateAction` kinds, the same category exemption scheduler drives need but don't yet have. The scheduler's own drives still bypass Policy Decision entirely. |
 | 4 | Does every completed action produce a Reflection? | **Yes, structurally** | Chat → Working Memory item; skills → `skill_action_audit` row (see "Two different Reflection mechanisms" above — the *fact* of a reflection is universal for these two surfaces; its *shape* is not unified). |
 | 5 | Does every Reflection update Memory? | **Yes** | Working Memory snapshots persist on daemon stop; `skill_action_audit` writes immediately; daily/weekly reflections persist via `MemoryStore.insert_reflection()`. |
-| 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()` and `daemon.persona_manager.get_active_pack_id()`. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
+| 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()`, `daemon.persona_manager.get_active_pack_id()`, and (item 11.7) `daemon.working_memory.get_context_string()` for prior-turn content. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
 | 7 | Does every interface expose the same personality? | **No** | The deprecated `identity_interpreter/policies/persona.py` still has live legacy callers (CLI `explain`, standalone `chat.py` script) independent of `PersonaPackManager`; voice/sight adapters don't consult persona at all yet. |
 
 **Reading this table:** the loop shape is real, tested, and load-bearing for chat and skills —

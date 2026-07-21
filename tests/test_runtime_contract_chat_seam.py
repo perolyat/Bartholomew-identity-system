@@ -215,6 +215,30 @@ class TestChatReferencesPersistedExperienceKernelState:
         assert item1 is not None and "first turn" in item1.content
         assert item2 is not None and "second turn" in item2.content
 
+    async def test_second_turn_prompt_references_first_turns_own_content(self, daemon):
+        """The gap goals/persona alone didn't close: a later chat turn's
+        *prompt* (not just its Working Memory item) can reference an earlier
+        turn's actual conversational content -- previously nothing read
+        Working Memory back into the prompt at all (the legacy
+        identity_interpreter ContextBuilder/MemoryManager path that was
+        supposed to do this is dead code in production; see
+        _build_interpretation()'s docstring)."""
+        result1 = await run_chat_through_runtime_contract(
+            daemon,
+            "my favorite color is teal",
+            _stub_respond,
+        )
+        assert result1.response is not None
+
+        result2 = await run_chat_through_runtime_contract(
+            daemon,
+            "what did I just tell you?",
+            _stub_respond,
+        )
+
+        assert "my favorite color is teal" in result2.interpretation.prompt
+        assert "Recent conversation:" in result2.interpretation.prompt
+
     async def test_persona_switch_is_reflected_in_the_next_chat_turn(self, daemon):
         """Switching persona (e.g. via /api/persona/switch) is observable
         in the very next chat turn, proving chat consults live Experience

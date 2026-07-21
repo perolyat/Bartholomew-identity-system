@@ -2,6 +2,15 @@
 Context Builder
 ---------------
 Builds conversational context for the LLM using stored memories.
+
+STATUS (2026-07-21): unreachable in production -- `Orchestrator()` is
+constructed with no `identity_config` in
+`bartholomew_api_bridge_v0_1/services/api/app.py`, so `self.memory` here is
+always `None` and `build_prompt_context()`/`inject_context()` are no-ops.
+`bartholomew.kernel.runtime_contract`'s Interpretation stage now injects
+recent conversation history from Working Memory instead. See
+`identity_interpreter/adapters/memory_manager.py`'s module docstring for
+the full writeup.
 """
 
 from typing import Any
