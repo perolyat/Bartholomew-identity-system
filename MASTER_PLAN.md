@@ -46,6 +46,7 @@ See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHEC
 ## Canonical docs
 
 - **MASTER_PLAN.md** (this doc)
+- [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md)
 - [ROADMAP.md](ROADMAP.md)
 - [DECISIONS.md](DECISIONS.md)
 - [RISKS.md](RISKS.md)
@@ -642,15 +643,27 @@ No exceptions. Not even chat.
     - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
       tests/test_api_chat_runtime_contract.py`.
 
-11.5. **Author `COGNITIVE_RUNTIME.md`**
+11.5. **Author `COGNITIVE_RUNTIME.md`** — ✅ implemented 2026-07-21
     - The canonical document defining the cognitive loop, runtime invariants, the ownership
       table, and the execution/observation/reflection/memory lifecycles, plus governance
-      checkpoints — the answer to "how does Bartholomew think?" Written during this milestone
-      (not before); added to the Canonical docs list once it exists.
+      checkpoints — the answer to "how does Bartholomew think?" Added to the Canonical docs
+      list above.
+    - Written by reading the actual implementation (`runtime_contract.py`,
+      `experience_kernel.py`, `narrator.py`, `working_memory.py`, `persona_pack.py`,
+      `policy_engine.py`, `identity_context.py`, `parking_brake.py`, `skill_registry.py`), not
+      from the plan narrative alone — this surfaced gaps not previously written down in one
+      place: chat's Governance stage checks only `ParkingBrake`, not the Identity Context →
+      Policy Decision path item 11.2 wired for skill execution; chat and skill execution each
+      produce a durably-persisted but structurally different Reflection record (a Working
+      Memory item vs. a `skill_action_audit` row) rather than one unified shape; and the
+      Exit Gate's seven questions are mostly "partial," not "yes" — documented honestly in the
+      new doc's "Exit Gate status" table rather than glossed over.
+    - **Acceptance:** the doc exists, is added to the Canonical docs list, and every claim in
+      it is traceable to a specific file/function rather than restating the plan.
     - A later, separate document, `ARCHITECTURAL_INVARIANTS.md` (Principle Zero, Principle
       One, one authority per concept, fail-closed, memory is consent-gated, every decision is
-      explainable, etc. — the rules meant to survive any future rewrite) is noted here as a
-      *future* addition after this milestone, not part of it.
+      explainable, etc. — the rules meant to survive any future rewrite) remains a *future*
+      addition, not part of this item.
 
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
