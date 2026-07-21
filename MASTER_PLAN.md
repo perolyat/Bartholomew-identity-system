@@ -773,6 +773,34 @@ No exceptions. Not even chat.
       tests/test_api_chat_runtime_contract.py tests/test_runtime_convergence_policy.py
       tests/test_working_memory.py` — 25 passed locally.
 
+11.8. **Reconcile the two reflection-narrative pipelines** — ✅ implemented 2026-07-21
+    - Closes ROADMAP.md Stage 3's "Still open" note. `daemon.py`'s `_run_daily_reflection()`/
+      `_run_weekly_reflection()` generated content exclusively via `identity_interpreter.
+      adapters.reflection_generator.ReflectionGenerator` (or a generic template fallback) — its
+      own "Notable Events" section literally reads `(Future: chat highlights, emotional
+      events, user activities)`, a placeholder. Meanwhile `narrator.py`'s `NarratorEngine`
+      already builds a real narrative from actual persisted episodes (affect/attention/drive/
+      goal/observation) via `generate_daily_reflection_narrative()`/
+      `generate_weekly_reflection_narrative()` — fully built, independently tested (`tests/
+      test_narrator.py`), but confirmed by grep to have **zero callers anywhere in the repo
+      except tests** before this change. The persisted/exported daily and weekly reflections
+      never reflected anything that actually happened.
+    - **Fix:** both methods in `daemon.py` now call the corresponding narrator method after
+      `ReflectionGenerator` produces its content, and append the result (`content = f"{content}
+      \n\n---\n\n{episodic_narrative}"`) rather than replacing or parsing either pipeline's
+      output — the safer integration, since both remain independently correct and neither
+      needed to change shape. Never lets a narrator error break reflection generation (wrapped
+      in its own `try`/`except`, matching this file's existing fail-safe pattern for the
+      `ReflectionGenerator` call itself).
+    - **Acceptance:** a daily/weekly reflection persisted after a real episode (e.g. a goal
+      added via `ExperienceKernel.add_goal()`) contains that episode's own content, and
+      `meta["episodic_narrative_included"]` is `True`; the weekly reflection's existing
+      "Identity Core Alignment" safety-audit section is unchanged (append-only, not clobbered).
+    - **Verify:** `pytest -q tests/test_reflection_narrative_integration.py` — 4 passed
+      locally; `pytest -q tests/test_stage3_integration.py tests/test_stage0_alive.py
+      tests/test_narrator.py tests/test_stage1_api_endpoints.py` — 140 passed (no
+      regressions).
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

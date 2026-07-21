@@ -156,9 +156,12 @@ this subsystem — episodic entries and self-model snapshots bypassed `ConsentGa
 - Persona packs switchable via config/UI and recorded in audit logs. ✅ (`persona_pack.py`,
   `PersonaPackManager`; not independently re-verified against this exact criterion this round)
 - New unit + integration tests for kernel/persona. ✅ (already exist, see correction above)
-- **Still open:** a dedicated "scenario replay" test (see `MASTER_PLAN.md`); reconciling the two
-  non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs. `narrator.py`'s
-  template-based narrative generators).
+- **Still open:** a dedicated "scenario replay" test (see `MASTER_PLAN.md`).
+- The two non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs.
+  `narrator.py`'s episodic-narrative generators) — ✅ reconciled 2026-07-21, additively:
+  `daemon.py`'s daily/weekly reflection generation now appends `narrator.py`'s real
+  episodic-narrative output alongside `ReflectionGenerator`'s own content, rather than either
+  replacing the other. See `MASTER_PLAN.md` item 11.8.
 
 **Verify:**
 ```bash
