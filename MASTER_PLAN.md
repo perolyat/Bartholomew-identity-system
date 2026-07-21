@@ -614,14 +614,33 @@ No exceptions. Not even chat.
       logged/testable.
     - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py`.
 
-11.4. **Wire chat into the Experience Kernel ("Living Device")**
-    - Route the chat surface through `ExperienceKernel`/`WorkingMemoryManager`/
-      `NarratorEngine`/`SkillRegistry` so persona, affect, goals, and narration observably
-      persist across turns — today none of this reaches chat at all.
+11.4. **Wire chat into the Experience Kernel ("Living Device")** — ✅ implemented 2026-07-21
+    - `/api/chat` (`bartholomew_api_bridge_v0_1/services/api/app.py`) now routes through
+      `run_chat_through_runtime_contract()` (item 11.3) when the kernel is running, so
+      Working Memory and the Experience Kernel's active goals/persona actually reach chat —
+      falls back to the prior, unwrapped `orch.handle_input()` call only when the kernel
+      isn't available (e.g. narrow startup/shutdown windows), preserving that edge case
+      exactly.
+    - `runtime_contract.py`'s Interpretation stage was extended to read
+      `daemon.experience.get_active_goals()` and `daemon.persona_manager.get_active_pack_id()`
+      and fold them into the prompt actually sent to the chat backend — this is what makes
+      "can reference persisted persona/goal state" genuinely true rather than just
+      structurally possible. Governance denial now returns a proper `503`, not an unhandled
+      `500` (no existing test pinned the old status code — confirmed by grep before changing
+      it).
+    - **Real bug found and fixed during live-smoke verification (not caught by `pytest`
+      alone):** the enriched prompt's own `"User: "` prefix collided with the existing chat
+      orchestrator's `inject_memory_context()` step, which applies its *own* `"\n\nUser: "`
+      wrapping around whatever prompt it receives — producing a visibly doubled
+      `"User: ... User: ..."` prefix in the actual HTTP response. Fixed by dropping the
+      redundant label from `runtime_contract.py`'s own contribution and letting the
+      downstream backend apply it once. Caught only by curling the live `/api/chat` endpoint
+      directly, not by any unit test — same discipline (verify against a running app, not
+      just `pytest`) established after item 11.2's regression.
     - **Acceptance:** a chat turn observably updates working memory and can reference
       persisted persona/goal state from a previous turn.
-    - **Verify:** extend `tests/test_narrator.py`/`test_experience_kernel.py`/
-      `test_stage3_integration.py` with a chat-driven scenario; new end-to-end test.
+    - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
+      tests/test_api_chat_runtime_contract.py`.
 
 11.5. **Author `COGNITIVE_RUNTIME.md`**
     - The canonical document defining the cognitive loop, runtime invariants, the ownership

@@ -76,6 +76,46 @@ class RuntimeContractResult:
     working_memory_item_id: str | None
 
 
+def _build_interpretation(daemon: KernelDaemon, observation: Observation) -> Interpretation:
+    """
+    Stage 2: give the raw observation structure/context -- specifically,
+    persisted Experience Kernel state (active goals, active persona) that
+    previously never reached chat at all. This is what makes "a chat turn
+    can reference persisted persona/goal state from a previous turn" (item
+    11.4's acceptance criterion) genuinely true, not just structurally
+    possible: the enriched prompt is what actually gets sent to `respond_fn`.
+
+    Never raises -- if Experience Kernel/persona state can't be read for any
+    reason, falls back to the raw input unchanged, since a missing context
+    enrichment shouldn't ever be able to break the chat response itself.
+    """
+    context_lines: list[str] = []
+    try:
+        goals = daemon.experience.get_active_goals()
+        if goals:
+            context_lines.append(f"Active goals: {', '.join(goals)}")
+    except Exception:
+        logger.exception("Failed to read active goals for chat interpretation")
+
+    try:
+        pack_id = daemon.persona_manager.get_active_pack_id()
+        if pack_id:
+            context_lines.append(f"Active persona: {pack_id}")
+    except Exception:
+        logger.exception("Failed to read active persona for chat interpretation")
+
+    if not context_lines:
+        return Interpretation(observation=observation, prompt=observation.raw_content)
+
+    # No "User:" label here -- respond_fn's own backend (e.g. the chat
+    # orchestrator's inject_memory_context() step) applies its own "User: "
+    # wrapping around whatever prompt it receives; adding one here too
+    # produced a visibly doubled "User: ... User: ..." prefix in the actual
+    # response, caught during this change's own live-smoke verification.
+    prompt = "\n".join(context_lines) + f"\n\n{observation.raw_content}"
+    return Interpretation(observation=observation, prompt=prompt)
+
+
 async def run_chat_through_runtime_contract(
     daemon: KernelDaemon,
     user_input: str,
@@ -87,8 +127,8 @@ async def run_chat_through_runtime_contract(
     Execution -> Reflection -> Memory.
 
     Args:
-        daemon: the KernelDaemon whose ParkingBrake/WorkingMemory this pass
-            consults and updates.
+        daemon: the KernelDaemon whose ParkingBrake/ExperienceKernel/
+            PersonaPackManager/WorkingMemory this pass consults and updates.
         user_input: the raw chat message.
         respond_fn: an async callable (prompt) -> response implementing the
             Capability/Execution stages for chat (e.g. a model-routing
@@ -102,8 +142,10 @@ async def run_chat_through_runtime_contract(
     # Stage 1: Observation
     observation = Observation(source="chat", raw_content=user_input)
 
-    # Stage 2: Interpretation
-    interpretation = Interpretation(observation=observation, prompt=user_input)
+    # Stage 2: Interpretation -- enriched with persisted Experience Kernel
+    # state (active goals, active persona), so it can genuinely be
+    # referenced by the response, not just theoretically available.
+    interpretation = _build_interpretation(daemon, observation)
 
     # Stage 3: Executive -- propose a candidate action
     candidate_action = CandidateAction(kind="chat_response", interpretation=interpretation)
