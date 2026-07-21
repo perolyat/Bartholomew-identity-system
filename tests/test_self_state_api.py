@@ -208,3 +208,48 @@ class TestEpisodesByType:
         response = client.get("/api/episodes/by-type/not_a_real_type")
 
         assert response.status_code == 400
+
+
+class TestEpisodeSearch:
+    """
+    NarratorEngine.search_episodes() (FTS5 full-text search over episodic
+    entries, with a graceful LIKE fallback) was fully built and tested but
+    had zero API route exposing it -- confirmed by grep, its only callers
+    anywhere were tests. Added GET /api/episodes/search.
+    """
+
+    def test_search_finds_an_episode_by_goal_content(self, client):
+        app_module._kernel.experience.add_goal("a uniquely searchable goal phrase")
+
+        response = client.get("/api/episodes/search", params={"q": "uniquely searchable"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["query"] == "uniquely searchable"
+        assert any("uniquely searchable" in ep["narrative"] for ep in body["episodes"])
+
+        app_module._kernel.experience.complete_goal("a uniquely searchable goal phrase")
+
+    def test_search_route_takes_priority_over_episode_id_route(self, client):
+        """Regression guard for the registration-order requirement: GET
+        /episodes/{episode_id} must not swallow /episodes/search."""
+        response = client.get("/api/episodes/search", params={"q": "anything"})
+
+        assert response.status_code == 200
+        assert "episodes" in response.json()
+
+    def test_search_rejects_an_unknown_episode_type_with_400(self, client):
+        response = client.get(
+            "/api/episodes/search",
+            params={"q": "anything", "episode_type": "not_a_real_type"},
+        )
+
+        assert response.status_code == 400
+
+    def test_search_rejects_an_unknown_tone_with_400(self, client):
+        response = client.get(
+            "/api/episodes/search",
+            params={"q": "anything", "tone": "not_a_real_tone"},
+        )
+
+        assert response.status_code == 400

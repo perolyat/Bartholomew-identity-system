@@ -896,6 +896,30 @@ No exceptions. Not even chat.
       tests/test_runtime_contract_chat_seam.py` — 197 passed (no regressions, no
       cross-file leakage).
 
+11.11. **Wire `NarratorEngine.search_episodes()` into a real route** — ✅ implemented 2026-07-21
+    - Generalizing item 11.10's ASSUMPTIONS.md A1b finding ("audit for public methods with
+      zero test coverage, not just zero *failures*"), swept every public method in
+      `narrator.py` for external callers by grep. Everything else checked out (private
+      handler methods correctly called only internally; `set_persona_manager()` is genuinely
+      dead code now that `daemon.py` passes `persona_manager` at construction instead — its
+      own docstring names the ordering problem that made it necessary, which no longer
+      applies; left alone, not worth a same-session cleanup). `search_episodes()` stood out:
+      a fully-built, independently-tested FTS5 full-text search over episodic entries (with
+      its own graceful LIKE fallback already built in) that no API route exposed at all.
+    - Added `GET /api/episodes/search` (`self_state.py`) — `q`, `limit`, optional
+      `episode_type`/`tone` filters (validated against the real enums, 400 on an unrecognized
+      value, same pattern as item 11.10's `get_episodes_by_type` fix). **Must be registered
+      before `GET /episodes/{episode_id}`** in the file — both are single-segment paths under
+      `/episodes/`, and FastAPI/Starlette resolves in registration order, so the existing
+      path-param route would otherwise greedily match `"search"` as an `episode_id`. Placed
+      it there and added a regression test asserting the ordering holds.
+    - **Acceptance:** a goal added via `ExperienceKernel.add_goal()` is findable by its own
+      text through `GET /api/episodes/search?q=...`.
+    - **Verify:** `pytest -q tests/test_self_state_api.py` — 18 passed locally (4 new);
+      `pytest -q tests/test_self_state_api.py tests/test_api_chat_runtime_contract.py
+      tests/test_narrator.py tests/test_stage1_api_endpoints.py` — 128 passed (no
+      regressions).
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

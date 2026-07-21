@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from bartholomew.kernel.narrator import EpisodeType
+from bartholomew.kernel.narrator import EpisodeType, NarrativeTone
 
 
 router = APIRouter(prefix="/api", tags=["self-state"])
@@ -250,6 +250,56 @@ async def get_recent_episodes(limit: int = 20) -> dict[str, Any]:
     return {
         "episodes": [ep.to_dict() for ep in episodes],
         "count": len(episodes),
+    }
+
+
+@router.get("/episodes/search")
+async def search_episodes(
+    q: str,
+    limit: int = 20,
+    episode_type: str | None = None,
+    tone: str | None = None,
+) -> dict[str, Any]:
+    """
+    Full-text search across episodic entries.
+
+    Wires up NarratorEngine.search_episodes() (FTS5, with a graceful LIKE
+    fallback baked into the method itself), which was fully built and
+    tested but had no route exposing it at all -- confirmed by grep, its
+    only callers anywhere in the repo were tests. Must be registered
+    before GET /episodes/{episode_id} in this file: that route's path
+    param would otherwise greedily match "search" as an episode_id (both
+    are single-segment paths under /episodes/, and FastAPI resolves in
+    registration order).
+    """
+    kernel = _get_kernel()
+
+    parsed_type = None
+    if episode_type is not None:
+        try:
+            parsed_type = EpisodeType(episode_type)
+        except ValueError:
+            valid = ", ".join(t.value for t in EpisodeType)
+            raise HTTPException(400, f"Unknown episode_type '{episode_type}'. Valid: {valid}") from None
+
+    parsed_tone = None
+    if tone is not None:
+        try:
+            parsed_tone = NarrativeTone(tone)
+        except ValueError:
+            valid = ", ".join(t.value for t in NarrativeTone)
+            raise HTTPException(400, f"Unknown tone '{tone}'. Valid: {valid}") from None
+
+    episodes = kernel.narrator.search_episodes(
+        query=q,
+        limit=limit,
+        episode_type=parsed_type,
+        tone=parsed_tone,
+    )
+    return {
+        "episodes": [ep.to_dict() for ep in episodes],
+        "count": len(episodes),
+        "query": q,
     }
 
 
