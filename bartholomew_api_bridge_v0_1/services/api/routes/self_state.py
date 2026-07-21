@@ -11,6 +11,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from bartholomew.kernel.narrator import EpisodeType
+
 
 router = APIRouter(prefix="/api", tags=["self-state"])
 
@@ -120,9 +122,9 @@ async def set_attention(body: AttentionUpdate) -> dict[str, Any]:
 
     kernel.experience.set_attention(
         target=body.target,
-        attention_type=body.attention_type,
+        focus_type=body.attention_type,
         intensity=body.intensity,
-        context_tags=body.context_tags or [],
+        tags=body.context_tags or [],
     )
 
     return {
@@ -146,7 +148,7 @@ async def clear_attention() -> dict[str, Any]:
 async def get_drives() -> dict[str, Any]:
     """Get all drives with effective activation levels."""
     kernel = _get_kernel()
-    drives = kernel.experience.get_top_drives(limit=100)
+    drives = kernel.experience.get_top_drives(n=100)
     return {
         "drives": [d.to_dict() for d in drives],
     }
@@ -156,7 +158,7 @@ async def get_drives() -> dict[str, Any]:
 async def get_top_drives(limit: int = 5) -> dict[str, Any]:
     """Get top N drives by effective activation."""
     kernel = _get_kernel()
-    drives = kernel.experience.get_top_drives(limit=limit)
+    drives = kernel.experience.get_top_drives(n=limit)
     return {
         "drives": [d.to_dict() for d in drives],
     }
@@ -168,7 +170,7 @@ async def activate_drive(drive_id: str, amount: float = 0.2) -> dict[str, Any]:
     kernel = _get_kernel()
 
     try:
-        kernel.experience.activate_drive(drive_id, amount=amount)
+        kernel.experience.activate_drive(drive_id, boost=amount)
         drive = kernel.experience.get_drive(drive_id)
         return {
             "ok": True,
@@ -179,12 +181,21 @@ async def activate_drive(drive_id: str, amount: float = 0.2) -> dict[str, Any]:
 
 
 @router.post("/self/drives/{drive_id}/satisfy")
-async def satisfy_drive(drive_id: str, amount: float = 0.3) -> dict[str, Any]:
-    """Satisfy a drive by decreasing its activation level."""
+async def satisfy_drive(drive_id: str) -> dict[str, Any]:
+    """
+    Satisfy a drive by decreasing its activation level.
+
+    No `amount` parameter -- ExperienceKernel.satisfy_drive() applies a
+    fixed reduction; there's no underlying way to parameterize it (a
+    previous version of this route accepted `amount` and silently
+    discarded it, since the kernel call it forwarded to never accepted it
+    either -- see the TypeError this route used to always raise before
+    it was fixed).
+    """
     kernel = _get_kernel()
 
     try:
-        kernel.experience.satisfy_drive(drive_id, amount=amount)
+        kernel.experience.satisfy_drive(drive_id)
         drive = kernel.experience.get_drive(drive_id)
         return {
             "ok": True,
@@ -259,7 +270,19 @@ async def get_episodes_by_type(
 ) -> dict[str, Any]:
     """Get episodes filtered by type."""
     kernel = _get_kernel()
-    episodes = kernel.narrator.get_episodes_by_type(episode_type, limit=limit)
+
+    # NarratorEngine.get_episodes_by_type() expects an EpisodeType enum (it
+    # calls episode_type.value internally) -- this route used to pass the
+    # raw path string straight through, which raised AttributeError on
+    # every single request (str has no .value). Convert here, with a 400
+    # for an unrecognized type rather than a raw 500.
+    try:
+        parsed_type = EpisodeType(episode_type)
+    except ValueError:
+        valid = ", ".join(t.value for t in EpisodeType)
+        raise HTTPException(400, f"Unknown episode_type '{episode_type}'. Valid: {valid}") from None
+
+    episodes = kernel.narrator.get_episodes_by_type(parsed_type, limit=limit)
     return {
         "episodes": [ep.to_dict() for ep in episodes],
         "count": len(episodes),

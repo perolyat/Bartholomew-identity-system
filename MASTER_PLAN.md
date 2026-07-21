@@ -841,6 +841,61 @@ No exceptions. Not even chat.
       tests/test_runtime_contract_chat_seam.py tests/test_api_chat_runtime_contract.py
       test_kernel_alive.py` — 96 passed (no regressions).
 
+11.10. **Fix five previously-live 500s in the `self_state` API router; add its first
+    HTTP-level test file** — ✅ implemented 2026-07-21
+    - `bartholomew_api_bridge_v0_1/services/api/routes/self_state.py` (`/api/self/*`,
+      `/api/persona/*`, `/api/episodes/*`) had **zero HTTP-level tests anywhere in the repo**
+      before this change — everything else touching this area
+      (`tests/test_runtime_contract_chat_seam.py`, `tests/test_scenario_replay.py`) calls
+      `daemon.experience.add_goal()` etc. directly, never through the actual routes. Writing
+      `tests/test_self_state_api.py` (the first such file) found five call sites that had
+      drifted from the real `ExperienceKernel`/`NarratorEngine` method signatures they call —
+      every one of these was a genuine, currently-live bug, not a hypothetical:
+      - `PUT /api/self/attention` — passed `attention_type=`/`context_tags=`; the real method
+        is `set_attention(target, focus_type, intensity, tags)`. **Always raised `TypeError`.**
+      - `GET /api/self/drives` and `GET /api/self/drives/top` — passed `limit=`; the real
+        method is `get_top_drives(n=3)`. **Always raised `TypeError`.**
+      - `POST /api/self/drives/{id}/activate` — passed `amount=`; the real method is
+        `activate_drive(drive_id, boost=0.0)`. **Always raised `TypeError`.**
+      - `POST /api/self/drives/{id}/satisfy` — passed `amount=`; the real method,
+        `satisfy_drive(drive_id)`, takes no second parameter at all (a fixed, unparameterized
+        reduction). **Always raised `TypeError`.**
+      - `GET /api/episodes/by-type/{episode_type}` — passed the raw URL path string straight
+        to `NarratorEngine.get_episodes_by_type()`, which calls `.value` on it internally,
+        assuming an `EpisodeType` enum. **Always raised `AttributeError`.**
+      - (Also fixed as part of the same investigation, see item above this one's sibling in
+        spirit: `POST /api/self/goals` always returned `"added": null` —
+        `ExperienceKernel.add_goal()` had no return statement. Now returns `bool`, mirroring
+        `complete_goal()`'s existing contract. No caller anywhere used the old `None` return
+        value, confirmed by grep, so this was safe to change.)
+    - **Separately confirmed, not fixed (out of scope, a deeper pre-existing gap):**
+      `daemon.py` constructs `ExperienceKernel(db_path=..., workspace=...)` with no
+      `identity_path` — so `ExperienceKernel` always falls back to its own hardcoded
+      `DEFAULT_DRIVES` list; neither `config/drives.yaml` nor `Identity.yaml`'s
+      `identity.self_model.drives` ever reaches it. `daemon.py` separately loads
+      `config/drives.yaml` into `self.drives` for the `Planner`, entirely disconnected from
+      `ExperienceKernel`'s own drive list — a second "drives" concept with two independent
+      configs and no shared source of truth. Noted here rather than fixed; a real design
+      question (should `ExperienceKernel` read `Identity.yaml`'s drives?) that deserves its own
+      scoped decision, not a same-session fix bundled into a route-signature bugfix pass.
+    - **Test-isolation finding along the way:** `app_module`'s module-level `_kernel` is a
+      process-wide singleton shared by every test file that imports
+      `bartholomew_api_bridge_v0_1.services.api.app` — `tests/test_self_state_api.py`'s new
+      goal/persona-mutating tests initially leaked state into
+      `tests/test_api_chat_runtime_contract.py`'s assertions when both ran in the same pytest
+      session (confirmed: goals from one file's tests showed up in the other file's chat
+      response). Fixed with explicit cleanup (an autouse fixture removing every goal the class
+      creates; the persona-switch test restores whatever pack was active before it ran).
+    - **Acceptance:** every route in `self_state.py`'s drives/attention/episodes-by-type
+      surface returns a real response instead of a 500; `POST /self/goals`'s `added` field is
+      accurate.
+    - **Verify:** `pytest -q tests/test_self_state_api.py` — 14 passed locally;
+      `pytest -q tests/test_self_state_api.py tests/test_api_chat_runtime_contract.py
+      tests/test_stage1_api_endpoints.py tests/test_stage0_alive.py
+      tests/test_experience_kernel.py tests/test_narrator.py tests/test_scenario_replay.py
+      tests/test_runtime_contract_chat_seam.py` — 197 passed (no regressions, no
+      cross-file leakage).
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?
