@@ -55,16 +55,22 @@ def evaluate_tool_policy(context: IdentityContext, tool_name: str) -> PolicyDeci
 
     allowed = context.tool_use_default_allowed or in_allowlist
     rationale.append(
-        "tool_use.default_allowed"
-        if context.tool_use_default_allowed
-        else "tool_use.default_allowed is false",
+        (
+            "tool_use.default_allowed"
+            if context.tool_use_default_allowed
+            else "tool_use.default_allowed is false"
+        ),
     )
 
     requires_consent = allowed and bool(context.tool_use_consent_prompts)
     if requires_consent:
         rationale.append(f"tool_use.consent_prompts: {context.tool_use_consent_prompts}")
 
-    reason = None if allowed else f"'{tool_name}' is not in tool_use.allowlist and default_allowed is false"
+    reason = (
+        None
+        if allowed
+        else f"'{tool_name}' is not in tool_use.allowlist and default_allowed is false"
+    )
 
     return PolicyDecision(
         allowed=allowed,
