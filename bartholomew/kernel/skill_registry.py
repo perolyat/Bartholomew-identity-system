@@ -10,7 +10,10 @@ Part of Stage 4: Skill Registry + Starter Skills.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import inspect
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
@@ -18,9 +21,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .memory.privacy_guard import get_consent_handler
+from .redaction_engine import redact_pii
 from .skill_base import SkillBase, SkillContext, SkillResult, SkillState
 from .skill_manifest import SkillManifest, discover_manifests
-from .skill_permissions import PermissionChecker, get_permission_checker
+from .skill_permissions import PERMISSION_CATEGORIES, PermissionChecker, get_permission_checker
 
 
 if TYPE_CHECKING:
@@ -71,6 +76,39 @@ class SkillRegistry:
         last_loaded TEXT,
         last_error TEXT,
         config_json TEXT
+    );
+
+    -- Audit trail for every execute_action() attempt (success, failure,
+    -- permission denial, or parking-brake block) -- distinct from
+    -- skill_permissions.permission_audit, which only logs permission
+    -- checks/grants, not the resulting action outcome.
+    CREATE TABLE IF NOT EXISTS skill_action_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        skill_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        params_json TEXT,
+        status TEXT NOT NULL,
+        result_message TEXT,
+        result_error TEXT,
+        timestamp TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_skill_action_audit_skill
+        ON skill_action_audit(skill_id);
+    CREATE INDEX IF NOT EXISTS idx_skill_action_audit_time
+        ON skill_action_audit(timestamp);
+
+    -- Same table MemoryStore's own schema creates (see memory_store.py).
+    -- Recreated here, identically and idempotently, so _is_blocked_by_brake()
+    -- can read the parking brake's state even when a SkillRegistry is used
+    -- against a db_path whose MemoryStore hasn't been initialized yet (or
+    -- isn't used at all) -- otherwise the brake check itself would fail
+    -- with "no such table", which _is_blocked_by_brake() treats as blocked
+    -- (fail-closed), incorrectly denying every action.
+    CREATE TABLE IF NOT EXISTS system_flags (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
     );
     """
 
@@ -324,7 +362,7 @@ class SkillRegistry:
 
         for sub in manifest.subscriptions:
             # Create handler that routes events to skill
-            async def handler(
+            async def async_handler(
                 event: WorkspaceEvent,
                 skill: SkillBase = instance,
             ) -> None:
@@ -337,7 +375,34 @@ class SkillRegistry:
                         e,
                     )
 
-            sub_id = self._workspace.subscribe(sub.channel, handler)
+            # GlobalWorkspace.publish() (used by most of the kernel, e.g.
+            # daemon.py/skill_base.py/working_memory.py) is synchronous and
+            # only ever invokes the sync `callback` slot -- it never awaits
+            # `async_callback`. Passing a bare async handler as `callback`
+            # created the coroutine but never ran it (silent no-op event
+            # routing). Schedule it on the running loop instead so the sync
+            # path still executes the handler; publish_async() continues to
+            # use `async_callback` directly.
+            def sync_handler(
+                event: WorkspaceEvent,
+                _async_handler: Any = async_handler,
+                _skill: SkillBase = instance,
+            ) -> None:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    logger.warning(
+                        "Skill %s event dropped: no running event loop",
+                        _skill.skill_id,
+                    )
+                    return
+                loop.create_task(_async_handler(event))
+
+            sub_id = self._workspace.subscribe(
+                sub.channel,
+                sync_handler,
+                async_callback=async_handler,
+            )
             subscription_ids.append(sub_id)
             logger.debug(
                 "Skill %s subscribed to channel: %s",
@@ -422,6 +487,16 @@ class SkillRegistry:
         """
         Execute an action on a loaded skill.
 
+        This is the single choke-point every skill execution flows through
+        (whether triggered by the planner, an API route, or anything else),
+        so it's where the parking-brake check, "ask"-level consent
+        resolution, and the execution audit trail all live -- individual
+        skills only self-check permissions they already have (see
+        SkillBase._require_permission()); they have no path to actually
+        *resolve* an "ask" grant, and nothing previously checked the
+        parking brake's "skills" scope at all (a documented, supported
+        scope per INTERFACES.md that nothing acted on).
+
         Args:
             skill_id: ID of skill
             action: Action name to execute
@@ -432,24 +507,54 @@ class SkillRegistry:
         """
         loaded = self._loaded.get(skill_id)
         if not loaded:
-            return SkillResult.fail(f"Skill not loaded: {skill_id}")
+            return self._finish(
+                skill_id,
+                action,
+                params,
+                SkillResult.fail(f"Skill not loaded: {skill_id}"),
+            )
 
         if not loaded.instance.is_ready:
-            return SkillResult.fail(
-                f"Skill not ready: {skill_id} (state={loaded.instance.state.value})",
+            return self._finish(
+                skill_id,
+                action,
+                params,
+                SkillResult.fail(
+                    f"Skill not ready: {skill_id} (state={loaded.instance.state.value})",
+                ),
             )
 
         # Validate action exists
         manifest_action = loaded.manifest.get_action(action)
         if not manifest_action:
-            return SkillResult.fail(f"Unknown action: {action} for skill {skill_id}")
+            return self._finish(
+                skill_id,
+                action,
+                params,
+                SkillResult.fail(f"Unknown action: {action} for skill {skill_id}"),
+            )
+
+        # Parking brake: fail-closed operational kill-switch, scope="skills".
+        if self._is_blocked_by_brake():
+            return self._finish(
+                skill_id,
+                action,
+                params,
+                SkillResult.fail("Blocked by parking brake (scope=skills)"),
+            )
+
+        # Resolve any "ask"-level permissions the manifest requires before
+        # executing (see _resolve_permissions()'s docstring).
+        consent_result = await self._resolve_permissions(loaded.manifest)
+        if consent_result is not None:
+            return self._finish(skill_id, action, params, consent_result)
 
         # Execute
         try:
             loaded.instance._set_state(SkillState.RUNNING)
             result = await loaded.instance.execute(action, params or {})
             loaded.instance._set_state(SkillState.READY)
-            return result
+            return self._finish(skill_id, action, params, result)
         except Exception as e:
             logger.exception(
                 "Skill %s action %s failed: %s",
@@ -458,7 +563,182 @@ class SkillRegistry:
                 e,
             )
             loaded.instance._set_error(str(e))
-            return SkillResult.fail(str(e))
+            return self._finish(skill_id, action, params, SkillResult.fail(str(e)))
+
+    def _is_blocked_by_brake(self) -> bool:
+        """
+        Check the global ParkingBrake's "skills" scope.
+
+        Fails closed (treats as blocked) if the check itself errors --
+        never silently allow a skill action when the safety gate can't be
+        read, matching this codebase's fail-closed governance principle.
+        """
+        if not self._db_path:
+            return False
+
+        try:
+            from bartholomew.orchestrator.safety.parking_brake import (
+                BrakeStorage,
+                ParkingBrake,
+            )
+
+            storage = BrakeStorage(self._db_path)
+            brake = ParkingBrake(storage)
+            return brake.is_blocked("skills")
+        except Exception:
+            logger.exception("Parking brake check failed; failing closed")
+            return True
+
+    async def _resolve_permissions(self, manifest: SkillManifest) -> SkillResult | None:
+        """
+        Ensure every permission the manifest declares in `requires` is
+        granted before executing an action.
+
+        "auto"-level permissions were already granted at load_skill() time.
+        "ask"-level permissions are resolved here via the same registered
+        consent handler used for memory consent
+        (bartholomew.kernel.memory.privacy_guard) -- the only actual
+        interactive "ask the user" plumbing in this codebase, reused for
+        consistency rather than inventing a second one. Grants are
+        session-scoped only (not persistent), so approving once doesn't
+        silently become permanent config. Fails closed (denies) with no
+        handler registered, exactly like the memory-consent path.
+
+        Returns:
+            None if every required permission is granted; otherwise a
+            SkillResult.denied(...) for the first permission that wasn't.
+        """
+        for permission in manifest.permissions.requires:
+            result = self._permission_checker.check(manifest.skill_id, permission)
+            if result.granted:
+                continue
+
+            if manifest.permissions.level != "ask":
+                # "never", or an "auto" skill whose permission somehow
+                # wasn't set at load time -- either way, a hard deny.
+                return SkillResult.denied(permission)
+
+            handler = get_consent_handler()
+            if handler is None:
+                return SkillResult.denied(permission)
+
+            description = PERMISSION_CATEGORIES.get(permission, permission)
+            prompt = (
+                f"Skill '{manifest.skill_id}' requests permission '{permission}' ({description})"
+            )
+            approved = handler(prompt)
+            if inspect.isawaitable(approved):
+                approved = await approved
+
+            if not approved:
+                return SkillResult.denied(permission)
+
+            self._permission_checker.grant_session(manifest.skill_id, permission)
+
+        return None
+
+    def _finish(
+        self,
+        skill_id: str,
+        action: str,
+        params: dict[str, Any] | None,
+        result: SkillResult,
+    ) -> SkillResult:
+        """Write the execution audit record, then return the result unchanged."""
+        self._audit_execution(skill_id, action, params, result)
+        return result
+
+    def _audit_execution(
+        self,
+        skill_id: str,
+        action: str,
+        params: dict[str, Any] | None,
+        result: SkillResult,
+    ) -> None:
+        """
+        Persist an audit record for every execute_action() attempt --
+        success, failure, permission denial, or parking-brake block alike.
+        """
+        if not self._db_path:
+            return
+
+        # Redact PII from top-level string param values before persisting --
+        # this table has no consent-gate/redaction pipeline of its own,
+        # same class of gap found and fixed for the Experience
+        # Kernel/Narrator elsewhere in this codebase.
+        sanitized_params = {
+            k: (redact_pii(v) if isinstance(v, str) else v) for k, v in (params or {}).items()
+        }
+
+        now = datetime.utcnow().isoformat() + "Z"
+        try:
+            conn = self._get_connection()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO skill_action_audit
+                    (skill_id, action, params_json, status, result_message, result_error, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        skill_id,
+                        action,
+                        json.dumps(sanitized_params),
+                        result.status.value,
+                        result.message,
+                        result.error,
+                        now,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception("Failed to write skill action audit record")
+
+    def get_action_audit_log(
+        self,
+        skill_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Get the skill action execution audit log.
+
+        Args:
+            skill_id: Optional filter by skill
+            limit: Maximum entries to return
+
+        Returns:
+            List of audit log entries, most recent first
+        """
+        if not self._db_path:
+            return []
+
+        conn = self._get_connection()
+        try:
+            if skill_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM skill_action_audit
+                    WHERE skill_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (skill_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM skill_action_audit
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
 
     # -------------------------------------------------------------------------
     # Event Routing

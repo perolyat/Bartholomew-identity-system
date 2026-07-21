@@ -169,7 +169,7 @@ pytest -q tests/test_persona_pack.py   # this doc previously cited a nonexistent
 
 ---
 
-### Stage 4 — Modularity: Skill registry + starter skills
+### Stage 4 — Modularity: Skill registry + starter skills — done (2026-07-21)
 
 **Goal:** Standardize skills as installable modules with explicit manifests, permissions, and test expectations.
 
@@ -177,6 +177,13 @@ pytest -q tests/test_persona_pack.py   # this doc previously cited a nonexistent
 - Skill manifest schema defined + enforced.
 - Registry can list/load skills; permission model applied.
 - Starter skills working end-to-end: tasks + notify + calendar draft.
+
+The registry, manifests, and starter skills were already fully built and
+unit-tested, but disconnected from the live daemon (`Planner` never called
+into `SkillRegistry`, `KernelDaemon` never constructed one). Wired up, plus
+a parking-brake check, "ask"-consent resolution for `calendar_draft`, and
+a dedicated `skill_action_audit` trail -- see MASTER_PLAN.md's "P2
+investigation & wiring" write-up for details.
 
 **Verify:**
 ```bash

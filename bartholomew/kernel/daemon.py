@@ -17,6 +17,7 @@ from .persona import load_persona
 from .persona_pack import PersonaPackManager
 from .planner import Planner
 from .policy import load_policy
+from .skill_registry import SkillRegistry
 from .state_model import WorldState
 from .working_memory import WorkingMemoryManager
 
@@ -70,6 +71,20 @@ class KernelDaemon:
             persona_manager=self.persona_manager,
         )
 
+        # Stage 4: Skill Registry -- previously never constructed anywhere in
+        # the live daemon (nor exposed via any API route), so the skill
+        # system existed as fully-tested but completely disconnected code.
+        # Wired into the planner below so Planner.handle_skill_request()
+        # ("prompt -> decide -> tool call") has something to call.
+        self.skill_registry = SkillRegistry(
+            db_path=db_path,
+            workspace=self.workspace,
+            kernel=self.experience,
+            working_memory=self.working_memory,
+            memory_store=self.mem,
+        )
+        self.planner.set_skill_registry(self.skill_registry)
+
         # Task handles for lifecycle management
         self._tick_task = None
         self._consumer_task = None
@@ -98,6 +113,17 @@ class KernelDaemon:
         # Stage 3: Initialize experience kernel state
         self._init_experience_kernel()
 
+        # Stage 4: Load skills. load_enabled_skills() loads whatever was
+        # previously enabled (skill_registry_state), which is empty on a
+        # fresh database -- fall back to loading every discovered starter
+        # skill so they work out of the box rather than requiring a manual
+        # enable step first, since they're documented as "safe and
+        # reversible".
+        loaded_count = await self.skill_registry.load_enabled_skills()
+        if loaded_count == 0 and not self.skill_registry.list_loaded():
+            for skill_id in self.skill_registry.list_available():
+                await self.skill_registry.load_skill(skill_id)
+
         # Stage 3: Subscribe narrator to workspace events
         self.narrator.subscribe_to_workspace()
 
@@ -108,6 +134,10 @@ class KernelDaemon:
             source="kernel_daemon",
             payload={"event": "startup", "timestamp": datetime.now(timezone.utc).isoformat()},
         )
+        # Give the scheduled skill event-handler tasks (see
+        # SkillRegistry._setup_subscriptions()) a chance to start running
+        # before we move on -- publish() is sync and only schedules them.
+        await asyncio.sleep(0)
 
         # Start background tasks
         self._tick_task = asyncio.create_task(self._system_tick())
@@ -162,6 +192,7 @@ class KernelDaemon:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
+        await asyncio.sleep(0)
 
         # Stage 3: Persist experience snapshot
         try:
@@ -176,6 +207,12 @@ class KernelDaemon:
             print("[Kernel] Working memory state persisted")
         except Exception as e:
             print(f"[Kernel] Failed to persist working memory: {e}")
+
+        # Stage 4: Shut down loaded skills
+        try:
+            await self.skill_registry.shutdown()
+        except Exception as e:
+            print(f"[Kernel] Failed to shut down skill registry: {e}")
 
         tasks = [
             self._tick_task,

@@ -422,6 +422,68 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
     - **Acceptance:** end-to-end: prompt → decide → tool call (with consent) → persisted + audited.
     - **Verify:** `pytest -q tests/test_end_to_end_tasks_and_audit.py`.
 
+#### P2 investigation & wiring (2026-07-21)
+
+Same pattern as P1's Experience Kernel: the manifest schema, `SkillRegistry`,
+`SkillBase`, permission model, and all three starter skills (`tasks`,
+`notify`, `calendar_draft`) already existed, fully built and unit-tested
+(`tests/test_skill_registry.py`, 48 tests) -- but nothing in the live system
+ever constructed a `SkillRegistry` or routed a request into it. `Planner`
+was a 19-line stub whose `decide()` always returned `None`, and
+`KernelDaemon` never imported `skill_registry` at all. The acceptance
+criterion ("prompt → decide → tool call (with consent) → persisted +
+audited") was unmet end-to-end even though every individual piece passed
+its own tests in isolation. Fixed:
+
+- **Planner**: added `Planner.handle_skill_request(skill_id, action, params)`
+  -- validates the request names a real, loaded skill/action (the "decide"
+  step), then delegates to `SkillRegistry.execute_action()` for consent
+  resolution, execution, and audit. `set_skill_registry()` setter added
+  since `KernelDaemon.__init__` constructs `Planner` before the Stage 3/4
+  modules `SkillRegistry` depends on.
+- **`daemon.py`**: constructs `SkillRegistry` and wires it into `Planner`;
+  `start()` loads enabled skills (falling back to loading every discovered
+  starter skill on a fresh database, so they work out of the box);
+  `stop()` shuts the registry down.
+- **Parking brake**: `SkillRegistry.execute_action()` now checks the global
+  `ParkingBrake`'s `"skills"` scope before every execution and fails closed
+  (blocks) if the check itself errors -- previously nothing in the skill
+  system consulted the brake at all, despite `config/policy.yaml` already
+  documenting a `"skills"` scope for it.
+- **"ask" consent resolution**: `calendar_draft`'s manifest was `level:
+  "auto"` (auto-granted, no consent) despite the backlog explicitly calling
+  for it to be "draft-only; behind consent" -- changed to `level: "ask"`.
+  Added `SkillRegistry._resolve_permissions()`, which resolves `"ask"`-level
+  requirements via the same consent-handler mechanism already used for
+  memory-write consent (`bartholomew.kernel.memory.privacy_guard`), rather
+  than inventing a second one. Grants are session-scoped only. Fails closed
+  (denies) with no handler registered.
+- **Action audit trail**: added a `skill_action_audit` table (distinct from
+  the existing `permission_audit`, which only logs permission checks) that
+  records every `execute_action()` attempt -- success, failure, permission
+  denial, or brake block -- with PII-redacted params, via a single
+  `_finish()`/`_audit_execution()` choke-point.
+- **Bug found and fixed along the way**: `SkillRegistry._setup_subscriptions()`
+  passed its async event handler directly as `GlobalWorkspace.subscribe()`'s
+  *sync* `callback` slot instead of `async_callback`. `GlobalWorkspace.publish()`
+  (the sync path used throughout the kernel -- `daemon.py` startup/shutdown
+  events, `skill_base.py`'s `_emit_event()`, `working_memory.py`) only ever
+  invokes the sync `callback`, so it created the handler coroutine and
+  immediately discarded it without running any of its body -- skill
+  event-driven reactions (e.g. `calendar_draft` auto-creating a block from a
+  `tasks.task_created` event) had silently never fired. Fixed by having the
+  sync `callback` schedule the async handler via
+  `asyncio.get_running_loop().create_task(...)` (failing safe -- logs and
+  drops the event -- if there's no running loop), while `async_callback`
+  continues to serve `publish_async()` directly.
+- Added `tests/test_end_to_end_tasks_and_audit.py` (4 tests): an "auto"
+  skill (`tasks.create`) persisting + auditing; an "ask" skill
+  (`calendar_draft.create`) approved via a registered consent handler; the
+  same "ask" flow denied with no handler registered (fail-closed); and the
+  parking brake blocking then, after `disengage()`, allowing the same
+  action.
+- Verified: full `pytest -q` remains green. `ruff check` clean.
+
 ### P3 — Initiative engine (proactive nudges) and workflows
 12. **Scheduler-driven check-ins + workflows**
    - Morning/evening check-in; weekly review; “next best action” suggestion engine.
