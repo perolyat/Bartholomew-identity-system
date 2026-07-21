@@ -367,14 +367,47 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
      template-based `generate_*_reflection_narrative`); a date-range query against the `memories`
      table itself for narrator/reflection use (currently only `episodic_entries` supports this).
 
-9. **Persona / Mentor Mode packs (config-driven)**
+9. ✅ **Persona / Mentor Mode packs (config-driven)** — verified against acceptance criteria and one
+   real gap closed 2026-07-20.
    - System prompt packs (e.g., Calm Mentor / Coach / Gamer Ally) selectable via config/UI without code edits.
    - **Acceptance:** switching persona changes tone/constraints; logged in audit trail.
-   - **Verify:** `pytest -q tests/test_persona_pack.py` (this doc previously cited a nonexistent
-     `tests/test_persona_switching.py` -- corrected 2026-07-20) + manual API smoke.
-   - **Status (2026-07-20):** also appears already implemented (`bartholomew/kernel/persona_pack.py`,
-     `PersonaPackManager`, wired into `daemon.py`; `tests/test_persona_pack.py` exists and passes) --
-     not independently re-verified against this item's specific acceptance criteria in this pass.
+   - **Verify:** `pytest -q tests/test_persona_pack.py tests/test_narrator.py::TestPersonaNarrativeOverrides`
+     (this doc previously cited a nonexistent `tests/test_persona_switching.py` -- corrected
+     2026-07-20) + manual API smoke (done, see below).
+   - **Verified independently against this item's specific acceptance criteria** (already-implemented
+     in `bartholomew/kernel/persona_pack.py`/`PersonaPackManager`, wired into `daemon.py`;
+     `tests/test_persona_pack.py` exists and passes -- but that alone doesn't prove the acceptance
+     criteria hold, so checked each piece directly):
+     - ✅ Config-driven, no-code-edit packs: `config/persona_packs/*.yaml` (default/caregiver/tactical).
+     - ✅ Switch is logged to an audit trail: `persona_switch_log` SQLite table, retrievable via
+       `GET /api/persona/history` -- confirmed live via a manual `TestClient` smoke test
+       (`list`/`switch`/`current`/`history` all exercised end-to-end against the real FastAPI app).
+     - ✅ Switching has a real behavioral effect on `ExperienceKernel`: `_apply_drive_boosts()`
+       actually mutates drive `context_boost` values per the active pack's `drive_boosts`.
+     - ❌ → ✅ **Switching changing "tone" was false until this fix.** `PersonaPack.narrative_overrides`/
+       `tone`/`style` existed as rich, well-designed data (e.g. tactical: "Target acquired:
+       {target}.", caregiver: "I noticed you might be feeling {emotion}. I'm here if you need
+       me.") and `PersonaPackManager.get_narrative_templates()`/`get_style()`/`get_tone()` existed
+       as accessors -- but `narrator.py` never called into `PersonaPackManager` anywhere. Proved
+       directly: switching between "default" and "tactical" produced byte-identical narrative
+       rotation, driven purely by an internal counter, completely independent of which persona was
+       active. Fixed: `NarratorEngine` takes an optional `persona_manager` constructor arg (plus a
+       `set_persona_manager()` setter for post-construction attachment) and a new `_get_templates()`
+       helper that checks the active pack's `narrative_overrides` for the current
+       `episode_type`/tone first, falling back to the existing static `NarrativeTemplates` when the
+       persona has no override for that specific tone. Affect-driven tone selection
+       (`determine_tone()`) is unchanged -- a persona only overrides which literal strings are used
+       for a given tone, not which tone gets picked. `daemon.py` reordered to construct
+       `persona_manager` before `narrator` (no dependency issue -- `PersonaPackManager` only needs
+       `experience`/`workspace`, both already constructed earlier) so it can be passed straight in.
+       Verified end-to-end: forcing the same NEUTRAL tone and switching from "default" to
+       "tactical" changes `generate_attention_episode()`'s actual output text
+       ("My attention shifted to..." → "Attention locked on...").
+   - Added `tests/test_narrator.py::TestPersonaNarrativeOverrides` (5 tests) and one assertion in
+     `tests/test_stage3_integration.py::TestDaemonIntegration::test_daemon_has_stage3_modules`
+     confirming `daemon.narrator._persona_manager is daemon.persona_manager` (the wiring itself,
+     not just the underlying mechanism).
+   - Verified: full `pytest -q` remains fully green (0 failures). `ruff check` clean.
 
 ### P2 — Modularity: skill registry + a few safe starter skills
 10. **Skill manifest + registry** (local "marketplace" later)

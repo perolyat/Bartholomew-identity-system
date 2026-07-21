@@ -26,6 +26,7 @@ from bartholomew.kernel.redaction_engine import redact_pii
 if TYPE_CHECKING:
     from bartholomew.kernel.experience_kernel import AffectState, ExperienceKernel
     from bartholomew.kernel.global_workspace import GlobalWorkspace, WorkspaceEvent
+    from bartholomew.kernel.persona_pack import PersonaPackManager
 
 
 # =============================================================================
@@ -550,6 +551,7 @@ class NarratorEngine:
         workspace: GlobalWorkspace | None = None,
         config: NarratorConfig | None = None,
         db_path: str | None = None,
+        persona_manager: PersonaPackManager | None = None,
     ):
         """
         Initialize the Narrator Engine.
@@ -559,11 +561,16 @@ class NarratorEngine:
             workspace: GlobalWorkspace for event subscription
             config: NarratorConfig or load from Identity.yaml
             db_path: Path to SQLite DB for persistence
+            persona_manager: Optional PersonaPackManager. When set and the
+                active pack defines a narrative_overrides entry for a given
+                episode_type/tone, those templates are used instead of the
+                static NarrativeTemplates below -- see _get_templates().
         """
         self._kernel = experience_kernel
         self._workspace = workspace
         self._config = config or NarratorConfig.from_identity()
         self._db_path = db_path or ":memory:"
+        self._persona_manager = persona_manager
 
         # Subscription IDs for cleanup
         self._subscription_ids: list[str] = []
@@ -764,6 +771,47 @@ class NarratorEngine:
         self._episode_counter += 1
         return templates[self._episode_counter % len(templates)]
 
+    def set_persona_manager(self, persona_manager: PersonaPackManager | None) -> None:
+        """
+        Attach (or detach) a PersonaPackManager after construction.
+
+        Needed because daemon.py constructs NarratorEngine before
+        PersonaPackManager (the latter depends on ExperienceKernel, which is
+        constructed first, but narrator predates it in the init order).
+        """
+        self._persona_manager = persona_manager
+
+    def _get_templates(
+        self,
+        episode_type: EpisodeType,
+        tone: NarrativeTone,
+        fallback: dict[NarrativeTone, list[str]],
+    ) -> list[str]:
+        """
+        Resolve the template list for an episode_type/tone, preferring the
+        active persona pack's narrative_overrides over the static
+        NarrativeTemplates fallback.
+
+        Without this, PersonaPack.narrative_overrides/tone/style are
+        write-only data -- retrievable via PersonaPackManager's own
+        accessors and the /api/persona/* routes, but never actually
+        consulted by anything that generates narrative text. Confirmed
+        directly: switching personas previously produced byte-identical
+        narrative rotation regardless of which pack was active. Affect-based
+        tone selection (determine_tone()) is unchanged by this -- a persona
+        only overrides which literal strings are used for a given tone, not
+        which tone gets picked.
+        """
+        if self._persona_manager:
+            override = self._persona_manager.get_narrative_templates(
+                episode_type.value,
+                tone.value,
+            )
+            if override:
+                return override
+
+        return fallback.get(tone, fallback[NarrativeTone.NEUTRAL])
+
     def _redact(self, text: str | None) -> str | None:
         """
         Redact PII from free text before it enters a persisted, exportable
@@ -809,10 +857,11 @@ class NarratorEngine:
             emotion = emotion or "different"
         emotion = self._redact(emotion)
 
-        # Select and format template
-        templates = NarrativeTemplates.AFFECT_SHIFT.get(
+        # Select and format template (persona override, if any, wins)
+        templates = self._get_templates(
+            EpisodeType.AFFECT_SHIFT,
             tone,
-            NarrativeTemplates.AFFECT_SHIFT[NarrativeTone.NEUTRAL],
+            NarrativeTemplates.AFFECT_SHIFT,
         )
         template = self._select_template(templates)
         narrative = template.format(emotion=emotion)
@@ -853,10 +902,11 @@ class NarratorEngine:
             target = target or "a new focus"
         target = self._redact(target)
 
-        # Select and format template
-        templates = NarrativeTemplates.ATTENTION_FOCUS.get(
+        # Select and format template (persona override, if any, wins)
+        templates = self._get_templates(
+            EpisodeType.ATTENTION_FOCUS,
             tone,
-            NarrativeTemplates.ATTENTION_FOCUS[NarrativeTone.NEUTRAL],
+            NarrativeTemplates.ATTENTION_FOCUS,
         )
         template = self._select_template(templates)
         narrative = template.format(target=target)
@@ -903,10 +953,11 @@ class NarratorEngine:
         # Convert drive_id to readable phrase
         drive_phrase = drive_id.replace("_", " ")
 
-        # Select and format template
-        templates = NarrativeTemplates.DRIVE_ACTIVATED.get(
+        # Select and format template (persona override, if any, wins)
+        templates = self._get_templates(
+            EpisodeType.DRIVE_ACTIVATED,
             tone,
-            NarrativeTemplates.DRIVE_ACTIVATED[NarrativeTone.NEUTRAL],
+            NarrativeTemplates.DRIVE_ACTIVATED,
         )
         template = self._select_template(templates)
         narrative = template.format(drive=drive_phrase)
@@ -949,10 +1000,11 @@ class NarratorEngine:
         # Convert drive_id to readable phrase
         drive_phrase = drive_id.replace("_", " ")
 
-        # Select and format template
-        templates = NarrativeTemplates.DRIVE_SATISFIED.get(
+        # Select and format template (persona override, if any, wins)
+        templates = self._get_templates(
+            EpisodeType.DRIVE_SATISFIED,
             tone,
-            NarrativeTemplates.DRIVE_SATISFIED[NarrativeTone.NEUTRAL],
+            NarrativeTemplates.DRIVE_SATISFIED,
         )
         template = self._select_template(templates)
         narrative = template.format(drive=drive_phrase)
@@ -993,10 +1045,11 @@ class NarratorEngine:
             goal = goal or "a new objective"
         goal = self._redact(goal)
 
-        # Select and format template
-        templates = NarrativeTemplates.GOAL_ADDED.get(
+        # Select and format template (persona override, if any, wins)
+        templates = self._get_templates(
+            EpisodeType.GOAL_ADDED,
             tone,
-            NarrativeTemplates.GOAL_ADDED[NarrativeTone.NEUTRAL],
+            NarrativeTemplates.GOAL_ADDED,
         )
         template = self._select_template(templates)
         narrative = template.format(goal=goal)
@@ -1037,10 +1090,11 @@ class NarratorEngine:
             goal = goal or "my objective"
         goal = self._redact(goal)
 
-        # Select and format template
-        templates = NarrativeTemplates.GOAL_COMPLETED.get(
+        # Select and format template (persona override, if any, wins)
+        templates = self._get_templates(
+            EpisodeType.GOAL_COMPLETED,
             tone,
-            NarrativeTemplates.GOAL_COMPLETED[NarrativeTone.NEUTRAL],
+            NarrativeTemplates.GOAL_COMPLETED,
         )
         template = self._select_template(templates)
         narrative = template.format(goal=goal)
@@ -1075,10 +1129,11 @@ class NarratorEngine:
         affect_snapshot = self.get_affect_snapshot()
         content = self._redact(content)
 
-        # Select and format template
-        templates = NarrativeTemplates.OBSERVATION.get(
+        # Select and format template (persona override, if any, wins)
+        templates = self._get_templates(
+            EpisodeType.OBSERVATION,
             tone,
-            NarrativeTemplates.OBSERVATION[NarrativeTone.NEUTRAL],
+            NarrativeTemplates.OBSERVATION,
         )
         template = self._select_template(templates)
         narrative = template.format(content=content)
