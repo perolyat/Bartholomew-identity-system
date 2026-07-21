@@ -591,15 +591,28 @@ No exceptions. Not even chat.
       `SkillRegistry.execute_action()`'s outcome for that skill).
     - **Verify:** `pytest -q tests/test_runtime_convergence_policy.py`.
 
-11.3. **Runtime Contract as a code seam**
+11.3. **Runtime Contract as a code seam** — ✅ implemented 2026-07-21 (chat, not yet wired as
+    `/api/chat`'s live default)
     - The Observation -> Interpretation -> Executive -> Governance -> Capability -> Execution
       -> Reflection -> Memory shape becomes real code, starting with chat + skill-execution.
       Voice/sight/other sensors remain future work (see `ROADMAP.md` Stage 6) but must be able
       to plug into the same seam later without a redesign.
+    - Added `bartholomew/kernel/runtime_contract.py`:
+      `run_chat_through_runtime_contract(daemon, user_input, respond_fn)` — a directly
+      callable function tracing every stage (`Observation`, `Interpretation`,
+      `CandidateAction`, a `ParkingBrake("skills")` Governance check, then
+      Capability/Execution via the injected `respond_fn`, a Working Memory `Reflection`
+      entry, and Memory durability via `WorkingMemoryManager`'s existing
+      snapshot/persistence).
+    - **Deliberately not wired as `/api/chat`'s default behavior in this change** — item
+      11.2's scheduler-drive regression (see DECISIONS.md) showed that flipping a live
+      production default needs its own dedicated live-smoke-verification pass, not just
+      `pytest`; wiring this into the actual chat endpoint is a tracked follow-up (see item
+      11.4), done separately and smoke-tested on its own.
     - **Acceptance:** a chat input produces a Working Memory entry and a distinct
       candidate-action representation before any execution, with each stage separately
       logged/testable.
-    - **Verify:** integration test tracing a chat message through each named stage.
+    - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py`.
 
 11.4. **Wire chat into the Experience Kernel ("Living Device")**
     - Route the chat surface through `ExperienceKernel`/`WorkingMemoryManager`/
