@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -22,6 +23,9 @@ from .state_model import WorldState
 from .working_memory import WorkingMemoryManager
 
 
+logger = logging.getLogger(__name__)
+
+
 class KernelDaemon:
     def __init__(
         self,
@@ -31,6 +35,7 @@ class KernelDaemon:
         policy_path: str,
         drives_path: str,
         loop_interval_s: int = 15,
+        identity_path: str | None = None,
     ):
         self.cfg = yaml.safe_load(open(cfg_path, encoding="utf-8"))
         self.tz = tz.gettz(self.cfg["timezone"])
@@ -42,6 +47,29 @@ class KernelDaemon:
         self.drives = yaml.safe_load(open(drives_path, encoding="utf-8"))
         self.planner = Planner(self.policy, self.drives, self.mem)
         self.state = WorldState()
+
+        # Identity Context (MASTER_PLAN.md "P2.5 -- Runtime Convergence",
+        # item 11.2): optional so existing callers/tests that don't pass
+        # identity_path see no behavior change. When provided, a failure to
+        # load/validate Identity.yaml is logged and treated the same as not
+        # providing one at all (permissive) rather than crashing daemon
+        # construction -- this wiring is new and additive, not yet a
+        # safety-critical dependency the whole daemon should die without.
+        self.identity_context = None
+        if identity_path:
+            try:
+                from identity_interpreter.identity_context import build_identity_context
+                from identity_interpreter.loader import load_identity
+
+                identity = load_identity(identity_path)
+                self.identity_context = build_identity_context(identity)
+            except Exception as e:
+                logger.warning(
+                    "Failed to load Identity Context from %s: %s -- "
+                    "continuing without one (tool-use policy checks skipped)",
+                    identity_path,
+                    e,
+                )
 
         # Stage 3: Experience Kernel modules
         self.workspace = GlobalWorkspace()
@@ -82,6 +110,7 @@ class KernelDaemon:
             kernel=self.experience,
             working_memory=self.working_memory,
             memory_store=self.mem,
+            identity_context=self.identity_context,
         )
         self.planner.set_skill_registry(self.skill_registry)
 

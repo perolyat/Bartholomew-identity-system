@@ -44,6 +44,22 @@ async def _run_drive(ctx: Any, task_id: str, fn):
         # Parking brake module not available, continue normally
         pass
 
+    # Executive Policy Decision: consult the same IdentityContext-derived
+    # tool-use policy skill-execution consults (see
+    # bartholomew.kernel.policy_engine and skill_registry.py's
+    # execute_action()) -- closing the "Identity.yaml governs only chat" gap
+    # (MASTER_PLAN.md's "P2.5 -- Runtime Convergence", item 11.2). Skipped
+    # entirely if ctx has no identity_context attribute or it's None, so
+    # callers that don't wire one see no behavior change.
+    identity_context = getattr(ctx, "identity_context", None)
+    if identity_context is not None:
+        from bartholomew.kernel import policy_engine
+
+        policy_decision = policy_engine.evaluate_tool_policy(identity_context, task_id)
+        if not policy_decision.allowed:
+            log.info("Drive %s denied by Identity policy: %s", task_id, policy_decision.reason)
+            return None, 0
+
     try:
         result = await asyncio.wait_for(fn(ctx), timeout=DRIVE_TIMEOUT)
         return result, 1
