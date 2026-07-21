@@ -193,6 +193,42 @@ pytest -q tests/test_end_to_end_tasks_and_audit.py
 
 ---
 
+### Stage 4.5 — Runtime Convergence (architectural prerequisite; recommended, pending sign-off)
+
+**Goal:** Close the gap a grounded architectural audit found (2026-07-21): the project
+effectively has "two brains" (`bartholomew/kernel` and `identity_interpreter/`) with four
+duplicated concepts (model routing, persona, permission gates, kill-switch), `Identity.yaml`
+governing only the chat path, and a fully-built Experience Kernel/Narrator/Working Memory
+stack ("Living Device" continuity) that chat never reaches. See MASTER_PLAN.md's "P2.5 —
+Runtime Convergence" for the full narrative, governing principles (Principle Zero, Principle
+One — Uniform Cognition, the Architectural Invariant), and the Runtime Contract.
+
+**Exit criteria (the Runtime Convergence Exit Gate — all seven must be "yes"):**
+- Can every input source create an Observation?
+- Does every proposed action pass through the Executive?
+- Does every execution pass through the same Governance path?
+- Does every completed action produce a Reflection?
+- Does every Reflection update Memory?
+- Does every conversation see the Experience Kernel?
+- Does every interface expose the same personality?
+
+**Scope:**
+- One authoritative owner per architectural concept; the four duplicate pairs marked
+  deprecated (not deleted) and routed through the winner.
+- Identity Context -> Executive -> Policy Decision (Identity stays declarative; the Executive
+  constructs the executable decision).
+- The Runtime Contract's pipeline (Observation -> Interpretation -> Executive -> Governance ->
+  Capability -> Execution -> Reflection -> Memory) becomes a real code seam for chat +
+  skill-execution.
+- Chat wired into the Experience Kernel.
+- `COGNITIVE_RUNTIME.md` authored as the canonical "how does Bartholomew think" document.
+
+**Note:** Stage 5 (below) is recommended to wait until this stage's exit gate is fully green —
+that sequencing is a recommendation, not yet a binding decision; it requires explicit
+user sign-off before treated as blocking.
+
+---
+
 ### Stage 5 — Initiative engine (scheduled check-ins + workflows)
 
 **Goal:** Proactive suggestions and check-ins that are safe, useful, and not naggy.

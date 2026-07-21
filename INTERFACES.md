@@ -178,3 +178,25 @@ permission denial, or brake block). Starter skills: `tasks` (auto),
 `notify` (auto), `calendar_draft` (ask — draft-only, no external calendar
 integration). See `tests/test_skill_registry.py` and
 `tests/test_end_to_end_tasks_and_audit.py`.
+
+## Identity Context / Policy Decision contract (planned)
+
+**Purpose:** Close the gap the 2026-07-21 architectural audit found — `Identity.yaml`
+currently governs only the chat path (via `identity_interpreter`'s pipeline); the autonomous
+kernel/scheduler/skill-execution path never consults it. See MASTER_PLAN.md's "P2.5 — Runtime
+Convergence" and DECISIONS.md's "Identity publishes a declarative Identity Context..." entry
+for the full rationale. **Nothing described below exists yet** — this section sketches the
+target shape for that milestone.
+
+**Identity Context** — produced by `identity_interpreter`, declarative only (answers "who is
+Bartholomew," never "what should I do right now"): values, red lines, behavioral constraints,
+preferences, communication style, risk profile, decision heuristics, goals. Extends/replaces
+the role `identity_interpreter.models.Decision` partially plays today.
+
+**Policy Decision** — constructed by the Executive (`bartholomew/kernel/daemon.py`,
+`planner.py`, `scheduler/loop.py`) from an Identity Context, not by Identity itself and not by
+the Kernel parsing `Identity.yaml` directly.
+
+**Consumers (planned):** `SkillRegistry.execute_action()`, `scheduler/loop.py`'s
+`_run_drive()`, and the chat pipeline all consult the same Policy Decision uniformly — today
+only the chat pipeline (`identity_interpreter/orchestrator/orchestrator.py`) does.
