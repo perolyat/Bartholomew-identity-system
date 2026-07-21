@@ -85,7 +85,10 @@ logs/    (runtime logs)
 
 ### Key invariants
 
-- **Identity.yaml is the governing config** for routing, safety, and persona/behavior constraints.
+- **Identity.yaml is the governing config** for routing, safety, and persona/behavior
+  constraints. *(Corrected 2026-07-21: confirmed true only for the chat path today —
+  the autonomous kernel/scheduler/skill-execution path does not consult it at all. See
+  "P2.5 — Runtime Convergence" in the backlog below for the fix.)*
 - **Single SQLite DB** is the shared persistence backbone.
 - **Consent + privacy gates** pre-filter retrieval results before they reach callers.
 - **Parking brake** provides an emergency/operational kill-switch by scope.
@@ -483,6 +486,130 @@ its own tests in isolation. Fixed:
   parking brake blocking then, after `disengage()`, allowing the same
   action.
 - Verified: full `pytest -q` remains green. `ruff check` clean.
+
+### P2.5 — Runtime Convergence (architectural prerequisite; recommended, pending sign-off)
+
+> **Source:** Architect review, 2026-07-21, responding to the P2 skill-registry wiring
+> write-up above and the grounded architectural audit that preceded it (subsystem map,
+> observation/action pipeline trace, and import/dependency graph — all confirmed by direct
+> code reading, not inference).
+
+**The finding:** the audit confirmed the project effectively has "two brains" today
+(`bartholomew/kernel` and `identity_interpreter/`) — no longer competing conceptually, but
+still duplicated structurally (four concrete pairs: model routing, persona, permission
+gates, kill-switch — see item 11.1 below). It also confirmed `Identity.yaml` governs only the
+chat path; the autonomous kernel/scheduler/skill-execution path never consults it, so two
+execution paths can produce different behavior — an architectural inconsistency ("Bartholomew
+should have one personality, not one personality per interface"), not primarily a safety bug.
+Separately, the Experience Kernel/Narrator/Working Memory ("Living Device" continuity — affect,
+attention, goals, persistent narration) are fully built but never reachable from chat — called
+"the single biggest opportunity in the entire repository."
+
+**Governing principles for this milestone:**
+- **Principle Zero** (governs flow): *"Every external stimulus and every internally generated
+  initiative must traverse the same cognitive loop before execution."*
+- **Principle One — Uniform Cognition** (governs decision-making): *"Every decision, regardless
+  of origin, is made by the same cognitive architecture."* Zero ensures everything enters the
+  same loop; One ensures everything is decided by the same mind.
+- **Architectural Invariant:** *"Every architectural responsibility has exactly one
+  authoritative owner. All other implementations are adapters, compatibility layers, or
+  deprecated migrations."*
+
+**Runtime Contract:** every interaction — chat, voice, vision, email, calendar, scheduler,
+webhook, background daemon, future sensors — enters through:
+
+```
+Observation -> Interpretation -> Executive -> Governance -> Capability -> Execution -> Reflection -> Memory
+```
+
+No exceptions. Not even chat.
+
+11.1. **Authority ownership for duplicated concepts**
+    - Owner table separates authoritative ownership from implementation (implementations stay
+      replaceable; ownership stays stable):
+
+      | Concept | Authoritative Owner | Implementations |
+      |---|---|---|
+      | Identity | Identity System (`identity_interpreter`) | YAML today, database tomorrow |
+      | Planning | Kernel Executive | `daemon.py`/`planner.py`/`scheduler/*` |
+      | Memory | Memory Substrate | SQLite now, Postgres later |
+      | Experience | Experience Kernel | Narrator, Working Memory, Affect |
+      | Governance | Governance (ParkingBrake + `skill_permissions.py`) | — |
+      | Capabilities | Skill Registry | Local skills, remote services, future MCP |
+      | Conversation | Chat Surface | — |
+
+    - Four duplicate pairs found by direct grep, each needing exactly one authoritative
+      side: model routing (`identity_interpreter/orchestrator/model_router.py`, actually used,
+      vs. `identity_interpreter/policies/model_router.py`, CLI-only); persona
+      (`bartholomew/kernel/persona_pack.py`, wired into Narrator/ExperienceKernel, vs.
+      `identity_interpreter/policies/persona.py`, chat-only); permission gates
+      (`bartholomew/kernel/skill_permissions.py` vs. `identity_interpreter/policies/tool_policy.py`);
+      kill-switch (`bartholomew/orchestrator/safety/parking_brake.py`, persistent/wired into
+      four live gate points, vs. `identity_interpreter/adapters/kill_switch.py`, print-only,
+      unwired).
+    - **Do not delete first.** Mark the non-authoritative side deprecated (docstring +
+      comment), route new callers through the winner, delete only once nothing depends on
+      the loser.
+    - **Acceptance:** each pair has a documented, single authoritative owner (recorded in
+      `DECISIONS.md`); the deprecated side carries an explicit deprecation notice; no caller
+      regressions.
+    - **Verify:** full `pytest -q` stays green; no new callers added to a deprecated module
+      after this point.
+
+11.2. **Identity Context -> Executive -> Policy Decision**
+    - Identity does not answer "what should I do?" — it answers "who am I?" It publishes a
+      declarative **Identity Context** (values, red lines, behavioral constraints,
+      preferences, communication style, risk profile, decision heuristics, goals). The
+      **Executive** consumes that context and is what constructs the actual **Policy
+      Decision** — not Identity, and not the Kernel parsing YAML directly.
+    - Closes the "`Identity.yaml` governs only chat" gap: a Policy Decision derived from the
+      same Identity Context must be consulted by skill-execution and the scheduler, not just
+      the chat pipeline.
+    - **Acceptance:** a single skill-execution path and a single scheduler-drive both
+      demonstrably respect an `Identity.yaml` red-line/tool-use rule change.
+    - **Verify:** new test asserting scheduler + skill-execution consult the same Policy
+      Decision source for a shared example rule.
+
+11.3. **Runtime Contract as a code seam**
+    - The Observation -> Interpretation -> Executive -> Governance -> Capability -> Execution
+      -> Reflection -> Memory shape becomes real code, starting with chat + skill-execution.
+      Voice/sight/other sensors remain future work (see `ROADMAP.md` Stage 6) but must be able
+      to plug into the same seam later without a redesign.
+    - **Acceptance:** a chat input produces a Working Memory entry and a distinct
+      candidate-action representation before any execution, with each stage separately
+      logged/testable.
+    - **Verify:** integration test tracing a chat message through each named stage.
+
+11.4. **Wire chat into the Experience Kernel ("Living Device")**
+    - Route the chat surface through `ExperienceKernel`/`WorkingMemoryManager`/
+      `NarratorEngine`/`SkillRegistry` so persona, affect, goals, and narration observably
+      persist across turns — today none of this reaches chat at all.
+    - **Acceptance:** a chat turn observably updates working memory and can reference
+      persisted persona/goal state from a previous turn.
+    - **Verify:** extend `tests/test_narrator.py`/`test_experience_kernel.py`/
+      `test_stage3_integration.py` with a chat-driven scenario; new end-to-end test.
+
+11.5. **Author `COGNITIVE_RUNTIME.md`**
+    - The canonical document defining the cognitive loop, runtime invariants, the ownership
+      table, and the execution/observation/reflection/memory lifecycles, plus governance
+      checkpoints — the answer to "how does Bartholomew think?" Written during this milestone
+      (not before); added to the Canonical docs list once it exists.
+    - A later, separate document, `ARCHITECTURAL_INVARIANTS.md` (Principle Zero, Principle
+      One, one authority per concept, fail-closed, memory is consent-gated, every decision is
+      explainable, etc. — the rules meant to survive any future rewrite) is noted here as a
+      *future* addition after this milestone, not part of it.
+
+**Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
+1. Can every input source create an Observation?
+2. Does every proposed action pass through the Executive?
+3. Does every execution pass through the same Governance path?
+4. Does every completed action produce a Reflection?
+5. Does every Reflection update Memory?
+6. Does every conversation see the Experience Kernel?
+7. Does every interface expose the same personality?
+
+**Note:** this section records the architect's recommendation and gives it a measurable exit
+gate; it does not itself pause P3 — that requires separate, explicit user sign-off.
 
 ### P3 — Initiative engine (proactive nudges) and workflows
 12. **Scheduler-driven check-ins + workflows**
