@@ -665,6 +665,40 @@ No exceptions. Not even chat.
       explainable, etc. — the rules meant to survive any future rewrite) remains a *future*
       addition, not part of this item.
 
+11.6. **Wire chat's Governance stage into the Policy Decision check** — ✅ implemented 2026-07-21
+    - Closes the gap `COGNITIVE_RUNTIME.md` (item 11.5) named: chat's Governance stage
+      (`runtime_contract.py`) previously checked only `ParkingBrake`, not the Identity Context
+      → Policy Decision path item 11.2 already wired for `SkillRegistry.execute_action()`.
+    - **A real regression risk found and avoided before it shipped, same discipline as item
+      11.2's scheduler-drive revert:** naively evaluating chat's `"chat_response"`
+      `CandidateAction` against `evaluate_tool_policy()` like any other tool name would have
+      denied every chat turn in production the instant it landed. Confirmed by direct reading
+      of `Identity.yaml`'s real `tool_use` section (`default_allowed: false`, `allowlist:
+      [web_fetch, browser_action]` — no conversational entry) and
+      `bartholomew_api_bridge_v0_1/services/api/app.py`, which already constructs
+      `KernelDaemon(identity_path="Identity.yaml")` by default — so `daemon.identity_context`
+      is never `None` in the live API. `evaluate_tool_policy()`'s own docstring says its
+      `tool_name` param means "a skill_id or scheduler drive task_id" — conversation is
+      neither, the same category error item 11.2 made for scheduler drives.
+    - **Fix:** added `_CONVERSATIONAL_KINDS` (currently `{"chat_response"}`, the only kind the
+      chat seam produces today) to `runtime_contract.py`. The Governance stage now consults
+      `policy_engine.evaluate_tool_policy(daemon.identity_context, candidate_action.kind)`
+      whenever an `IdentityContext` is wired in and the kind isn't in that exempt set — real
+      today for any future tool/skill-shaped candidate action a chat turn might propose,
+      correctly inert for plain conversation, mirroring the scheduler-drive exemption's
+      reasoning rather than repeating its mistake.
+    - **Acceptance:** a chat turn with a restrictive `IdentityContext`
+      (`tool_use_default_allowed=False`, empty `allowlist`) still succeeds
+      (`governance_allowed=True`) — proven by
+      `TestChatGovernanceConsultsPolicyDecision.test_chat_not_denied_by_a_restrictive_tool_use_policy`.
+      Behavior for daemons that don't wire an `IdentityContext` at all is unchanged
+      (`test_skipped_entirely_when_no_identity_context_wired`).
+    - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
+      tests/test_api_chat_runtime_contract.py tests/test_runtime_convergence_policy.py` — 21
+      passed locally (venv with `requirements.txt` + `requirements-dev.txt` + `pip install -e
+      .`; the sandbox's system Python has an unrelated pre-existing `cryptography` package
+      conflict blocking `pip install -e .` directly, unrelated to this change).
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

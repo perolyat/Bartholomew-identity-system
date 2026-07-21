@@ -114,17 +114,27 @@ specific proposed action. Identity computes no decisions; the Kernel never parse
 
 **Wired today:** `SkillRegistry.execute_action()` consults it when a daemon is constructed
 with `identity_path` (optional — no `IdentityContext` means the check is skipped, not denied).
-`KernelDaemon.__init__()` builds one context and shares it.
+`KernelDaemon.__init__()` builds one context and shares it. As of 2026-07-21, chat's Governance
+stage (`runtime_contract.py`) consults it too — with one deliberate carve-out: `CandidateAction`
+kinds in `_CONVERSATIONAL_KINDS` (currently just `"chat_response"`, the only kind the chat seam
+produces today) are exempt from the `tool_use.allowlist` check, for the same reason scheduler
+drives are (see next paragraph) — `evaluate_tool_policy()`'s `tool_name` param means "a skill_id
+or scheduler drive task_id," and Identity.yaml's real `tool_use` section is `default_allowed:
+false` / `allowlist: [web_fetch, browser_action]`, so evaluating plain conversation against it
+unconditionally would deny 100% of chat turns the moment an `IdentityContext` is wired in
+(which the live API bridge already does by default). The exemption is proven by
+`tests/test_runtime_contract_chat_seam.py::TestChatGovernanceConsultsPolicyDecision`. A future
+tool/skill-shaped candidate action proposed *during* a chat turn (kind outside the exempt set)
+would still be evaluated for real.
 
-**Not wired today:** chat's Governance stage (`runtime_contract.py`) checks only `ParkingBrake`
-— it does not consult `evaluate_tool_policy()`. The scheduler's own drives (`_run_drive()` in
-`scheduler/loop.py`) also don't consult it; an earlier attempt to wire scheduler drives into
-this check caused a real production regression (drives were denied by default and the
-scheduler's un-backed-off retry loop busy-looped the event loop badly enough that
-`/healthz` stopped answering — see `DECISIONS.md` and `MASTER_PLAN.md` item 11.2's writeup).
-So today a tool-use rule change in `Identity.yaml` provably changes skill-execution outcomes,
-but does not yet uniformly change chat or scheduler-drive outcomes — this is the biggest
-concrete gap under Principle One.
+**Not wired today:** the scheduler's own drives (`_run_drive()` in `scheduler/loop.py`) don't
+consult it at all; an earlier attempt to wire scheduler drives into this check caused a real
+production regression (drives were denied by default and the scheduler's un-backed-off retry
+loop busy-looped the event loop badly enough that `/healthz` stopped answering — see
+`DECISIONS.md` and `MASTER_PLAN.md` item 11.2's writeup). So today a tool-use rule change in
+`Identity.yaml` provably changes skill-execution outcomes and can affect chat (for any future
+non-conversational candidate action), but does not yet reach the scheduler-drive path — the
+remaining concrete gap under Principle One.
 
 ### Consent ("ask"-level permissions)
 
@@ -195,7 +205,7 @@ exists today:
 |---|---|---|---|
 | 1 | Can every input source create an Observation? | **Partial** | Chat does (`runtime_contract.Observation`). Skill execution has an equivalent choke-point (`execute_action()`) but no explicit `Observation` object. Voice/sight adapters and scheduler drives have their own `ParkingBrake` checks but never construct one. |
 | 2 | Does every proposed action pass through the Executive? | **Partial** | Chat's `CandidateAction` is explicit. Skill execution is a single choke-point in practice but not modeled as a `CandidateAction`. Scheduler drives bypass this entirely. |
-| 3 | Does every execution pass through the same Governance path? | **Partial** | All five live call sites share the same `ParkingBrake` class, but scopes differ by surface, and the Identity Context → Policy Decision check (item 11.2) is wired for skill execution only — not chat, not the scheduler. |
+| 3 | Does every execution pass through the same Governance path? | **Partial** | All five live call sites share the same `ParkingBrake` class, but scopes differ by surface. The Identity Context → Policy Decision check (item 11.2) is now wired for both skill execution and chat's Governance stage (2026-07-21) — chat's only exemption is plain-conversation `CandidateAction` kinds, the same category exemption scheduler drives need but don't yet have. The scheduler's own drives still bypass Policy Decision entirely. |
 | 4 | Does every completed action produce a Reflection? | **Yes, structurally** | Chat → Working Memory item; skills → `skill_action_audit` row (see "Two different Reflection mechanisms" above — the *fact* of a reflection is universal for these two surfaces; its *shape* is not unified). |
 | 5 | Does every Reflection update Memory? | **Yes** | Working Memory snapshots persist on daemon stop; `skill_action_audit` writes immediately; daily/weekly reflections persist via `MemoryStore.insert_reflection()`. |
 | 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()` and `daemon.persona_manager.get_active_pack_id()`. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
@@ -203,11 +213,10 @@ exists today:
 
 **Reading this table:** the loop shape is real, tested, and load-bearing for chat and skills —
 this is not aspirational. What's not yet true is *uniformity across every surface*, which is
-exactly what Principle One demands. The gaps above (chat's Governance stage skipping Policy
-Decision; scheduler drives skipping both Executive and Policy Decision; voice/sight being
-parking-brake-only stubs; two Reflection shapes; two reflection-narrative pipelines; one
-lingering persona duplication) are the concrete backlog for closing this gate, not a
-restatement of the plan.
+exactly what Principle One demands. The gaps above (scheduler drives skipping both Executive
+and Policy Decision; voice/sight being parking-brake-only stubs; two Reflection shapes; two
+reflection-narrative pipelines; one lingering persona duplication) are the concrete backlog
+for closing this gate, not a restatement of the plan.
 
 ## Verify
 

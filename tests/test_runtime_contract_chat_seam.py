@@ -18,11 +18,13 @@ from __future__ import annotations
 import pytest
 
 from bartholomew.kernel.runtime_contract import (
+    _CONVERSATIONAL_KINDS,
     CandidateAction,
     Interpretation,
     Observation,
     run_chat_through_runtime_contract,
 )
+from identity_interpreter.identity_context import IdentityContext
 
 
 @pytest.fixture
@@ -225,3 +227,46 @@ class TestChatReferencesPersistedExperienceKernelState:
         result = await run_chat_through_runtime_contract(daemon, "hi again", _stub_respond)
 
         assert f"Active persona: {other_pack}" in result.interpretation.prompt
+
+
+@pytest.mark.asyncio
+class TestChatGovernanceConsultsPolicyDecision:
+    """Chat's Governance stage now also consults the Identity Context ->
+    Executive -> Policy Decision mechanism (item 11.2), not just
+    ParkingBrake -- closing the gap COGNITIVE_RUNTIME.md's Exit Gate table
+    named ("chat's Governance stage checks only ParkingBrake").
+
+    The critical regression guard: Identity.yaml's real tool_use section is
+    `default_allowed: false` with `allowlist: [web_fetch, browser_action]` --
+    the same restrictive shape as DENY_CONTEXT below. If chat's
+    "chat_response" candidate action were evaluated against that like any
+    other tool name, every chat turn would be denied by default the moment
+    an IdentityContext is wired in (which the live API bridge already does).
+    Plain conversation is exempt from tool_use.allowlist for the same reason
+    scheduler drives are (see test_runtime_convergence_policy.py's module
+    docstring for that precedent) -- these tests prove the exemption holds.
+    """
+
+    async def test_chat_not_denied_by_a_restrictive_tool_use_policy(self, daemon):
+        daemon.identity_context = IdentityContext(
+            tool_use_default_allowed=False,
+            tool_use_allowlist=[],
+        )
+
+        result = await run_chat_through_runtime_contract(daemon, "hello", _stub_respond)
+
+        assert result.governance_allowed is True
+        assert result.governance_reason is None
+        assert result.response is not None
+
+    async def test_chat_response_kind_is_exempt_from_tool_use_policy(self):
+        assert "chat_response" in _CONVERSATIONAL_KINDS
+
+    async def test_skipped_entirely_when_no_identity_context_wired(self, daemon):
+        """No behavior change for daemons that don't opt in (identity_context
+        defaults to None) -- same additive posture as SkillRegistry."""
+        assert daemon.identity_context is None
+
+        result = await run_chat_through_runtime_contract(daemon, "hello", _stub_respond)
+
+        assert result.governance_allowed is True

@@ -31,11 +31,27 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from . import policy_engine
+
 
 if TYPE_CHECKING:
     from .daemon import KernelDaemon
 
 logger = logging.getLogger(__name__)
+
+# CandidateAction kinds that are plain conversation, not a tool/skill
+# invocation. evaluate_tool_policy()'s `tool_name` param means "a skill_id or
+# scheduler drive task_id" (see policy_engine.py's docstring) -- gating
+# ordinary chat replies against Identity.yaml's tool_use.allowlist would be
+# the same category error item 11.2's scheduler-drive wiring made and had to
+# revert (confirmed by direct reading of Identity.yaml: tool_use.allowlist is
+# only ["web_fetch", "browser_action"] with default_allowed: false, and the
+# live API bridge already passes identity_path="Identity.yaml" by default --
+# so an unconditional check here would deny 100% of chat turns in production
+# the moment this landed). Kinds in this set are exempt from the Policy
+# Decision check below; anything else (a future tool/skill-shaped candidate
+# action proposed during a chat turn) is evaluated for real.
+_CONVERSATIONAL_KINDS = frozenset({"chat_response"})
 
 
 @dataclass(frozen=True)
@@ -167,6 +183,26 @@ async def run_chat_through_runtime_contract(
         logger.exception("Governance check failed; failing closed")
         governance_allowed = False
         governance_reason = "Governance check errored"
+
+    # Governance -- Identity Context -> Executive -> Policy Decision (item
+    # 11.2's mechanism, now genuinely consulted by chat's Governance stage
+    # too, closing the gap COGNITIVE_RUNTIME.md's Exit Gate table named).
+    # Skipped for plain conversational kinds (see _CONVERSATIONAL_KINDS)
+    # and, like SkillRegistry.execute_action(), skipped entirely when no
+    # IdentityContext was wired in -- additive, not a new failure mode for
+    # callers that don't opt in.
+    if (
+        governance_allowed
+        and daemon.identity_context is not None
+        and candidate_action.kind not in _CONVERSATIONAL_KINDS
+    ):
+        policy_decision = policy_engine.evaluate_tool_policy(
+            daemon.identity_context,
+            candidate_action.kind,
+        )
+        if not policy_decision.allowed:
+            governance_allowed = False
+            governance_reason = f"Denied by Identity policy: {policy_decision.reason}"
 
     response: str | None = None
     working_memory_item_id: str | None = None
