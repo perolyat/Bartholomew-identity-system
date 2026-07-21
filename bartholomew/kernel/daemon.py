@@ -209,7 +209,7 @@ class KernelDaemon:
                     continue
 
                 # Stage 3: Decay affect toward baseline each tick
-                self.experience.decay_affect(rate=0.02)
+                self.experience.decay_affect_to_baseline(delta_seconds=self.interval)
 
                 # Stage 3: Check for auto persona activation
                 context_tags = list(self.experience.get_context("tags") or [])

@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from bartholomew.kernel.redaction_engine import redact_pii
+
 
 if TYPE_CHECKING:
     from bartholomew.kernel.global_workspace import GlobalWorkspace
@@ -441,7 +443,11 @@ class ExperienceKernel:
         if energy is not None:
             self._affect.energy = max(0.0, min(1.0, energy))
         if emotion is not None:
-            self._affect.dominant_emotion = emotion
+            # self_snapshot()/GET /api/self are documented (INTERFACES.md)
+            # as "safe-to-share" -- emotion is caller-supplied free text
+            # with no per-field redaction rule of its own, so redact PII
+            # unconditionally at this boundary rather than trusting callers.
+            self._affect.dominant_emotion = redact_pii(emotion)
 
         # Emit event if workspace attached
         if self._workspace:
@@ -504,6 +510,11 @@ class ExperienceKernel:
             raise ValueError(f"focus_type must be one of {valid_types}")
 
         previous_target = self._attention.focus_target
+
+        # target is caller-supplied free text with no per-field redaction
+        # rule -- see update_affect()'s comment on why this is redacted
+        # unconditionally rather than trusting callers.
+        target = redact_pii(target)
 
         self._attention = AttentionState(
             focus_target=target,
@@ -614,6 +625,12 @@ class ExperienceKernel:
         Args:
             goal: Description of the goal
         """
+        # goal is caller-supplied free text with no per-field redaction
+        # rule -- see update_affect()'s comment on why this is redacted
+        # unconditionally rather than trusting callers. Redacted before the
+        # membership check too, so complete_goal() (also redacted below)
+        # matches consistently regardless of which raw text callers pass.
+        goal = redact_pii(goal)
         if goal and goal not in self._active_goals:
             self._active_goals.append(goal)
 
@@ -635,6 +652,7 @@ class ExperienceKernel:
         Returns:
             True if goal was found and removed, False otherwise
         """
+        goal = redact_pii(goal)
         if goal in self._active_goals:
             self._active_goals.remove(goal)
 
@@ -669,6 +687,12 @@ class ExperienceKernel:
             key: Context key
             value: Context value (must be JSON-serializable)
         """
+        # String values are caller-supplied free text with no per-field
+        # redaction rule -- see update_affect()'s comment. Non-string
+        # values (numbers, dicts, lists) are left as-is; recursively
+        # redacting nested structures is out of scope here.
+        if isinstance(value, str):
+            value = redact_pii(value)
         self._context[key] = value
 
     def get_context(self, key: str, default: Any = None) -> Any:

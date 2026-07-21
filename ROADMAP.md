@@ -132,7 +132,18 @@ pytest -q
 
 ---
 
-### Stage 3 — Unified Persona Core (Experience Kernel) (next after Stage 2)
+### Stage 3 — Unified Persona Core (Experience Kernel) — largely done; gaps closed 2026-07-20
+
+**Correction (2026-07-20):** this section previously described Stage 3 as future/not-started. It
+was stale — `bartholomew/kernel/experience_kernel.py`, `narrator.py`, `global_workspace.py`,
+`working_memory.py`, `persona_pack.py` are already implemented and wired into `daemon.py`, with
+~320 existing tests across 7 test files (all passing). See `MASTER_PLAN.md`'s "Experience Kernel
+MVP: bug fix + privacy gap" section for what was actually found and fixed this round: a
+silently-swallowed `AttributeError` that disabled the tick loop's affect decay / persona
+auto-activation / planner calls since Stage 3 landed, and a privacy gap (this section's own
+"must preserve consent gates, privacy redaction" constraint below wasn't actually implemented for
+this subsystem — episodic entries and self-model snapshots bypassed `ConsentGate`/
+`memory_rules.py`/`redaction_engine.py` entirely).
 
 **Goal:** Bartholomew behaves like one continuous “self” with an Experience Kernel (self-model + narrator) and configurable persona packs, without expanding the action surface.
 
@@ -141,14 +152,19 @@ pytest -q
 - Must preserve consent gates, privacy redaction/encryption, and auditability.
 
 **Exit criteria:**
-- Experience Kernel MVP wired into the loop (self snapshot + narrator reflections).
-- Persona packs switchable via config/UI and recorded in audit logs.
-- New unit + integration tests for kernel/persona.
+- Experience Kernel MVP wired into the loop (self snapshot + narrator reflections). ✅
+- Persona packs switchable via config/UI and recorded in audit logs. ✅ (`persona_pack.py`,
+  `PersonaPackManager`; not independently re-verified against this exact criterion this round)
+- New unit + integration tests for kernel/persona. ✅ (already exist, see correction above)
+- **Still open:** a dedicated "scenario replay" test (see `MASTER_PLAN.md`); reconciling the two
+  non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs. `narrator.py`'s
+  template-based narrative generators).
 
 **Verify:**
 ```bash
 pytest -q tests/test_experience_kernel.py
-pytest -q tests/test_persona_switching.py
+pytest -q tests/test_persona_pack.py   # this doc previously cited a nonexistent
+                                        # tests/test_persona_switching.py -- corrected 2026-07-20
 ```
 
 ---

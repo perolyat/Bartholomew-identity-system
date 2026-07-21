@@ -118,17 +118,29 @@
 See [PERF_BUDGETS.md](PERF_BUDGETS.md) for budgets and measurement method.
 
 
-## Experience Kernel (proposed)
+## Experience Kernel — implemented (this section previously said "proposed"; corrected 2026-07-20)
+
+**Correction (2026-07-20):** implemented in `bartholomew/kernel/experience_kernel.py` (self-model)
+and `bartholomew/kernel/narrator.py` (narration/reflections), wired into `daemon.py`. The
+"Retrieved memories (filtered by consent/privacy)" input below was not actually true of the
+implementation until this date — episode/self-model free-text fields (attention targets, goal
+descriptions, affect labels, observation/reflection content) had no redaction of their own. Fixed:
+see `MASTER_PLAN.md`'s "Experience Kernel MVP: bug fix + privacy gap" section. Narration doesn't
+read from the `memories` table directly (confirmed: it's built from `GlobalWorkspace` event
+payloads and template strings, not raw stored memory content) — the risk was specifically the
+caller-supplied free-text fields listed above, not a memories-table leak.
 
 **Purpose:** Maintain continuity of self (state), narrate experience, and provide reflection summaries.
 
 **Inputs:**
 - Recent events (structured)
-- Retrieved memories (filtered by consent/privacy)
+- Retrieved memories (filtered by consent/privacy) — N/A in the current implementation; narration
+  is built from GlobalWorkspace event payloads, not a direct memories-table read
 - Current persona pack id
 
 **Outputs:**
-- `self_snapshot` (safe-to-share description + current goals)
+- `self_snapshot` (safe-to-share description + current goals) — free-text fields now redacted for
+  concrete PII shapes (email/phone/SSN) before entering the snapshot; see correction above
 - `narration` (short narrative of recent events)
 - `reflections` (daily/weekly)
 

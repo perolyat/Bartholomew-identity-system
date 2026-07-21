@@ -114,3 +114,50 @@ def apply_redaction(text: str, rule: dict[str, Any]) -> str:
         # Unknown strategy - log warning and return original
         logger.warning(f"Unknown redaction strategy '{strategy}', returning original text")
         return text
+
+
+# mask_sensitive()/apply_redaction() above require the caller to supply a
+# specific regex pattern (driven by memory_rules.yaml's per-kind rules).
+# Experience Kernel / Narrator accept arbitrary free text (attention
+# targets, goal descriptions, affect labels, observation/reflection
+# content) with no per-field rule of their own, so they need a
+# general-purpose pattern instead of one tailored to a specific memory
+# kind.
+#
+# Deliberately NOT reusing memory.privacy_guard.SENSITIVE_KEYWORDS here
+# (name/address/location/phone/email/bank/password/routine/health/
+# private/account) -- that list is a *consent-prompt* trigger (a human
+# confirms before storing), which tolerates false positives fine. This
+# function is *silent, automatic* redaction with no human in the loop, and
+# those keywords are also just ordinary vocabulary a wellness-focused
+# assistant's own self-model legitimately uses constantly (e.g. a "health"
+# or "routine"-related goal/attention target) -- using them here mangled
+# entirely benign content in testing (confirmed: "Answer health question"
+# became "Answer **** question"). So this matches only concrete,
+# unambiguous PII *shapes* instead -- narrower, but far fewer false
+# positives for content this subsystem is expected to legitimately handle.
+_EMAIL_PATTERN = r"[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}"
+_PHONE_PATTERN = r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b"
+_SSN_PATTERN = r"\b\d{3}-\d{2}-\d{4}\b"
+
+PII_PATTERN = re.compile(
+    "|".join([_EMAIL_PATTERN, _SSN_PATTERN, _PHONE_PATTERN]),
+    re.IGNORECASE,
+)
+
+
+def redact_pii(text: str | None) -> str | None:
+    """
+    General-purpose PII redaction for free text with no per-field rule.
+
+    Intended for Experience Kernel / Narrator call sites that accept
+    arbitrary caller-supplied text (attention targets, goal descriptions,
+    affect labels, observation/reflection content) and need a safe default
+    rather than requiring every call site to supply its own regex.
+
+    Returns text unchanged if empty/None (so callers can pass through
+    optional fields, e.g. set_attention(target=None), without a None check).
+    """
+    if not text:
+        return text
+    return PII_PATTERN.sub("****", text)

@@ -77,6 +77,15 @@ You must add:
 
 
 ## Experience Kernel
+
+**Status (2026-07-20):** unit coverage already exists and passes (`tests/test_experience_kernel.py`,
+`tests/test_narrator.py`, `tests/test_reflection_generation.py`, `tests/test_persona_pack.py`,
+`tests/test_working_memory.py`, `tests/test_global_workspace.py`), including new PII-redaction
+tests (`TestPIIRedaction` in `test_narrator.py`, `TestExperienceKernelPIIRedaction` in
+`test_experience_kernel.py`) added when that gap was found and closed — see `MASTER_PLAN.md`.
+`tests/test_stage3_integration.py::TestFullLifecycle` is cross-module integration coverage, but the
+dedicated **scenario replay** integration/E2E tests below are still not implemented as of this date.
+
 - **Unit:** narrator formatting, self_snapshot schema validation, fallback paths.
-- **Integration:** scenario replay producing daily/weekly reflection without leaking gated memories.
-- **E2E:** prompt → retrieve → kernel decide → produce safe reflection + audit trail entry.
+- **Integration:** scenario replay producing daily/weekly reflection without leaking gated memories. *(not yet implemented)*
+- **E2E:** prompt → retrieve → kernel decide → produce safe reflection + audit trail entry. *(not yet implemented)*
