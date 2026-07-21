@@ -28,9 +28,13 @@
 - **What could go wrong:** Skills/scheduler execute actions without explicit consent, or continue running when they shouldn’t.
 - **Current controls:** Parking brake (scoped, persistent, fail-closed).
 - **Mitigation:** Ensure every “Act” path checks brake; keep Stage 1 strictly read/ack/dismiss; add integration tests.
-- **Status:** Controlled, but expansion risk grows with features. Not re-verified this pass;
-  see `COGNITIVE_RUNTIME.md`'s "Governance checkpoints" section for the current list of live
-  `ParkingBrake` call sites (five, as of 2026-07-21).
+- **Status:** Controlled, and the "add integration tests" mitigation is well satisfied: `pytest
+  -q tests/integration/test_parking_brake_integration.py tests/test_parking_brake_scoped_blocks.py
+  tests/unit/safety/test_parking_brake.py` (17 tests, 2026-07-21) covers all five live scopes
+  (`skills`, `scheduler`, `sight`, `voice`, `global`) both engaged and disengaged. See
+  `COGNITIVE_RUNTIME.md`'s "Governance checkpoints" section for the current call-site list.
+  Expansion risk (new "Act" paths forgetting the brake check) remains the open-ended part of
+  this risk — not something a point-in-time audit closes permanently.
 
 ### R3 — SQLite / FTS feature variability causes false confidence
 - **Category:** Reliability
