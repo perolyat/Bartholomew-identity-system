@@ -48,15 +48,26 @@ class KernelDaemon:
             db_path=db_path,
             workspace=self.workspace,
         )
-        self.narrator = NarratorEngine(db_path=db_path, workspace=self.workspace)
         self.working_memory = WorkingMemoryManager(
             workspace=self.workspace,
             kernel=self.experience,
         )
+        # persona_manager is constructed before narrator (reordered from the
+        # original self.experience -> self.narrator -> ... -> persona_manager
+        # sequence) so it can be passed straight into NarratorEngine --
+        # narrator's narrative_overrides lookup needs it (see narrator.py's
+        # _get_templates()); previously nothing wired persona packs into the
+        # narrator at all, so switching persona had no effect on narrative
+        # tone/content despite PersonaPack.narrative_overrides existing.
         self.persona_manager = PersonaPackManager(
             experience_kernel=self.experience,
             workspace=self.workspace,
             db_path=db_path,
+        )
+        self.narrator = NarratorEngine(
+            db_path=db_path,
+            workspace=self.workspace,
+            persona_manager=self.persona_manager,
         )
 
         # Task handles for lifecycle management

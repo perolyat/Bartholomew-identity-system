@@ -374,6 +374,13 @@ drives: []
         assert hasattr(daemon, "working_memory")
         assert hasattr(daemon, "persona_manager")
 
+        # narrator must actually be wired to the daemon's persona_manager
+        # (not just constructed independently) -- otherwise persona
+        # switching has no effect on narrative tone/content, which is
+        # exactly the bug this wiring fixes. See narrator.py's
+        # _get_templates()/PersonaPackManager wiring.
+        assert daemon.narrator._persona_manager is daemon.persona_manager
+
     @pytest.mark.asyncio
     async def test_daemon_start_initializes_kernel(self, mock_config_files):
         """Daemon start() should initialize experience kernel."""

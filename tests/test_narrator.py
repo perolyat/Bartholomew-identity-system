@@ -991,6 +991,131 @@ class TestPIIRedaction:
 
 
 # =============================================================================
+# Test Persona Narrative Overrides
+# =============================================================================
+
+
+class TestPersonaNarrativeOverrides:
+    """
+    Tests that switching persona actually changes narrative content.
+
+    Previously PersonaPack.narrative_overrides/tone/style were write-only --
+    retrievable via PersonaPackManager's own accessors and the
+    /api/persona/* routes, but never consulted by anything that generates
+    narrative text (confirmed directly: switching personas produced
+    byte-identical narrative rotation regardless of which pack was active,
+    driven purely by the internal template-rotation counter). These tests
+    lock in the fix (NarratorEngine._get_templates()).
+    """
+
+    def _manager_with_override(self, tmp_path):
+        from bartholomew.kernel.persona_pack import PersonaPack, PersonaPackManager
+
+        manager = PersonaPackManager(packs_dir=tmp_path, db_path=":memory:")
+        manager.register_pack(
+            PersonaPack(
+                pack_id="default",
+                name="Default",
+                description="",
+                is_default=True,
+            ),
+        )
+        manager.register_pack(
+            PersonaPack(
+                pack_id="tactical",
+                name="Tactical",
+                description="",
+                narrative_overrides={
+                    "attention_focus": {"neutral": ["Target acquired: {target}."]},
+                },
+            ),
+        )
+        manager.switch_pack("default")
+        return manager
+
+    def test_no_persona_manager_uses_static_templates(self):
+        """NarratorEngine with no persona_manager attached is unaffected (default arg)."""
+        narrator = NarratorEngine()
+        episode = narrator.generate_attention_episode(target="the report")
+        assert episode.narrative  # just shouldn't crash / behavior unchanged
+
+    def test_persona_override_used_when_tone_matches(self, tmp_path):
+        manager = self._manager_with_override(tmp_path)
+        narrator = NarratorEngine(persona_manager=manager)
+
+        templates = narrator._get_templates(
+            EpisodeType.ATTENTION_FOCUS,
+            NarrativeTone.NEUTRAL,
+            NarrativeTemplates.ATTENTION_FOCUS,
+        )
+
+        manager.switch_pack("tactical")
+        templates_after = narrator._get_templates(
+            EpisodeType.ATTENTION_FOCUS,
+            NarrativeTone.NEUTRAL,
+            NarrativeTemplates.ATTENTION_FOCUS,
+        )
+
+        assert templates_after == ["Target acquired: {target}."]
+        assert templates_after != templates
+
+    def test_falls_back_to_static_when_persona_has_no_override_for_tone(self, tmp_path):
+        """tactical only overrides 'neutral' -- other tones fall back untouched."""
+        manager = self._manager_with_override(tmp_path)
+        manager.switch_pack("tactical")
+        narrator = NarratorEngine(persona_manager=manager)
+
+        templates = narrator._get_templates(
+            EpisodeType.ATTENTION_FOCUS,
+            NarrativeTone.CONTENT,
+            NarrativeTemplates.ATTENTION_FOCUS,
+        )
+
+        assert templates == NarrativeTemplates.ATTENTION_FOCUS[NarrativeTone.CONTENT]
+
+    def test_set_persona_manager_attaches_after_construction(self, tmp_path):
+        manager = self._manager_with_override(tmp_path)
+        narrator = NarratorEngine()
+
+        narrator.set_persona_manager(manager)
+        manager.switch_pack("tactical")
+
+        templates = narrator._get_templates(
+            EpisodeType.ATTENTION_FOCUS,
+            NarrativeTone.NEUTRAL,
+            NarrativeTemplates.ATTENTION_FOCUS,
+        )
+        assert templates == ["Target acquired: {target}."]
+
+    def test_switching_persona_changes_generated_narrative(self, tmp_path):
+        """
+        End-to-end: same query, same forced-NEUTRAL affect, different
+        persona -> different narrative text out of generate_attention_episode()
+        directly (not just the underlying template list).
+        """
+        from bartholomew.kernel.experience_kernel import ExperienceKernel
+
+        kernel = ExperienceKernel(db_path=":memory:")
+        # AffectState.neutral() (valence=0.2, arousal=0.3) determines to
+        # CONTENT, not NEUTRAL -- force NEUTRAL explicitly so both
+        # generations land on the tone tactical actually overrides.
+        kernel.update_affect(valence=0.0, arousal=0.45)
+        assert kernel.get_affect().valence == 0.0  # sanity
+
+        manager = self._manager_with_override(tmp_path)
+        narrator = NarratorEngine(experience_kernel=kernel, persona_manager=manager)
+        assert narrator.determine_tone() == NarrativeTone.NEUTRAL
+
+        default_narrative = narrator.generate_attention_episode(target="the report").narrative
+
+        manager.switch_pack("tactical")
+        tactical_narrative = narrator.generate_attention_episode(target="the report").narrative
+
+        assert tactical_narrative == "Target acquired: the report."
+        assert tactical_narrative != default_narrative
+
+
+# =============================================================================
 # Test Singleton Pattern
 # =============================================================================
 
