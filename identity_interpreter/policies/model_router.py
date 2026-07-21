@@ -1,10 +1,29 @@
 """
 Model selection policy engine
 Routes tasks to appropriate models based on identity configuration
+
+DEPRECATED (2026-07-21, MASTER_PLAN.md "P2.5 -- Runtime Convergence" / item 11.1):
+this module is not the authoritative model-routing implementation. That's
+`identity_interpreter.orchestrator.model_router.ModelRouter`, which is the one
+actually driving live requests through `Orchestrator.handle_input()`. This
+module remains in use only by `identity_interpreter/cli.py`'s `explain`
+command and `chat.py`'s standalone script -- do not add new callers. It will
+be removed once those two callers are migrated to the authoritative router
+(see DECISIONS.md's "One authority per architectural concept" entry).
 """
+
+import warnings
 
 from ..models import Decision, Identity
 from ..normalizer import get_available_models, get_model_parameters
+
+
+_DEPRECATION_MSG = (
+    "identity_interpreter.policies.model_router.select_model() is deprecated; "
+    "the authoritative model router is "
+    "identity_interpreter.orchestrator.model_router.ModelRouter. See "
+    "MASTER_PLAN.md's 'P2.5 -- Runtime Convergence' item 11.1."
+)
 
 
 def select_model(
@@ -25,6 +44,7 @@ def select_model(
     Returns:
         Decision with selected model and rationale
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     rationale = []
 
     # Get task-specific model preferences
