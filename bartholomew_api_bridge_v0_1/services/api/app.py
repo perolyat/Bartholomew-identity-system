@@ -248,8 +248,28 @@ async def health():
 
 
 @app.post("/api/chat", response_model=ChatOut)
-def chat(body: ChatIn):
-    raw = orch.handle_input(body.message)
+async def chat(body: ChatIn):
+    # MASTER_PLAN.md "P2.5 -- Runtime Convergence" item 11.4: route chat
+    # through the Runtime Contract seam (bartholomew.kernel.runtime_contract)
+    # so it observably updates Working Memory, the same Experience Kernel
+    # every other kernel-driven surface shares -- previously chat and the
+    # Experience Kernel were fully disconnected. Falls back to the prior,
+    # unwrapped orch.handle_input() call when the kernel isn't available
+    # (e.g. during startup/shutdown windows), preserving existing behavior
+    # exactly in that case.
+    if _kernel is not None:
+        from bartholomew.kernel.runtime_contract import run_chat_through_runtime_contract
+
+        async def _respond(prompt: str) -> str:
+            return orch.handle_input(prompt)
+
+        result = await run_chat_through_runtime_contract(_kernel, body.message, _respond)
+        if not result.governance_allowed:
+            raise HTTPException(503, result.governance_reason or "Blocked by governance")
+        raw = result.response
+    else:
+        raw = orch.handle_input(body.message)
+
     reply, tone, emotion = _parse_reply(raw)
     if not reply:
         reply = str(raw)
