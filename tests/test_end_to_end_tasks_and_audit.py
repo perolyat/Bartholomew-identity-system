@@ -71,7 +71,9 @@ class TestEndToEndTasksAndAudit:
         assert await registry.load_skill("tasks") is True
 
         result = await planner.handle_skill_request(
-            "tasks", "create", {"title": "Buy milk"},
+            "tasks",
+            "create",
+            {"title": "Buy milk"},
         )
 
         assert result.success is True
@@ -149,7 +151,9 @@ class TestEndToEndTasksAndAudit:
         brake.engage("skills")
 
         blocked_result = await planner.handle_skill_request(
-            "tasks", "create", {"title": "Should be blocked"},
+            "tasks",
+            "create",
+            {"title": "Should be blocked"},
         )
         assert blocked_result.success is False
         assert "parking brake" in blocked_result.error.lower()
@@ -162,14 +166,15 @@ class TestEndToEndTasksAndAudit:
             "SELECT skill_id, action, status, result_error FROM skill_action_audit",
         )
         assert any(
-            row[0] == "tasks" and row[1] == "create" and row[2] == "error"
-            for row in audit_rows
+            row[0] == "tasks" and row[1] == "create" and row[2] == "error" for row in audit_rows
         )
 
         brake.disengage()
 
         allowed_result = await planner.handle_skill_request(
-            "tasks", "create", {"title": "Should succeed"},
+            "tasks",
+            "create",
+            {"title": "Should succeed"},
         )
         assert allowed_result.success is True
 

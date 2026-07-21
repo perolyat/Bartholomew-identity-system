@@ -399,7 +399,9 @@ class SkillRegistry:
                 loop.create_task(_async_handler(event))
 
             sub_id = self._workspace.subscribe(
-                sub.channel, sync_handler, async_callback=async_handler,
+                sub.channel,
+                sync_handler,
+                async_callback=async_handler,
             )
             subscription_ids.append(sub_id)
             logger.debug(
@@ -505,7 +507,12 @@ class SkillRegistry:
         """
         loaded = self._loaded.get(skill_id)
         if not loaded:
-            return self._finish(skill_id, action, params, SkillResult.fail(f"Skill not loaded: {skill_id}"))
+            return self._finish(
+                skill_id,
+                action,
+                params,
+                SkillResult.fail(f"Skill not loaded: {skill_id}"),
+            )
 
         if not loaded.instance.is_ready:
             return self._finish(
@@ -616,7 +623,9 @@ class SkillRegistry:
                 return SkillResult.denied(permission)
 
             description = PERMISSION_CATEGORIES.get(permission, permission)
-            prompt = f"Skill '{manifest.skill_id}' requests permission '{permission}' ({description})"
+            prompt = (
+                f"Skill '{manifest.skill_id}' requests permission '{permission}' ({description})"
+            )
             approved = handler(prompt)
             if inspect.isawaitable(approved):
                 approved = await approved
