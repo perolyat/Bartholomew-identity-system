@@ -211,8 +211,19 @@ the scheduler, and starved the event loop badly enough that the live app never a
 `/healthz`) — see DECISIONS.md's "`tool_use.allowlist` gates skill/capability execution, not
 scheduler drives" entry.
 
-**Still planned:** the chat pipeline (`identity_interpreter/orchestrator/orchestrator.py`)
-does not yet consult this shared Policy Decision either — it has its own, separate
-parking-brake-only check (see the Skill Registry section above).
+**Chat, updated 2026-07-21 (item 11.6):** `bartholomew/kernel/runtime_contract.py`'s Governance
+stage — the seam `/api/chat` routes through when the kernel is running (item 11.4) — now also
+consults `evaluate_tool_policy(daemon.identity_context, candidate_action.kind)`, with one
+exemption: `CandidateAction` kinds in `_CONVERSATIONAL_KINDS` (currently just
+`"chat_response"`, the only kind the chat seam produces today) skip the check, since plain
+conversation isn't a "tool" in `tool_use.allowlist`'s sense — the same category distinction
+scheduler drives need (previous paragraph) but, unlike drives, chat's exemption is implemented
+and enforced. A future tool/skill-shaped candidate action proposed *during* a chat turn (a
+kind outside that exempt set) would be evaluated for real. `identity_interpreter/orchestrator/
+orchestrator.py`'s own `handle_input()` (used directly as `respond_fn`'s backend, and also as
+the fallback path when the kernel isn't running) still has only its separate,
+parking-brake-only check — it does not consult the shared Policy Decision itself; only the
+Runtime Contract seam wrapping it does.
 
-See `tests/test_runtime_convergence_policy.py`.
+See `tests/test_runtime_convergence_policy.py` and
+`tests/test_runtime_contract_chat_seam.py::TestChatGovernanceConsultsPolicyDecision`.
