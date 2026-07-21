@@ -83,7 +83,11 @@
   mode selection, invalid-mode handling, and env/config override precedence, all passing
   locally as of 2026-07-21. Left struck through rather than deleted since this wasn't
   independently re-derived from a bug report, only inferred from current test coverage.
-- Chunking engine exists but not wired; risk of architecture drift.
+- ~~Chunking engine exists but not wired; risk of architecture drift.~~ Stale as of
+  2026-07-21: `bartholomew/kernel/chunking_engine.py`'s `ChunkingEngine` is wired into
+  `memory_store.py`'s live `upsert_memory()` path (`chunking_engine.enabled` defaults to
+  `True`), not a standalone/dormant module — `pytest -q -k chunk` (16 tests) passes locally.
+  Left struck through rather than deleted for the same reason as the retrieval-mode item above.
 
 ## Red-team focus areas
 
