@@ -964,6 +964,35 @@ No exceptions. Not even chat.
       pack's tone (`warm, helpful, kind, curious`) with traits still from Identity; `ruff check`
       and `black --check` (pinned 25.9.0) clean on all four touched files.
 
+11.13. **Delete the deprecated kill-switch adapter — the third of item 11.1's four pairs to
+    fully retire** — ✅ implemented 2026-07-22
+    - (Sibling item 11.12 — the persona pair — landed separately, first; this is a parallel
+      slice, so the two items merge into the 11.11 → 11.12 → 11.13 sequence from independent
+      branches.) Unlike the persona and (future) model-routing pairs, the kill-switch pair
+      needed **no caller migration at all** — `identity_interpreter/adapters/kill_switch.py`'s
+      `KillSwitch` class was print-only and, as item 11.1 already recorded, **unwired with zero
+      live callers**. Re-confirmed exhaustively before deleting: the only references to the
+      symbol anywhere were the module itself and its re-export in
+      `identity_interpreter/adapters/__init__.py` (import + `__all__`). The unrelated
+      `KillSwitch` **in `identity_interpreter/models.py` is a different class** — a Pydantic
+      schema model for the `Identity.yaml` `safety_and_alignment.controls.kill_switch` field,
+      not the adapter — and stays untouched; every other `kill_switch` mention in the tree
+      (`chat.py`, `loader.py`) reads that Identity field, not the adapter.
+    - **The authoritative owner is unchanged and already live:**
+      `bartholomew/orchestrator/safety/parking_brake.py`'s `ParkingBrake` — a persistent,
+      fail-closed brake wired into five live gate points. Nothing about the safety surface
+      changes here; this only removes dead, misleadingly-named code that suggested a second
+      kill-switch mechanism existed.
+    - **Change:** `git rm identity_interpreter/adapters/kill_switch.py`; removed its import and
+      `__all__` entry from `identity_interpreter/adapters/__init__.py`. No other file changed.
+    - **Acceptance:** `identity_interpreter/adapters/kill_switch.py` no longer exists;
+      `from identity_interpreter.adapters import KillSwitch` no longer resolves; no code or test
+      imports the removed class (grep-confirmed); `ParkingBrake` remains the sole kill-switch
+      authority.
+    - **Verify:** `python -c "import identity_interpreter.adapters"` succeeds; `pytest -q
+      tests/test_policies.py` and the adapters-touching suites stay green; `ruff check` +
+      `black --check` (pinned 25.9.0) clean.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?
