@@ -176,6 +176,13 @@ class Retriever:
         if not candidates:
             return []
 
+        # Load consented memory IDs once per query (Phase 2d's memory_consent
+        # table -- see ConsentGate), so _should_include() can tell an
+        # actually-consented ask_before_store memory apart from one that
+        # never got consent, instead of excluding every requires_consent
+        # memory unconditionally regardless of its real consent state.
+        consented_ids = self._get_consented_ids()
+
         # Load memory data and apply rule-based filtering
         # Store tuples of (item, ts) for tie-breaking
         results_with_ts = []
@@ -193,7 +200,7 @@ class Retriever:
             evaluated = self.rules_engine.evaluate(memory_data)
 
             # Check if memory should be excluded from retrieval
-            if not self._should_include(evaluated):
+            if not self._should_include(evaluated, memory_id, consented_ids):
                 continue
 
             # Phase 2d+: Apply retrieval boost from rules
@@ -296,13 +303,24 @@ class Retriever:
 
         return True
 
-    def _should_include(self, evaluated: dict[str, Any]) -> bool:
+    def _get_consented_ids(self) -> set[int]:
+        """Load the set of memory IDs with a recorded memory_consent row."""
+        from bartholomew.kernel.consent_gate import ConsentGate
+
+        return ConsentGate(self.vector_store.db_path).get_consented_memory_ids()
+
+    def _should_include(
+        self,
+        evaluated: dict[str, Any],
+        memory_id: int | None = None,
+        consented_ids: set[int] | None = None,
+    ) -> bool:
         """
         Check if memory should be included in retrieval results
 
         Exclusions:
         - never_store: should not have embeddings anyway
-        - ask_before_store: exclude unless consent flag present
+        - ask_before_store: exclude unless a memory_consent record exists
 
         Inclusions (but marked):
         - context_only: include but mark for internal use
@@ -311,13 +329,13 @@ class Retriever:
         if not evaluated.get("allow_store", True):
             return False
 
-        # Check if consent is required but not granted
-        # For Phase 2d, we exclude these by default
-        # Future: check for consent flag in memory metadata
+        # Check if consent is required but not granted -- consult the same
+        # memory_consent table ConsentGate reads, so a memory that actually
+        # got consent (e.g. via upsert_memory()'s embedding flow) is
+        # retrievable, not excluded unconditionally.
         if evaluated.get("requires_consent", False):
-            # TODO: Check if consent was granted and stored
-            # For now, exclude to be safe
-            return False
+            if consented_ids is None or memory_id not in consented_ids:
+                return False
 
         return True
 
@@ -572,7 +590,10 @@ class FTSOnlyRetriever:
         # Apply rules engine if provided
         rules_data = {}
         if self.rules_engine:
-            rules_data = self._evaluate_rules(metadata, filtered_ids)
+            from bartholomew.kernel.consent_gate import ConsentGate
+
+            consented_ids = ConsentGate(self.db_path).get_consented_memory_ids()
+            rules_data = self._evaluate_rules(metadata, filtered_ids, consented_ids)
             filtered_ids = {
                 mid for mid in filtered_ids if rules_data.get(mid, {}).get("include", True)
             }
@@ -674,19 +695,23 @@ class FTSOnlyRetriever:
         self,
         metadata: dict[int, dict[str, Any]],
         memory_ids: set,
+        consented_ids: set[int] | None = None,
     ) -> dict[int, dict[str, Any]]:
         """Evaluate rules for memories"""
         rules_data = {}
+        consented_ids = consented_ids or set()
 
         for memory_id in memory_ids:
             data = metadata[memory_id]
             evaluated = self.rules_engine.evaluate(data)
 
-            # Check if should be included
+            # Check if should be included -- a requires_consent memory with
+            # a recorded memory_consent row (see ConsentGate) is retrievable,
+            # not excluded unconditionally.
             include = True
             if not evaluated.get("allow_store", True):
                 include = False
-            if evaluated.get("requires_consent", False):
+            if evaluated.get("requires_consent", False) and memory_id not in consented_ids:
                 include = False
 
             rules_data[memory_id] = {

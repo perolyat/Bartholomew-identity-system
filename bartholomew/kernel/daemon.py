@@ -186,6 +186,17 @@ class KernelDaemon:
             # Try to load last experience snapshot
             snapshot = self.experience.load_last_snapshot()
             if snapshot:
+                # Real, previously-live bug (found 2026-07-21 while writing a
+                # scenario-replay test): load_last_snapshot() only loads and
+                # returns a SelfSnapshot -- it never applies it. This code
+                # printed "Restored experience state from last snapshot" on
+                # every boot while actually leaving drives/affect/attention/
+                # active_goals at their fresh-instance defaults, silently
+                # discarding restore_from_snapshot()'s entire purpose. Same
+                # bug class as the 2026-07-20 "silently-swallowed
+                # AttributeError" fix in this module -- a log message that
+                # was never actually true.
+                self.experience.restore_from_snapshot(snapshot)
                 print("[Kernel] Restored experience state from last snapshot")
             else:
                 print("[Kernel] Starting with fresh experience state")
@@ -445,6 +456,27 @@ Continue supporting user wellness and autonomy.
                 "error": str(e),
             }
 
+        # Enrich with the Experience Kernel's own episodic narrative (real
+        # affect/attention/drive/goal/observation episodes from today) --
+        # otherwise the persisted/exported reflection only ever contains
+        # ReflectionGenerator's generic template text (its own "Notable
+        # Events" section literally says "(Future: chat highlights,
+        # emotional events, user activities)"), even though the Narrator's
+        # episodic layer already tracks exactly that. This was ROADMAP.md
+        # Stage 3's "Still open: reconciling the two non-unified reflection
+        # pipelines" note -- appended rather than merged/replacing either
+        # pipeline's own output, the safer integration given both pipelines
+        # are independently tested and this doesn't require parsing either
+        # one's text. Never lets a narrator error break reflection
+        # generation.
+        try:
+            episodic_narrative = self.narrator.generate_daily_reflection_narrative(now)
+            if episodic_narrative:
+                content = f"{content}\n\n---\n\n{episodic_narrative}"
+                meta["episodic_narrative_included"] = True
+        except Exception as e:
+            print(f"[Kernel] Failed to include episodic narrative in daily reflection: {e}")
+
         # Persist reflection
         await self.mem.insert_reflection(
             kind="daily_journal",
@@ -521,6 +553,18 @@ Continue current operation. No remediation needed.
                 "generator": "template",
                 "error": str(e),
             }
+
+        # Enrich with the Experience Kernel's own episodic narrative for the
+        # week -- same rationale as _run_daily_reflection()'s equivalent
+        # block above. Appended, not merged; never lets a narrator error
+        # break reflection generation.
+        try:
+            episodic_narrative = self.narrator.generate_weekly_reflection_narrative()
+            if episodic_narrative:
+                content = f"{content}\n\n---\n\n{episodic_narrative}"
+                meta["episodic_narrative_included"] = True
+        except Exception as e:
+            print(f"[Kernel] Failed to include episodic narrative in weekly reflection: {e}")
 
         # Persist reflection
         await self.mem.insert_reflection(

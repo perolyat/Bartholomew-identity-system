@@ -156,9 +156,15 @@ this subsystem — episodic entries and self-model snapshots bypassed `ConsentGa
 - Persona packs switchable via config/UI and recorded in audit logs. ✅ (`persona_pack.py`,
   `PersonaPackManager`; not independently re-verified against this exact criterion this round)
 - New unit + integration tests for kernel/persona. ✅ (already exist, see correction above)
-- **Still open:** a dedicated "scenario replay" test (see `MASTER_PLAN.md`); reconciling the two
-  non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs. `narrator.py`'s
-  template-based narrative generators).
+- A dedicated "scenario replay" test — ✅ added 2026-07-21 (`tests/test_scenario_replay.py`;
+  see `MASTER_PLAN.md` item 11.9). Found and fixed a real restart-persistence bug in the
+  process: `ExperienceKernel` state (goals/affect/attention/drives) was never actually
+  restored on daemon restart despite a log line claiming it was.
+- The two non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs.
+  `narrator.py`'s episodic-narrative generators) — ✅ reconciled 2026-07-21, additively:
+  `daemon.py`'s daily/weekly reflection generation now appends `narrator.py`'s real
+  episodic-narrative output alongside `ReflectionGenerator`'s own content, rather than either
+  replacing the other. See `MASTER_PLAN.md` item 11.8.
 
 **Verify:**
 ```bash
@@ -221,7 +227,13 @@ One — Uniform Cognition, the Architectural Invariant), and the Runtime Contrac
   Capability -> Execution -> Reflection -> Memory) becomes a real code seam for chat +
   skill-execution.
 - Chat wired into the Experience Kernel.
-- `COGNITIVE_RUNTIME.md` authored as the canonical "how does Bartholomew think" document.
+- `COGNITIVE_RUNTIME.md` authored as the canonical "how does Bartholomew think" document. —
+  ✅ done 2026-07-21. Its own "Exit Gate status" table is the honest scorecard: most of the
+  seven questions above are "partial," not "yes" (e.g. chat's Governance stage doesn't yet
+  consult the Identity Context → Policy Decision path item 11.2 wired for skills; scheduler
+  drives and voice/sight adapters don't construct an Observation/CandidateAction at all).
+  Writing the doc doesn't close the gate by itself — see `COGNITIVE_RUNTIME.md` for the
+  concrete remaining gaps.
 
 **Note:** Stage 5 (below) is recommended to wait until this stage's exit gate is fully green —
 that sequencing is a recommendation, not yet a binding decision; it requires explicit

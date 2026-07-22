@@ -1,6 +1,29 @@
 """
 Comprehensive Memory Management System for Bartholomew
 Implements episodic, semantic, affective, and symbolic memory modalities
+
+STATUS (2026-07-21, found while closing MASTER_PLAN.md's "P2.5 -- Runtime
+Convergence" gaps): this module's role as chat's conversational-memory
+context source is unreachable in production today, not merely deprecated.
+`identity_interpreter.orchestrator.context_builder.ContextBuilder` only
+constructs a `MemoryManager` when given a non-None `identity_config`, and
+`bartholomew_api_bridge_v0_1/services/api/app.py` constructs
+`Orchestrator()` with no `identity_config` -- so `ContextBuilder.memory` is
+always `None` and `build_prompt_context()` always returns `""`. The two
+`# TODO Phase 2b/2c` comments below (`Enforce encryption based on
+evaluated["encrypt"]`, `Generate summary if evaluated["summarize"] is
+true`) are therefore stale: `bartholomew.kernel.memory_store.MemoryStore`
+(the authoritative Memory Substrate -- see COGNITIVE_RUNTIME.md's ownership
+table) already implements both, live, via `encryption_engine.py` and
+`summarization_engine.py`. `bartholomew.kernel.runtime_contract`'s
+Interpretation stage now reads recent conversation history from
+`WorkingMemoryManager.get_context_string()` instead (item 11.4/COGNITIVE_
+RUNTIME.md follow-up) -- the same duplicated-concept shape as the four
+pairs MASTER_PLAN.md item 11.1 already found (one authoritative
+implementation, one superseded), just for conversational memory injection.
+Do not complete these TODOs here; if this module is ever revived, route it
+through the Memory Substrate rather than reimplementing encryption/
+summarization a second time.
 """
 
 import asyncio
@@ -354,8 +377,12 @@ class MemoryManager:
             if evaluated.get("expires_in"):
                 memory.expires_in = evaluated["expires_in"]
 
-            # TODO Phase 2b: Enforce encryption based on evaluated["encrypt"]
-            # TODO Phase 2c: Generate summary if evaluated["summarize"] is true
+            # Phase 2b/2c (encryption enforcement, summarization): not
+            # implemented here -- see this module's docstring. This code
+            # path is unreachable in production (ContextBuilder never
+            # constructs a MemoryManager without an identity_config, which
+            # the live API bridge never passes); the authoritative
+            # implementation is bartholomew.kernel.memory_store.MemoryStore.
 
             # Privacy guard fallback: check for sensitive content
             if is_sensitive(memory.content):

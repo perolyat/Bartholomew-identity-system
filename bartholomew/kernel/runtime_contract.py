@@ -31,11 +31,27 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from . import policy_engine
+
 
 if TYPE_CHECKING:
     from .daemon import KernelDaemon
 
 logger = logging.getLogger(__name__)
+
+# CandidateAction kinds that are plain conversation, not a tool/skill
+# invocation. evaluate_tool_policy()'s `tool_name` param means "a skill_id or
+# scheduler drive task_id" (see policy_engine.py's docstring) -- gating
+# ordinary chat replies against Identity.yaml's tool_use.allowlist would be
+# the same category error item 11.2's scheduler-drive wiring made and had to
+# revert (confirmed by direct reading of Identity.yaml: tool_use.allowlist is
+# only ["web_fetch", "browser_action"] with default_allowed: false, and the
+# live API bridge already passes identity_path="Identity.yaml" by default --
+# so an unconditional check here would deny 100% of chat turns in production
+# the moment this landed). Kinds in this set are exempt from the Policy
+# Decision check below; anything else (a future tool/skill-shaped candidate
+# action proposed during a chat turn) is evaluated for real.
+_CONVERSATIONAL_KINDS = frozenset({"chat_response"})
 
 
 @dataclass(frozen=True)
@@ -85,9 +101,31 @@ def _build_interpretation(daemon: KernelDaemon, observation: Observation) -> Int
     11.4's acceptance criterion) genuinely true, not just structurally
     possible: the enriched prompt is what actually gets sent to `respond_fn`.
 
-    Never raises -- if Experience Kernel/persona state can't be read for any
-    reason, falls back to the raw input unchanged, since a missing context
-    enrichment shouldn't ever be able to break the chat response itself.
+    Also folds in recent conversation history from Working Memory
+    (`daemon.working_memory.get_context_string()`). This was a real,
+    previously-unnoticed gap: item 11.4 wired goals/persona into the prompt,
+    but nothing ever read prior turns' own content back out of Working
+    Memory before this -- despite the Reflection stage (below) writing every
+    turn into it. `identity_interpreter.orchestrator.context_builder.
+    ContextBuilder` was meant to be the thing that injects prior
+    conversational memory into the prompt, but it's dead code in production
+    today: `bartholomew_api_bridge_v0_1/services/api/app.py` constructs
+    `Orchestrator()` with no `identity_config`, so `ContextBuilder.__init__`
+    never builds a `MemoryManager` and `build_prompt_context()` always
+    returns `""`. Rather than reviving that separate, superseded path (see
+    DECISIONS.md's "One authority per architectural concept" entry -- this
+    is the same duplicated-concept shape as the four pairs item 11.1 already
+    found, just for conversational memory injection specifically), this
+    reads it from Working Memory instead -- the authoritative Experience
+    owner per COGNITIVE_RUNTIME.md's ownership table, and the same store
+    the Reflection stage below already writes every turn into. Called
+    *before* this turn's own Reflection write, so it only ever contains
+    prior turns.
+
+    Never raises -- if Experience Kernel/persona/working-memory state can't
+    be read for any reason, falls back to the raw input unchanged, since a
+    missing context enrichment shouldn't ever be able to break the chat
+    response itself.
     """
     context_lines: list[str] = []
     try:
@@ -103,6 +141,13 @@ def _build_interpretation(daemon: KernelDaemon, observation: Observation) -> Int
             context_lines.append(f"Active persona: {pack_id}")
     except Exception:
         logger.exception("Failed to read active persona for chat interpretation")
+
+    try:
+        wm_context = daemon.working_memory.get_context_string()
+        if wm_context:
+            context_lines.append(f"Recent conversation:\n{wm_context}")
+    except Exception:
+        logger.exception("Failed to read working memory context for chat interpretation")
 
     if not context_lines:
         return Interpretation(observation=observation, prompt=observation.raw_content)
@@ -167,6 +212,26 @@ async def run_chat_through_runtime_contract(
         logger.exception("Governance check failed; failing closed")
         governance_allowed = False
         governance_reason = "Governance check errored"
+
+    # Governance -- Identity Context -> Executive -> Policy Decision (item
+    # 11.2's mechanism, now genuinely consulted by chat's Governance stage
+    # too, closing the gap COGNITIVE_RUNTIME.md's Exit Gate table named).
+    # Skipped for plain conversational kinds (see _CONVERSATIONAL_KINDS)
+    # and, like SkillRegistry.execute_action(), skipped entirely when no
+    # IdentityContext was wired in -- additive, not a new failure mode for
+    # callers that don't opt in.
+    if (
+        governance_allowed
+        and daemon.identity_context is not None
+        and candidate_action.kind not in _CONVERSATIONAL_KINDS
+    ):
+        policy_decision = policy_engine.evaluate_tool_policy(
+            daemon.identity_context,
+            candidate_action.kind,
+        )
+        if not policy_decision.allowed:
+            governance_allowed = False
+            governance_reason = f"Denied by Identity policy: {policy_decision.reason}"
 
     response: str | None = None
     working_memory_item_id: str | None = None

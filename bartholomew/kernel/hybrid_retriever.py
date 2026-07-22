@@ -397,7 +397,10 @@ class HybridRetriever:
         # Step 5: Apply rules engine if provided
         rules_data = {}
         if self.rules_engine:
-            rules_data = self._evaluate_rules(memory_metadata, filtered_ids)
+            from bartholomew.kernel.consent_gate import ConsentGate
+
+            consented_ids = ConsentGate(self.db_path).get_consented_memory_ids()
+            rules_data = self._evaluate_rules(memory_metadata, filtered_ids, consented_ids)
             # Remove memories blocked by rules
             filtered_ids = {
                 mid for mid in filtered_ids if rules_data.get(mid, {}).get("include", True)
@@ -697,6 +700,7 @@ class HybridRetriever:
         self,
         metadata: dict[int, dict[str, Any]],
         memory_ids: set,
+        consented_ids: set[int] | None = None,
     ) -> dict[int, dict[str, Any]]:
         """
         Evaluate rules for memories
@@ -705,6 +709,7 @@ class HybridRetriever:
             Dict mapping memory_id to rule evaluation results
         """
         rules_data = {}
+        consented_ids = consented_ids or set()
 
         for memory_id in memory_ids:
             data = metadata[memory_id]
@@ -714,9 +719,8 @@ class HybridRetriever:
             include = True
             if not evaluated.get("allow_store", True):
                 include = False
-            if evaluated.get("requires_consent", False):
-                # Exclude unless consent granted
-                # TODO: Check memory_consent table
+            if evaluated.get("requires_consent", False) and memory_id not in consented_ids:
+                # Exclude unless a memory_consent row exists (see ConsentGate)
                 include = False
 
             rules_data[memory_id] = {

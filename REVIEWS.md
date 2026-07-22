@@ -2,7 +2,8 @@
 
 > Weekly check-ins and stage gate review rituals.
 >
-> **Last updated:** 2026-01-19
+> **Last updated:** 2026-07-21 (see "Last Review Snapshot" below — it had gone stale since
+> 2026-01-19)
 
 ## Purpose
 
@@ -118,126 +119,121 @@ If this stage introduces risk:
 ## Last Review Snapshot
 
 > **This section must stay current.** Update after every weekly check-in or gate review.
+>
+> This snapshot had gone stale since 2026-01-19 despite six months of substantial,
+> well-documented progress in the interim (all six of the P0 failures it lists below were
+> fixed 2026-07-20 — see MASTER_PLAN.md's "Full test suite investigation" and "P0 status:
+> complete" sections). Refreshed 2026-07-21 against what this session directly verified plus
+> the historical record in `MASTER_PLAN.md`/`ROADMAP.md`.
 
-**Date:** 2026-01-19
-**Type:** Coordinator Handoff Preparation
-**Reviewer:** Cline (Kimi coordinator)
+**Date:** 2026-07-21
+**Type:** Ad-hoc snapshot refresh (found stale while auditing canonical docs for currency)
+**Reviewer:** Claude (autonomous session)
 
 ### Current Project State
 
 **Stage Progress:**
 - **Stage 0:** ✅ Complete (kernel alive, stable, dreaming)
-- **Stage 1:** 📋 Planned (console/UI integration - not started)
-- **Stage 2:** 🚧 In Progress (governance hardening - 6 P0 failures)
-- **Stages 3-7:** 📋 Planned (Experience Kernel → embodiments)
-- **Echo Integration:** 💡 Future (45 features across 4 gates)
+- **Stage 0.5:** ✅ Complete 2026-07-20 (packaging/architecture fixes)
+- **Stage 1:** 📋 Still not started (console/UI integration — no evidence of work on this
+  found this session)
+- **Stage 2:** ✅ P0 complete 2026-07-20 (all 6 failures below fixed; full suite green on Linux)
+- **Stage 3:** ✅ Largely done (Experience Kernel/Narrator/Persona wired since before this
+  session; this session closed the "still open" items: a scenario-replay test harness and
+  reconciling the two reflection-narrative pipelines — see items 11.8–11.9 below)
+- **Stage 4:** ✅ Done 2026-07-21 (skill registry wired into the live daemon)
+- **Stage 4.5 (Runtime Convergence):** 🚧 In progress, substantial movement this session —
+  items 11.1–11.11 done (see MASTER_PLAN.md); Exit Gate still mostly "partial," not "yes" (see
+  `COGNITIVE_RUNTIME.md`'s Exit Gate status table for the honest per-question breakdown)
+- **Stages 5–7:** 📋 Still planned/future
+- **Echo Integration:** 💡 Still future (conceptual roadmap, unchanged)
 
 **CI Health:**
-- ✅ `pre-commit.yml` - Auto-run on push/PR (format + lint + smoke tests)
-- ✅ `smoke.yml` - Auto-run on push/PR (server health checks)
-- ⚠️ `tests.yml` - Manual-only (full test suite + coverage)
-- **Target:** Enable auto-run tests.yml after P0 fixes
+- ✅ `pre-commit.yml` — auto-run on push/PR; now also runs `pytest -q` (the **full** suite, not
+  just smoke tests) as of 2026-07-20 — CI.md itself hadn't mentioned this until today
+- ✅ `smoke.yml` — auto-run on push/PR (server health checks)
+- ⚠️ `tests.yml` — still manual-only (coverage-gated full suite); still not auto-enabled
 
 **Documentation:**
-- ✅ 11/11 canonical docs present (CI.md + REVIEWS.md just created)
-- ⚠️ STATUS snapshot dated 2025-12-29 (needs refresh to 2026-01-19)
+- ✅ 12/12 canonical docs present (`COGNITIVE_RUNTIME.md` added 2026-07-21, per MASTER_PLAN.md
+  item 11.5)
+- ✅ `docs/STATUS_2025-12-29.md` now carries an explicit stale-doc banner (2026-07-21) pointing
+  back to `MASTER_PLAN.md`, rather than silently contradicting current docs
+- This session also re-verified and corrected several other canonical docs against current
+  code/tests: `RISKS.md`, `ASSUMPTIONS.md`, `INTERFACES.md`, `TEST_MATRIX.md`, `CI.md`
 
 **Test Health:**
-- ✅ Stage 0 tests green (kernel lifecycle, WAL, dreaming loops)
-- ⚠️ 6 P0 non-environmental failures (per Dec 29 snapshot):
-  1. Summarization truncation fallback
-  2. Encryption envelope round-trip
-  3. Embeddings persist lifecycle
-  4. embed_store defaulting logic
-  5. Retrieval factory mode mismatch
-  6. Metrics registry idempotency
-- ℹ️ Many environmental failures (Windows file locking, SQLite FTS5 variance)
+- ✅ The 6 P0 non-environmental failures this snapshot previously listed (summarization
+  fallback, encryption round-trip, embeddings lifecycle, embed_store defaulting, retrieval
+  factory mismatch, metrics idempotency) were **all fixed 2026-07-20** — verified again this
+  session: `pytest -q` across the encryption/metrics/retrieval-factory test files passes
+  locally in a clean venv.
+- This session found and fixed several new, real bugs (not previously known/tracked):
+  retrieval silently over-excluding consented memories; a restart-persistence bug where
+  Experience Kernel state was never actually restored despite a log line claiming it was; five
+  live 500s in the `self_state` API router (zero HTTP-level tests existed for that whole
+  router before this session).
+- **Not independently re-verified this session:** a single `pytest -q` run across the
+  *entire* suite in one command (targeted, relevant subsets were run per change instead,
+  30+ separate invocations covering ~400 distinct tests with no failures) — see this doc's
+  own "Verification-first" best practice below; no reason to doubt full-suite health given
+  every touched area passed, but this is named explicitly rather than assumed.
 
-**Tech Stack:**
-- Python 3.10+ (targeting 3.10/3.11/3.12)
-- FastAPI + Uvicorn + Pydantic v2 + SQLAlchemy 2.0
-- SQLite (single DB, WAL mode)
-- Ubuntu CI baseline, Windows dev environment
+**Tech Stack:** unchanged from the 2026-01-19 snapshot (not re-verified this session).
 
 ### Active Blockers
 
-**None currently blocking forward progress.**
+**None.**
 
-P0 test failures are documented and prioritized but don't block documentation work or planning.
+### Next Moves (per MASTER_PLAN.md, current as of this refresh)
 
-### Next 3 Moves (per MASTER_PLAN)
-
-1. ✅ **Land SSOT docs** - Complete canonical docs (CI.md + REVIEWS.md just created)
-2. ⏭️ **Reinstate minimal CI** - Enable auto-run tests.yml after fixing P0s
-3. ⏭️ **Fix P0 non-environmental failures** - One fix per PR, smallest surface first
-
-### Priority Stack (per ChatGPT handoff guidance)
-
-1. ✅ **Canonical docs completeness** - Just completed (Phase 1)
-2. ⏭️ **Refresh STATUS snapshot** - Next action (Phase 2)
-3. ⏭️ **Fix P0 failures** - Restore test signal (Phase 3)
-4. ⏭️ **Enable auto-run CI** - Make tests.yml continuous (Phase 4)
-5. 📋 **New features** - Only after baseline stability restored
-
-### Coordinator Handoff Status
-
-**Handoff from:** ChatGPT (planning coordinator)
-**Handoff to:** Cline/Kimi (execution coordinator)
-**Status:** ✅ Complete as of 2026-01-19
-
-**What was handed off:**
-- Complete project context (9 canonical docs read + analyzed)
-- CI infrastructure assessment (3 workflows analyzed)
-- P0 failure documentation (STATUS_2025-12-29.md)
-- Priority stack and 4-phase action plan
-- Tribal knowledge captured from ChatGPT
-
-**Handoff complete when:**
-- [x] All canonical docs exist (just completed)
-- [ ] STATUS snapshot refreshed (Phase 2 - next action)
-- [x] Next coordinator briefed on project state
-- [x] Priority stack agreed (Docs → CI → P0 fixes → Features)
-
-### Recommended Next Actions
-
-**Immediate (this week):**
-1. Refresh STATUS snapshot to Jan 19, 2026 (Phase 2)
-2. Run full test suite: `pytest -q --tb=short`
-3. Document current state vs Dec 29 baseline
-4. Re-prioritize P0 fixes based on current failures
-
-**Short-term (next 2-4 weeks):**
-1. Fix P0 failures one-by-one (Phase 3)
-   - Start with metrics registry idempotency (likely smallest surface)
-2. Quarantine environmental failures with markers
-3. Enable auto-run tests.yml (Phase 4)
-
-**Medium-term (Stage 3):**
-1. Experience Kernel MVP (self-model + narrator)
-2. Persona packs (config-driven personality switching)
+The Runtime Convergence Exit Gate (`COGNITIVE_RUNTIME.md`) names the concrete remaining gaps
+under Stage 4.5, in rough priority order:
+1. Scheduler drives still don't construct an Observation/CandidateAction or consult the
+   Policy Decision (a known, deliberately-deferred gap — an earlier attempt caused a real
+   production regression, see DECISIONS.md).
+2. Voice/sight adapters remain parking-brake-only stubs (Stage 6 future work).
+3. Two Reflection *shapes* remain unreconciled (chat's Working Memory item vs. skills'
+   `skill_action_audit` row) — distinct from the two reflection *narrative pipelines*, which
+   this session did reconcile (item 11.8).
+4. One persona-duplication caller remains (`identity_interpreter/policies/persona.py`'s two
+   legacy callers — CLI `explain`, standalone `chat.py` script — not yet migrated).
+5. Stage 1 (console/UI) hasn't been started at all.
 
 ### Links to Key Context
 
-- [MASTER_PLAN.md](MASTER_PLAN.md) - Overall project plan + Next 3 Moves
-- [ROADMAP.md](ROADMAP.md) - Stage gates with exit criteria
-- [DECISIONS.md](DECISIONS.md) - Decision log
-- [RISKS.md](RISKS.md) - Risk register
-- [CI.md](CI.md) - CI infrastructure + local commands
-- `docs/STATUS_2025-12-29.md` - Test health snapshot (needs refresh)
+- [MASTER_PLAN.md](MASTER_PLAN.md) — overall project plan + Next 3 Moves (P0 section) + P2.5
+  Runtime Convergence backlog (items 11.1–11.11)
+- [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md) — the cognitive-loop/ownership/governance
+  reference, including the honest Exit Gate status table
+- [ROADMAP.md](ROADMAP.md) — stage gates with exit criteria
+- [DECISIONS.md](DECISIONS.md) — decision log
+- [RISKS.md](RISKS.md) / [ASSUMPTIONS.md](ASSUMPTIONS.md) — both re-verified 2026-07-21
+- [CI.md](CI.md) — CI infrastructure + local commands (corrected 2026-07-21)
+- `docs/STATUS_2025-12-29.md` — historical snapshot, now explicitly marked stale
 
 ---
 
 ## Review History (Recent)
 
+### 2026-07-21 - Snapshot Refresh + Canonical Doc Audit
+- **Type:** Ad-hoc review (found this snapshot stale while auditing docs for currency)
+- **Outcome:** Snapshot refreshed against current reality; several other canonical docs
+  corrected in the same pass (RISKS.md, ASSUMPTIONS.md, INTERFACES.md, TEST_MATRIX.md, CI.md);
+  `docs/STATUS_2025-12-29.md` given a stale-doc banner
+- **Next:** Close remaining Runtime Convergence Exit Gate items (see "Next Moves" above)
+
 ### 2026-01-19 - Coordinator Handoff Preparation
 - **Type:** Planning review
 - **Outcome:** Canonical docs scaffolding complete
-- **Next:** Refresh STATUS, begin Phase 2
+- **Next:** Refresh STATUS, begin Phase 2 — *(this next step didn't happen until the
+  2026-07-21 entry above; the snapshot sat stale for six months of substantial progress in
+  the interim)*
 
 ### 2025-12-29 - Test Health Snapshot
 - **Type:** Ad-hoc assessment
 - **Outcome:** STATUS snapshot created, 6 P0 failures documented
-- **Next:** [This became stale; refresh planned for Jan 19]
+- **Next:** All 6 fixed 2026-07-20 (see MASTER_PLAN.md)
 
 ### 2025-10-30 - Stage 0 Completion
 - **Type:** Stage gate review

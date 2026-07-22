@@ -46,6 +46,7 @@ See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHEC
 ## Canonical docs
 
 - **MASTER_PLAN.md** (this doc)
+- [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md)
 - [ROADMAP.md](ROADMAP.md)
 - [DECISIONS.md](DECISIONS.md)
 - [RISKS.md](RISKS.md)
@@ -314,6 +315,50 @@ pytest -q  # full suite: 42 failures -> 38 (all remaining are the separate,
      call site). Session-scoped consent caching (`session_consents`) is unchanged. Verified:
      imports cleanly, `pytest -q -k consent` and `pytest -m smoke` show no new failures beyond
      the two pre-existing ones already on record above.
+
+---
+
+## Retrieval consent-enforcement bug: `requires_consent` memories excluded unconditionally — fixed 2026-07-21
+
+**Symptom:** none reported — found by reading `bartholomew/kernel/retrieval.py` and
+`hybrid_retriever.py` while investigating Runtime Convergence gaps; two `# TODO: Check
+memory_consent table` comments (`retrieval.py:318`, `hybrid_retriever.py:719`) were the tell.
+
+**Root cause:** three retriever classes each ran their own rules-engine pass over
+`requires_consent` memories and excluded them unconditionally, regardless of the real
+`memory_consent` table — `Retriever._should_include()` and `FTSOnlyRetriever._evaluate_rules()`
+in `retrieval.py`, and `HybridRetriever._evaluate_rules()` in `hybrid_retriever.py` (the
+vector-only, FTS-only, and hybrid retrieval modes respectively — i.e. all three). This
+duplicated, weaker logic sat *on top of* `FTSClient.search()`/`VectorStore.search()`'s own
+`apply_consent_gate=True` default, which correctly reads `memory_consent` via
+`ConsentGate.get_consented_memory_ids()` one layer down. Net effect: a memory a user had
+genuinely consented to (a real `memory_consent` row, e.g. from `MemoryStore.upsert_memory()`'s
+embedding flow) already passed the lower-level `ConsentGate` check, then got silently
+re-excluded by the retriever's own redundant pass anyway. Fail-closed (no privacy leak) but the
+consent-granting feature was non-functional for retrieval in all three modes — this project's
+own privacy-first non-negotiable ("Consent gating for 'ask before store' classes... must be
+enforceable and testable") wasn't actually true for the retrieval side of consent.
+
+**Fix:** all three methods now accept a `consented_ids: set[int]` (loaded once per
+call via `ConsentGate(db_path).get_consented_memory_ids()`, matching the existing pattern
+`ConsentGate.filter_memory_ids()` already uses) and only exclude a `requires_consent` memory
+when its ID isn't in that set — reusing the one authoritative consent-check
+(`ConsentGate`/`memory_consent` table) instead of a fourth reimplementation. Defaults to the
+old fail-closed behavior when no `consented_ids` is passed, so nothing regresses for any
+caller that doesn't opt in.
+
+**Acceptance:** a `requires_consent` memory with a real `memory_consent` row is retrievable
+in all three modes; one without a row stays excluded; `never_store` (`allow_store=false`)
+memories stay excluded regardless of consent.
+
+**Verify:** `pytest -q tests/test_retrieval_consent_enforcement.py tests/test_consent_gates.py
+tests/test_fts_search.py tests/test_hybrid_boosts_flip.py tests/test_hybrid_fusion_math.py
+tests/test_hybrid_recency.py tests/test_hybrid_rrf.py tests/test_hybrid_tiebreakers.py
+tests/test_retrieval_factory.py tests/test_retrieval_fts5_fallback.py
+tests/test_retrieval_hot_reload.py tests/test_kernel_privacy_guard.py
+tests/test_phase2d_embeddings.py tests/test_working_memory.py test_memory_functionality.py` —
+all passed locally (clean venv; see item 11.6's note on the sandbox's system-Python
+`cryptography` conflict, unrelated to this change).
 
 ---
 
@@ -642,15 +687,238 @@ No exceptions. Not even chat.
     - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
       tests/test_api_chat_runtime_contract.py`.
 
-11.5. **Author `COGNITIVE_RUNTIME.md`**
+11.5. **Author `COGNITIVE_RUNTIME.md`** — ✅ implemented 2026-07-21
     - The canonical document defining the cognitive loop, runtime invariants, the ownership
       table, and the execution/observation/reflection/memory lifecycles, plus governance
-      checkpoints — the answer to "how does Bartholomew think?" Written during this milestone
-      (not before); added to the Canonical docs list once it exists.
+      checkpoints — the answer to "how does Bartholomew think?" Added to the Canonical docs
+      list above.
+    - Written by reading the actual implementation (`runtime_contract.py`,
+      `experience_kernel.py`, `narrator.py`, `working_memory.py`, `persona_pack.py`,
+      `policy_engine.py`, `identity_context.py`, `parking_brake.py`, `skill_registry.py`), not
+      from the plan narrative alone — this surfaced gaps not previously written down in one
+      place: chat's Governance stage checks only `ParkingBrake`, not the Identity Context →
+      Policy Decision path item 11.2 wired for skill execution; chat and skill execution each
+      produce a durably-persisted but structurally different Reflection record (a Working
+      Memory item vs. a `skill_action_audit` row) rather than one unified shape; and the
+      Exit Gate's seven questions are mostly "partial," not "yes" — documented honestly in the
+      new doc's "Exit Gate status" table rather than glossed over.
+    - **Acceptance:** the doc exists, is added to the Canonical docs list, and every claim in
+      it is traceable to a specific file/function rather than restating the plan.
     - A later, separate document, `ARCHITECTURAL_INVARIANTS.md` (Principle Zero, Principle
       One, one authority per concept, fail-closed, memory is consent-gated, every decision is
-      explainable, etc. — the rules meant to survive any future rewrite) is noted here as a
-      *future* addition after this milestone, not part of it.
+      explainable, etc. — the rules meant to survive any future rewrite) remains a *future*
+      addition, not part of this item.
+
+11.6. **Wire chat's Governance stage into the Policy Decision check** — ✅ implemented 2026-07-21
+    - Closes the gap `COGNITIVE_RUNTIME.md` (item 11.5) named: chat's Governance stage
+      (`runtime_contract.py`) previously checked only `ParkingBrake`, not the Identity Context
+      → Policy Decision path item 11.2 already wired for `SkillRegistry.execute_action()`.
+    - **A real regression risk found and avoided before it shipped, same discipline as item
+      11.2's scheduler-drive revert:** naively evaluating chat's `"chat_response"`
+      `CandidateAction` against `evaluate_tool_policy()` like any other tool name would have
+      denied every chat turn in production the instant it landed. Confirmed by direct reading
+      of `Identity.yaml`'s real `tool_use` section (`default_allowed: false`, `allowlist:
+      [web_fetch, browser_action]` — no conversational entry) and
+      `bartholomew_api_bridge_v0_1/services/api/app.py`, which already constructs
+      `KernelDaemon(identity_path="Identity.yaml")` by default — so `daemon.identity_context`
+      is never `None` in the live API. `evaluate_tool_policy()`'s own docstring says its
+      `tool_name` param means "a skill_id or scheduler drive task_id" — conversation is
+      neither, the same category error item 11.2 made for scheduler drives.
+    - **Fix:** added `_CONVERSATIONAL_KINDS` (currently `{"chat_response"}`, the only kind the
+      chat seam produces today) to `runtime_contract.py`. The Governance stage now consults
+      `policy_engine.evaluate_tool_policy(daemon.identity_context, candidate_action.kind)`
+      whenever an `IdentityContext` is wired in and the kind isn't in that exempt set — real
+      today for any future tool/skill-shaped candidate action a chat turn might propose,
+      correctly inert for plain conversation, mirroring the scheduler-drive exemption's
+      reasoning rather than repeating its mistake.
+    - **Acceptance:** a chat turn with a restrictive `IdentityContext`
+      (`tool_use_default_allowed=False`, empty `allowlist`) still succeeds
+      (`governance_allowed=True`) — proven by
+      `TestChatGovernanceConsultsPolicyDecision.test_chat_not_denied_by_a_restrictive_tool_use_policy`.
+      Behavior for daemons that don't wire an `IdentityContext` at all is unchanged
+      (`test_skipped_entirely_when_no_identity_context_wired`).
+    - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
+      tests/test_api_chat_runtime_contract.py tests/test_runtime_convergence_policy.py` — 21
+      passed locally (venv with `requirements.txt` + `requirements-dev.txt` + `pip install -e
+      .`; the sandbox's system Python has an unrelated pre-existing `cryptography` package
+      conflict blocking `pip install -e .` directly, unrelated to this change).
+
+11.7. **Wire recent conversation history into chat's Interpretation stage; found and flagged
+    a 5th duplicated-memory-injection concept** — ✅ implemented 2026-07-21
+    - Closes a gap item 11.4 didn't: goals/persona reached the prompt, but no prior turn's
+      own *content* did. `runtime_contract.py`'s `_build_interpretation()` now also folds in
+      `daemon.working_memory.get_context_string()` (called before this turn's own Reflection
+      write, so it only ever contains prior turns) — a chat turn can now genuinely answer "what
+      did I just tell you?" using only what a prior turn wrote into Working Memory.
+    - **Found while investigating:** `identity_interpreter.orchestrator.context_builder.
+      ContextBuilder` was clearly *meant* to be the thing injecting prior conversational memory
+      into chat's prompt (backed by `identity_interpreter/adapters/memory_manager.py`'s
+      `MemoryManager`, which itself has two stale `# TODO Phase 2b/2c` comments for encryption/
+      summarization). Traced it and confirmed it's dead code in production: `ContextBuilder`
+      only builds a `MemoryManager` when given a non-`None identity_config`, and
+      `bartholomew_api_bridge_v0_1/services/api/app.py` constructs `Orchestrator()` with none
+      — so `build_prompt_context()` always returns `""` today. This is a fifth duplicated
+      concept (conversational-memory injection) beyond the four item 11.1 already found, just
+      never exercised at runtime so it never surfaced as a behavioral conflict. Documented
+      in-place (module docstrings in both files) rather than adding a formal ownership-table
+      row for a concept this narrow; the authoritative implementation is now `runtime_contract.
+      py` + `WorkingMemoryManager`, per COGNITIVE_RUNTIME.md's ownership table's existing
+      "Experience" entry. Did not implement the stale TODOs — see the docstring note explaining
+      why (the authoritative Memory Substrate, `bartholomew.kernel.memory_store.MemoryStore`,
+      already does both, live).
+    - **Acceptance:** a second chat turn's prompt contains a prior turn's own raw content
+      (not just goals/persona) — proven by
+      `test_second_turn_prompt_references_first_turns_own_content`.
+    - **Verify:** `pytest -q tests/test_runtime_contract_chat_seam.py
+      tests/test_api_chat_runtime_contract.py tests/test_runtime_convergence_policy.py
+      tests/test_working_memory.py` — 25 passed locally.
+
+11.8. **Reconcile the two reflection-narrative pipelines** — ✅ implemented 2026-07-21
+    - Closes ROADMAP.md Stage 3's "Still open" note. `daemon.py`'s `_run_daily_reflection()`/
+      `_run_weekly_reflection()` generated content exclusively via `identity_interpreter.
+      adapters.reflection_generator.ReflectionGenerator` (or a generic template fallback) — its
+      own "Notable Events" section literally reads `(Future: chat highlights, emotional
+      events, user activities)`, a placeholder. Meanwhile `narrator.py`'s `NarratorEngine`
+      already builds a real narrative from actual persisted episodes (affect/attention/drive/
+      goal/observation) via `generate_daily_reflection_narrative()`/
+      `generate_weekly_reflection_narrative()` — fully built, independently tested (`tests/
+      test_narrator.py`), but confirmed by grep to have **zero callers anywhere in the repo
+      except tests** before this change. The persisted/exported daily and weekly reflections
+      never reflected anything that actually happened.
+    - **Fix:** both methods in `daemon.py` now call the corresponding narrator method after
+      `ReflectionGenerator` produces its content, and append the result (`content = f"{content}
+      \n\n---\n\n{episodic_narrative}"`) rather than replacing or parsing either pipeline's
+      output — the safer integration, since both remain independently correct and neither
+      needed to change shape. Never lets a narrator error break reflection generation (wrapped
+      in its own `try`/`except`, matching this file's existing fail-safe pattern for the
+      `ReflectionGenerator` call itself).
+    - **Acceptance:** a daily/weekly reflection persisted after a real episode (e.g. a goal
+      added via `ExperienceKernel.add_goal()`) contains that episode's own content, and
+      `meta["episodic_narrative_included"]` is `True`; the weekly reflection's existing
+      "Identity Core Alignment" safety-audit section is unchanged (append-only, not clobbered).
+    - **Verify:** `pytest -q tests/test_reflection_narrative_integration.py` — 4 passed
+      locally; `pytest -q tests/test_stage3_integration.py tests/test_stage0_alive.py
+      tests/test_narrator.py tests/test_stage1_api_endpoints.py` — 140 passed (no
+      regressions).
+
+11.9. **Scenario replay test harness + a real restart-persistence bug it found** —
+    ✅ implemented 2026-07-21
+    - Closes the "dedicated scenario replay test harness (distinct from `tests/
+      test_stage3_integration.py::TestFullLifecycle`)" item this backlog previously marked
+      deliberately out of scope. `TestFullLifecycle` hand-wires individual kernel modules
+      together directly; `tests/test_scenario_replay.py` instead drives a real `KernelDaemon`
+      through the actual `run_chat_through_runtime_contract()` seam across one continuous
+      multi-turn session (chat -> goal added -> a later turn referencing both the goal and a
+      prior turn's own content -> persona switch observed next turn -> parking brake blocking
+      and recovering -> daily reflection capturing the real episode -> a simulated restart).
+    - **A real, previously-live bug found while writing it:** `daemon.py`'s
+      `_init_experience_kernel()` called `self.experience.load_last_snapshot()`, printed
+      `"[Kernel] Restored experience state from last snapshot"`, and then did nothing else with
+      the result — `load_last_snapshot()` only loads and returns a `SelfSnapshot`; applying it
+      is a separate method, `ExperienceKernel.restore_from_snapshot()`, that nothing was
+      calling. Every daemon restart silently reset drives/affect/attention/active_goals to
+      fresh-instance defaults while logging that it had restored them — the log message was
+      never true. (`WorkingMemoryManager.load_last_snapshot()`'s equivalent path was already
+      correct — it calls `self.restore(snapshot)` internally — so this bug was isolated to
+      `ExperienceKernel`.) Same bug class as the 2026-07-20 "silently-swallowed `AttributeError`
+      disabled the kernel's entire tick loop" fix in this same file (see "Experience Kernel
+      MVP: bug fix + privacy gap" below) — another log message asserting something the code
+      didn't actually do.
+    - **Fix:** one line — `_init_experience_kernel()` now calls
+      `self.experience.restore_from_snapshot(snapshot)` before printing the (now-true) message.
+    - **Also confirmed, not a bug:** `PersonaPackManager` has no persisted "active pack" state
+      at all (`persona_switch_log` is an audit trail, not restorable state) — every boot
+      intentionally activates the default pack via `_init_experience_kernel()`'s own "activate
+      default if none active" logic. The scenario test asserts this explicitly rather than
+      assuming persona should survive restart.
+    - **Acceptance:** a goal added before a simulated restart (`persist_snapshot()` + a second
+      `KernelDaemon` instance against the same db) is present in
+      `daemon2.experience.get_active_goals()` and is referenced in a post-restart chat turn's
+      prompt.
+    - **Verify:** `pytest -q tests/test_scenario_replay.py` — 2 passed locally;
+      `pytest -q tests/test_stage3_integration.py tests/test_experience_kernel.py
+      tests/test_stage0_alive.py tests/test_reflection_narrative_integration.py
+      tests/test_runtime_contract_chat_seam.py tests/test_api_chat_runtime_contract.py
+      test_kernel_alive.py` — 96 passed (no regressions).
+
+11.10. **Fix five previously-live 500s in the `self_state` API router; add its first
+    HTTP-level test file** — ✅ implemented 2026-07-21
+    - `bartholomew_api_bridge_v0_1/services/api/routes/self_state.py` (`/api/self/*`,
+      `/api/persona/*`, `/api/episodes/*`) had **zero HTTP-level tests anywhere in the repo**
+      before this change — everything else touching this area
+      (`tests/test_runtime_contract_chat_seam.py`, `tests/test_scenario_replay.py`) calls
+      `daemon.experience.add_goal()` etc. directly, never through the actual routes. Writing
+      `tests/test_self_state_api.py` (the first such file) found five call sites that had
+      drifted from the real `ExperienceKernel`/`NarratorEngine` method signatures they call —
+      every one of these was a genuine, currently-live bug, not a hypothetical:
+      - `PUT /api/self/attention` — passed `attention_type=`/`context_tags=`; the real method
+        is `set_attention(target, focus_type, intensity, tags)`. **Always raised `TypeError`.**
+      - `GET /api/self/drives` and `GET /api/self/drives/top` — passed `limit=`; the real
+        method is `get_top_drives(n=3)`. **Always raised `TypeError`.**
+      - `POST /api/self/drives/{id}/activate` — passed `amount=`; the real method is
+        `activate_drive(drive_id, boost=0.0)`. **Always raised `TypeError`.**
+      - `POST /api/self/drives/{id}/satisfy` — passed `amount=`; the real method,
+        `satisfy_drive(drive_id)`, takes no second parameter at all (a fixed, unparameterized
+        reduction). **Always raised `TypeError`.**
+      - `GET /api/episodes/by-type/{episode_type}` — passed the raw URL path string straight
+        to `NarratorEngine.get_episodes_by_type()`, which calls `.value` on it internally,
+        assuming an `EpisodeType` enum. **Always raised `AttributeError`.**
+      - (Also fixed as part of the same investigation, see item above this one's sibling in
+        spirit: `POST /api/self/goals` always returned `"added": null` —
+        `ExperienceKernel.add_goal()` had no return statement. Now returns `bool`, mirroring
+        `complete_goal()`'s existing contract. No caller anywhere used the old `None` return
+        value, confirmed by grep, so this was safe to change.)
+    - **Separately confirmed, not fixed (out of scope, a deeper pre-existing gap):**
+      `daemon.py` constructs `ExperienceKernel(db_path=..., workspace=...)` with no
+      `identity_path` — so `ExperienceKernel` always falls back to its own hardcoded
+      `DEFAULT_DRIVES` list; neither `config/drives.yaml` nor `Identity.yaml`'s
+      `identity.self_model.drives` ever reaches it. `daemon.py` separately loads
+      `config/drives.yaml` into `self.drives` for the `Planner`, entirely disconnected from
+      `ExperienceKernel`'s own drive list — a second "drives" concept with two independent
+      configs and no shared source of truth. Noted here rather than fixed; a real design
+      question (should `ExperienceKernel` read `Identity.yaml`'s drives?) that deserves its own
+      scoped decision, not a same-session fix bundled into a route-signature bugfix pass.
+    - **Test-isolation finding along the way:** `app_module`'s module-level `_kernel` is a
+      process-wide singleton shared by every test file that imports
+      `bartholomew_api_bridge_v0_1.services.api.app` — `tests/test_self_state_api.py`'s new
+      goal/persona-mutating tests initially leaked state into
+      `tests/test_api_chat_runtime_contract.py`'s assertions when both ran in the same pytest
+      session (confirmed: goals from one file's tests showed up in the other file's chat
+      response). Fixed with explicit cleanup (an autouse fixture removing every goal the class
+      creates; the persona-switch test restores whatever pack was active before it ran).
+    - **Acceptance:** every route in `self_state.py`'s drives/attention/episodes-by-type
+      surface returns a real response instead of a 500; `POST /self/goals`'s `added` field is
+      accurate.
+    - **Verify:** `pytest -q tests/test_self_state_api.py` — 14 passed locally;
+      `pytest -q tests/test_self_state_api.py tests/test_api_chat_runtime_contract.py
+      tests/test_stage1_api_endpoints.py tests/test_stage0_alive.py
+      tests/test_experience_kernel.py tests/test_narrator.py tests/test_scenario_replay.py
+      tests/test_runtime_contract_chat_seam.py` — 197 passed (no regressions, no
+      cross-file leakage).
+
+11.11. **Wire `NarratorEngine.search_episodes()` into a real route** — ✅ implemented 2026-07-21
+    - Generalizing item 11.10's ASSUMPTIONS.md A1b finding ("audit for public methods with
+      zero test coverage, not just zero *failures*"), swept every public method in
+      `narrator.py` for external callers by grep. Everything else checked out (private
+      handler methods correctly called only internally; `set_persona_manager()` is genuinely
+      dead code now that `daemon.py` passes `persona_manager` at construction instead — its
+      own docstring names the ordering problem that made it necessary, which no longer
+      applies; left alone, not worth a same-session cleanup). `search_episodes()` stood out:
+      a fully-built, independently-tested FTS5 full-text search over episodic entries (with
+      its own graceful LIKE fallback already built in) that no API route exposed at all.
+    - Added `GET /api/episodes/search` (`self_state.py`) — `q`, `limit`, optional
+      `episode_type`/`tone` filters (validated against the real enums, 400 on an unrecognized
+      value, same pattern as item 11.10's `get_episodes_by_type` fix). **Must be registered
+      before `GET /episodes/{episode_id}`** in the file — both are single-segment paths under
+      `/episodes/`, and FastAPI/Starlette resolves in registration order, so the existing
+      path-param route would otherwise greedily match `"search"` as an `episode_id`. Placed
+      it there and added a regression test asserting the ordering holds.
+    - **Acceptance:** a goal added via `ExperienceKernel.add_goal()` is findable by its own
+      text through `GET /api/episodes/search?q=...`.
+    - **Verify:** `pytest -q tests/test_self_state_api.py` — 18 passed locally (4 new);
+      `pytest -q tests/test_self_state_api.py tests/test_api_chat_runtime_contract.py
+      tests/test_narrator.py tests/test_stage1_api_endpoints.py` — 128 passed (no
+      regressions).
 
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?

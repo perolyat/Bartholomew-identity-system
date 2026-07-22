@@ -11,6 +11,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from bartholomew.kernel.narrator import EpisodeType, NarrativeTone
+
 
 router = APIRouter(prefix="/api", tags=["self-state"])
 
@@ -120,9 +122,9 @@ async def set_attention(body: AttentionUpdate) -> dict[str, Any]:
 
     kernel.experience.set_attention(
         target=body.target,
-        attention_type=body.attention_type,
+        focus_type=body.attention_type,
         intensity=body.intensity,
-        context_tags=body.context_tags or [],
+        tags=body.context_tags or [],
     )
 
     return {
@@ -146,7 +148,7 @@ async def clear_attention() -> dict[str, Any]:
 async def get_drives() -> dict[str, Any]:
     """Get all drives with effective activation levels."""
     kernel = _get_kernel()
-    drives = kernel.experience.get_top_drives(limit=100)
+    drives = kernel.experience.get_top_drives(n=100)
     return {
         "drives": [d.to_dict() for d in drives],
     }
@@ -156,7 +158,7 @@ async def get_drives() -> dict[str, Any]:
 async def get_top_drives(limit: int = 5) -> dict[str, Any]:
     """Get top N drives by effective activation."""
     kernel = _get_kernel()
-    drives = kernel.experience.get_top_drives(limit=limit)
+    drives = kernel.experience.get_top_drives(n=limit)
     return {
         "drives": [d.to_dict() for d in drives],
     }
@@ -168,7 +170,7 @@ async def activate_drive(drive_id: str, amount: float = 0.2) -> dict[str, Any]:
     kernel = _get_kernel()
 
     try:
-        kernel.experience.activate_drive(drive_id, amount=amount)
+        kernel.experience.activate_drive(drive_id, boost=amount)
         drive = kernel.experience.get_drive(drive_id)
         return {
             "ok": True,
@@ -179,12 +181,21 @@ async def activate_drive(drive_id: str, amount: float = 0.2) -> dict[str, Any]:
 
 
 @router.post("/self/drives/{drive_id}/satisfy")
-async def satisfy_drive(drive_id: str, amount: float = 0.3) -> dict[str, Any]:
-    """Satisfy a drive by decreasing its activation level."""
+async def satisfy_drive(drive_id: str) -> dict[str, Any]:
+    """
+    Satisfy a drive by decreasing its activation level.
+
+    No `amount` parameter -- ExperienceKernel.satisfy_drive() applies a
+    fixed reduction; there's no underlying way to parameterize it (a
+    previous version of this route accepted `amount` and silently
+    discarded it, since the kernel call it forwarded to never accepted it
+    either -- see the TypeError this route used to always raise before
+    it was fixed).
+    """
     kernel = _get_kernel()
 
     try:
-        kernel.experience.satisfy_drive(drive_id, amount=amount)
+        kernel.experience.satisfy_drive(drive_id)
         drive = kernel.experience.get_drive(drive_id)
         return {
             "ok": True,
@@ -242,6 +253,59 @@ async def get_recent_episodes(limit: int = 20) -> dict[str, Any]:
     }
 
 
+@router.get("/episodes/search")
+async def search_episodes(
+    q: str,
+    limit: int = 20,
+    episode_type: str | None = None,
+    tone: str | None = None,
+) -> dict[str, Any]:
+    """
+    Full-text search across episodic entries.
+
+    Wires up NarratorEngine.search_episodes() (FTS5, with a graceful LIKE
+    fallback baked into the method itself), which was fully built and
+    tested but had no route exposing it at all -- confirmed by grep, its
+    only callers anywhere in the repo were tests. Must be registered
+    before GET /episodes/{episode_id} in this file: that route's path
+    param would otherwise greedily match "search" as an episode_id (both
+    are single-segment paths under /episodes/, and FastAPI resolves in
+    registration order).
+    """
+    kernel = _get_kernel()
+
+    parsed_type = None
+    if episode_type is not None:
+        try:
+            parsed_type = EpisodeType(episode_type)
+        except ValueError:
+            valid = ", ".join(t.value for t in EpisodeType)
+            raise HTTPException(
+                400,
+                f"Unknown episode_type '{episode_type}'. Valid: {valid}",
+            ) from None
+
+    parsed_tone = None
+    if tone is not None:
+        try:
+            parsed_tone = NarrativeTone(tone)
+        except ValueError:
+            valid = ", ".join(t.value for t in NarrativeTone)
+            raise HTTPException(400, f"Unknown tone '{tone}'. Valid: {valid}") from None
+
+    episodes = kernel.narrator.search_episodes(
+        query=q,
+        limit=limit,
+        episode_type=parsed_type,
+        tone=parsed_tone,
+    )
+    return {
+        "episodes": [ep.to_dict() for ep in episodes],
+        "count": len(episodes),
+        "query": q,
+    }
+
+
 @router.get("/episodes/{episode_id}")
 async def get_episode(episode_id: str) -> dict[str, Any]:
     """Get a specific episode by ID."""
@@ -259,7 +323,19 @@ async def get_episodes_by_type(
 ) -> dict[str, Any]:
     """Get episodes filtered by type."""
     kernel = _get_kernel()
-    episodes = kernel.narrator.get_episodes_by_type(episode_type, limit=limit)
+
+    # NarratorEngine.get_episodes_by_type() expects an EpisodeType enum (it
+    # calls episode_type.value internally) -- this route used to pass the
+    # raw path string straight through, which raised AttributeError on
+    # every single request (str has no .value). Convert here, with a 400
+    # for an unrecognized type rather than a raw 500.
+    try:
+        parsed_type = EpisodeType(episode_type)
+    except ValueError:
+        valid = ", ".join(t.value for t in EpisodeType)
+        raise HTTPException(400, f"Unknown episode_type '{episode_type}'. Valid: {valid}") from None
+
+    episodes = kernel.narrator.get_episodes_by_type(parsed_type, limit=limit)
     return {
         "episodes": [ep.to_dict() for ep in episodes],
         "count": len(episodes),

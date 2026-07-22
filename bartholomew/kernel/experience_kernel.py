@@ -618,12 +618,20 @@ class ExperienceKernel:
     # Public API: Goal Management
     # =========================================================================
 
-    def add_goal(self, goal: str) -> None:
+    def add_goal(self, goal: str) -> bool:
         """
         Add a goal to the active goals list.
 
         Args:
             goal: Description of the goal
+
+        Returns:
+            True if the goal was actually added, False if it was a no-op
+            (empty after redaction, or already present) -- mirrors
+            complete_goal()'s existing bool return so both report success
+            accurately (bartholomew_api_bridge_v0_1's POST /self/goals route
+            previously always got None back and reported it as "added"
+            regardless of whether anything happened).
         """
         # goal is caller-supplied free text with no per-field redaction
         # rule -- see update_affect()'s comment on why this is redacted
@@ -641,6 +649,8 @@ class ExperienceKernel:
                     goal=goal,
                     total_goals=len(self._active_goals),
                 )
+            return True
+        return False
 
     def complete_goal(self, goal: str) -> bool:
         """
