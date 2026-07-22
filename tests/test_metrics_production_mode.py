@@ -1,7 +1,52 @@
 """Test metrics endpoint production mode behavior."""
 
+import sys
+
 import pytest
 from httpx import ASGITransport, AsyncClient
+
+
+_APP_MODULE_NAMES = ("bartholomew_api_bridge_v0_1.services.api.app", "app")
+
+
+@pytest.fixture(autouse=True)
+def _restore_app_module_identity():
+    """
+    Every test below deletes bartholomew_api_bridge_v0_1.services.api.app
+    (and its "app" alias) from sys.modules to force a fresh re-import that
+    picks up a changed METRICS_INTERNAL_ONLY env var -- but none of them
+    ever restored the original module object afterward. That's a real,
+    previously-undiscovered hazard: any other test file that captured its
+    own reference to this module before these tests ran (e.g. a
+    module-scoped `from ... import app as app_module` at collection time --
+    collection happens for every file before any test executes, so that
+    binding is fixed well before these tests run) keeps pointing at the
+    *original* module object, including its already-started FastAPI `app`
+    instance. Meanwhile any *runtime* `from ... import _kernel`-style lookup
+    elsewhere (self_state.py's _get_kernel(), by design, so it always sees a
+    live value) resolves via sys.modules at call time -- and after these
+    tests run, sys.modules has been left pointing at whichever fresh module
+    the *last* test here happened to construct, a third object matching
+    neither the original nor whatever the TestClient actually started.
+    Simply deleting the entries again afterward doesn't fix this -- it just
+    forces yet another fresh import next time, still mismatched against the
+    original. Found via bisection: this exact split-brain made every test in
+    tests/test_self_state_api.py fail with 503s when the full suite ran,
+    since "test_metrics_production_mode" sorts alphabetically before
+    "test_self_state_api".
+
+    The actual fix: snapshot whatever's in sys.modules for these names
+    before each test (present or absent), and put exactly that back
+    afterward -- not a re-delete, a genuine restore -- so every other
+    consumer's already-captured reference stays valid.
+    """
+    original = {name: sys.modules.get(name) for name in _APP_MODULE_NAMES}
+    yield
+    for name, module in original.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
 
 
 @pytest.mark.anyio
