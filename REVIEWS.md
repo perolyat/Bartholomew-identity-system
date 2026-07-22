@@ -2,8 +2,9 @@
 
 > Weekly check-ins and stage gate review rituals.
 >
-> **Last updated:** 2026-07-21 (see "Last Review Snapshot" below — it had gone stale since
-> 2026-01-19)
+> **Last updated:** 2026-07-22 (governance addendum: Lead Architect transition recorded; see
+> "Last Review Snapshot" below — the underlying content snapshot itself is from 2026-07-21,
+> refreshed after going stale since 2026-01-19)
 
 ## Purpose
 
@@ -125,10 +126,16 @@ If this stage introduces risk:
 > fixed 2026-07-20 — see MASTER_PLAN.md's "Full test suite investigation" and "P0 status:
 > complete" sections). Refreshed 2026-07-21 against what this session directly verified plus
 > the historical record in `MASTER_PLAN.md`/`ROADMAP.md`.
+>
+> **Governance addendum, 2026-07-22:** the Lead Architect role transitioned from Bartholomew to
+> Claude this date (see `DECISIONS.md`'s "Lead Architect role transitions from Bartholomew to
+> Claude"). `CONSTITUTION.md` was added as a 13th canonical doc (see `DECISIONS.md`'s "Adopt
+> `CONSTITUTION.md` as a canonical SSOT doc"). This addendum does not re-verify the rest of this
+> snapshot's content — see the 2026-07-21 refresh below for what was directly checked then.
 
-**Date:** 2026-07-21
+**Date:** 2026-07-21 (governance addendum 2026-07-22)
 **Type:** Ad-hoc snapshot refresh (found stale while auditing canonical docs for currency)
-**Reviewer:** Claude (autonomous session)
+**Reviewer:** Claude (autonomous session) — also current Architect of record as of 2026-07-22
 
 ### Current Project State
 
@@ -155,8 +162,8 @@ If this stage introduces risk:
 - ⚠️ `tests.yml` — still manual-only (coverage-gated full suite); still not auto-enabled
 
 **Documentation:**
-- ✅ 12/12 canonical docs present (`COGNITIVE_RUNTIME.md` added 2026-07-21, per MASTER_PLAN.md
-  item 11.5)
+- ✅ 13/13 canonical docs present (`COGNITIVE_RUNTIME.md` added 2026-07-21, per MASTER_PLAN.md
+  item 11.5; `CONSTITUTION.md` added 2026-07-22, see DECISIONS.md)
 - ✅ `docs/STATUS_2025-12-29.md` now carries an explicit stale-doc banner (2026-07-21) pointing
   back to `MASTER_PLAN.md`, rather than silently contradicting current docs
 - This session also re-verified and corrected several other canonical docs against current
