@@ -75,7 +75,7 @@ source, not just recorded here):
 | Concept | Authoritative | Deprecated (still has legacy callers) |
 |---|---|---|
 | Model routing | `identity_interpreter/orchestrator/model_router.py` (`ModelRouter`, drives live requests) | `identity_interpreter/policies/model_router.py` (CLI `explain` + standalone `chat.py` script only) |
-| Persona | `bartholomew/kernel/persona_pack.py` (`PersonaPackManager`, wired into `NarratorEngine`/`ExperienceKernel`) | `identity_interpreter/policies/persona.py` (same two legacy callers) |
+| Persona | `bartholomew/kernel/persona_pack.py` (`PersonaPackManager`, wired into `NarratorEngine`/`ExperienceKernel`; both legacy callers now migrated) | ~~`identity_interpreter/policies/persona.py`~~ — **removed 2026-07-22** (item 11.12); CLI `explain` + standalone `chat.py` now read tone from `PersonaPackManager`'s active pack |
 | Permission gates | `bartholomew/kernel/skill_permissions.py` (`PermissionChecker`, actually gates `SkillRegistry.execute_action()`) | `identity_interpreter/policies/tool_policy.py` (CLI `explain` only) |
 | Kill-switch | `bartholomew/orchestrator/safety/parking_brake.py` (`ParkingBrake`, persistent, wired into 5 live gate points) | `identity_interpreter/adapters/kill_switch.py` (prints to stdout, zero live callers) |
 
@@ -216,7 +216,7 @@ exists today:
 | 4 | Does every completed action produce a Reflection? | **Yes, structurally** | Chat → Working Memory item; skills → `skill_action_audit` row (see "Two different Reflection mechanisms" above — the *fact* of a reflection is universal for these two surfaces; its *shape* is not unified). |
 | 5 | Does every Reflection update Memory? | **Yes** | Working Memory snapshots persist on daemon stop; `skill_action_audit` writes immediately; daily/weekly reflections persist via `MemoryStore.insert_reflection()`. |
 | 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()`, `daemon.persona_manager.get_active_pack_id()`, and (item 11.7) `daemon.working_memory.get_context_string()` for prior-turn content. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
-| 7 | Does every interface expose the same personality? | **No** | The deprecated `identity_interpreter/policies/persona.py` still has live legacy callers (CLI `explain`, standalone `chat.py` script) independent of `PersonaPackManager`; voice/sight adapters don't consult persona at all yet. |
+| 7 | Does every interface expose the same personality? | **Closer, still partial** | The deprecated `identity_interpreter/policies/persona.py` was removed (item 11.12, 2026-07-22) — its two legacy callers (CLI `explain`, standalone `chat.py`) now source tone from `PersonaPackManager`'s active pack, so every text interface shares the live kernel's persona *tone*. Two dimensions still short of "yes": (a) `PersonaPack` carries no `traits`, so those two callers still read `traits` from `Identity.yaml` directly (a stable identity descriptor, not persona-pack state — a deliberate split, not a duplication); (b) voice/sight adapters don't consult persona at all yet (Stage 6). |
 
 **Reading this table:** the loop shape is real, tested, and load-bearing for chat and skills —
 this is not aspirational. What's not yet true is *uniformity across every surface*, which is

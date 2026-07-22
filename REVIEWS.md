@@ -203,8 +203,10 @@ under Stage 4.5, in rough priority order:
 3. Two Reflection *shapes* remain unreconciled (chat's Working Memory item vs. skills'
    `skill_action_audit` row) — distinct from the two reflection *narrative pipelines*, which
    this session did reconcile (item 11.8).
-4. One persona-duplication caller remains (`identity_interpreter/policies/persona.py`'s two
-   legacy callers — CLI `explain`, standalone `chat.py` script — not yet migrated).
+4. ~~One persona-duplication caller remains~~ — **resolved 2026-07-22 (item 11.12):**
+   `identity_interpreter/policies/persona.py` removed; both legacy callers (CLI `explain`,
+   standalone `chat.py`) migrated to `PersonaPackManager`. (Voice/sight adapters still don't
+   consult persona — Stage 6 — so Exit Gate #7 is "closer, still partial," not yet "yes.")
 5. Stage 1 (console/UI) hasn't been started at all.
 
 ### Links to Key Context

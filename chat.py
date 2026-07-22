@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from bartholomew.kernel.memory.privacy_guard import set_consent_handler
+from bartholomew.kernel.persona_pack import PersonaPackManager, create_default_pack
 from identity_interpreter import load_identity, normalize_identity
 from identity_interpreter.adapters.llm_stub import LLMAdapter
 from identity_interpreter.adapters.memory_manager import ConversationTurn
@@ -21,7 +22,6 @@ from identity_interpreter.adapters.metrics_logger import MetricsLogger
 from identity_interpreter.adapters.storage import StorageAdapter
 from identity_interpreter.policies import (
     check_red_lines,
-    get_persona_config,
     handle_low_confidence,
     select_model,
 )
@@ -62,10 +62,20 @@ class BartholomewChat:
         self.metrics = MetricsLogger(self.identity)
         self.storage = StorageAdapter(self.identity)
 
-        # Get persona configuration
-        self.persona = get_persona_config(self.identity, context="casual")
-        print(f"🎭 Persona: {', '.join(self.persona['traits'])}")
-        print(f"🗣️  Tone: {', '.join(self.persona['tone'])}")
+        # Persona presentation comes from the authoritative persona system
+        # (PersonaPackManager's active pack) so this interface matches the live
+        # kernel's persona instead of reading Identity.yaml's persona section
+        # directly. Traits stay a stable identity descriptor sourced from
+        # Identity.yaml; tone/style are what the switchable pack modulates.
+        self.persona_manager = PersonaPackManager()
+        if self.persona_manager.get_active_pack() is None:
+            # No packs on disk (e.g. launched outside the repo root) -- fall
+            # back to the built-in default so tone is never empty.
+            self.persona_manager.register_pack(create_default_pack())
+        self.persona_traits = list(self.identity.persona.traits)
+        self.persona_tone = self.persona_manager.get_tone()
+        print(f"🎭 Persona: {', '.join(self.persona_traits)}")
+        print(f"🗣️  Tone: {', '.join(self.persona_tone)}")
 
         # Load previous conversation history from memory
         self.conversation_history = []
@@ -193,8 +203,8 @@ class BartholomewChat:
     def _build_system_prompt(self) -> str:
         """Build system prompt based on identity configuration"""
         values = self.identity.values_and_principles.core_values
-        traits = self.persona["traits"]
-        tone = self.persona["tone"]
+        traits = self.persona_traits
+        tone = self.persona_tone
 
         return f"""You are {self.identity.meta.name}, an AI companion.
 

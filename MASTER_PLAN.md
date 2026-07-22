@@ -920,6 +920,50 @@ No exceptions. Not even chat.
       tests/test_narrator.py tests/test_stage1_api_endpoints.py` — 128 passed (no
       regressions).
 
+11.12. **Retire the deprecated persona module — migrate its two legacy callers to
+    `PersonaPackManager`, then delete it** — ✅ implemented 2026-07-22
+    - Completes the first of item 11.1's four duplicate pairs through the full
+      deprecate → migrate → delete cycle. `identity_interpreter/policies/persona.py`
+      (`get_persona_config()` and the never-exported `get_style_guidelines()`/
+      `should_adjust_tone()`) had exactly two live callers, confirmed by grep: `chat.py`'s
+      standalone script (`get_response()`'s system prompt) and `identity_interpreter/cli.py`'s
+      `explain` command. Both now read persona *tone* from the authoritative
+      `bartholomew.kernel.persona_pack.PersonaPackManager`'s active pack — the same object the
+      live daemon/Narrator/ExperienceKernel use — so every text interface now shows the
+      kernel's active-pack tone rather than `Identity.yaml`'s `persona.tone` field.
+    - **The one real design question this surfaced, resolved deliberately, not glossed:**
+      `PersonaPack` (the authoritative unit) has **no `traits` field** — packs model tone,
+      style, drive-boosts, and narrative overrides (the *switchable presentation*), not the
+      being's stable character. The deprecated function conflated both by reading everything
+      off `Identity.yaml`'s `persona` block. So the migration split the two concerns along the
+      ownership table's existing boundary: **tone/style → `PersonaPackManager`** (switchable,
+      matches the live kernel), **`traits` → `Identity.yaml` via `identity.persona.traits`
+      directly** (stable identity descriptor, not persona-pack state). This is the correct
+      separation — persona packs own *how* Bartholomew presents; Identity owns *who* it is —
+      not a residual duplication. Recorded in `DECISIONS.md`'s "One authority per architectural
+      concept" entry.
+    - Both callers fall back to the built-in `create_default_pack()` when no pack is active
+      (e.g. launched outside the repo root, where `config/persona_packs/*.yaml` isn't found),
+      so tone is never empty. `identity_interpreter/cli.py` importing
+      `bartholomew.kernel.persona_pack` is the intended dependency direction (an interface
+      depending on the authoritative core) and introduces no cycle — `persona_pack.py` imports
+      nothing from `identity_interpreter` (confirmed by reading its imports).
+    - Removed `get_persona_config` from `identity_interpreter/policies/__init__.py`'s exports,
+      deleted `tests/test_policies.py::test_persona_config` (tested only the deleted function;
+      the authoritative system keeps its own coverage in `tests/test_persona_pack.py`), and
+      `git rm`'d `identity_interpreter/policies/persona.py`.
+    - **Exit-gate impact:** moves question #7 ("does every interface expose the same
+      personality?") from "No" to "closer, still partial" — every *text* interface now shares
+      the active pack's tone; voice/sight adapters still don't consult persona at all (Stage 6),
+      which is what keeps it short of a full "yes."
+    - **Acceptance:** `identity_interpreter/policies/persona.py` no longer exists; `chat.py` and
+      `cli.py`'s `explain` both source tone from `PersonaPackManager.get_tone()`; no caller
+      anywhere imports the removed module.
+    - **Verify:** `pytest -q tests/test_policies.py tests/test_persona_pack.py` — 59 passed
+      locally; `python -m identity_interpreter.cli explain Identity.yaml` prints the active
+      pack's tone (`warm, helpful, kind, curious`) with traits still from Identity; `ruff check`
+      and `black --check` (pinned 25.9.0) clean on all four touched files.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?
