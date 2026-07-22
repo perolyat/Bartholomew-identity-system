@@ -96,7 +96,8 @@ class TestFTSOnlyRetrieverEvaluateRules:
 
     def test_excludes_requires_consent_without_a_consent_record(self, initialized_db):
         retriever = FTSOnlyRetriever(
-            db_path=initialized_db, rules_engine=_consenting_rules_engine(),
+            db_path=initialized_db,
+            rules_engine=_consenting_rules_engine(),
         )
         metadata = {7: {"id": 7, "kind": "user"}}
 
@@ -106,7 +107,8 @@ class TestFTSOnlyRetrieverEvaluateRules:
 
     def test_includes_requires_consent_with_a_consent_record(self, initialized_db):
         retriever = FTSOnlyRetriever(
-            db_path=initialized_db, rules_engine=_consenting_rules_engine(),
+            db_path=initialized_db,
+            rules_engine=_consenting_rules_engine(),
         )
         metadata = {7: {"id": 7, "kind": "user"}}
 
@@ -117,7 +119,8 @@ class TestFTSOnlyRetrieverEvaluateRules:
     def test_defaults_to_excluded_when_consented_ids_omitted(self, initialized_db):
         """No behavior change for any caller that doesn't pass consented_ids."""
         retriever = FTSOnlyRetriever(
-            db_path=initialized_db, rules_engine=_consenting_rules_engine(),
+            db_path=initialized_db,
+            rules_engine=_consenting_rules_engine(),
         )
         metadata = {7: {"id": 7, "kind": "user"}}
 
