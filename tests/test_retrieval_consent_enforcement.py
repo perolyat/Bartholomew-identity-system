@@ -95,7 +95,9 @@ class TestFTSOnlyRetrieverEvaluateRules:
     """bartholomew.kernel.retrieval.FTSOnlyRetriever._evaluate_rules()"""
 
     def test_excludes_requires_consent_without_a_consent_record(self, initialized_db):
-        retriever = FTSOnlyRetriever(db_path=initialized_db, rules_engine=_consenting_rules_engine())
+        retriever = FTSOnlyRetriever(
+            db_path=initialized_db, rules_engine=_consenting_rules_engine(),
+        )
         metadata = {7: {"id": 7, "kind": "user"}}
 
         rules_data = retriever._evaluate_rules(metadata, {7}, consented_ids=set())
@@ -103,7 +105,9 @@ class TestFTSOnlyRetrieverEvaluateRules:
         assert rules_data[7]["include"] is False
 
     def test_includes_requires_consent_with_a_consent_record(self, initialized_db):
-        retriever = FTSOnlyRetriever(db_path=initialized_db, rules_engine=_consenting_rules_engine())
+        retriever = FTSOnlyRetriever(
+            db_path=initialized_db, rules_engine=_consenting_rules_engine(),
+        )
         metadata = {7: {"id": 7, "kind": "user"}}
 
         rules_data = retriever._evaluate_rules(metadata, {7}, consented_ids={7})
@@ -112,7 +116,9 @@ class TestFTSOnlyRetrieverEvaluateRules:
 
     def test_defaults_to_excluded_when_consented_ids_omitted(self, initialized_db):
         """No behavior change for any caller that doesn't pass consented_ids."""
-        retriever = FTSOnlyRetriever(db_path=initialized_db, rules_engine=_consenting_rules_engine())
+        retriever = FTSOnlyRetriever(
+            db_path=initialized_db, rules_engine=_consenting_rules_engine(),
+        )
         metadata = {7: {"id": 7, "kind": "user"}}
 
         rules_data = retriever._evaluate_rules(metadata, {7})
@@ -163,5 +169,10 @@ class TestEndToEndConsentRecordUnblocksRetrieval:
 
         assert 99 in consented_ids
         evaluated = {"allow_store": True, "requires_consent": True}
-        assert retriever._should_include(evaluated, memory_id=99, consented_ids=consented_ids) is True
-        assert retriever._should_include(evaluated, memory_id=100, consented_ids=consented_ids) is False
+        assert (
+            retriever._should_include(evaluated, memory_id=99, consented_ids=consented_ids) is True
+        )
+        assert (
+            retriever._should_include(evaluated, memory_id=100, consented_ids=consented_ids)
+            is False
+        )

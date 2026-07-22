@@ -280,7 +280,9 @@ async def search_episodes(
             parsed_type = EpisodeType(episode_type)
         except ValueError:
             valid = ", ".join(t.value for t in EpisodeType)
-            raise HTTPException(400, f"Unknown episode_type '{episode_type}'. Valid: {valid}") from None
+            raise HTTPException(
+                400, f"Unknown episode_type '{episode_type}'. Valid: {valid}",
+            ) from None
 
     parsed_tone = None
     if tone is not None:
