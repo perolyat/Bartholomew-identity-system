@@ -9,10 +9,45 @@ Stage 1 Exit Criteria (from ROADMAP.md):
 - No "Act" capability beyond these actions
 """
 
+import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+_APP_MODULE_NAME = "bartholomew_api_bridge_v0_1.services.api.app"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_app_reimport():
+    """
+    Every test below does `with patch.dict("sys.modules", {"bartholomew.kernel.daemon":
+    MagicMock()}): from bartholomew_api_bridge_v0_1.services.api.app import X` specifically
+    to force a fresh reimport of the app module against a mocked KernelDaemon dependency,
+    so `patch("...app._kernel", mock_kernel)` patches a throwaway module instance rather than
+    a real, already-running one. That only works if the app module isn't already cached in
+    sys.modules -- which was never guaranteed; it depended entirely on incidental collection
+    order relative to other test files that import the real module (tests/
+    test_api_chat_runtime_contract.py, tests/test_self_state_api.py). Confirmed by CI: fixing
+    a different, real test-isolation bug elsewhere (see tests/test_metrics_production_mode.py's
+    own fixture) changed the app module's caching state by the time this file's tests ran and
+    broke every test here, because they'd all been silently relying on the module happening to
+    be absent from sys.modules at that point.
+
+    Force it explicitly instead of hoping: delete the module before each test (guaranteeing
+    the `from ... import X` inside the test's own patch.dict block gets a truly fresh,
+    isolated reimport), then restore whatever was there before (present or absent) --
+    matching test_metrics_production_mode.py's fix so this file no longer depends on, nor
+    interferes with, any other file's use of the same module.
+    """
+    original = sys.modules.get(_APP_MODULE_NAME)
+    sys.modules.pop(_APP_MODULE_NAME, None)
+    yield
+    if original is None:
+        sys.modules.pop(_APP_MODULE_NAME, None)
+    else:
+        sys.modules[_APP_MODULE_NAME] = original
 
 
 @pytest.fixture
