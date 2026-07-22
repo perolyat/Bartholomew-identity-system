@@ -10,7 +10,6 @@ from identity_interpreter.loader import load_identity
 from identity_interpreter.policies import (
     check_red_lines,
     check_tool_allowed,
-    get_persona_config,
     handle_low_confidence,
     select_model,
 )
@@ -69,11 +68,3 @@ def test_confidence_policy(identity):
     # High confidence
     decision = handle_low_confidence(identity, 0.9)
     assert decision.decision["is_low_confidence"] is False
-
-
-def test_persona_config(identity):
-    """Test persona configuration"""
-    config = get_persona_config(identity, context="casual")
-    assert "traits" in config
-    assert "tone" in config
-    assert len(config["traits"]) > 0

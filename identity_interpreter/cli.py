@@ -15,11 +15,12 @@ except ImportError:
     print("Install with: pip install typer rich")
     sys.exit(1)
 
+from bartholomew.kernel.persona_pack import PersonaPackManager, create_default_pack
+
 from .loader import IdentityLoadError, lint_identity, load_identity
 from .normalizer import normalize_identity
 from .policies import (
     check_tool_allowed,
-    get_persona_config,
     handle_low_confidence,
     select_model,
 )
@@ -104,11 +105,15 @@ def explain(
             tool_decision = check_tool_allowed(identity, tool)
             _print_decision(tool_decision)
 
-        # Persona
+        # Persona -- tone from the authoritative persona system
+        # (PersonaPackManager's active pack) so this matches the live kernel;
+        # traits stay a stable identity descriptor from Identity directly.
         console.print("\n[cyan]Persona Configuration:[/cyan]")
-        persona = get_persona_config(identity, context="casual")
-        console.print(f"  Traits: {', '.join(persona['traits'])}")
-        console.print(f"  Tone: {', '.join(persona['tone'])}")
+        persona_manager = PersonaPackManager()
+        if persona_manager.get_active_pack() is None:
+            persona_manager.register_pack(create_default_pack())
+        console.print(f"  Traits: {', '.join(identity.persona.traits)}")
+        console.print(f"  Tone: {', '.join(persona_manager.get_tone())}")
 
         console.print()
 
