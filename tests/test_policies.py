@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from bartholomew.kernel.policy_engine import evaluate_tool_policy
+from identity_interpreter.identity_context import build_identity_context
 from identity_interpreter.loader import load_identity
 from identity_interpreter.policies import (
     check_red_lines,
-    check_tool_allowed,
     handle_low_confidence,
     select_model,
 )
@@ -37,14 +38,22 @@ def test_model_selection(identity):
 
 
 def test_tool_policy(identity):
-    """Test tool allowlist and consent"""
-    # Allowed tool
-    decision = check_tool_allowed(identity, "web_fetch")
-    assert decision.decision["in_allowlist"] is True
+    """Test tool allowlist via the authoritative Executive-side policy engine.
+
+    (The deprecated identity_interpreter.policies.tool_policy.check_tool_allowed
+    was removed in item 11.14; evaluate_tool_policy over a declarative
+    IdentityContext is its successor -- the same path the CLI `explain --tool`
+    command now uses.)
+    """
+    context = build_identity_context(identity)
+
+    # Allowed tool (in Identity.yaml's tool_use.allowlist)
+    decision = evaluate_tool_policy(context, "web_fetch")
+    assert decision.allowed is True
 
     # Not allowed tool
-    decision = check_tool_allowed(identity, "unknown_tool")
-    assert decision.decision["allowed"] is False
+    decision = evaluate_tool_policy(context, "unknown_tool")
+    assert decision.allowed is False
 
 
 def test_red_lines(identity):

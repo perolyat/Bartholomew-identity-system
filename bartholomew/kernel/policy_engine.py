@@ -41,11 +41,13 @@ def evaluate_tool_policy(context: IdentityContext, tool_name: str) -> PolicyDeci
     Decide whether `tool_name` (a skill_id or scheduler drive task_id) is
     permitted under the given IdentityContext.
 
-    Mirrors the logic `identity_interpreter.policies.tool_policy.check_tool_allowed()`
-    already implements (default_allowed OR explicit allowlist membership),
-    recomputed here on the Executive side from a declarative context instead
-    of delegating to that (deprecated) module -- see DECISIONS.md's "One
-    authority per architectural concept" entry.
+    Implements the tool_use-allowlist logic (default_allowed OR explicit
+    allowlist membership) on the Executive side from a declarative context.
+    This is now the sole implementation: the former
+    `identity_interpreter.policies.tool_policy.check_tool_allowed()` it once
+    mirrored was removed in item 11.14 once its last caller (the CLI `explain`
+    command) migrated here -- see DECISIONS.md's "One authority per
+    architectural concept" entry.
     """
     rationale: list[str] = []
 
