@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from . import policy_engine
+from .reflection import ActionReflection, record_action_reflection
 
 
 if TYPE_CHECKING:
@@ -241,16 +242,37 @@ async def run_chat_through_runtime_contract(
         response = await respond_fn(interpretation.prompt)
 
         # Stage 7: Reflection -- record the interaction in Working Memory
+        # (chat's short-term context buffer; feeds get_context_string()).
         item = daemon.working_memory.add(
             content=f"User: {user_input}\nBartholomew: {response}",
             source="chat",
             tags=["chat", candidate_action.kind],
         )
         working_memory_item_id = item.item_id
+        reflection = ActionReflection(
+            surface="chat",
+            action=candidate_action.kind,
+            outcome="responded",
+            summary=f"Chat turn ({candidate_action.kind}): responded",
+            details={"response_preview": (response or "")[:200]},
+        )
+    else:
+        reflection = ActionReflection(
+            surface="chat",
+            action=candidate_action.kind,
+            outcome="governance_denied",
+            summary=f"Chat turn ({candidate_action.kind}): denied by governance",
+            details={"reason": governance_reason},
+        )
 
-    # Stage 8: Memory -- durability is Working Memory's own concern
-    # (WorkingMemoryManager.persist_snapshot(), invoked by KernelDaemon.stop());
-    # no separate write here.
+    # Stage 7 (cont.) + Stage 8: Reflection -> Memory. Emit the canonical
+    # per-action Reflection into the single shared Memory sink
+    # (MemoryStore.reflections) that skill execution also writes -- the same
+    # Reflection shape through one sink, for every outcome (responded or
+    # denied), closing Exit Gate #4. Best-effort: never breaks the turn.
+    # Working Memory's own durability stays its concern
+    # (WorkingMemoryManager.persist_snapshot() on KernelDaemon.stop()).
+    await record_action_reflection(daemon.mem, reflection)
 
     return RuntimeContractResult(
         observation=observation,
