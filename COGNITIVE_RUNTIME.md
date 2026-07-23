@@ -76,7 +76,7 @@ source, not just recorded here):
 |---|---|---|
 | Model routing | `identity_interpreter/orchestrator/model_router.py` (`ModelRouter`, drives live requests) | `identity_interpreter/policies/model_router.py` (CLI `explain` + standalone `chat.py` script only) |
 | Persona | `bartholomew/kernel/persona_pack.py` (`PersonaPackManager`, wired into `NarratorEngine`/`ExperienceKernel`; both legacy callers now migrated) | ~~`identity_interpreter/policies/persona.py`~~ — **removed 2026-07-22** (item 11.12); CLI `explain` + standalone `chat.py` now read tone from `PersonaPackManager`'s active pack |
-| Permission gates | `bartholomew/kernel/skill_permissions.py` (`PermissionChecker`, actually gates `SkillRegistry.execute_action()`) | `identity_interpreter/policies/tool_policy.py` (CLI `explain` only) |
+| Permission gates | `bartholomew/kernel/skill_permissions.py` (`PermissionChecker`, gates skill *manifests* at `SkillRegistry.execute_action()`) **+** `bartholomew/kernel/policy_engine.py` (`evaluate_tool_policy`, the `tool_use`-allowlist check) | ~~`identity_interpreter/policies/tool_policy.py`~~ — **removed 2026-07-22** (item 11.14); its `tool_use`-allowlist role was superseded by `evaluate_tool_policy`, and the CLI `explain --tool` caller now uses `evaluate_tool_policy(build_identity_context(...))` |
 | Kill-switch | `bartholomew/orchestrator/safety/parking_brake.py` (`ParkingBrake`, persistent, wired into 5 live gate points) | ~~`identity_interpreter/adapters/kill_switch.py`~~ — **removed 2026-07-22** (item 11.13); was print-only with zero live callers |
 
 Rule going forward: **do not add new callers to a deprecated module.** Delete only once its

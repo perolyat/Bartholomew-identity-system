@@ -993,6 +993,45 @@ No exceptions. Not even chat.
       tests/test_policies.py` and the adapters-touching suites stay green; `ruff check` +
       `black --check` (pinned 25.9.0) clean.
 
+11.14. **Retire the deprecated tool-policy module — migrate its one caller, then delete it —
+    the fourth-identified pair; three of four now fully retired** — ✅ implemented 2026-07-22
+    - `identity_interpreter/policies/tool_policy.py`'s `check_tool_allowed()` had exactly one
+      live caller (grep-confirmed): the CLI `explain --tool` command
+      (`identity_interpreter/cli.py`). Its other function, `get_sandbox_paths()`, had **zero**
+      callers anywhere. Migrated the CLI to build a declarative `IdentityContext`
+      (`build_identity_context()`) and call `bartholomew.kernel.policy_engine.evaluate_tool_policy()`,
+      then deleted the module.
+    - **The nuance this pair surfaced (and the ownership-label correction it forced):** item
+      11.1 / the ownership table named `bartholomew.kernel.skill_permissions.PermissionChecker`
+      as the "permission gates" authority. But `PermissionChecker` gates skill **manifests**
+      (permission *categories* like `memory.read`/`network.fetch` at declared levels
+      never/ask/auto) — it needs a loaded skill and cannot answer the question
+      `check_tool_allowed()` actually answered, namely "is this tool in `Identity.yaml`'s
+      `tool_use.allowlist`?". The true functional successor of `check_tool_allowed()` is
+      `evaluate_tool_policy()` (`policy_engine.py`), whose own docstring already said it
+      "mirrors the logic `check_tool_allowed()` implements" — the same Executive-side path
+      skill execution (`SkillRegistry.execute_action()`) and the scheduler already consult. So
+      the CLI migrated there, not to `PermissionChecker`. Updated `policy_engine.py`'s docstring
+      (it referenced `check_tool_allowed()` as still-existing) to note it is now the sole
+      implementation, and corrected the ownership table row in `COGNITIVE_RUNTIME.md` and
+      `DECISIONS.md` accordingly.
+    - **Minor, deliberate output change:** the old CLI printed a `sandbox` field the authoritative
+      `IdentityContext` doesn't model; the migrated command drops it and instead surfaces the
+      policy engine's `reason` (e.g. why a non-allowlisted tool is denied) — strictly more
+      informative for the allow/deny decision the command exists to explain.
+    - Removed `check_tool_allowed` from `identity_interpreter/policies/__init__.py`'s exports;
+      rewrote `tests/test_policies.py::test_tool_policy` to assert against `evaluate_tool_policy`
+      via `build_identity_context` (the exact path the CLI now uses; broader deny/allow/default/
+      consent coverage already lives in `tests/test_runtime_convergence_policy.py`); `git rm`'d
+      the module.
+    - **Acceptance:** `identity_interpreter/policies/tool_policy.py` no longer exists;
+      `python -m identity_interpreter.cli explain Identity.yaml --tool web_fetch` reports
+      `allowed: true` / `in_allowlist: true`, and `--tool <unknown>` reports `allowed: false`
+      with a reason; nothing imports the removed module.
+    - **Verify:** `pytest -q tests/test_policies.py tests/test_runtime_convergence_policy.py` —
+      passes locally; CLI `explain --tool` live-checked for both an allowlisted and a
+      non-allowlisted tool; `ruff check` + `black --check` (pinned 25.9.0) clean.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

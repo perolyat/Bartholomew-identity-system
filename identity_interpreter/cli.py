@@ -16,11 +16,12 @@ except ImportError:
     sys.exit(1)
 
 from bartholomew.kernel.persona_pack import PersonaPackManager, create_default_pack
+from bartholomew.kernel.policy_engine import evaluate_tool_policy
 
+from .identity_context import build_identity_context
 from .loader import IdentityLoadError, lint_identity, load_identity
 from .normalizer import normalize_identity
 from .policies import (
-    check_tool_allowed,
     handle_low_confidence,
     select_model,
 )
@@ -99,11 +100,29 @@ def explain(
         confidence_decision = handle_low_confidence(identity, confidence)
         _print_decision(confidence_decision)
 
-        # Tool policy if requested
+        # Tool policy if requested -- evaluated by the authoritative Executive-
+        # side policy engine (evaluate_tool_policy), the successor to the
+        # deprecated tool_policy.check_tool_allowed(). Identity publishes a
+        # declarative IdentityContext; the policy engine turns it into a
+        # decision. (PermissionChecker gates skill *manifests*, a different
+        # concern -- it can't answer "is this tool in tool_use.allowlist".)
         if tool:
             console.print(f"\n[cyan]Tool Policy for '{tool}':[/cyan]")
-            tool_decision = check_tool_allowed(identity, tool)
-            _print_decision(tool_decision)
+            context = build_identity_context(identity)
+            tool_decision = evaluate_tool_policy(context, tool)
+            decision_summary = {
+                "allowed": tool_decision.allowed,
+                "in_allowlist": tool in context.tool_use_allowlist,
+            }
+            console.print(f"  Decision: {json.dumps(decision_summary, indent=2)}")
+            if tool_decision.rationale:
+                console.print("  Rationale:")
+                for path in tool_decision.rationale:
+                    console.print(f"    • {path}")
+            if tool_decision.requires_consent:
+                console.print("  [yellow]⚠ Requires consent[/yellow]")
+            if tool_decision.reason:
+                console.print(f"  [dim]{tool_decision.reason}[/dim]")
 
         # Persona -- tone from the authoritative persona system
         # (PersonaPackManager's active pack) so this matches the live kernel;
