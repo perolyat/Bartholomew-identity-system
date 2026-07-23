@@ -41,8 +41,8 @@ Observation -> Interpretation -> Executive -> Governance -> Capability -> Execut
 | Governance | Fail-closed checks: the `ParkingBrake` kill-switch (always), plus — where wired — the Identity Context → Policy Decision check (`policy_engine.evaluate_tool_policy()`) and manifest-declared "ask"-level consent. | `bartholomew/orchestrator/safety/parking_brake.py`, `bartholomew/kernel/policy_engine.py`, `bartholomew/kernel/skill_registry.py`'s `_resolve_permissions()` |
 | Capability | The thing that actually knows how to do the action (a chat backend, a loaded skill). | injected `respond_fn` for chat; `SkillBase` subclasses for skills |
 | Execution | Running the capability and capturing its result. | `runtime_contract.py`'s `respond_fn` call; `SkillRegistry.execute_action()`'s `loaded.instance.execute()` |
-| Reflection | A durable record of what happened, written *before* returning. | a `WorkingMemoryManager.add()` item for chat; a `skill_action_audit` row for skills (see "Two different Reflection mechanisms" below — these are not yet the same thing) |
-| Memory | The Reflection becoming durable, queryable state. | `WorkingMemoryManager.persist_snapshot()` (on `KernelDaemon.stop()`); `skill_action_audit` table (written immediately, every call) |
+| Reflection | A durable record of what happened, written *before* returning. | one canonical `ActionReflection` (`bartholomew/kernel/reflection.py`) for **both** surfaces, plus each surface's own store (chat still adds a Working Memory item; skills still write a `skill_action_audit` row) — see "Unified Reflection" below |
+| Memory | The Reflection becoming durable, queryable state. | the shared sink: `MemoryStore.reflections` (kind `action_reflection`), written every action for chat and skills alike; plus `WorkingMemoryManager.persist_snapshot()` (chat context, on `KernelDaemon.stop()`) and the `skill_action_audit` table (skill compliance, immediate) |
 
 **No exceptions is the goal, not yet the reality.** Today two surfaces run through an explicit,
 code-level version of this shape — chat (`run_chat_through_runtime_contract()`) and skill
@@ -189,12 +189,24 @@ ownership entry above refers to the durable SQLite backbone all three ultimately
    Kernel's *own* privacy gate, separate from `ConsentGate`/`memory_rules.py` above (a gap
    found and fixed in the Stage 3 correction; see `ROADMAP.md`).
 
-**Two different Reflection mechanisms today, not one.** Chat's Reflection stage writes a
-Working Memory item. Skill execution's Reflection stage writes a `skill_action_audit` row
-(`SkillRegistry._audit_execution()`, itself PII-redacted via `redact_pii()` on string params) —
-every `execute_action()` attempt, success or denial alike. Both are durable, both are audited,
-but they are structurally different records, not the same `Reflection` type flowing through
-one Memory sink. Unifying them is unstarted work, not yet claimed as done anywhere.
+**Unified Reflection: one shape, one sink (item 11.16, 2026-07-23).** Both surfaces now emit
+the *same* canonical record — `bartholomew.kernel.reflection.ActionReflection` (`surface`,
+`action`, `outcome`, `summary`, `details`, `ts`) — through the *same* Memory sink,
+`MemoryStore.reflections` under the `action_reflection` kind (`record_action_reflection()`),
+for every action and every outcome (a chat turn that responded or was governance-denied; a
+skill execution that succeeded, failed, was denied, or brake-blocked). The record is PII-safe
+by construction: `to_memory_row()` runs `redact_pii()` over the summary and every string in
+`details`, matching what `skill_action_audit` already did for its params. This is what Exit
+Gate #4 asked for — the *shape* is now unified, not just the *fact* of a reflection.
+
+The change is deliberately **additive**: the surface-specific stores stay, because they serve
+different jobs from the durable Reflection. Chat still adds a Working Memory item (its
+short-term context buffer, feeding `get_context_string()`); skill execution still writes a
+`skill_action_audit` row (`SkillRegistry._audit_execution()`, the detailed immediate compliance
+audit). What changed is that there is now *also* one canonical Reflection type flowing into one
+sink, which there wasn't before. Retiring or deriving the surface-specific stores from the
+unified record (so there's genuinely one write, not three) is a possible future simplification,
+not done here.
 
 **Two reflection *pipelines* also remain unreconciled** (noted, not new here): `daemon.py`'s
 daily/weekly `ReflectionGenerator` (via `identity_interpreter.adapters.reflection_generator`)
@@ -214,17 +226,19 @@ exists today:
 | 1 | Can every input source create an Observation? | **Partial** | Chat does (`runtime_contract.Observation`). Skill execution has an equivalent choke-point (`execute_action()`) but no explicit `Observation` object. Voice/sight adapters and scheduler drives have their own `ParkingBrake` checks but never construct one. |
 | 2 | Does every proposed action pass through the Executive? | **Partial** | Chat's `CandidateAction` is explicit. Skill execution is a single choke-point in practice but not modeled as a `CandidateAction`. Scheduler drives bypass this entirely. |
 | 3 | Does every execution pass through the same Governance path? | **Partial** | All five live call sites share the same `ParkingBrake` class, but scopes differ by surface. The Identity Context → Policy Decision check (item 11.2) is now wired for both skill execution and chat's Governance stage (2026-07-21) — chat's only exemption is plain-conversation `CandidateAction` kinds, the same category exemption scheduler drives need but don't yet have. The scheduler's own drives still bypass Policy Decision entirely. |
-| 4 | Does every completed action produce a Reflection? | **Yes, structurally** | Chat → Working Memory item; skills → `skill_action_audit` row (see "Two different Reflection mechanisms" above — the *fact* of a reflection is universal for these two surfaces; its *shape* is not unified). |
+| 4 | Does every completed action produce a Reflection? | **Yes** | Item 11.16 (2026-07-23) — chat turns and skill executions now emit the same `ActionReflection` into the same sink (`MemoryStore.reflections`, kind `action_reflection`), for every outcome. Shape *and* sink are unified (see "Unified Reflection" above); each surface's own store (Working Memory for chat context, `skill_action_audit` for skill compliance) is retained additively. |
 | 5 | Does every Reflection update Memory? | **Yes** | Working Memory snapshots persist on daemon stop; `skill_action_audit` writes immediately; daily/weekly reflections persist via `MemoryStore.insert_reflection()`. |
 | 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()`, `daemon.persona_manager.get_active_pack_id()`, and (item 11.7) `daemon.working_memory.get_context_string()` for prior-turn content. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
 | 7 | Does every interface expose the same personality? | **Closer, still partial** | The deprecated `identity_interpreter/policies/persona.py` was removed (item 11.12, 2026-07-22) — its two legacy callers (CLI `explain`, standalone `chat.py`) now source tone from `PersonaPackManager`'s active pack, so every text interface shares the live kernel's persona *tone*. Two dimensions still short of "yes": (a) `PersonaPack` carries no `traits`, so those two callers still read `traits` from `Identity.yaml` directly (a stable identity descriptor, not persona-pack state — a deliberate split, not a duplication); (b) voice/sight adapters don't consult persona at all yet (Stage 6). |
 
 **Reading this table:** the loop shape is real, tested, and load-bearing for chat and skills —
 this is not aspirational. What's not yet true is *uniformity across every surface*, which is
-exactly what Principle One demands. The gaps above (scheduler drives skipping both Executive
-and Policy Decision; voice/sight being parking-brake-only stubs; two Reflection shapes; two
-reflection-narrative pipelines; one lingering persona duplication) are the concrete backlog
-for closing this gate, not a restatement of the plan.
+exactly what Principle One demands. The gaps still open (scheduler drives skipping both
+Executive and Policy Decision; voice/sight being parking-brake-only stubs; two
+reflection-narrative pipelines; persona/traits not reaching voice/sight) are the concrete
+backlog for closing this gate, not a restatement of the plan. The two-Reflection-shapes gap was
+closed by item 11.16 (2026-07-23); the four duplicate-concept pairs were resolved by items
+11.12–11.15.
 
 ## Verify
 

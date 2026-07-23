@@ -1072,6 +1072,43 @@ No exceptions. Not even chat.
       shows the Identity-selected model unchanged; `ruff check` + `black --check` (pinned 25.9.0)
       clean.
 
+11.16. **Unify the two Reflection shapes — one canonical `ActionReflection` through one Memory
+    sink; closes Exit Gate #4** — ✅ implemented 2026-07-23
+    - **The gap:** the Runtime Contract's Reflection stage had two structurally different records.
+      Chat wrote a Working Memory item; skill execution wrote a `skill_action_audit` row. Both
+      durable, both audited, but "not the same `Reflection` type flowing through one Memory
+      sink" — `COGNITIVE_RUNTIME.md` named this as Exit Gate question #4's shortfall ("the *fact*
+      of a reflection is universal; its *shape* is not").
+    - **Change:** added `bartholomew/kernel/reflection.py` — a canonical `ActionReflection`
+      (`surface`, `action`, `outcome`, `summary`, `details`, `ts`) and an async
+      `record_action_reflection()` that persists it to the **already-existing** shared sink,
+      `MemoryStore.reflections` (new `kind="action_reflection"`, alongside the daily/weekly and
+      drive reflections already stored there). Both surfaces now emit it: `runtime_contract.py`'s
+      chat Reflection stage (for both the responded *and* the governance-denied outcome — the
+      denied case produced no reflection at all before) and `SkillRegistry._finish()` (made
+      `async`; every `execute_action()` exit already funnels through it, so success/failure/
+      denial/brake-block all get one). PII-safe by construction: `to_memory_row()` runs
+      `redact_pii()` over the summary and every string in `details`, matching what
+      `skill_action_audit` already did.
+    - **Deliberately additive — no regression, no removal.** The surface-specific stores stay,
+      because they serve different jobs from the durable Reflection: Working Memory remains chat's
+      short-term context buffer (still feeds `get_context_string()` for prior-turn content);
+      `skill_action_audit` remains the immediate detailed compliance audit. What is now true that
+      wasn't: one canonical Reflection *shape* flows into one Memory *sink* for every surface.
+      Both writes are best-effort (a reflection-write failure never breaks the action), mirroring
+      `_audit_execution`'s existing swallow-and-log posture. Retiring or deriving the
+      surface-specific stores from the unified record (so there's one write, not additive ones)
+      is a possible future simplification, explicitly out of scope here.
+    - **Acceptance:** a chat turn and a skill execution both produce a `reflections` row under
+      kind `action_reflection`, distinguishable only by `meta.surface`; the durable record is
+      PII-redacted; existing Working-Memory and `skill_action_audit` behavior is unchanged.
+    - **Verify:** `pytest -q tests/test_reflection_unification.py` — 6 passed (unit shape +
+      redaction, no-op-without-store, skill-writes-reflection, chat-writes-reflection,
+      both-share-one-kind-and-sink); `pytest -q tests/test_skill_registry.py
+      tests/test_runtime_contract_chat_seam.py tests/test_scenario_replay.py
+      tests/test_api_chat_runtime_contract.py` — 64 passed (no regressions); `ruff check` +
+      `black --check` (pinned 25.9.0) clean.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

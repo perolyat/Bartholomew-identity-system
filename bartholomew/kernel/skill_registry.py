@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from . import policy_engine
 from .memory.privacy_guard import get_consent_handler
 from .redaction_engine import redact_pii
+from .reflection import ActionReflection, record_action_reflection
 from .skill_base import SkillBase, SkillContext, SkillResult, SkillState
 from .skill_manifest import SkillManifest, discover_manifests
 from .skill_permissions import PERMISSION_CATEGORIES, PermissionChecker, get_permission_checker
@@ -523,7 +524,7 @@ class SkillRegistry:
         """
         loaded = self._loaded.get(skill_id)
         if not loaded:
-            return self._finish(
+            return await self._finish(
                 skill_id,
                 action,
                 params,
@@ -531,7 +532,7 @@ class SkillRegistry:
             )
 
         if not loaded.instance.is_ready:
-            return self._finish(
+            return await self._finish(
                 skill_id,
                 action,
                 params,
@@ -543,7 +544,7 @@ class SkillRegistry:
         # Validate action exists
         manifest_action = loaded.manifest.get_action(action)
         if not manifest_action:
-            return self._finish(
+            return await self._finish(
                 skill_id,
                 action,
                 params,
@@ -552,7 +553,7 @@ class SkillRegistry:
 
         # Parking brake: fail-closed operational kill-switch, scope="skills".
         if self._is_blocked_by_brake():
-            return self._finish(
+            return await self._finish(
                 skill_id,
                 action,
                 params,
@@ -568,7 +569,7 @@ class SkillRegistry:
         if self._identity_context is not None:
             policy_decision = policy_engine.evaluate_tool_policy(self._identity_context, skill_id)
             if not policy_decision.allowed:
-                return self._finish(
+                return await self._finish(
                     skill_id,
                     action,
                     params,
@@ -581,14 +582,14 @@ class SkillRegistry:
         # executing (see _resolve_permissions()'s docstring).
         consent_result = await self._resolve_permissions(loaded.manifest)
         if consent_result is not None:
-            return self._finish(skill_id, action, params, consent_result)
+            return await self._finish(skill_id, action, params, consent_result)
 
         # Execute
         try:
             loaded.instance._set_state(SkillState.RUNNING)
             result = await loaded.instance.execute(action, params or {})
             loaded.instance._set_state(SkillState.READY)
-            return self._finish(skill_id, action, params, result)
+            return await self._finish(skill_id, action, params, result)
         except Exception as e:
             logger.exception(
                 "Skill %s action %s failed: %s",
@@ -597,7 +598,7 @@ class SkillRegistry:
                 e,
             )
             loaded.instance._set_error(str(e))
-            return self._finish(skill_id, action, params, SkillResult.fail(str(e)))
+            return await self._finish(skill_id, action, params, SkillResult.fail(str(e)))
 
     def _is_blocked_by_brake(self) -> bool:
         """
@@ -671,16 +672,47 @@ class SkillRegistry:
 
         return None
 
-    def _finish(
+    async def _finish(
         self,
         skill_id: str,
         action: str,
         params: dict[str, Any] | None,
         result: SkillResult,
     ) -> SkillResult:
-        """Write the execution audit record, then return the result unchanged."""
+        """
+        Record the reflection for this execution, then return the result
+        unchanged. Two writes, one per concern: the detailed, immediate
+        `skill_action_audit` compliance row (`_audit_execution`), and the
+        unified per-action Reflection into the shared Memory sink
+        (`_record_reflection`) that chat also writes -- closing Exit Gate #4's
+        "one Reflection shape through one sink" gap (see
+        `bartholomew.kernel.reflection`).
+        """
         self._audit_execution(skill_id, action, params, result)
+        await self._record_reflection(skill_id, action, params, result)
         return result
+
+    async def _record_reflection(
+        self,
+        skill_id: str,
+        action: str,
+        params: dict[str, Any] | None,
+        result: SkillResult,
+    ) -> None:
+        """
+        Emit the canonical per-action Reflection for a skill execution --
+        every attempt (success, failure, permission denial, parking-brake
+        block), the same set `_audit_execution` covers. Best-effort: never
+        raises (see `record_action_reflection`).
+        """
+        reflection = ActionReflection(
+            surface="skill",
+            action=f"{skill_id}.{action}",
+            outcome=result.status.value,
+            summary=f"Skill '{skill_id}.{action}': {result.status.value}",
+            details={"message": result.message, "error": result.error},
+        )
+        await record_action_reflection(self._memory_store, reflection)
 
     def _audit_execution(
         self,
