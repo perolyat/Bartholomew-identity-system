@@ -22,7 +22,13 @@ DRIVE_TIMEOUT = float(os.getenv("BARTH_DRIVE_TIMEOUT", "5.0"))
 
 async def _run_drive(ctx: Any, task_id: str, fn):
     """
-    Execute a drive function with timeout and exception handling.
+    Execute a drive function with timeout and exception handling, routed
+    through the Runtime Contract seam (Observation -> Interpretation ->
+    Executive -> Governance -> Capability -> Execution -> Reflection ->
+    Memory). See `runtime_contract.run_drive_through_runtime_contract()`
+    for what each stage means for a scheduler drive specifically -- item
+    11.17, closing Exit Gate questions #1-3 for this surface (see
+    COGNITIVE_RUNTIME.md's Exit Gate status table).
 
     Args:
         ctx: Context object (typically KernelDaemon instance)
@@ -32,27 +38,9 @@ async def _run_drive(ctx: Any, task_id: str, fn):
     Returns:
         Tuple of (nudge_or_none, success_flag)
     """
-    # Parking brake gate for scheduler scope
-    try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    from bartholomew.kernel.runtime_contract import run_drive_through_runtime_contract
 
-        storage = BrakeStorage(ctx.mem.db_path)
-        brake = ParkingBrake(storage)
-        if brake.is_blocked("scheduler"):
-            raise RuntimeError("ParkingBrake: scheduler blocked")
-    except ImportError:
-        # Parking brake module not available, continue normally
-        pass
-
-    try:
-        result = await asyncio.wait_for(fn(ctx), timeout=DRIVE_TIMEOUT)
-        return result, 1
-    except asyncio.TimeoutError:
-        log.warning("Drive %s timed out after %.2fs", task_id, DRIVE_TIMEOUT)
-        return None, 0
-    except Exception:
-        log.exception("Drive %s crashed", task_id)
-        return None, 0
+    return await run_drive_through_runtime_contract(ctx, task_id, fn, timeout=DRIVE_TIMEOUT)
 
 
 def resolve_cadences(ctx: Any) -> dict:

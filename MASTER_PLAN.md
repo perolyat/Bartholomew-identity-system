@@ -1109,6 +1109,55 @@ No exceptions. Not even chat.
       tests/test_api_chat_runtime_contract.py` — 64 passed (no regressions); `ruff check` +
       `black --check` (pinned 25.9.0) clean.
 
+11.17. **Scheduler-drive convergence — Observation, Executive, Governance for the scheduler
+    surface; closes Exit Gate questions #1-3 for that surface** — ✅ implemented 2026-07-23
+    - **The gap:** `COGNITIVE_RUNTIME.md`'s Exit Gate table named all three "Partial" answers to
+      the same root cause: `scheduler/loop.py`'s `_run_drive()` had its own
+      `ParkingBrake("scheduler")` check but never constructed an `Observation`, was never modeled
+      as a `CandidateAction`, and never consulted the Identity Context → Policy Decision path
+      (item 11.2) at all — the scheduler was the one live surface still fully outside the Runtime
+      Contract seam chat (11.3/11.4/11.6) and skill execution (11.2) already traverse.
+    - **The constraint this had to respect:** item 11.2's *first* attempt at this exact wiring
+      evaluated every drive's `task_id` against `evaluate_tool_policy()` unconditionally. Because
+      `Identity.yaml`'s real `tool_use.allowlist` (`[web_fetch, browser_action]`,
+      `default_allowed: false`) has never listed a drive `task_id`, that denied every registered
+      drive by default in production, and — because the scheduler's retry loop has no backoff on
+      denial — busy-looped the asyncio event loop badly enough that `/healthz` never answered
+      (see DECISIONS.md's "tool_use.allowlist gates skill/capability execution, not scheduler
+      drives" entry). That attempt was reverted; the corrected scope explicitly left scheduler
+      drives ungated pending "a different, drive-appropriate policy source."
+    - **Change:** added `bartholomew.kernel.runtime_contract.run_drive_through_runtime_contract()`
+      — the same Observation → Interpretation → CandidateAction shape chat uses (`source=
+      "scheduler"`, `kind=task_id`), the pre-existing `ParkingBrake("scheduler")` check unchanged
+      (still raises on block, not a routine denial), and a Policy Decision check gated by a new
+      `_SELF_MAINTENANCE_DRIVES` exemption set (`self_check`, `curiosity_probe`,
+      `reflection_micro`, `fts_optimize` — today's full `drives.py` `REGISTRY`) — the
+      "drive-appropriate policy source" the revert asked for: known kernel self-maintenance
+      drives stay exempt exactly as before (zero behavior change, zero regression risk), while
+      any *future* scheduler-originated action outside that set (e.g. a drive that acts on the
+      user's behalf) is genuinely evaluated, mirroring `_CONVERSATIONAL_KINDS`' reasoning for chat
+      (item 11.6). Also extends Exit Gate #4's unified `ActionReflection` (item 11.16) to the
+      scheduler surface (`surface="scheduler"`) — additive, best-effort, not itself part of what
+      #1-3 required. `scheduler/loop.py`'s `_run_drive()` now delegates to it, preserving its
+      exact pre-existing contract (raises `RuntimeError` on parking-brake block; returns
+      `(nudge_or_none, success_flag)` otherwise) so its call site and the tests that import it
+      directly needed no changes.
+    - **Live-smoke-verified, not just `pytest`** (the discipline item 11.2's regression made
+      mandatory for exactly this class of change): booted a real `KernelDaemon` with
+      `identity_path="Identity.yaml"` — the real restrictive production policy that caused the
+      original incident — and ran the actual `run_scheduler()` loop for several seconds
+      alongside a concurrent healthz-style pinger coroutine. All four drives ticked
+      successfully (`ok=1`) and the pinger completed all 50 scheduled pings on time, proving the
+      event loop stayed responsive under the exact conditions that starved it before.
+    - **Acceptance:** a scheduler drive's task_id outside `_SELF_MAINTENANCE_DRIVES`, under a
+      restrictive `IdentityContext`, is denied (no execution, a `governance_denied` reflection);
+      every currently-registered drive is provably unaffected under that same restrictive
+      context (the exact regression scenario); the parking-brake block still raises, not denies.
+    - **Verify:** `pytest -q tests/test_scheduler_drive_convergence.py` — 17 passed;
+      `pytest -q tests/integration/test_parking_brake_integration.py
+      tests/test_runtime_convergence_policy.py tests/test_runtime_contract_chat_seam.py` — no
+      regressions; `ruff check` + `black --check` (pinned 25.9.0) clean.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

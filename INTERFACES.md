@@ -203,27 +203,33 @@ wired). `daemon.py`'s optional `identity_path` param loads `Identity.yaml` once 
 bridge (`bartholomew_api_bridge_v0_1/services/api/app.py`) passes
 `identity_path="Identity.yaml"` by default.
 
-**Not a consumer (by design, not oversight):** `scheduler/loop.py`'s `_run_drive()` does
-**not** consult this — internal scheduler drives (`self_check`, `curiosity_probe`, etc.) are
-kernel self-maintenance functions, not "tools" in `tool_use.allowlist`'s sense. An earlier
-version wired this in and it was a real regression (denied every drive by default, busy-looped
-the scheduler, and starved the event loop badly enough that the live app never answered
-`/healthz`) — see DECISIONS.md's "`tool_use.allowlist` gates skill/capability execution, not
-scheduler drives" entry.
-
 **Chat, updated 2026-07-21 (item 11.6):** `bartholomew/kernel/runtime_contract.py`'s Governance
 stage — the seam `/api/chat` routes through when the kernel is running (item 11.4) — now also
 consults `evaluate_tool_policy(daemon.identity_context, candidate_action.kind)`, with one
 exemption: `CandidateAction` kinds in `_CONVERSATIONAL_KINDS` (currently just
 `"chat_response"`, the only kind the chat seam produces today) skip the check, since plain
-conversation isn't a "tool" in `tool_use.allowlist`'s sense — the same category distinction
-scheduler drives need (previous paragraph) but, unlike drives, chat's exemption is implemented
-and enforced. A future tool/skill-shaped candidate action proposed *during* a chat turn (a
-kind outside that exempt set) would be evaluated for real. `identity_interpreter/orchestrator/
-orchestrator.py`'s own `handle_input()` (used directly as `respond_fn`'s backend, and also as
-the fallback path when the kernel isn't running) still has only its separate,
-parking-brake-only check — it does not consult the shared Policy Decision itself; only the
-Runtime Contract seam wrapping it does.
+conversation isn't a "tool" in `tool_use.allowlist`'s sense. A future tool/skill-shaped
+candidate action proposed *during* a chat turn (a kind outside that exempt set) would be
+evaluated for real. `identity_interpreter/orchestrator/orchestrator.py`'s own `handle_input()`
+(used directly as `respond_fn`'s backend, and also as the fallback path when the kernel isn't
+running) still has only its separate, parking-brake-only check — it does not consult the shared
+Policy Decision itself; only the Runtime Contract seam wrapping it does.
 
-See `tests/test_runtime_convergence_policy.py` and
-`tests/test_runtime_contract_chat_seam.py::TestChatGovernanceConsultsPolicyDecision`.
+**Scheduler drives, updated 2026-07-23 (item 11.17):** `scheduler/loop.py`'s `_run_drive()` now
+delegates to `bartholomew.kernel.runtime_contract.run_drive_through_runtime_contract()`, which
+also consults `evaluate_tool_policy(ctx.identity_context, task_id)` — with the same shape of
+exemption as chat's: task_ids in `_SELF_MAINTENANCE_DRIVES` (`self_check`, `curiosity_probe`,
+`reflection_micro`, `fts_optimize` — today's full `scheduler/drives.py` `REGISTRY`) skip the
+check, since these are kernel self-maintenance functions, not "tools" in
+`tool_use.allowlist`'s sense. An *earlier* attempt (before this exemption existed) wired every
+drive's `task_id` into the check unconditionally and it was a real production regression
+(denied every drive by default, busy-looped the scheduler, and starved the event loop badly
+enough that the live app never answered `/healthz`) — see DECISIONS.md's "`tool_use.allowlist`
+gates skill/capability execution, not scheduler drives" entry for that incident, and "Scheduler
+drives get Identity-derived gating via a category exemption..." for how it was corrected. A
+future scheduler-originated action outside `_SELF_MAINTENANCE_DRIVES` (e.g. a drive that acts
+on the user's behalf) would be evaluated for real.
+
+See `tests/test_runtime_convergence_policy.py`,
+`tests/test_runtime_contract_chat_seam.py::TestChatGovernanceConsultsPolicyDecision`, and
+`tests/test_scheduler_drive_convergence.py`.

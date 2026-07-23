@@ -2,8 +2,8 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-07-22 (two new entries added: the Lead Architect transition from
-> Bartholomew to Claude, and the adoption of `CONSTITUTION.md` as a 13th canonical SSOT doc)
+> **Last updated:** 2026-07-23 (one new entry added: scheduler drives get Identity-derived
+> gating via a category exemption, closing item 11.17)
 
 ## Format
 
@@ -128,3 +128,10 @@
 - **Why:** `MASTER_PLAN.md` is explicitly a living, frequently-updated SSOT for current state and next moves; mixing rarely-changing foundational principles into it risks them being edited incidentally alongside routine status updates. A separate doc with an explicit "changes rarely" norm protects the principles from that drift.
 - **Consequences:** `REVIEWS.md`'s canonical-doc count and any future doc-currency audit must account for 13 canonical docs, not 12. Edits to `CONSTITUTION.md` should be treated as a governance-level change (same bar as the "User Approval Gate" decision above), not routine documentation upkeep.
 - **Date:** 2026-07-22 (project owner handover)
+
+## Decision: Scheduler drives get Identity-derived gating via a category exemption, not a `tool_use.allowlist` reuse
+- **Decision:** Resolves the "different, drive-appropriate policy source" this document's "`tool_use.allowlist` gates skill/capability execution, not scheduler drives" entry (above) called for. `run_drive_through_runtime_contract()` (`bartholomew/kernel/runtime_contract.py`) now does consult `evaluate_tool_policy()` for scheduler drives — but exempts a `_SELF_MAINTENANCE_DRIVES` set (`self_check`, `curiosity_probe`, `reflection_micro`, `fts_optimize` — today's full `scheduler/drives.py` `REGISTRY`) from that check, the same shape as `_CONVERSATIONAL_KINDS`' exemption for chat (the "also does not gate plain conversational chat replies" entry above). A future scheduler-originated action outside that set is genuinely evaluated.
+- **Alternatives:** (a) Repeat the original plan — evaluate every drive's `task_id` against `tool_use.allowlist` unconditionally; already tried, already reverted, documented above. (b) Add a dedicated `scheduler_drives`-style allowlist section to `Identity.yaml` as the "different policy source," separate from `tool_use.allowlist`. (c) Leave scheduler drives permanently ungated, closing the docstring's open question with "no."
+- **Why:** (a) is the exact regression this decision exists to avoid repeating. (b) would work but adds a second allowlist shape to `Identity.yaml` for a set of task_ids that don't change independently of `scheduler/drives.py`'s own `REGISTRY` — the exemption-set approach gets the same safety property (a conscious, reviewable decision per drive, per `tests/test_scheduler_drive_convergence.py::TestSelfMaintenanceDrivesMatchRegistry`'s registry-parity guard) without a second Identity.yaml schema to keep in sync. (c) would leave Exit Gate questions #1-3 permanently "Partial" for the scheduler surface with no path to closing them for any future non-self-maintenance drive.
+- **Consequences:** Anyone adding a new drive to `scheduler/drives.py`'s `REGISTRY` must consciously decide whether it belongs in `_SELF_MAINTENANCE_DRIVES` (kernel-internal, always exempt) or should be evaluated for real against `Identity.yaml` (e.g. a future drive that acts on the user's behalf) — the registry-parity test fails until that decision is made, mirroring the "must update `_CONVERSATIONAL_KINDS` deliberately, not by omission" consequence chat's exemption already carries. Verified against a live `run_scheduler()` smoke run under the real, restrictive `Identity.yaml` policy (the same discipline the original regression made mandatory), not just `pytest` — see `MASTER_PLAN.md` item 11.17's writeup.
+- **Date:** 2026-07-23 (`MASTER_PLAN.md`'s "P2.5 — Runtime Convergence" item 11.17)
