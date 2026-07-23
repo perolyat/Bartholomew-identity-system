@@ -1031,6 +1031,46 @@ No exceptions. Not even chat.
     - **Verify:** `pytest -q tests/test_policies.py tests/test_runtime_convergence_policy.py` —
       passes locally; CLI `explain --tool` live-checked for both an allowlisted and a
       non-allowlisted tool; `ruff check` + `black --check` (pinned 25.9.0) clean.
+11.15. **Reclassify the "model routing" pair — it was a mislabel, not a duplicate; un-deprecate
+    `select_model` and record the real gap** — ✅ implemented 2026-07-22
+    - (Item 11.14 — the permission-gates pair — lands separately via its own branch; this is the
+      fourth and last of item 11.1's audit-named "pairs" to be resolved, closing out item 11.1.)
+    - **The finding:** unlike the other three, the "model routing" pair is **not two
+      implementations of one concept** — they do different jobs, confirmed by direct reading:
+      - `identity_interpreter/policies/model_router.py`'s `select_model(identity, task_type)`
+        does **Identity-policy-driven model *selection*** — it reads `Identity.yaml`'s
+        `meta.deployment_profile.model_policies.selection.by_task_type` to choose a model +
+        parameters for a task type. It is the *only* code in the repo that reads `by_task_type`.
+      - `identity_interpreter/orchestrator/model_router.py`'s `ModelRouter` does **backend
+        *routing* + generation** — `select_route(data)` maps a `backend` hint to a hardcoded
+        backend config and `route()` calls the LLM. It never reads `by_task_type`. Confirmed the
+        live path (`Orchestrator.route_model()`) passes only `user_input`/`prompt`/`session_id`,
+        so it just gets the default backend.
+      A mechanical "migrate callers to `ModelRouter`, delete `select_model`" would have been a
+      real regression (chat.py/CLI would stop honoring `Identity.yaml`'s task-type policy and
+      fall back to the default backend) — the same class of trap as item 11.2's scheduler-drive
+      revert. So this pair is resolved by **correcting the record, not deleting**.
+    - **Change:** removed the deprecation notice + `DeprecationWarning` from
+      `policies/model_router.py` and rewrote its docstring to establish it as the authoritative
+      owner of *task-type model selection*, explicitly distinct from `ModelRouter` (routing).
+      No caller changed; no behavior changed. Updated the ownership tables
+      (`COGNITIVE_RUNTIME.md`, `DECISIONS.md`) to show selection and routing as two concepts,
+      not a pair.
+    - **Real gap surfaced (tracked future work, not part of this item):** the live runtime
+      (`Orchestrator.route_model()` → `ModelRouter`) ignores `Identity.yaml`'s `by_task_type`
+      selection policy entirely — only `select_model`'s standalone callers (CLI `explain`,
+      `chat.py`) honor it. Teaching the live router to consult the selection policy (or otherwise
+      unifying the two so the daemon's model choice is Identity-driven) is a genuine feature that
+      touches the live generation path and needs its own smoke-verified change (item 11.2
+      discipline) — deliberately **not** done here.
+    - **Acceptance:** `select_model` no longer emits a `DeprecationWarning`; `chat.py` and CLI
+      `explain` behave exactly as before; docs describe selection and routing as distinct owners;
+      item 11.1's four "pairs" are all resolved (three retired: items 11.12–11.14; one
+      reclassified: this item).
+    - **Verify:** `pytest -q tests/test_policies.py test_integration.py` stays green (no
+      deprecation warning now emitted); `python -m identity_interpreter.cli explain Identity.yaml`
+      shows the Identity-selected model unchanged; `ruff check` + `black --check` (pinned 25.9.0)
+      clean.
 
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?

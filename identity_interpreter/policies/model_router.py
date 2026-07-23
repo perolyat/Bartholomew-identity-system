@@ -1,29 +1,31 @@
 """
 Model selection policy engine
-Routes tasks to appropriate models based on identity configuration
+=============================
+Selects which model to use for a given *task type*, driven by `Identity.yaml`'s
+`meta.deployment_profile.model_policies.selection.by_task_type` (plus budget and
+availability filtering). This is Identity-policy-driven model *selection*: "for a
+'code' task, which model does this Identity prefer, and with what parameters?"
+It is the authoritative owner of that concept -- this module is the only code in
+the repo that reads `by_task_type`.
 
-DEPRECATED (2026-07-21, MASTER_PLAN.md "P2.5 -- Runtime Convergence" / item 11.1):
-this module is not the authoritative model-routing implementation. That's
-`identity_interpreter.orchestrator.model_router.ModelRouter`, which is the one
-actually driving live requests through `Orchestrator.handle_input()`. This
-module remains in use only by `identity_interpreter/cli.py`'s `explain`
-command and `chat.py`'s standalone script -- do not add new callers. It will
-be removed once those two callers are migrated to the authoritative router
-(see DECISIONS.md's "One authority per architectural concept" entry).
+NOT a duplicate of `identity_interpreter.orchestrator.model_router.ModelRouter`
+(despite the shared filename): that class is a different concern -- runtime
+*backend routing* + generation. It maps a `backend` hint to a hardcoded backend
+config and actually calls the LLM; it never reads `Identity.yaml`'s
+`by_task_type`. The 2026-07-21 audit (MASTER_PLAN.md item 11.1) briefly labeled
+these two a single "model routing" duplicate pair; item 11.15 corrected that --
+selection and routing answer different questions and neither subsumes the other,
+so this module is not deprecated.
+
+Known gap (tracked, not a duplicate): the live runtime path
+(`Orchestrator.route_model()` -> `ModelRouter`) does not currently consult this
+task-type selection policy at all -- only this module's callers (CLI `explain`,
+standalone `chat.py`) honor it. Teaching the live router to respect it is future
+work (MASTER_PLAN.md item 11.15), not a deletion.
 """
-
-import warnings
 
 from ..models import Decision, Identity
 from ..normalizer import get_available_models, get_model_parameters
-
-
-_DEPRECATION_MSG = (
-    "identity_interpreter.policies.model_router.select_model() is deprecated; "
-    "the authoritative model router is "
-    "identity_interpreter.orchestrator.model_router.ModelRouter. See "
-    "MASTER_PLAN.md's 'P2.5 -- Runtime Convergence' item 11.1."
-)
 
 
 def select_model(
@@ -44,7 +46,6 @@ def select_model(
     Returns:
         Decision with selected model and rationale
     """
-    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     rationale = []
 
     # Get task-specific model preferences
