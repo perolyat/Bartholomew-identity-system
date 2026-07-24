@@ -1158,6 +1158,69 @@ No exceptions. Not even chat.
       tests/test_runtime_convergence_policy.py tests/test_runtime_contract_chat_seam.py` — no
       regressions; `ruff check` + `black --check` (pinned 25.9.0) clean.
 
+11.18. **Scheduler persistence off the event loop — fixing a CI-caught deadlock hazard found
+    while merging item 11.17** — ✅ implemented 2026-07-24
+    - **Not itself a Runtime Convergence Exit Gate item** (doesn't change any of the seven
+      Observation/Governance/Reflection answers below) — a concurrency/infrastructure fix
+      surfaced by, and required to safely land, item 11.17's own PR.
+    - **The gap:** getting item 11.17's PR green surfaced three independent problems in
+      sequence, each caught by CI rather than found by inspection. (1) `test_kernel_alive.py`
+      wrote directly to the real, git-tracked `data/barth.db`/`data/memory.db` on every run —
+      fixed by isolating it to `tmp_path`. (2) With that fixed, CI then caught
+      `tests/test_self_state_api.py::TestPersonaEndpoints::test_switch_persona_is_reflected_by_current`
+      failing with `sqlite3.OperationalError: database is locked` — the shared kernel's
+      background scheduler ticking a drive right as the test's own persona-switch write ran on
+      the same file — fixed with a bounded retry (test-only). (3) With both fixed, CI then hung
+      for the full 120s pytest-timeout inside `test_kernel_alive.py`, on Python 3.10 — a genuine
+      deadlock shape, not a flake: `scheduler/loop.py`'s `run_scheduler()` tick loop, and
+      `scheduler/health.py`'s `get_system_metrics()` (called from `drives.py`'s
+      `drive_self_check`/`drive_reflection_micro`, both invoked *inside* that same loop), made
+      synchronous, blocking `sqlite3` calls — including an unconditional, exclusive `PRAGMA
+      wal_checkpoint(TRUNCATE)` on every single operation via `db_ctx.py`'s `wal_db()` — directly
+      on the asyncio event loop. This pattern predates item 11.17 (present since the scheduler's
+      original implementation); a fresh DB makes every registered drive immediately due
+      (`upsert_scheduled_tasks()` sets `next_run_ts = now`), which is what made the always-latent
+      hazard reliably manifest inside a test's tight, same-instant execution window.
+    - **Change:** `bartholomew/kernel/scheduler/store.py` (new) — `SchedulerStore`, offloading
+      all scheduler persistence and `get_system_metrics()` onto one dedicated worker thread per
+      `KernelDaemon`, with an `asyncio.Lock`-gated single-in-flight-operation submission model
+      (not scattered `asyncio.to_thread()` calls) so scheduler DB calls never block the event
+      loop and stay strictly sequential. Cancelling the coroutine awaiting a call does not lose
+      tracking of an already-running worker future (done-callback-driven, not tied to the
+      awaiter's own control flow). `close()` is idempotent, bound-drains outstanding work, and
+      returns whether it fully drained. `db_ctx.py`'s `wal_db()` no longer checkpoints on every
+      call by default (was: unconditional `TRUNCATE`; now: none, relying on SQLite's own
+      automatic WAL checkpoint — correctness-neutral, WAL mode already guarantees readers see
+      committed writes regardless of checkpoint timing). Explicit `TRUNCATE` is retained for
+      controlled shutdown only (`MemoryStore.close()`, the API bridge's `atexit` hook —
+      unchanged). `KernelDaemon.stop()` skips that shutdown checkpoint if `SchedulerStore.close()`
+      didn't drain within its bound, logging the deferral rather than risking contention with a
+      thread that may still be running. Incidentally fixed a dead-on-arrival import bug found
+      along the way: `_run_daily_reflection()`'s `from .scheduler.persistence import
+      get_system_metrics` doesn't exist there (the function lives in `scheduler/health.py`) and
+      had always raised `ImportError`, silently swallowed — `pending_nudges` had always been `0`
+      in daily reflections; now routed through `scheduler_store` correctly.
+    - **Merged directly to `main`** (fast-forward, explicit user approval, "Claude/Cline are
+      authorised trusted builders") rather than as a separate PR, since it was a fix blocking
+      item 11.17's own PR from landing safely, not independent work.
+    - **Verify:** `pytest -q tests/test_scheduler_persistence_concurrency.py` (new — 8 tests:
+      event-loop responsiveness under lock contention, fresh-DB scheduler startup bounded to
+      well under the old 120s timeout, `PASSIVE` vs `TRUNCATE` checkpoint contention behavior
+      including a subprocess-isolated hard-timeout guard so a genuinely stuck checkpoint can't
+      hang the suite itself, serialization/peak-concurrency, and two `SchedulerStore.close()`
+      lifecycle cases) — 8 passed; `pytest -q tests/test_scheduler_drive_convergence.py
+      tests/test_runtime_convergence_policy.py` — 25 passed, no regressions; `pytest -q
+      test_kernel_alive.py tests/test_self_state_api.py tests/test_stage3_integration.py
+      tests/test_reflection_narrative_integration.py tests/test_runtime_contract_chat_seam.py
+      tests/test_reflection_unification.py` — 57 passed; full `pytest -q` — clean (zero
+      failures/errors); `ruff check` + `black --check` (pinned 25.9.0) clean. See DECISIONS.md's
+      "Scheduler persistence moved off the event loop..." entry for the full incident writeup,
+      alternatives considered, and what's explicitly deferred (not decided) rather than fixed
+      here: why the original hung `TRUNCATE` call outlasted its own 30s busy-timeout (temporary
+      DEBUG-level instrumentation added to help answer this later — see RISKS.md), and whether
+      the daemon's split `aiosqlite`/sync-`sqlite3` database ownership should eventually
+      consolidate.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

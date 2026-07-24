@@ -2,9 +2,11 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-07-21 (R1, R3, R5, R6, and the retrieval-mode tech debt item
-> re-verified against current code/tests this pass; R2/R4 and the remaining tech debt items
-> not independently re-checked, left as last recorded)
+> **Last updated:** 2026-07-24 (two tech debt items added — see below — from the scheduler/WAL
+> concurrency fix found while merging item 11.17; MASTER_PLAN.md item 11.18 and DECISIONS.md's
+> "Scheduler persistence moved off the event loop..." entry have the full writeup. R1/R3/R5/R6
+> last independently re-verified 2026-07-21, not re-checked this pass; R2/R4 and the
+> pre-existing tech debt items likewise left as last recorded)
 
 ## Risk register (top)
 
@@ -92,6 +94,25 @@
   `memory_store.py`'s live `upsert_memory()` path (`chunking_engine.enabled` defaults to
   `True`), not a standalone/dormant module — `pytest -q -k chunk` (16 tests) passes locally.
   Left struck through rather than deleted for the same reason as the retrieval-mode item above.
+- **(2026-07-24) Unresolved root cause: why a `TRUNCATE` checkpoint outlasted its own
+  busy-timeout in CI.** `db_ctx.py`'s `wal_checkpoint()` gained temporary DEBUG-level
+  instrumentation (start time, duration, thread, mode, label, the checkpoint's own result row,
+  `in_transaction`) to help answer this — it's inert unless that logger's level is explicitly
+  raised, so it carries no runtime cost today, but it has no removal date or owning
+  investigation ticket. See MASTER_PLAN.md item 11.18 / DECISIONS.md's "Scheduler persistence
+  moved off the event loop..." entry for the incident. Either resolve the question and remove
+  the instrumentation, or turn it into permanent, deliberately-scoped observability — leaving it
+  as unowned "temporary" code is the debt.
+- **(2026-07-24) Mixed synchronous `sqlite3` and `aiosqlite` ownership of the same database
+  file.** `memory_store.py` (aiosqlite), `scheduler/persistence.py` (sync, now behind
+  `SchedulerStore`'s dedicated thread), and `persona_pack.py`/`narrator.py` (sync, still called
+  directly from async methods, not audited or fixed by item 11.18) all read/write the same
+  underlying db file with no single owner. Item 11.18 fixed the one call path proven to hang
+  (the scheduler's own tick loop); it deliberately did not consolidate database ownership more
+  broadly, and did not touch `bartholomew_api_bridge_v0_1/services/api/db_ctx.py` — a
+  near-duplicate of `bartholomew/kernel/db_ctx.py` with the same per-call-checkpoint pattern
+  still live in `liveness.py`/`db.py`'s hot paths. Same latent hazard class as item 11.18 fixed;
+  not yet known to have caused a failure outside the one incident that prompted this fix.
 
 ## Red-team focus areas
 
