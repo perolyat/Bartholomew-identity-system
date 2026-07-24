@@ -34,7 +34,6 @@ from bartholomew.kernel.planner import Planner
 from bartholomew.kernel.reflection import REFLECTION_KIND
 from bartholomew.kernel.runtime_contract import (
     CandidateAction,
-    Observation,
     run_skill_through_runtime_contract,
 )
 from bartholomew.kernel.skill_base import SkillBase, SkillContext, SkillResult
@@ -49,7 +48,6 @@ from identity_interpreter.identity_context import IdentityContext
 # =============================================================================
 
 CALL_LOG: list[str] = []
-RAISE_ON_EXECUTE = False
 
 
 class SpySkill(SkillBase):
@@ -59,7 +57,13 @@ class SpySkill(SkillBase):
     the real one, one of two things happens and a test below catches it:
     either this executes when it shouldn't (denied case), or it doesn't
     execute when it should (allowed case).
+
+    `raise_on_execute` is a class attribute (not a module global) so a test
+    can flip it without a `global` statement -- assigning `SpySkill.
+    raise_on_execute` is an attribute write, not a name rebind.
     """
+
+    raise_on_execute: bool = False
 
     @property
     def skill_id(self) -> str:
@@ -73,19 +77,18 @@ class SpySkill(SkillBase):
 
     async def execute(self, action: str, params: dict | None = None) -> SkillResult:
         CALL_LOG.append("skill_executed")
-        if RAISE_ON_EXECUTE:
+        if SpySkill.raise_on_execute:
             raise RuntimeError("spy skill crashed on purpose")
         return SkillResult.ok(data={"ran": action})
 
 
 @pytest.fixture(autouse=True)
 def _reset_spy_state():
-    global RAISE_ON_EXECUTE
     CALL_LOG.clear()
-    RAISE_ON_EXECUTE = False
+    SpySkill.raise_on_execute = False
     yield
     CALL_LOG.clear()
-    RAISE_ON_EXECUTE = False
+    SpySkill.raise_on_execute = False
 
 
 @pytest.fixture(autouse=True)
@@ -129,7 +132,8 @@ async def registry(tmp_path, skills_dir):
     # a manifest-driven `entry_module: "tests.test_skill_runtime_contract_seam"`
     # re-import can land as a second, distinct module object from this test
     # file's own import, which would silently give SpySkill.execute() a
-    # different CALL_LOG/RAISE_ON_EXECUTE than the one this file asserts on.
+    # different CALL_LOG / SpySkill.raise_on_execute than the one this file
+    # asserts on.
     with patch.object(reg, "_instantiate_skill", return_value=SpySkill()):
         await reg.load_skill("spy_skill")
     reg._mem = mem  # stash for teardown/queries
@@ -200,7 +204,11 @@ class TestCandidateActionGenuinelyConsumedByGovernance:
             evaluated_tool_names.append(tool_name)
             return real_evaluate(context, tool_name)
 
-        monkeypatch.setattr(skill_registry_module.policy_engine, "evaluate_tool_policy", spy_evaluate)
+        monkeypatch.setattr(
+            skill_registry_module.policy_engine,
+            "evaluate_tool_policy",
+            spy_evaluate,
+        )
 
         result = await registry.execute_action("spy_skill", "run", {})
 
@@ -240,7 +248,11 @@ class TestCandidateActionGenuinelyConsumedByGovernance:
             CALL_LOG.append("policy_checked")
             return real_evaluate(context, tool_name)
 
-        monkeypatch.setattr(skill_registry_module.policy_engine, "evaluate_tool_policy", spy_evaluate)
+        monkeypatch.setattr(
+            skill_registry_module.policy_engine,
+            "evaluate_tool_policy",
+            spy_evaluate,
+        )
 
         result = await registry.execute_action("spy_skill", "run", {})
 
@@ -255,7 +267,11 @@ class TestCandidateActionGenuinelyConsumedByGovernance:
             CALL_LOG.append("policy_checked")
             return real_evaluate(context, tool_name)
 
-        monkeypatch.setattr(skill_registry_module.policy_engine, "evaluate_tool_policy", spy_evaluate)
+        monkeypatch.setattr(
+            skill_registry_module.policy_engine,
+            "evaluate_tool_policy",
+            spy_evaluate,
+        )
 
         await registry.execute_action("spy_skill", "run", {})
 
@@ -349,7 +365,11 @@ class TestNamedSeamIsTheSoleProductionEntryPath:
         assert "execute_action" not in call_names
 
     @pytest.mark.asyncio
-    async def test_planner_handle_skill_request_calls_the_seam_function(self, registry, monkeypatch):
+    async def test_planner_handle_skill_request_calls_the_seam_function(
+        self,
+        registry,
+        monkeypatch,
+    ):
         """Behavioral confirmation, not just source inspection: patch the
         seam function planner.py imports at call time and prove
         handle_skill_request() actually invokes it."""
@@ -434,8 +454,7 @@ class TestExactlyOneReflectionPerAttempt:
         assert "Identity policy" in row["meta"]["error"]
 
     async def test_execution_exception_records_exactly_one_reflection(self, registry):
-        global RAISE_ON_EXECUTE
-        RAISE_ON_EXECUTE = True
+        SpySkill.raise_on_execute = True
 
         result = await registry.execute_action("spy_skill", "run", {})
         assert result.success is False

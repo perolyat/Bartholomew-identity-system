@@ -50,4 +50,3 @@ def start_stream(db_path: str = None) -> None:
     asyncio.run(
         run_voice_through_runtime_contract(db_path=db_path, stream_fn=_perform_stream),
     )
-    return None

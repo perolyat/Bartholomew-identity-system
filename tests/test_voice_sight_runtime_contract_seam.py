@@ -124,8 +124,22 @@ def _reflection_rows(path: str) -> list[tuple]:
 # `cap_kw` is its capability keyword; `kind`/`surface`/`scope` are the expected
 # per-surface identifiers.
 SURFACES = [
-    pytest.param(run_sight_through_runtime_contract, "capture_fn", "sight_capture_start", "sight", "sight", id="sight"),
-    pytest.param(run_voice_through_runtime_contract, "stream_fn", "voice_stream_start", "voice", "voice", id="voice"),
+    pytest.param(
+        run_sight_through_runtime_contract,
+        "capture_fn",
+        "sight_capture_start",
+        "sight",
+        "sight",
+        id="sight",
+    ),
+    pytest.param(
+        run_voice_through_runtime_contract,
+        "stream_fn",
+        "voice_stream_start",
+        "voice",
+        "voice",
+        id="voice",
+    ),
 ]
 
 
@@ -138,14 +152,22 @@ SURFACES = [
 @pytest.mark.parametrize("seam,cap_kw,kind,surface,scope", SURFACES)
 class TestGovernanceGenuinelyGatesExecution:
     async def test_approved_creates_observation_and_candidate_action(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         log: list[str] = []
         spy = Spy(log, "capability")
         set_consent_handler(_approving_handler())
 
         result: DeviceRuntimeResult = await seam(
-            db_path=db_path, identity_context=ALLOW_CONTEXT, **{cap_kw: spy}
+            db_path=db_path,
+            identity_context=ALLOW_CONTEXT,
+            **{cap_kw: spy},
         )
 
         assert result.observation.source == surface
@@ -154,7 +176,14 @@ class TestGovernanceGenuinelyGatesExecution:
         assert result.started is True
 
     async def test_policy_authority_receives_the_candidate_action(
-        self, db_path, seam, cap_kw, kind, surface, scope, monkeypatch
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
+        monkeypatch,
     ):
         """The exact CandidateAction the seam builds is what the policy
         authority evaluates -- captured by spying on both the CandidateAction
@@ -183,9 +212,7 @@ class TestGovernanceGenuinelyGatesExecution:
         assert constructed == [kind]
         assert evaluated == constructed  # governance evaluated the built CA
 
-    async def test_policy_denied_never_executes(
-        self, db_path, seam, cap_kw, kind, surface, scope
-    ):
+    async def test_policy_denied_never_executes(self, db_path, seam, cap_kw, kind, surface, scope):
         set_consent_handler(_approving_handler())  # consent would allow
         spy = Spy([], "capability")
 
@@ -197,21 +224,27 @@ class TestGovernanceGenuinelyGatesExecution:
         assert spy.calls == 0
 
     async def test_unrelated_allowlist_entry_still_denies(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())
         spy = Spy([], "capability")
 
         result = await seam(
-            db_path=db_path, identity_context=UNRELATED_ALLOW_CONTEXT, **{cap_kw: spy}
+            db_path=db_path,
+            identity_context=UNRELATED_ALLOW_CONTEXT,
+            **{cap_kw: spy},
         )
 
         assert result.outcome == "governance_denied"
         assert spy.calls == 0
 
-    async def test_consent_absent_never_executes(
-        self, db_path, seam, cap_kw, kind, surface, scope
-    ):
+    async def test_consent_absent_never_executes(self, db_path, seam, cap_kw, kind, surface, scope):
         # No consent handler registered (fail-closed), policy would allow.
         spy = Spy([], "capability")
 
@@ -222,7 +255,13 @@ class TestGovernanceGenuinelyGatesExecution:
         assert spy.calls == 0
 
     async def test_consent_declined_never_executes(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(lambda _prompt: False)
         spy = Spy([], "capability")
@@ -233,7 +272,13 @@ class TestGovernanceGenuinelyGatesExecution:
         assert spy.calls == 0
 
     async def test_consent_unresolved_falsy_never_executes(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(lambda _prompt: None)  # unresolved ask -> falsy
         spy = Spy([], "capability")
@@ -244,7 +289,13 @@ class TestGovernanceGenuinelyGatesExecution:
         assert spy.calls == 0
 
     async def test_parking_brake_denied_never_executes(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())  # consent would allow
         brake = ParkingBrake(BrakeStorage(db_path))
@@ -258,7 +309,13 @@ class TestGovernanceGenuinelyGatesExecution:
             brake.disengage()
 
     async def test_approved_executes_exactly_once(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())
         spy = Spy([], "capability")
@@ -269,7 +326,14 @@ class TestGovernanceGenuinelyGatesExecution:
         assert spy.calls == 1
 
     async def test_execution_occurs_only_after_governance(
-        self, db_path, seam, cap_kw, kind, surface, scope, monkeypatch
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
+        monkeypatch,
     ):
         """Ordering proof: policy check and consent both complete strictly
         before the capability runs."""
@@ -290,7 +354,13 @@ class TestGovernanceGenuinelyGatesExecution:
         assert log == ["policy", "consent", "capability"]
 
     async def test_no_identity_context_skips_policy_but_still_needs_consent(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         """Additive policy (skipped when no IdentityContext), matching
         chat/scheduler/skill -- but consent still fail-closes, so a start with
@@ -318,7 +388,13 @@ class TestGovernanceGenuinelyGatesExecution:
 @pytest.mark.parametrize("seam,cap_kw,kind,surface,scope", SURFACES)
 class TestExactlyOneReflectionPerAttempt:
     async def test_success_records_one_reflection(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())
         await seam(db_path=db_path, identity_context=ALLOW_CONTEXT, **{cap_kw: Spy([], "c")})
@@ -331,7 +407,13 @@ class TestExactlyOneReflectionPerAttempt:
         assert mem["meta"]["outcome"] == "started"
 
     async def test_policy_denial_records_one_reflection(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())
         await seam(db_path=db_path, identity_context=DENY_CONTEXT, **{cap_kw: Spy([], "c")})
@@ -342,7 +424,13 @@ class TestExactlyOneReflectionPerAttempt:
         assert mem["meta"]["outcome"] == "governance_denied"
 
     async def test_consent_denial_records_one_reflection(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         await seam(db_path=db_path, identity_context=ALLOW_CONTEXT, **{cap_kw: Spy([], "c")})
 
@@ -352,7 +440,13 @@ class TestExactlyOneReflectionPerAttempt:
         assert mem["meta"]["outcome"] == "consent_denied"
 
     async def test_parking_brake_denial_records_one_reflection(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())
         brake = ParkingBrake(BrakeStorage(db_path))
@@ -368,7 +462,13 @@ class TestExactlyOneReflectionPerAttempt:
         assert mem["meta"]["outcome"] == "parking_brake_denied"
 
     async def test_execution_error_records_one_reflection_and_ran_once(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())
         spy = Spy([], "capability", raises=True)
@@ -386,7 +486,13 @@ class TestExactlyOneReflectionPerAttempt:
         assert mem["meta"]["outcome"] == "error"
 
     async def test_multiple_attempts_each_add_exactly_one(
-        self, db_path, seam, cap_kw, kind, surface, scope
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
     ):
         set_consent_handler(_approving_handler())
         await seam(db_path=db_path, identity_context=ALLOW_CONTEXT, **{cap_kw: Spy([], "c")})
@@ -421,7 +527,7 @@ class TestCompatWrappersDelegateToSeam:
                 outcome="started",
                 reason=None,
                 result={"status": "capturing"},
-            )
+            ),
         )
         monkeypatch.setattr(rc, "run_sight_through_runtime_contract", spy)
 
@@ -443,7 +549,7 @@ class TestCompatWrappersDelegateToSeam:
                 outcome="consent_denied",
                 reason="x",
                 result=None,
-            )
+            ),
         )
         monkeypatch.setattr(rc, "run_sight_through_runtime_contract", spy)
 
@@ -461,7 +567,7 @@ class TestCompatWrappersDelegateToSeam:
                 outcome="started",
                 reason=None,
                 result=None,
-            )
+            ),
         )
         monkeypatch.setattr(rc, "run_voice_through_runtime_contract", spy)
 
@@ -527,13 +633,9 @@ class TestStructuralNoBypass:
         for path, func_name, seam_name in checks:
             tree = ast.parse(path.read_text(), filename=str(path))
             func = next(
-                n
-                for n in ast.walk(tree)
-                if isinstance(n, ast.FunctionDef) and n.name == func_name
+                n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == func_name
             )
-            referenced = {
-                n.id for n in ast.walk(func) if isinstance(n, ast.Name)
-            } | {
+            referenced = {n.id for n in ast.walk(func) if isinstance(n, ast.Name)} | {
                 n.attr for n in ast.walk(func) if isinstance(n, ast.Attribute)
             }
             assert seam_name in referenced, f"{func_name} does not delegate to {seam_name}"
@@ -551,7 +653,14 @@ class TestStructuralNoBypass:
 @pytest.mark.parametrize("seam,cap_kw,kind,surface,scope", SURFACES)
 class TestMutationNonVacuity:
     async def test_policy_denial_would_pass_if_policy_were_neutralised(
-        self, db_path, seam, cap_kw, kind, surface, scope, monkeypatch
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
+        monkeypatch,
     ):
         """Mirror of test_policy_denied_never_executes: under DENY_CONTEXT the
         capability must NOT run. Here we force evaluate_tool_policy to allow --
@@ -573,7 +682,14 @@ class TestMutationNonVacuity:
         assert spy.calls == 1
 
     async def test_consent_denial_would_pass_if_consent_were_neutralised(
-        self, db_path, seam, cap_kw, kind, surface, scope, monkeypatch
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
+        monkeypatch,
     ):
         """Mirror of test_consent_absent_never_executes: with no handler the
         capability must NOT run. Here we force the seam's consent lookup to a
@@ -588,7 +704,14 @@ class TestMutationNonVacuity:
         assert spy.calls == 1
 
     async def test_brake_denial_would_pass_if_brake_were_neutralised(
-        self, db_path, seam, cap_kw, kind, surface, scope, monkeypatch
+        self,
+        db_path,
+        seam,
+        cap_kw,
+        kind,
+        surface,
+        scope,
+        monkeypatch,
     ):
         """Mirror of test_parking_brake_denied_never_executes: with the brake
         engaged the capability must NOT run. Here we force is_blocked to False

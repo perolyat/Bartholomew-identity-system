@@ -663,7 +663,13 @@ async def run_sight_through_runtime_contract(
             logger.exception("Sight capture failed after governance approval")
             outcome, reason, started = "error", str(exc), False
 
-    await _record_device_reflection(resolved_db_path, "sight", candidate_action.kind, outcome, reason)
+    await _record_device_reflection(
+        resolved_db_path,
+        "sight",
+        candidate_action.kind,
+        outcome,
+        reason,
+    )
 
     return DeviceRuntimeResult(
         observation=observation,
@@ -744,7 +750,13 @@ async def run_voice_through_runtime_contract(
             logger.exception("Voice stream failed after governance approval")
             outcome, reason, started = "error", str(exc), False
 
-    await _record_device_reflection(resolved_db_path, "voice", candidate_action.kind, outcome, reason)
+    await _record_device_reflection(
+        resolved_db_path,
+        "voice",
+        candidate_action.kind,
+        outcome,
+        reason,
+    )
 
     return DeviceRuntimeResult(
         observation=observation,
