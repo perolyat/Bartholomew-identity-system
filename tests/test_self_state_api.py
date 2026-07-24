@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sqlite3
 import tempfile
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +36,26 @@ from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: 
 def client():
     with TestClient(app_module.app) as c:
         yield c
+
+
+def _switch_persona_with_retry(client, pack_id, attempts=5, backoff=0.1):
+    """POST /api/persona/switch, retrying on transient SQLite lock contention.
+
+    app_module._kernel's background scheduler thread runs continuously
+    against the same shared DB file for the whole test session -- a drive
+    tick can hold a write lock right as this route's own switch-log INSERT
+    runs, raising sqlite3.OperationalError("database is locked") even
+    though the connection has a busy_timeout. The lock clears in well under
+    a tick's duration, so a short retry is enough; this is transient CI
+    flakiness, not a route bug.
+    """
+    for attempt in range(attempts):
+        try:
+            return client.post("/api/persona/switch", json={"pack_id": pack_id})
+        except sqlite3.OperationalError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(backoff * (attempt + 1))
 
 
 class TestSelfSnapshot:
@@ -125,13 +147,13 @@ class TestPersonaEndpoints:
             packs = app_module._kernel.persona_manager.list_packs()
             other_pack = next(p for p in packs if p != original)
 
-            response = client.post("/api/persona/switch", json={"pack_id": other_pack})
+            response = _switch_persona_with_retry(client, other_pack)
             assert response.status_code == 200
 
             current_response = client.get("/api/persona/current")
             assert current_response.json()["pack"]["pack_id"] == other_pack
         finally:
-            client.post("/api/persona/switch", json={"pack_id": original})
+            _switch_persona_with_retry(client, original)
 
 
 class TestDrivesAndAttention:
