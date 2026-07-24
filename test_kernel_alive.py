@@ -4,23 +4,36 @@ Test script to verify kernel is alive, stable, and dreaming.
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 from bartholomew.kernel.daemon import KernelDaemon
 
 
-async def test_kernel_lifecycle():
+_REPO_ROOT = Path(__file__).parent
+
+
+async def test_kernel_lifecycle(tmp_path, monkeypatch):
     """Test kernel startup, operations, and shutdown."""
     print("=== Testing Kernel Lifecycle ===\n")
 
     # Initialize kernel
     print("1. Starting kernel...")
+    # db_path is isolated per test run (tmp_path) rather than pointed at the
+    # real, git-tracked data/barth.db -- that file was getting mutated by
+    # every test run and contending over SQLite locks with other tests/CI
+    # legs that also touch it. Config paths are resolved to absolute paths
+    # first (they're read-only, safe to share) because the reflection flow
+    # below also touches identity_interpreter.MemoryManager's *relative*
+    # "./data" default -- chdir'ing into tmp_path keeps that isolated too,
+    # so config paths must not depend on the original cwd.
     kd = KernelDaemon(
-        cfg_path="config/kernel.yaml",
-        db_path="data/barth.db",
-        persona_path="config/persona.yaml",
-        policy_path="config/policy.yaml",
-        drives_path="config/drives.yaml",
+        cfg_path=str(_REPO_ROOT / "config/kernel.yaml"),
+        db_path=str(tmp_path / "barth.db"),
+        persona_path=str(_REPO_ROOT / "config/persona.yaml"),
+        policy_path=str(_REPO_ROOT / "config/policy.yaml"),
+        drives_path=str(_REPO_ROOT / "config/drives.yaml"),
     )
+    monkeypatch.chdir(tmp_path)
     await kd.start()
     print("   ✓ Kernel started\n")
 
@@ -66,4 +79,9 @@ async def test_kernel_lifecycle():
 
 
 if __name__ == "__main__":
-    asyncio.run(test_kernel_lifecycle())
+    import tempfile
+
+    import pytest
+
+    with tempfile.TemporaryDirectory() as tmp_dir, pytest.MonkeyPatch.context() as mp:
+        asyncio.run(test_kernel_lifecycle(Path(tmp_dir), mp))
