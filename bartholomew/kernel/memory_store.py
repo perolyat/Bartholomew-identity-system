@@ -895,12 +895,23 @@ class MemoryStore:
         # Re-create embeddings
         return await self.persist_embeddings_for(memory_id, sources)
 
-    async def close(self) -> None:
-        """Checkpoint and clean up WAL files and global resources."""
+    async def close(self, checkpoint: bool = True) -> None:
+        """Clean up global resources, and checkpoint WAL files unless
+        checkpoint=False.
+
+        checkpoint=False is for a caller that has determined it's unsafe
+        to run right now -- e.g. KernelDaemon.stop() when its
+        SchedulerStore didn't drain within its bound, meaning a
+        background thread may still be writing to this same db_path; see
+        SchedulerStore.close()'s docstring.
+        """
         # Clean up global embedding/vector store instances
         global _embedding_engine, _vector_store
         _embedding_engine = None
         _vector_store = None
+
+        if not checkpoint:
+            return
 
         # Checkpoint WAL files to ensure database is clean. Uses this
         # package's own db_ctx (not the API bridge's near-identical copy --

@@ -57,7 +57,7 @@ def ensure_schema(db_path: str) -> None:
     Args:
         db_path: Path to SQLite database
     """
-    with wal_db(db_path, timeout=30.0) as conn:
+    with wal_db(db_path, timeout=30.0, label="ensure_schema") as conn:
         # Set busy timeout for concurrent access
         conn.execute("PRAGMA busy_timeout = 3000")
 
@@ -88,7 +88,7 @@ def upsert_scheduled_tasks(db_path: str, tasks: dict[str, dict[str, Any]]) -> No
         db_path: Path to SQLite database
         tasks: Dict mapping task_id to {cadence, ...}
     """
-    with wal_db(db_path, timeout=30.0) as conn:
+    with wal_db(db_path, timeout=30.0, label="upsert_scheduled_tasks") as conn:
         conn.execute("PRAGMA busy_timeout = 3000")
 
         for task_id, config in tasks.items():
@@ -124,7 +124,7 @@ def next_due_task(db_path: str, now_ts: int) -> dict[str, Any] | None:
     Returns:
         Dict with task details, or None if no tasks due
     """
-    with wal_db(db_path, timeout=30.0) as conn:
+    with wal_db(db_path, timeout=30.0, label="next_due_task") as conn:
         conn.execute("PRAGMA busy_timeout = 3000")
 
         cur = conn.execute(
@@ -147,6 +147,30 @@ def next_due_task(db_path: str, now_ts: int) -> dict[str, Any] | None:
             "last_run_ts": row[3],
             "window_state": row[4],
         }
+
+
+def tick_exists(db_path: str, idempotency_key: str) -> bool:
+    """
+    Check whether a tick with this idempotency key has already been recorded.
+
+    Factored out of scheduler/loop.py's inline restart-protection check so
+    that call, too, goes through SchedulerStore rather than touching
+    wal_db()/sqlite3 directly from the scheduler's async loop.
+
+    Args:
+        db_path: Path to SQLite database
+        idempotency_key: Unique key identifying the tick
+
+    Returns:
+        True if a tick with this idempotency key already exists
+    """
+    with wal_db(db_path, timeout=5.0, label="tick_exists") as conn:
+        conn.execute("PRAGMA busy_timeout = 3000")
+        cur = conn.execute(
+            "SELECT id FROM ticks WHERE idempotency_key = ?",
+            (idempotency_key,),
+        )
+        return cur.fetchone() is not None
 
 
 def insert_tick(
@@ -175,7 +199,7 @@ def insert_tick(
     """
     result_json = json.dumps(result_meta) if result_meta else None
 
-    with wal_db(db_path, timeout=30.0) as conn:
+    with wal_db(db_path, timeout=30.0, label="insert_tick") as conn:
         conn.execute("PRAGMA busy_timeout = 3000")
 
         cur = conn.execute(
@@ -218,7 +242,7 @@ def insert_nudge(
 
     created_iso = datetime.fromtimestamp(created_ts, tz=timezone.utc).isoformat()
 
-    with wal_db(db_path, timeout=30.0) as conn:
+    with wal_db(db_path, timeout=30.0, label="insert_nudge") as conn:
         conn.execute("PRAGMA busy_timeout = 3000")
 
         cur = conn.execute(
@@ -261,7 +285,7 @@ def insert_reflection(
 
     ts_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
-    with wal_db(db_path, timeout=30.0) as conn:
+    with wal_db(db_path, timeout=30.0, label="insert_reflection") as conn:
         conn.execute("PRAGMA busy_timeout = 3000")
 
         cur = conn.execute(
@@ -291,7 +315,7 @@ def update_next_run(
         last_run_ts: Last run time (UTC epoch seconds)
         window_state: Optional window state JSON
     """
-    with wal_db(db_path, timeout=30.0) as conn:
+    with wal_db(db_path, timeout=30.0, label="update_next_run") as conn:
         conn.execute("PRAGMA busy_timeout = 3000")
 
         conn.execute(

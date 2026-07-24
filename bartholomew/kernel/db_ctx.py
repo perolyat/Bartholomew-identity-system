@@ -10,10 +10,16 @@ This is a kernel-local copy to avoid coupling to the API layer.
 """
 
 import gc
+import logging
 import sqlite3
+import threading
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
+
+
+_checkpoint_log = logging.getLogger("bartholomew.kernel.db_ctx.checkpoint")
+_VALID_CHECKPOINT_MODES = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
 
 
 def _windows_release_handles(delay: float = 0.05) -> None:
@@ -89,38 +95,79 @@ def connect(
     )
 
 
-def wal_checkpoint_truncate(
+def wal_checkpoint(
     db_path_or_uri: str,
     *,
     uri: bool = False,
     timeout: float = 30.0,
-) -> None:
+    mode: str = "TRUNCATE",
+    label: str = "",
+) -> tuple[int, int, int] | None:
     """
-    Run PRAGMA wal_checkpoint(TRUNCATE) with a fresh connection.
+    Run PRAGMA wal_checkpoint(<mode>) with a fresh, short-lived connection.
 
-    This is the key pattern for reliable WAL cleanup on Windows:
-    1. Open a fresh short-lived connection
-    2. Run PRAGMA wal_checkpoint(TRUNCATE)
-    3. Close the connection immediately
-    4. Force garbage collection and brief sleep
+    mode:
+      - "PASSIVE": non-blocking, best-effort. Never waits on other
+        connections; may checkpoint fewer frames than requested. Safe to
+        call from a hot path (e.g. scheduled diagnostics), but still not
+        the routine default -- see wal_db().
+      - "FULL" / "RESTART": accepted for completeness; unused today.
+      - "TRUNCATE" (default for direct calls, matching this function's
+        previous name/behavior as wal_checkpoint_truncate): blocks until
+        it can get an exclusive lock and physically truncate the WAL
+        file. Reserve for controlled maintenance or shutdown, once
+        active readers/writers have been drained -- see
+        MemoryStore.close() and the API bridge's atexit hook.
 
-    This ensures the checkpoint operation doesn't conflict with lingering
-    handles from recently-closed connections, and gives Windows time to
-    release file locks.
+    TEMPORARY instrumentation (see DECISIONS.md's scheduler-persistence
+    entry): logs start time, duration, thread, mode, label, the
+    checkpoint's own result row (busy, log_frames, checkpointed_frames),
+    and this connection's in_transaction state, at DEBUG level only --
+    inert unless something explicitly raises this logger's level. Kept
+    to help diagnose the open question there (why an earlier TRUNCATE
+    checkpoint call exceeded its own busy-timeout in CI); remove once
+    that's resolved.
 
     Args:
         db_path_or_uri: Database file path or URI
         uri: Whether the path is a URI (default: False)
         timeout: Lock timeout in seconds (default: 30.0)
+        mode: Checkpoint mode (default: "TRUNCATE")
+        label: Optional caller-supplied tag for the instrumentation log
+
+    Returns:
+        The PRAGMA's own result row (busy, log_frames, checkpointed_frames),
+        or None if the connection could not be opened.
 
     Example:
-        >>> wal_checkpoint_truncate("data.db")
+        >>> wal_checkpoint("data.db", mode="PASSIVE")
     """
+    if mode not in _VALID_CHECKPOINT_MODES:
+        raise ValueError(
+            f"wal_checkpoint: unknown mode {mode!r}, expected one of {_VALID_CHECKPOINT_MODES}",
+        )
+
     checkpoint_conn = None
+    row = None
+    started = time.monotonic()
     try:
         checkpoint_conn = connect(db_path_or_uri, uri=uri, timeout=timeout)
-        checkpoint_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cur = checkpoint_conn.execute(f"PRAGMA wal_checkpoint({mode})")
+        row = cur.fetchone()
+        return row
     finally:
+        duration_ms = (time.monotonic() - started) * 1000
+        _checkpoint_log.debug(
+            "wal_checkpoint db=%s mode=%s label=%s thread=%s duration_ms=%.1f "
+            "result=%s in_transaction=%s",
+            db_path_or_uri,
+            mode,
+            label,
+            threading.current_thread().name,
+            duration_ms,
+            row,
+            checkpoint_conn.in_transaction if checkpoint_conn else None,
+        )
         if checkpoint_conn:
             try:
                 checkpoint_conn.close()
@@ -128,6 +175,35 @@ def wal_checkpoint_truncate(
                 pass
         # Allow Windows to release file handles
         _windows_release_handles(delay=0.05)
+
+
+def wal_checkpoint_truncate(
+    db_path_or_uri: str,
+    *,
+    uri: bool = False,
+    timeout: float = 30.0,
+    label: str = "",
+) -> None:
+    """
+    Run PRAGMA wal_checkpoint(TRUNCATE) with a fresh connection.
+
+    Unchanged public API and behavior -- a thin wrapper over
+    wal_checkpoint(mode="TRUNCATE"). This is the key pattern for reliable
+    WAL cleanup on Windows: open a fresh short-lived connection, run the
+    checkpoint, close it immediately, then give Windows a moment to
+    release file handles. Reserve for controlled maintenance or shutdown
+    once active readers/writers have been drained.
+
+    Args:
+        db_path_or_uri: Database file path or URI
+        uri: Whether the path is a URI (default: False)
+        timeout: Lock timeout in seconds (default: 30.0)
+        label: Optional caller-supplied tag for the instrumentation log
+
+    Example:
+        >>> wal_checkpoint_truncate("data.db")
+    """
+    wal_checkpoint(db_path_or_uri, uri=uri, timeout=timeout, mode="TRUNCATE", label=label)
 
 
 def close_quietly(conn: sqlite3.Connection | None) -> None:
@@ -177,7 +253,14 @@ def close_all_and_checkpoint(
 
 
 @contextmanager
-def wal_db(db_path_or_uri: str, *, uri: bool = False, timeout: float = 30.0):
+def wal_db(
+    db_path_or_uri: str,
+    *,
+    uri: bool = False,
+    timeout: float = 30.0,
+    checkpoint: str | None = None,
+    label: str = "",
+):
     """
     Context manager for SQLite connections with WAL cleanup.
 
@@ -185,7 +268,7 @@ def wal_db(db_path_or_uri: str, *, uri: bool = False, timeout: float = 30.0):
     1. Connection is opened with standard settings
     2. WAL mode and pragmas are configured
     3. Connection is closed properly in finally block
-    4. Checkpoint(TRUNCATE) is run with a fresh connection
+    4. Optional checkpoint is run with a fresh connection (see `checkpoint`)
     5. Brief delay allows Windows to release file handles
 
     Usage pattern:
@@ -193,13 +276,27 @@ def wal_db(db_path_or_uri: str, *, uri: bool = False, timeout: float = 30.0):
             conn.execute("INSERT INTO table VALUES (?)", (value,))
             conn.commit()
 
-    The checkpoint and cleanup happen automatically when exiting the
-    context, even on errors.
+    The cleanup happens automatically when exiting the context, even on
+    errors.
 
     Args:
         db_path_or_uri: Database file path or URI
         uri: Whether the path is a URI (default: False)
         timeout: Lock timeout in seconds (default: 30.0)
+        checkpoint: What to run on exit, after the working connection is
+            closed. Default None -- no explicit checkpoint at all;
+            SQLite's own automatic WAL checkpoint (~every 1000 WAL
+            pages) is the standard mechanism for routine reads/writes,
+            and is the correct default for any hot path. WAL mode
+            already guarantees readers see committed writes regardless
+            of checkpoint timing, so this is a disk-layout/performance
+            knob, not a correctness one. Pass "PASSIVE" for an explicit
+            non-blocking best-effort checkpoint. Pass "TRUNCATE" only
+            for controlled maintenance/shutdown -- prefer calling
+            wal_checkpoint_truncate() directly instead in that case,
+            since that's what it's for.
+        label: Optional caller-supplied tag for the instrumentation log
+            (only used when `checkpoint` is set)
 
     Yields:
         SQLite connection configured for WAL mode
@@ -218,5 +315,6 @@ def wal_db(db_path_or_uri: str, *, uri: bool = False, timeout: float = 30.0):
         # Close the working connection first
         close_quietly(conn)
 
-        # Then checkpoint with a fresh connection
-        wal_checkpoint_truncate(db_path_or_uri, uri=uri, timeout=timeout)
+        # Then checkpoint with a fresh connection, if requested
+        if checkpoint:
+            wal_checkpoint(db_path_or_uri, uri=uri, timeout=timeout, mode=checkpoint, label=label)

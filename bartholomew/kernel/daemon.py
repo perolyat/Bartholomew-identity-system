@@ -42,6 +42,15 @@ class KernelDaemon:
         self.interval = int(self.cfg.get("loop_interval_seconds", loop_interval_s))
         self.bus = EventBus()
         self.mem = MemoryStore(db_path)
+
+        # Owned by this daemon instance for its entire lifetime -- closed
+        # in stop(). Construction is cheap (no I/O, no thread spawned
+        # until first use), so it's safe to always create one, even for
+        # a KernelDaemon that's never start()ed. See scheduler/store.py's
+        # module docstring for why this exists.
+        from .scheduler.store import SchedulerStore
+
+        self.scheduler_store = SchedulerStore(db_path)
         self.persona = load_persona(persona_path)
         self.policy = load_policy(policy_path)
         self.drives = yaml.safe_load(open(drives_path, encoding="utf-8"))
@@ -272,8 +281,23 @@ class KernelDaemon:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
 
-        # Close memory store (checkpoint WAL)
-        await self.mem.close()
+        # Close the scheduler's dedicated DB worker thread before the
+        # memory store's own final checkpoint below, so nothing is still
+        # mid-operation on the same file when that checkpoint runs. If it
+        # doesn't drain cleanly within the bound, skip the (blocking,
+        # exclusive) TRUNCATE checkpoint entirely rather than risk
+        # contending with a thread that may still be running -- see
+        # SchedulerStore.close()'s docstring and DECISIONS.md.
+        scheduler_drained = await self.scheduler_store.close()
+        if not scheduler_drained:
+            print(
+                "[Kernel] Scheduler store did not drain cleanly on shutdown; "
+                "deferring WAL cleanup to next startup",
+            )
+
+        # Close memory store (checkpoint WAL, unless the scheduler store
+        # above didn't drain -- see comment above)
+        await self.mem.close(checkpoint=scheduler_drained)
 
     def _is_quiet_hours(self, now: datetime) -> bool:
         """Check if current time is within quiet hours."""
@@ -395,12 +419,15 @@ class KernelDaemon:
         """Generate and persist daily reflection using Identity Interpreter."""
         print("[Kernel] Running daily reflection...")
 
-        # Get pending nudges count for richer context
+        # Get pending nudges count for richer context. Previously did
+        # `from .scheduler.persistence import get_system_metrics`, which
+        # doesn't exist there (it's in scheduler/health.py) -- that
+        # ImportError was silently swallowed by the except below, so
+        # pending_nudges was always 0. Fixed as part of routing this
+        # through scheduler_store, which offloads it off the event loop.
         pending_nudges = 0
         try:
-            from .scheduler.persistence import get_system_metrics
-
-            metrics = get_system_metrics(self.mem.db_path)
+            metrics = await self.scheduler_store.get_system_metrics()
             pending_nudges = metrics.get("pending_nudges", 0)
         except Exception:
             pass

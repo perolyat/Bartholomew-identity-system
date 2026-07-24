@@ -44,7 +44,7 @@ def get_system_metrics(db_path: str) -> dict[str, Any]:
     try:
         from bartholomew.kernel.db_ctx import wal_db
 
-        with wal_db(db_path, timeout=5.0) as conn:
+        with wal_db(db_path, timeout=5.0, label="get_system_metrics") as conn:
             cur = conn.execute("SELECT COUNT(*) FROM nudges WHERE status='pending'")
             row = cur.fetchone()
             metrics["pending_nudges"] = int(row[0] if row else 0)

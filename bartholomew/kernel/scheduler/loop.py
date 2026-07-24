@@ -13,7 +13,8 @@ from contextlib import suppress
 from typing import Any
 
 from . import cadence as cadence_module
-from . import drives, persistence
+from . import drives
+from .store import SchedulerStore
 
 
 log = logging.getLogger(__name__)
@@ -83,64 +84,73 @@ async def run_scheduler(ctx: Any) -> None:
     Runs continuously until cancelled, executing drives on their
     cadences and persisting all activity.
 
+    All persistence goes through a SchedulerStore (bartholomew.kernel.
+    scheduler.store), which offloads the underlying synchronous sqlite3
+    calls onto one dedicated worker thread so this loop never blocks the
+    event loop on DB I/O. Ownership: if ctx already has a
+    `scheduler_store` (the normal path -- KernelDaemon constructs one in
+    __init__ and closes it in stop()), this function uses it and does
+    NOT close it. If ctx has none, this function constructs its own and
+    closes it itself when the loop exits -- a fallback for callers that
+    invoke run_scheduler() directly without a full KernelDaemon lifecycle.
+
     Args:
         ctx: Context object (typically KernelDaemon instance)
             Must have: mem.db_path, cfg (optional), tz
     """
-    db_path = ctx.mem.db_path
+    store = getattr(ctx, "scheduler_store", None)
+    owns_store = store is None
+    if owns_store:
+        store = SchedulerStore(ctx.mem.db_path)
+        ctx.scheduler_store = store
 
-    # Ensure schema exists
-    print("[Scheduler] Initializing schema...")
-    persistence.ensure_schema(db_path)
+    try:
+        # Ensure schema exists
+        print("[Scheduler] Initializing schema...")
+        await store.ensure_schema()
 
-    # Resolve cadences from config/env
-    resolved_cadences = resolve_cadences(ctx)
-    print(f"[Scheduler] Resolved cadences: {resolved_cadences}")
+        # Resolve cadences from config/env
+        resolved_cadences = resolve_cadences(ctx)
+        print(f"[Scheduler] Resolved cadences: {resolved_cadences}")
 
-    # Log resolved cadences
-    print("[Scheduler] Resolved cadences:")
-    for task_id, cadence_str in resolved_cadences.items():
-        print(f"  {task_id}: {cadence_str}")
+        # Log resolved cadences
+        print("[Scheduler] Resolved cadences:")
+        for task_id, cadence_str in resolved_cadences.items():
+            print(f"  {task_id}: {cadence_str}")
 
-    # Build tasks dict with resolved cadences
-    tasks_config = {}
-    for task_id in drives.REGISTRY.keys():
-        tasks_config[task_id] = {"cadence": resolved_cadences[task_id]}
+        # Build tasks dict with resolved cadences
+        tasks_config = {}
+        for task_id in drives.REGISTRY.keys():
+            tasks_config[task_id] = {"cadence": resolved_cadences[task_id]}
 
-    # Upsert scheduled tasks
-    persistence.upsert_scheduled_tasks(db_path, tasks_config)
+        # Upsert scheduled tasks
+        await store.upsert_scheduled_tasks(tasks_config)
 
-    print("[Scheduler] Autonomy loop started")
+        print("[Scheduler] Autonomy loop started")
 
-    # Main loop
-    while True:
-        try:
-            now_ts = int(time.time())
-
-            # Get next due task
-            due_task = persistence.next_due_task(db_path, now_ts)
-
-            if not due_task:
-                # No tasks due, sleep briefly
-                await asyncio.sleep(5)
-                continue
-
-            task_id = due_task["id"]
-            scheduled_ts = due_task["next_run_ts"]
-            cadence_str = due_task["cadence"]
-
-            # Build idempotency key using scheduled time
-            idempotency_key = f"{task_id}:{scheduled_ts}"
-
-            # Check if this tick already exists (restart protection)
+        # Main loop
+        while True:
             try:
-                with persistence.wal_db(db_path, timeout=5.0) as conn:
-                    conn.execute("PRAGMA busy_timeout = 3000")
-                    cur = conn.execute(
-                        "SELECT id FROM ticks WHERE idempotency_key = ?",
-                        (idempotency_key,),
-                    )
-                    if cur.fetchone():
+                now_ts = int(time.time())
+
+                # Get next due task
+                due_task = await store.next_due_task(now_ts)
+
+                if not due_task:
+                    # No tasks due, sleep briefly
+                    await asyncio.sleep(5)
+                    continue
+
+                task_id = due_task["id"]
+                scheduled_ts = due_task["next_run_ts"]
+                cadence_str = due_task["cadence"]
+
+                # Build idempotency key using scheduled time
+                idempotency_key = f"{task_id}:{scheduled_ts}"
+
+                # Check if this tick already exists (restart protection)
+                try:
+                    if await store.tick_exists(idempotency_key):
                         # Already ran, just update next_run and continue
                         next_ts, new_window_state = cadence_module.compute_next_run(
                             last_run_ts=scheduled_ts,
@@ -149,77 +159,77 @@ async def run_scheduler(ctx: Any) -> None:
                             now_ts=now_ts,
                             window_state=due_task["window_state"],
                         )
-                        persistence.update_next_run(
-                            db_path,
+                        await store.update_next_run(
                             task_id,
                             next_ts,
                             scheduled_ts,
                             new_window_state,
                         )
                         continue
-            except Exception:
-                # If check fails, proceed anyway (idempotency in INSERT)
-                pass
+                except Exception:
+                    # If check fails, proceed anyway (idempotency in INSERT)
+                    pass
 
-            # Record tick start
-            started_ts = int(time.time())
+                # Record tick start
+                started_ts = int(time.time())
 
-            # Execute drive with timeout and exception guard
-            drive_fn = drives.REGISTRY[task_id]["fn"]
-            nudge, success = await _run_drive(ctx, task_id, drive_fn)
-            result_meta = {}
+                # Execute drive with timeout and exception guard
+                drive_fn = drives.REGISTRY[task_id]["fn"]
+                nudge, success = await _run_drive(ctx, task_id, drive_fn)
+                result_meta = {}
 
-            finished_ts = int(time.time())
-            dur_ms = (finished_ts - started_ts) * 1000
+                finished_ts = int(time.time())
+                dur_ms = (finished_ts - started_ts) * 1000
 
-            # Persist tick
-            try:
-                persistence.insert_tick(
-                    db_path,
-                    task_id,
-                    started_ts,
-                    finished_ts,
-                    success,
-                    idempotency_key,
-                    result_meta,
-                )
-            except Exception as e:
-                # If insert fails due to duplicate key, that's OK
-                if "unique" not in str(e).lower():
-                    print(f"[Scheduler] Error inserting tick for {task_id}: {e}")
-
-            # Persist nudge if emitted
-            if nudge:
-                with suppress(Exception):
-                    persistence.insert_nudge(
-                        db_path,
-                        nudge.kind,
-                        nudge.message,
-                        nudge.actions,
-                        nudge.reason,
-                        nudge.created_ts,
+                # Persist tick
+                try:
+                    await store.insert_tick(
+                        task_id,
+                        started_ts,
+                        finished_ts,
+                        success,
+                        idempotency_key,
+                        result_meta,
                     )
+                except Exception as e:
+                    # If insert fails due to duplicate key, that's OK
+                    if "unique" not in str(e).lower():
+                        print(f"[Scheduler] Error inserting tick for {task_id}: {e}")
 
-            # Compute next run time
-            next_ts, new_window_state = cadence_module.compute_next_run(
-                last_run_ts=scheduled_ts,
-                scheduled_ts=scheduled_ts,
-                cadence_str=cadence_str,
-                now_ts=now_ts,
-                window_state=due_task["window_state"],
-            )
+                # Persist nudge if emitted
+                if nudge:
+                    with suppress(Exception):
+                        await store.insert_nudge(
+                            nudge.kind,
+                            nudge.message,
+                            nudge.actions,
+                            nudge.reason,
+                            nudge.created_ts,
+                        )
 
-            # Update scheduled task
-            persistence.update_next_run(db_path, task_id, next_ts, scheduled_ts, new_window_state)
+                # Compute next run time
+                next_ts, new_window_state = cadence_module.compute_next_run(
+                    last_run_ts=scheduled_ts,
+                    scheduled_ts=scheduled_ts,
+                    cadence_str=cadence_str,
+                    now_ts=now_ts,
+                    window_state=due_task["window_state"],
+                )
 
-            # Log tick execution
-            print(f"[Scheduler] tick={task_id} ok={success} dur_ms={dur_ms} next={next_ts}")
+                # Update scheduled task
+                await store.update_next_run(task_id, next_ts, scheduled_ts, new_window_state)
 
-        except asyncio.CancelledError:
-            print("[Scheduler] Shutdown requested")
-            break
-        except Exception as e:
-            print(f"[Scheduler] Unexpected error in loop: {e}")
-            await asyncio.sleep(5)
+                # Log tick execution
+                print(f"[Scheduler] tick={task_id} ok={success} dur_ms={dur_ms} next={next_ts}")
 
-    print("[Scheduler] Autonomy loop stopped")
+            except asyncio.CancelledError:
+                print("[Scheduler] Shutdown requested")
+                break
+            except Exception as e:
+                print(f"[Scheduler] Unexpected error in loop: {e}")
+                await asyncio.sleep(5)
+
+        print("[Scheduler] Autonomy loop stopped")
+    finally:
+        if owns_store:
+            await store.close()

@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .health import check_drift, get_system_metrics
+from .health import check_drift
 from .models import Nudge
 
 
@@ -27,13 +27,17 @@ async def drive_self_check(ctx: Any) -> Nudge | None:
     - Stale daily reflections
 
     Args:
-        ctx: Context object (typically KernelDaemon instance)
+        ctx: Context object (typically KernelDaemon instance). Must have
+            a scheduler_store (bartholomew.kernel.scheduler.store.
+            SchedulerStore) -- no synchronous fallback is used here on
+            purpose: a missing scheduler_store should fail loudly rather
+            than silently reverting to a blocking sqlite3 call on the
+            event loop.
 
     Returns:
         Nudge if system drift detected, None otherwise
     """
-    db_path = ctx.mem.db_path
-    metrics = get_system_metrics(db_path)
+    metrics = await ctx.scheduler_store.get_system_metrics()
     drift = check_drift(metrics)
 
     if drift:
@@ -90,14 +94,15 @@ async def drive_reflection_micro(ctx: Any) -> Nudge | None:
     Does not emit nudges by default.
 
     Args:
-        ctx: Context object (typically KernelDaemon instance)
+        ctx: Context object (typically KernelDaemon instance). Must have
+            a scheduler_store -- see drive_self_check()'s docstring for
+            why there's no synchronous fallback.
 
     Returns:
         None (reflections are inserted directly, no nudge needed)
     """
     # Get system metrics for reflection content
-    db_path = ctx.mem.db_path
-    metrics = get_system_metrics(db_path)
+    metrics = await ctx.scheduler_store.get_system_metrics()
 
     # Build micro-reflection content
     content = f"""# Micro-Reflection
