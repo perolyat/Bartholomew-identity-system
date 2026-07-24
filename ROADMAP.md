@@ -229,18 +229,30 @@ One — Uniform Cognition, the Architectural Invariant), and the Runtime Contrac
 - Chat wired into the Experience Kernel.
 - `COGNITIVE_RUNTIME.md` authored as the canonical "how does Bartholomew think" document. —
   ✅ done 2026-07-21. Its own "Exit Gate status" table is the honest, continuously-updated
-  scorecard. As of item 11.19 (2026-07-24), chat, skill execution, *and* scheduler drives all
-  construct an Observation/CandidateAction that genuinely drives the Governance decision (not
-  just constructed and discarded — proven by `tests/test_skill_runtime_contract_seam.py` for the
-  skill surface) and consult the Identity Context → Policy Decision path (each surface exempting
-  its own known-safe kinds). Voice/sight adapters remain parking-brake-only stubs with no
-  Observation/CandidateAction at all (Stage 6) — the one concrete remaining gap across Exit Gate
-  questions #1-3. See `COGNITIVE_RUNTIME.md`'s Exit Gate table for the live, per-question status
-  rather than restating it here.
+  scorecard. As of item 11.21 (2026-07-24), **all five live surfaces** — chat, skill execution,
+  scheduler drives, *and* voice/sight — construct an Observation/CandidateAction that genuinely
+  drives the Governance decision (not just constructed and discarded — proven per-surface, and for
+  voice/sight by `tests/test_voice_sight_runtime_contract_seam.py` including deliberate
+  gate-neutralisation non-vacuity controls) and pass through the shared Governance path. Voice/
+  sight additionally require a fail-closed device consent gate; their capture/stream capability
+  stays an inert Stage 6 placeholder reachable only through the governed seam. See
+  `COGNITIVE_RUNTIME.md`'s Exit Gate table for the live, per-question status rather than restating
+  it here.
+
+**Status (2026-07-24): governance convergence complete.** Exit Gate questions **#1–#6 are "yes"**
+for every surface that exists today; item 11.21 closed the last current-production governance gap
+(voice/sight). Question **#7 (personality uniformity) remains partial**, but its residual is *not*
+a governance gap — it is (a) a deliberate `PersonaPack`-vs-`Identity.yaml` traits split and (b)
+voice/sight producing no personality output yet, which is Stage 6. This stage's architectural/
+governance goal — one uniform cognition path, no "two brains", every surface governed alike — is
+therefore met; the sole non-green exit-gate question is out of scope for current production and
+tracked to Stage 6. Real voice/sight functionality (capture, streaming, transcription, sessions,
+persona output) remains Stage 6.
 
 **Note:** Stage 5 (below) is recommended to wait until this stage's exit gate is fully green —
 that sequencing is a recommendation, not yet a binding decision; it requires explicit
-user sign-off before treated as blocking.
+user sign-off before treated as blocking. (With #1–#6 now green and #7's remainder assigned to
+Stage 6, the governance prerequisite that motivated the recommendation is satisfied.)
 
 ---
 
@@ -267,6 +279,19 @@ pytest -q tests/test_scheduler_checkins.py
 **Exit criteria:**
 - Token auth; cross-device client shows same timeline/state.
 - Voice endpoints degrade gracefully when binaries missing.
+
+**Carried-forward requirements from item 11.21 (voice/sight governance seam):**
+- Real capture/streaming/transcription/computer-vision/device-driver work slots *into* the
+  existing governed seams (`run_voice_/run_sight_through_runtime_contract()`), which already
+  construct the Observation/CandidateAction and run brake + Identity Policy + fail-closed device
+  consent. Do not add a second, ungoverned capture path — the inert `_perform_stream`/
+  `_perform_capture` placeholders are the slot.
+- Governance approval at the seam authorizes a **single start attempt** only. Continuous sessions,
+  consent renewal, and revocation are new mechanisms to design here — not an extension of the
+  single-start grant.
+- **Safety invariant:** safely stopping or tearing down an active capture session must NEVER
+  depend on obtaining permission to *continue* capturing. Teardown is not a governed "start" and
+  must not be gated as one (a stuck consent/policy path must not be able to trap the device "on").
 
 **Verify:**
 ```bash

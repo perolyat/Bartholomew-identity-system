@@ -2,12 +2,13 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-07-24 (R1's red-team test suite added and independently re-verified —
-> see below and MASTER_PLAN.md item 11.20; two tech debt items added earlier the same day from
-> the scheduler/WAL concurrency fix found while merging item 11.17 — MASTER_PLAN.md item 11.18
-> and DECISIONS.md's "Scheduler persistence moved off the event loop..." entry have the full
-> writeup. R3/R5/R6 last independently re-verified 2026-07-21, not re-checked this pass; R2/R4
-> and the pre-existing tech debt items likewise left as last recorded)
+> **Last updated:** 2026-07-24 (R2 updated for the voice/sight governance seam — MASTER_PLAN.md
+> item 11.21; R1's red-team test suite added and independently re-verified — MASTER_PLAN.md item
+> 11.20; two tech debt items added earlier the same day from the scheduler/WAL concurrency fix
+> found while merging item 11.17 — MASTER_PLAN.md item 11.18 and DECISIONS.md's "Scheduler
+> persistence moved off the event loop..." entry have the full writeup. R3/R5/R6 last
+> independently re-verified 2026-07-21, not re-checked this pass; R4 and the pre-existing tech
+> debt items likewise left as last recorded)
 
 ## Risk register (top)
 
@@ -53,11 +54,20 @@
 - **Mitigation:** Ensure every “Act” path checks brake; keep Stage 1 strictly read/ack/dismiss; add integration tests.
 - **Status:** Controlled, and the "add integration tests" mitigation is well satisfied: `pytest
   -q tests/integration/test_parking_brake_integration.py tests/test_parking_brake_scoped_blocks.py
-  tests/unit/safety/test_parking_brake.py` (17 tests, 2026-07-21) covers all five live scopes
-  (`skills`, `scheduler`, `sight`, `voice`, `global`) both engaged and disengaged. See
-  `COGNITIVE_RUNTIME.md`'s "Governance checkpoints" section for the current call-site list.
-  Expansion risk (new "Act" paths forgetting the brake check) remains the open-ended part of
-  this risk — not something a point-in-time audit closes permanently.
+  tests/unit/safety/test_parking_brake.py` (2026-07-21) covers all five live scopes
+  (`skills`, `scheduler`, `sight`, `voice`, `global`) both engaged and disengaged. As of item
+  11.21 (2026-07-24) the `sight`/`voice` paths are no longer brake-*only*: their governed seams
+  (`runtime_contract.run_sight_/run_voice_through_runtime_contract()`, which the `start_capture()`/
+  `start_stream()` adapters now delegate to exclusively) additionally consult the Identity Policy
+  Decision and an *always-required, fail-closed* device consent gate before any (currently inert)
+  capability call — so a future real capture/stream is gated by consent + policy + brake, not
+  brake alone. Covered by `tests/test_voice_sight_runtime_contract_seam.py` (45 tests, including
+  deliberate per-gate neutralisation non-vacuity controls). See `COGNITIVE_RUNTIME.md`'s
+  "Governance checkpoints" and "Device surfaces" sections for the current call-site list.
+  Expansion risk (new "Act" paths forgetting the governed seam) remains the open-ended part of
+  this risk — not something a point-in-time audit closes permanently; the item 11.21 AST
+  structural test (placeholder capability never callable outside the seam) is one guard against
+  that specific regression for voice/sight.
 
 ### R3 — SQLite / FTS feature variability causes false confidence
 - **Category:** Reliability

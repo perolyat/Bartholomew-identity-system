@@ -1351,6 +1351,79 @@ No exceptions. Not even chat.
       tests/test_runtime_contract_chat_seam.py tests/test_api_chat_runtime_contract.py` — 112
       passed, no regressions; full `pytest -q` — clean (zero failures/errors).
 
+11.20. **RISKS.md R1 red-team test suite (consent bypass / privacy leakage)** — ✅ added
+    2026-07-24. Not a Runtime Convergence item per se, but the risk mitigation gated on the same
+    milestone. Full write-up in the standalone "RISKS.md R1 (consent bypass / privacy leakage):
+    red-team test suite" section above and in RISKS.md's R1 entry. Summary: `tests/
+    test_consent_bypass_redteam.py` (10 tests) proves no production retrieval surface ever
+    surfaces a `never_store`/unconsented `ask_before_store` memory, plus two permanent structural
+    guards (no `apply_consent_gate=False` in production; no `.retrieve()` facade exposes a
+    gate-bypass parameter). Non-vacuity confirmed by deliberately breaking `ConsentGate` and
+    watching exactly the right tests fail.
+
+11.21. **Voice/sight convergence — Observation/CandidateAction + governed seam for the two
+    remaining device surfaces; closes Exit Gate questions #1-3 for them (the last
+    current-production governance gap)** — ✅ implemented 2026-07-24
+    - **The gap:** voice (`identity_interpreter/adapters/voice_io/stream_bridge.py:start_stream()`)
+      and sight (`identity_interpreter/adapters/sight/pipeline.py:start_capture()`) were
+      parking-brake-only stubs with no production caller (only
+      `tests/integration/test_parking_brake_integration.py`), no `Observation`/`CandidateAction`,
+      no Identity Policy consultation, and no consent gate or Reflection at all — the last
+      surfaces `COGNITIVE_RUNTIME.md`'s Exit Gate table named "Partial" for questions #1-3.
+    - **Strictly architectural scope:** this adds *only* the governed seam and its invariants. No
+      real microphone/camera/streaming/transcription/computer-vision/device-lifecycle work, and no
+      Stage 6 capture architecture, is introduced — the capability bodies
+      (`_perform_stream`/`_perform_capture`) stay inert placeholders.
+    - **The seam:** `runtime_contract.run_voice_through_runtime_contract()` /
+      `run_sight_through_runtime_contract()` build `Observation(source="voice"/"sight")` and
+      `CandidateAction(kind="voice_stream_start"/"sight_capture_start")` — distinct, stable kinds
+      for a *single start attempt* (the `_start` suffix is deliberate: approval authorizes one
+      start, never continuing access), not generic skill kinds. Governance runs three gates,
+      strictly before any capability call: (1) ParkingBrake (scope, preserving the pre-existing
+      `except ImportError: pass` behaviour); (2) additive Identity Policy Decision (skipped when no
+      `IdentityContext`, matching chat/scheduler/skill; under real `Identity.yaml` these kinds are
+      denied by default); (3) an *always-required, fail-closed* device consent gate reusing the one
+      interactive consent channel (`privacy_guard.get_consent_handler()`) that skill "ask"
+      permissions use — absent handler, declined, or unresolved (falsy) all deny. Exactly one
+      `ActionReflection` into the shared sink for every outcome (started / policy denial / consent
+      denial / brake denial / execution error).
+    - **Sole production entry, no bypass:** `start_stream()`/`start_capture()` remain as public
+      compatibility wrappers (unchanged signatures/return shapes) but delegate *exclusively* to the
+      seam; the inert capability is passed in as `stream_fn`/`capture_fn` and is reachable only
+      through the seam. An AST structural test forbids any direct call to
+      `_perform_stream`/`_perform_capture` anywhere in production and asserts the wrappers delegate
+      to the named seam.
+    - **Proven, not assumed — new tests (`tests/test_voice_sight_runtime_contract_seam.py`, 45
+      tests, both surfaces parametrized):** the CandidateAction is genuinely consumed (constructor
+      + `evaluate_tool_policy` spies agree on the exact kind); denied starts (policy / consent-absent
+      / consent-declined / consent-unresolved / brake) never invoke the capability (call-count 0);
+      approved starts execute exactly once; governance completes strictly before execution
+      (ordering assertion `["policy","consent","capability"]`); exactly one Reflection per attempt
+      for every outcome; compat wrappers delegate only to the seam. **Required non-vacuity
+      controls:** three mutation tests neutralise each gate (force-allow policy, force-allow consent,
+      force `is_blocked` False) *in the test only* and assert the placeholder then executes —
+      plus a manual pre-commit check that deliberately broke each of the three gates in the
+      production seam and confirmed exactly that gate's denial tests (and only those) failed.
+    - **Two existing tests updated (not weakened):** `test_sight_allowed_when_disengaged` /
+      `test_voice_allowed_when_disengaged` now register an approving consent handler, because
+      disengaging the brake alone is no longer sufficient to start — device consent is
+      additionally required. The three brake-*engaged* tests pass unmodified (the brake is checked
+      first and still short-circuits).
+    - **A recorded Stage 6 safety requirement (not implemented now):** safely stopping/tearing down
+      a future active capture session must never depend on obtaining permission to *continue*
+      capturing — teardown is not a governed "start". See COGNITIVE_RUNTIME.md's "Device surfaces"
+      section.
+    - **Acceptance:** every executable voice/sight start creates the right Observation/
+      CandidateAction; consent + Identity Policy + parking brake all decide before any device or
+      downstream action; denied requests produce no side effect; approved requests execute exactly
+      once; reflection/audit occur exactly once; production callers cannot bypass the seam; the
+      inert adapters stay inert behind it.
+    - **Verify:** `pytest -q tests/test_voice_sight_runtime_contract_seam.py` — 45 passed;
+      `pytest -q tests/test_voice_sight_runtime_contract_seam.py
+      tests/integration/test_parking_brake_integration.py tests/test_parking_brake_scoped_blocks.py
+      tests/unit/safety/test_parking_brake.py` — all passed; full `pytest -q` — 879 passed, 2
+      skipped, 0 failures.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?
@@ -1359,6 +1432,15 @@ No exceptions. Not even chat.
 5. Does every Reflection update Memory?
 6. Does every conversation see the Experience Kernel?
 7. Does every interface expose the same personality?
+
+**Status as of item 11.21 (2026-07-24):** questions **1–6 are "yes"** for every surface that
+exists today — the last current-production *governance* gap (voice/sight) is closed. Question
+**7 remains partial**, and its residual is *not* a governance gap: `PersonaPack` carries no
+`traits` (a deliberate stable-identity/persona-state split, not a duplication), and voice/sight
+produce no personality output yet — that, like all real capture/streaming, is Stage 6. See
+`COGNITIVE_RUNTIME.md`'s Exit Gate table for the per-question evidence. So the architectural/
+governance convergence this milestone exists to enforce is complete; the one open question is a
+personality-uniformity item whose remainder is out of scope for current production.
 
 **Note:** this section records the architect's recommendation and gives it a measurable exit
 gate; it does not itself pause P3 — that requires separate, explicit user sign-off.
