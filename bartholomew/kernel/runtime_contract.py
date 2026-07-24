@@ -38,6 +38,8 @@ from .reflection import ActionReflection, record_action_reflection
 
 if TYPE_CHECKING:
     from .daemon import KernelDaemon
+    from .skill_base import SkillResult
+    from .skill_registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -427,3 +429,37 @@ async def run_drive_through_runtime_contract(
         logger.exception("Drive %s crashed", task_id)
         await _record_drive_reflection(ctx, candidate_action, outcome="error")
         return None, 0
+
+
+async def run_skill_through_runtime_contract(
+    registry: SkillRegistry,
+    skill_id: str,
+    action: str,
+    params: dict[str, Any] | None = None,
+) -> SkillResult:
+    """
+    Trace a skill execution through the Runtime Contract seam, by name --
+    the production entry point every skill invocation is meant to go
+    through (MASTER_PLAN.md item 11.19, closing Exit Gate questions #1-2
+    for the skill surface; see COGNITIVE_RUNTIME.md's Exit Gate table).
+
+    Unlike chat (item 11.3, `run_chat_through_runtime_contract()`) and
+    scheduler drives (item 11.17, `run_drive_through_runtime_contract()`),
+    skill execution already had a real, single choke-point before this --
+    `SkillRegistry.execute_action()` -- so there is nothing to reimplement
+    here: Observation/Interpretation/CandidateAction construction, the
+    Governance stage (ParkingBrake + Identity Context -> Policy Decision,
+    evaluated against the constructed CandidateAction), and the unified
+    Reflection write into the shared Memory sink all now live *inside*
+    `execute_action()` itself (see that method's docstring for the detail).
+
+    This function exists so every surface's production entry point shares
+    the same `run_*_through_runtime_contract()` naming convention --
+    mirroring `scheduler/loop.py`'s `_run_drive()`, which is exactly this
+    shape: a thin, named wrapper around the surface's real seam function.
+    `Planner.handle_skill_request()` is this function's sole production
+    caller; `execute_action()` remains directly callable (and directly
+    tested by ~5 existing test files) as the primitive underneath, not a
+    parallel/competing path.
+    """
+    return await registry.execute_action(skill_id, action, params)
