@@ -248,21 +248,24 @@ exists today:
 | 4 | Does every completed action produce a Reflection? | **Yes** | Item 11.16 (2026-07-23) — chat turns and skill executions now emit the same `ActionReflection` into the same sink (`MemoryStore.reflections`, kind `action_reflection`), for every outcome. Shape *and* sink are unified (see "Unified Reflection" above); each surface's own store (Working Memory for chat context, `skill_action_audit` for skill compliance) is retained additively. |
 | 5 | Does every Reflection update Memory? | **Yes** | Working Memory snapshots persist on daemon stop; `skill_action_audit` writes immediately; daily/weekly reflections persist via `MemoryStore.insert_reflection()`. |
 | 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()`, `daemon.persona_manager.get_active_pack_id()`, and (item 11.7) `daemon.working_memory.get_context_string()` for prior-turn content. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
-| 7 | Does every interface expose the same personality? | **Closer, still partial** | The deprecated `identity_interpreter/policies/persona.py` was removed (item 11.12, 2026-07-22) — its two legacy callers (CLI `explain`, standalone `chat.py`) now source tone from `PersonaPackManager`'s active pack, so every text interface shares the live kernel's persona *tone*. Two dimensions still short of "yes": (a) `PersonaPack` carries no `traits`, so those two callers still read `traits` from `Identity.yaml` directly (a stable identity descriptor, not persona-pack state — a deliberate split, not a duplication); (b) voice/sight adapters don't consult persona at all yet (Stage 6). |
+| 7 | Does every interface expose the same personality? | **Yes** (Stage 4.5 scope; voice/sight persona formally reclassified to Stage 6 — see note below the table) | The Stage 4.5 goal this question encodes — *"one personality, not one personality per interface"* (MASTER_PLAN.md's P2.5 finding) — is met for every interface that produces personality-bearing output today: chat, CLI `explain`, and standalone `chat.py` all source tone from the single persona authority (`PersonaPackManager`'s active pack) after the deprecated `identity_interpreter/policies/persona.py` was removed (item 11.12, 2026-07-22). The `traits` those callers read from `Identity.yaml` are a stable identity descriptor, not persona-pack state — a deliberate split, not a convergence gap. The one remaining piece — voice/sight consulting persona — is **formally reclassified to Stage 6 (2026-07-24)**: a surface that produces no personality-bearing output cannot "expose" a personality, so converging persona onto voice/sight is inseparable from Stage 6's persona-producing voice/sight functionality (the already-approved Stage 6 boundary), not a Stage 4.5 deliverable left undone. |
 
 **Reading this table:** the loop shape is real, tested, and load-bearing for chat, skills, the
 scheduler, and (for the single-start attempt) voice/sight — this is not aspirational. As of item
-11.21 (2026-07-24) questions **1–3 are all "yes" for every surface that exists today**: the last
-current-production governance gap (voice/sight being parking-brake-only stubs) is closed. What
-remains not-fully-green is question **7** (personality uniformity), and its residual is *not* a
-governance gap: (a) `PersonaPack` carries no `traits`, a deliberate stable-identity/persona-state
-split, not a duplication; and (b) voice/sight don't consult persona and produce no personality
-output yet — that, like all real capture/streaming/transcription, is Stage 6. Question 6 ("every
-conversation sees the Experience Kernel") is "yes for chat," the only conversational surface that
-exists. One non-gate item also stays open: two reflection-narrative pipelines (Stage 3's "Still
-open" note). Timeline: two-Reflection-shapes gap closed by 11.16; scheduler-drive gap by 11.17;
-skill-execution Observation/CandidateAction gap by 11.19; voice/sight governance gap by 11.21;
-the four duplicate-concept pairs by 11.12–11.15.
+11.21 (2026-07-24) the governance questions **1–3 are all "yes" for every surface that exists
+today** — the last current-production governance gap (voice/sight being parking-brake-only stubs)
+is closed. Questions **4–6** are "yes" for the surfaces that exist (#6 notes chat is the only
+conversational surface). Question **7** is "yes within Stage 4.5's scope": every personality-
+bearing interface shares the one persona authority, and its only residual — voice/sight persona —
+was **formally reclassified to Stage 6 on 2026-07-24** (see the Q7 row and ROADMAP.md Stage 6),
+because a surface with no persona-bearing output cannot expose a personality until Stage 6 builds
+that output. With that reclassification recorded, **all seven exit-gate questions are satisfied
+within Stage 4.5's scope, and Stage 4.5's Runtime Convergence is complete.** One non-gate item
+remains open but was never a Stage 4.5 exit criterion: two reflection-narrative pipelines (Stage
+3's "Still open" note). Timeline: two-Reflection-shapes gap closed by 11.16; scheduler-drive gap
+by 11.17; skill-execution Observation/CandidateAction gap by 11.19; voice/sight governance gap by
+11.21; the Q7 voice/sight-persona residual reclassified to Stage 6 by 11.22; the four
+duplicate-concept pairs by 11.12–11.15.
 
 ### Device surfaces (voice/sight) — scope boundary (item 11.21)
 

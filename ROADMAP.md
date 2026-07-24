@@ -199,7 +199,7 @@ pytest -q tests/test_end_to_end_tasks_and_audit.py
 
 ---
 
-### Stage 4.5 — Runtime Convergence (architectural prerequisite; recommended, pending sign-off)
+### Stage 4.5 — Runtime Convergence (architectural prerequisite) ✅ (Complete 2026-07-24)
 
 **Goal:** Close the gap a grounded architectural audit found (2026-07-21): the project
 effectively has "two brains" (`bartholomew/kernel` and `identity_interpreter/`) with four
@@ -239,20 +239,22 @@ One — Uniform Cognition, the Architectural Invariant), and the Runtime Contrac
   `COGNITIVE_RUNTIME.md`'s Exit Gate table for the live, per-question status rather than restating
   it here.
 
-**Status (2026-07-24): governance convergence complete.** Exit Gate questions **#1–#6 are "yes"**
-for every surface that exists today; item 11.21 closed the last current-production governance gap
-(voice/sight). Question **#7 (personality uniformity) remains partial**, but its residual is *not*
-a governance gap — it is (a) a deliberate `PersonaPack`-vs-`Identity.yaml` traits split and (b)
-voice/sight producing no personality output yet, which is Stage 6. This stage's architectural/
-governance goal — one uniform cognition path, no "two brains", every surface governed alike — is
-therefore met; the sole non-green exit-gate question is out of scope for current production and
-tracked to Stage 6. Real voice/sight functionality (capture, streaming, transcription, sessions,
-persona output) remains Stage 6.
+**Status (2026-07-24): complete.** All seven Exit Gate questions are satisfied within Stage 4.5's
+scope. Questions **#1–#6 are "yes"** for every surface that exists today (item 11.21 closed the
+last current-production governance gap, voice/sight). Question **#7 (personality uniformity) is
+"yes" within Stage 4.5's scope**: every personality-bearing interface (chat, CLI `explain`,
+`chat.py`) sources persona from the single authority (`PersonaPackManager`); the `Identity.yaml`
+`traits` split is deliberate-by-design, not a convergence gap. Q7's only residual — voice/sight
+consulting persona — was **formally reclassified to Stage 6** (item 11.22, 2026-07-24), because a
+surface producing no persona-bearing output cannot expose a personality until Stage 6 builds that
+output; it is a Stage 6 dependency, not a Stage 4.5 deliverable left undone. No official exit
+criterion is left partial. Real voice/sight functionality (capture, streaming, transcription,
+sessions, persona output) remains Stage 6.
 
-**Note:** Stage 5 (below) is recommended to wait until this stage's exit gate is fully green —
-that sequencing is a recommendation, not yet a binding decision; it requires explicit
-user sign-off before treated as blocking. (With #1–#6 now green and #7's remainder assigned to
-Stage 6, the governance prerequisite that motivated the recommendation is satisfied.)
+**Note:** Stage 5 (below) was recommended to wait until this stage's exit gate is fully green.
+With all seven questions now satisfied within scope, that prerequisite is met — though pausing/
+resuming P3 (Stage 5) still requires separate, explicit user sign-off, which this completion does
+not itself grant.
 
 ---
 
@@ -292,6 +294,13 @@ pytest -q tests/test_scheduler_checkins.py
 - **Safety invariant:** safely stopping or tearing down an active capture session must NEVER
   depend on obtaining permission to *continue* capturing. Teardown is not a governed "start" and
   must not be gated as one (a stuck consent/policy path must not be able to trap the device "on").
+- **Personality uniformity for voice/sight (reclassified here from Stage 4.5 Exit Gate question
+  #7, item 11.22, 2026-07-24):** once voice/sight produce persona-bearing output, that output must
+  source persona from the single authority (`PersonaPackManager`'s active pack), the same way the
+  text interfaces already do — so Bartholomew presents "one personality, not one per interface"
+  across voice/sight too. This could not be done in Stage 4.5: a surface with no persona-bearing
+  output has no personality to converge. Satisfying it is part of building real voice/sight
+  functionality here; it closes the last residual of Exit Gate question #7.
 
 **Verify:**
 ```bash

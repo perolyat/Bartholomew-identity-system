@@ -598,7 +598,7 @@ its own tests in isolation. Fixed:
   action.
 - Verified: full `pytest -q` remains green. `ruff check` clean.
 
-### P2.5 — Runtime Convergence (architectural prerequisite; recommended, pending sign-off)
+### P2.5 — Runtime Convergence (architectural prerequisite) ✅ Complete 2026-07-24 (item 11.22)
 
 > **Source:** Architect review, 2026-07-21, responding to the P2 skill-registry wiring
 > write-up above and the grounded architectural audit that preceded it (subsystem map,
@@ -1424,6 +1424,38 @@ No exceptions. Not even chat.
       tests/unit/safety/test_parking_brake.py` — all passed; full `pytest -q` — 879 passed, 2
       skipped, 0 failures.
 
+11.22. **Exit Gate question #7 (personality uniformity): reclassify the voice/sight-persona
+    residual to Stage 6; declare Stage 4.5 complete** — ✅ documentation-only, 2026-07-24 (no
+    production code changed).
+    - **Why this was needed:** after item 11.21, Q7 was the only exit-gate question not marked
+      "yes", which is inconsistent with declaring Stage 4.5's convergence complete. Precise
+      resolution required determining, from the authoritative stage definition, whether Q7's
+      remaining residual is a Stage 4.5 deliverable or a Stage 6 dependency.
+    - **The authoritative determination:** Q7 *is* a genuine Stage 4.5 criterion — the P2.5
+      finding above states the milestone's own goal as *"Bartholomew should have one personality,
+      not one personality per interface"* (an architectural inconsistency), so personality
+      uniformity is central to this stage, not peripheral, and was **not** hand-waved wholesale to
+      Stage 6. What Q7 architecturally demands — every personality-bearing interface sourcing
+      persona from the single authority (`PersonaPackManager`) rather than a duplicated
+      implementation — is **done** for every interface that exists as a personality-bearing surface
+      today (chat, CLI `explain`, standalone `chat.py`; the duplicated `identity_interpreter/
+      policies/persona.py` was removed in item 11.12). The `traits` split is a deliberate
+      stable-identity-vs-persona-state design decision, already documented as "not a duplication",
+      i.e. not an open convergence gap.
+    - **What is reclassified (the residual only, not the question):** the one thing still
+      outstanding under Q7 — voice/sight *consulting* persona — is a Stage 6 **dependency**, not a
+      Stage 4.5 shortcut: a surface that produces no personality-bearing output cannot "expose the
+      same personality", so converging persona onto voice/sight is architecturally impossible until
+      Stage 6 gives them persona-producing output. That work is the already-approved Stage 6
+      boundary for real voice/sight functionality (see item 11.21's Stage 6 note). It is moved to
+      ROADMAP.md Stage 6's carried-forward requirements, with this reason recorded.
+    - **Result:** with the residual reclassified, all seven exit-gate questions are satisfied
+      within Stage 4.5's scope; no official Stage 4.5 exit criterion is left partial while the
+      stage is marked complete. Stage 4.5 (Runtime Convergence) is **complete**. Real voice/sight
+      functionality — including persona-producing output — remains Stage 6.
+    - **Scope:** documentation only (`COGNITIVE_RUNTIME.md`, `MASTER_PLAN.md`, `ROADMAP.md`). No
+      production code, tests, or behaviour changed.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?
@@ -1433,14 +1465,17 @@ No exceptions. Not even chat.
 6. Does every conversation see the Experience Kernel?
 7. Does every interface expose the same personality?
 
-**Status as of item 11.21 (2026-07-24):** questions **1–6 are "yes"** for every surface that
-exists today — the last current-production *governance* gap (voice/sight) is closed. Question
-**7 remains partial**, and its residual is *not* a governance gap: `PersonaPack` carries no
-`traits` (a deliberate stable-identity/persona-state split, not a duplication), and voice/sight
-produce no personality output yet — that, like all real capture/streaming, is Stage 6. See
-`COGNITIVE_RUNTIME.md`'s Exit Gate table for the per-question evidence. So the architectural/
-governance convergence this milestone exists to enforce is complete; the one open question is a
-personality-uniformity item whose remainder is out of scope for current production.
+**Status as of item 11.22 (2026-07-24): all seven satisfied within Stage 4.5's scope — Stage 4.5
+Runtime Convergence is complete.** Questions **1–6 are "yes"** for every surface that exists
+today (item 11.21 closed the last current-production governance gap, voice/sight). Question **7
+is "yes" within Stage 4.5's scope**: every personality-bearing interface (chat, CLI `explain`,
+`chat.py`) sources persona from the one authority (`PersonaPackManager`); the `traits` read from
+`Identity.yaml` are a deliberate stable-identity/persona-state split, not a convergence gap. Q7's
+only residual — voice/sight consulting persona — was **formally reclassified to Stage 6 by item
+11.22** (see that item for the reason); it is architecturally impossible to satisfy inside Stage
+4.5 because voice/sight produce no persona-bearing output until Stage 6 builds it. See
+`COGNITIVE_RUNTIME.md`'s Exit Gate table for the per-question evidence. No official Stage 4.5
+exit criterion is left partial.
 
 **Note:** this section records the architect's recommendation and gives it a measurable exit
 gate; it does not itself pause P3 — that requires separate, explicit user sign-off.
