@@ -229,13 +229,14 @@ One — Uniform Cognition, the Architectural Invariant), and the Runtime Contrac
 - Chat wired into the Experience Kernel.
 - `COGNITIVE_RUNTIME.md` authored as the canonical "how does Bartholomew think" document. —
   ✅ done 2026-07-21. Its own "Exit Gate status" table is the honest, continuously-updated
-  scorecard. As of item 11.17 (2026-07-23), chat, skill execution, *and* scheduler drives all
-  construct an Observation/CandidateAction and consult the Identity Context → Policy Decision
-  path (each surface exempting its own known-safe kinds); voice/sight adapters remain
-  parking-brake-only stubs with no Observation/CandidateAction at all (Stage 6), and skill
-  execution's choke-point still isn't modeled as an explicit `Observation`/`CandidateAction`
-  object — the concrete remaining gaps. See `COGNITIVE_RUNTIME.md`'s Exit Gate table for the
-  live, per-question status rather than restating it here.
+  scorecard. As of item 11.19 (2026-07-24), chat, skill execution, *and* scheduler drives all
+  construct an Observation/CandidateAction that genuinely drives the Governance decision (not
+  just constructed and discarded — proven by `tests/test_skill_runtime_contract_seam.py` for the
+  skill surface) and consult the Identity Context → Policy Decision path (each surface exempting
+  its own known-safe kinds). Voice/sight adapters remain parking-brake-only stubs with no
+  Observation/CandidateAction at all (Stage 6) — the one concrete remaining gap across Exit Gate
+  questions #1-3. See `COGNITIVE_RUNTIME.md`'s Exit Gate table for the live, per-question status
+  rather than restating it here.
 
 **Note:** Stage 5 (below) is recommended to wait until this stage's exit gate is fully green —
 that sequencing is a recommendation, not yet a binding decision; it requires explicit

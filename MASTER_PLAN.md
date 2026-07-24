@@ -1221,6 +1221,70 @@ No exceptions. Not even chat.
       the daemon's split `aiosqlite`/sync-`sqlite3` database ownership should eventually
       consolidate.
 
+11.19. **Skill-execution convergence — Observation, Executive/CandidateAction for the skill
+    surface; closes Exit Gate questions #1-2 for that surface, strengthens #3** — ✅ implemented
+    2026-07-24
+    - **The gap:** unlike chat (11.3/11.6) and scheduler drives (11.17), `SkillRegistry.
+      execute_action()` was already a real, single choke-point (parking brake, Identity Policy
+      Decision, unified Reflection into the shared sink) — so, unlike those two surfaces,
+      nothing was actually missing from Governance/Reflection behavior. The gap
+      `COGNITIVE_RUNTIME.md`'s Exit Gate table named was narrower and purely representational:
+      none of that behavior was expressed as an `Observation`/`CandidateAction`, so the table
+      couldn't honestly answer "yes" to questions #1-2 for this surface even though the
+      underlying mechanics already matched chat/scheduler's shape.
+    - **The requirement this had to satisfy, not just the shape:** merely constructing an
+      `Observation`/`CandidateAction` object and discarding it would not have closed anything —
+      the objects had to be genuinely consumed by the Governance decision before any skill side
+      effect, not decorative. So `execute_action()` now builds `Observation(source="skill",
+      raw_content=f"{skill_id}.{action}")` and `CandidateAction(kind=skill_id, ...)` at entry (
+      `kind=skill_id`, not `"<skill_id>.<action>"`, deliberately matching the exact grain
+      `evaluate_tool_policy()`/`Identity.yaml`'s `tool_use.allowlist` already operate on — the
+      same grain `tests/test_runtime_convergence_policy.py`'s `ALLOW_CONTEXT` already allowlists
+      by skill_id, not skill_id+action), and the Identity Policy check now evaluates
+      `candidate_action.kind` itself rather than a separately-derived local. `_finish()`/
+      `_record_reflection()` source the Reflection's `surface` from `observation.source` rather
+      than the previous hardcoded literal.
+    - **New named production seam, mirroring the established pattern exactly:**
+      `runtime_contract.run_skill_through_runtime_contract()` — unlike
+      `run_chat_through_runtime_contract()`/`run_drive_through_runtime_contract()`, which had to
+      build Governance from scratch for their surfaces, this one is a thin delegator to
+      `execute_action()` (which already owns the real logic), the same shape
+      `scheduler/loop.py`'s `_run_drive()` already is relative to
+      `run_drive_through_runtime_contract()`. `Planner.handle_skill_request()` — the sole
+      production caller of `execute_action()` — now calls this instead of `execute_action()`
+      directly. `execute_action()` remains directly callable as the execution primitive
+      underneath (still exercised directly by ~5 pre-existing test files); this is not a second,
+      parallel Governance path, and behavioral-equivalence between the two is directly tested.
+    - **Proven, not assumed — new tests
+      (`tests/test_skill_runtime_contract_seam.py`, 15 tests):**
+      - The policy authority receives the exact CandidateAction constructed inside
+        `execute_action()`: a spy on both the `CandidateAction` constructor and
+        `evaluate_tool_policy()`'s incoming `tool_name` asserts they're the same value.
+      - Denied actions never invoke the underlying skill (a `SpySkill` whose `execute()` logs an
+        unmistakable side effect never logs it under a denying `IdentityContext`), including an
+        "unrelated tool allowlisted" context that rules out a hardcoded/drifted stand-in kind.
+      - Execution occurs only after the Governance decision: an ordering assertion proves the
+        policy check completes strictly before `SkillBase.execute()` runs.
+      - A structural (AST-based, not textual — avoids false positives from prose that merely
+        *mentions* `execute_action()`) repo scan of `bartholomew/`, `bartholomew_api_bridge_v0_1/`,
+        `identity_interpreter/` proves no production call site outside `runtime_contract.py`
+        invokes `.execute_action(` directly, plus a behavioral patch-and-assert test that
+        `Planner.handle_skill_request()` actually calls the named seam function.
+      - Exactly one `ActionReflection` per attempt — success, parking-brake denial, policy
+        denial, execution exception — verified by direct row counts against the shared
+        `reflections` sink and the `skill_action_audit` table (no duplicate writes).
+    - **Acceptance:** `SkillRegistry.execute_action()` builds and genuinely consumes an
+      `Observation`/`CandidateAction` for every request; `Planner.handle_skill_request()` is the
+      one production route into skill execution and it goes through
+      `run_skill_through_runtime_contract()`; existing skill behavior (permissions, consent,
+      parking brake, audit trail) is unchanged.
+    - **Verify:** `pytest -q tests/test_skill_runtime_contract_seam.py` — 15 passed; `pytest
+      tests/test_skill_runtime_contract_seam.py tests/test_skill_registry.py
+      tests/test_reflection_unification.py tests/test_runtime_convergence_policy.py
+      tests/test_end_to_end_tasks_and_audit.py tests/test_scheduler_drive_convergence.py
+      tests/test_runtime_contract_chat_seam.py tests/test_api_chat_runtime_contract.py` — 112
+      passed, no regressions; full `pytest -q` — clean (zero failures/errors).
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?

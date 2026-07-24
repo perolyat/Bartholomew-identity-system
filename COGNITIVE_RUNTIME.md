@@ -9,7 +9,7 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-07-21
+> **Last updated:** 2026-07-24
 
 ## The governing principles
 
@@ -46,12 +46,14 @@ Observation -> Interpretation -> Executive -> Governance -> Capability -> Execut
 
 **No exceptions is the goal, not yet the reality.** Today three surfaces run through an
 explicit, code-level version of this shape — chat (`run_chat_through_runtime_contract()`),
-skill execution (`SkillRegistry.execute_action()`, which is the single choke-point every skill
-call flows through, whatever triggered it), and, as of item 11.17 (2026-07-23), scheduler
-drives (`run_drive_through_runtime_contract()`, which `scheduler/loop.py`'s `_run_drive()`
-delegates to). Voice, sight, and future sensors are still named in the Runtime Contract's
-design but do not yet construct an `Observation`/`CandidateAction` — see "What's not converged
-yet" below.
+scheduler drives (item 11.17, `run_drive_through_runtime_contract()`, which
+`scheduler/loop.py`'s `_run_drive()` delegates to), and, as of item 11.19 (2026-07-24), skill
+execution: `SkillRegistry.execute_action()` (the single choke-point every skill call flows
+through, whatever triggered it) now builds the same `Observation`/`CandidateAction` shape, and
+`runtime_contract.run_skill_through_runtime_contract()` is the named production seam
+`Planner.handle_skill_request()` calls, mirroring `_run_drive()`. Voice, sight, and future
+sensors are still named in the Runtime Contract's design but do not yet construct an
+`Observation`/`CandidateAction` — see "What's not converged yet" below.
 
 ## Ownership table
 
@@ -233,23 +235,23 @@ exists today:
 
 | # | Question | Status | Evidence |
 |---|---|---|---|
-| 1 | Can every input source create an Observation? | **Partial** | Chat does (`runtime_contract.Observation`, `source="chat"`). As of item 11.17 (2026-07-23), scheduler drives do too (`source="scheduler"`, via `run_drive_through_runtime_contract()`). Skill execution has an equivalent choke-point (`execute_action()`) but no explicit `Observation` object. Voice/sight adapters still have only their own `ParkingBrake` checks and never construct one — the remaining gap. |
-| 2 | Does every proposed action pass through the Executive? | **Partial** | Chat's `CandidateAction` (`kind="chat_response"`) is explicit. As of item 11.17, scheduler drives are too (`kind=task_id`). Skill execution is a single choke-point in practice but not modeled as a `CandidateAction`. Voice/sight bypass this entirely. |
-| 3 | Does every execution pass through the same Governance path? | **Partial** | All five live call sites share the same `ParkingBrake` class, but scopes differ by surface. The Identity Context → Policy Decision check (item 11.2) is wired for skill execution, chat's Governance stage (item 11.6, 2026-07-21), and, as of item 11.17 (2026-07-23), scheduler drives — each surface exempting its own known-safe kinds (`_CONVERSATIONAL_KINDS` for chat, `_SELF_MAINTENANCE_DRIVES` for scheduler drives) from the `tool_use.allowlist` check, so a *future* non-exempt action on any of the three surfaces is genuinely gated. Voice/sight remain `ParkingBrake`-only stubs (Stage 6) — the remaining gap. |
+| 1 | Can every input source create an Observation? | **Partial** | Chat does (`runtime_contract.Observation`, `source="chat"`). Scheduler drives do too (item 11.17, `source="scheduler"`). As of item 11.19 (2026-07-24), skill execution does as well: `SkillRegistry.execute_action()` builds `Observation(source="skill", raw_content=f"{skill_id}.{action}")` at entry, and `_finish()`/`_record_reflection()` source the Reflection's `surface` from `observation.source` rather than a hardcoded literal — proven by `tests/test_skill_runtime_contract_seam.py`. Voice/sight adapters still have only their own `ParkingBrake` checks and never construct one — the remaining gap. |
+| 2 | Does every proposed action pass through the Executive? | **Partial** | Chat's `CandidateAction` (`kind="chat_response"`) is explicit; scheduler drives' too (`kind=task_id`, item 11.17). As of item 11.19, skill execution's is too: `execute_action()` builds `CandidateAction(kind=skill_id, ...)` and the Identity Policy check evaluates `candidate_action.kind` itself (not a separately-derived variable) — `tests/test_skill_runtime_contract_seam.py::TestCandidateActionGenuinelyConsumedByGovernance` proves this by capturing both the constructed `kind` and the value `evaluate_tool_policy()` actually receives and asserting they're the same value, then proving denied actions never call the underlying skill (`SpySkill.execute()`) and an unrelated-but-present allowlist entry still denies (rules out a hardcoded/drifted stand-in). Voice/sight bypass this entirely — the remaining gap. |
+| 3 | Does every execution pass through the same Governance path? | **Partial** | All five live call sites share the same `ParkingBrake` class, but scopes differ by surface. The Identity Context → Policy Decision check is wired for skill execution (now evaluated against the CandidateAction itself, item 11.19), chat's Governance stage (item 11.6), and scheduler drives (item 11.17) — each surface exempting its own known-safe kinds (`_CONVERSATIONAL_KINDS` for chat, `_SELF_MAINTENANCE_DRIVES` for scheduler drives) from the `tool_use.allowlist` check, so a *future* non-exempt action on any of the three surfaces is genuinely gated. `tests/test_skill_runtime_contract_seam.py` additionally proves ordering — the policy check completes strictly before `SkillBase.execute()` ever runs — and that `run_skill_through_runtime_contract()` (the named production seam `Planner.handle_skill_request()` now calls, mirroring `_run_drive()`) is behaviorally identical to calling `execute_action()` directly, so it isn't a second, divergent Governance path. Voice/sight remain `ParkingBrake`-only stubs (Stage 6) — the remaining gap. |
 | 4 | Does every completed action produce a Reflection? | **Yes** | Item 11.16 (2026-07-23) — chat turns and skill executions now emit the same `ActionReflection` into the same sink (`MemoryStore.reflections`, kind `action_reflection`), for every outcome. Shape *and* sink are unified (see "Unified Reflection" above); each surface's own store (Working Memory for chat context, `skill_action_audit` for skill compliance) is retained additively. |
 | 5 | Does every Reflection update Memory? | **Yes** | Working Memory snapshots persist on daemon stop; `skill_action_audit` writes immediately; daily/weekly reflections persist via `MemoryStore.insert_reflection()`. |
 | 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()`, `daemon.persona_manager.get_active_pack_id()`, and (item 11.7) `daemon.working_memory.get_context_string()` for prior-turn content. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
 | 7 | Does every interface expose the same personality? | **Closer, still partial** | The deprecated `identity_interpreter/policies/persona.py` was removed (item 11.12, 2026-07-22) — its two legacy callers (CLI `explain`, standalone `chat.py`) now source tone from `PersonaPackManager`'s active pack, so every text interface shares the live kernel's persona *tone*. Two dimensions still short of "yes": (a) `PersonaPack` carries no `traits`, so those two callers still read `traits` from `Identity.yaml` directly (a stable identity descriptor, not persona-pack state — a deliberate split, not a duplication); (b) voice/sight adapters don't consult persona at all yet (Stage 6). |
 
 **Reading this table:** the loop shape is real, tested, and load-bearing for chat, skills, and
-now the scheduler — this is not aspirational. What's not yet true is *uniformity across every
-surface*, which is exactly what Principle One demands. The gaps still open (voice/sight being
-parking-brake-only stubs with no Observation/CandidateAction/Policy Decision at all; skill
-execution lacking an explicit `Observation`/`CandidateAction` object even though its choke-point
-behaves like one; two reflection-narrative pipelines; persona/traits not reaching voice/sight)
-are the concrete backlog for closing this gate, not a restatement of the plan. The
+the scheduler — this is not aspirational. What's not yet true is *uniformity across every
+surface*, which is exactly what Principle One demands. The one gap still open across questions
+1–3 is voice/sight: parking-brake-only stubs with no Observation/CandidateAction/Policy Decision
+at all (Stage 6). Two other items remain open but don't move questions 1–3: two
+reflection-narrative pipelines; persona/traits not reaching voice/sight. The
 two-Reflection-shapes gap was closed by item 11.16 (2026-07-23); the scheduler-drive gap was
-closed by item 11.17 (2026-07-23); the four duplicate-concept pairs were resolved by items
+closed by item 11.17 (2026-07-23); the skill-execution Observation/CandidateAction gap was
+closed by item 11.19 (2026-07-24); the four duplicate-concept pairs were resolved by items
 11.12–11.15.
 
 ## Verify
