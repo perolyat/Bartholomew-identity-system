@@ -362,6 +362,72 @@ all passed locally (clean venv; see item 11.6's note on the sandbox's system-Pyt
 
 ---
 
+## RISKS.md R1 (consent bypass / privacy leakage): red-team test suite — added 2026-07-24
+
+**The gap:** R1's own status note (2026-07-21) had already audited every `apply_consent_gate`
+call site by grep (no production bypass found) and fixed the fail-*closed* bug above, but named
+one mitigation still open: "No red-team test suite for bypass paths exists yet."
+
+**Why not through `MemoryStore.upsert_memory()`:** `MemoryRulesEngine.should_store()` already
+hard-blocks any `requires_consent` memory at write time (not "store but hide from retrieval" —
+see that method's own docstring: "Block memories that require consent until explicit consent is
+captured and a separate promotion path is used"). So the scenario R1 actually names — a memory
+that *should* be excluded already existing and being retrieved — can only be reproduced the way
+it would happen for real: content that reaches the `memories`/FTS/vector tables some other way (a
+`memory_rules.yaml` reclassification after the fact, a migration, direct DB access, a future
+write-path bug), not via the normal write path. `tests/test_consent_bypass_redteam.py` lands
+content that way, then drives it through every production retrieval surface a real caller would
+use.
+
+**What the suite proves (10 tests):**
+- `get_retriever()`'s three modes (hybrid/vector/fts) never surface an unconsented
+  `ask_before_store` memory, and correctly still surface a consented one (regression guard for
+  the fail-closed bug fixed above) and a plain one, from a single query that makes all three
+  raw candidates.
+- `HybridRetriever(db_path=...)` and `FTSOnlyRetriever(db_path=...)` constructed directly with no
+  `rules_engine` — the exact construction each class's own docstring usage example shows — still
+  never leak. This surfaced a genuine structural finding (not a bug): both classes skip their own
+  optional rules-engine re-filtering entirely when `rules_engine` is `None` (`if self.rules_engine:`
+  in each `retrieve()`), but the `ConsentGate` baked unconditionally into
+  `FTSClient.search()`/`VectorStore.search()` (`apply_consent_gate=True` by default, one layer
+  down) still holds regardless. Confirmed genuine, not vacuous, by deliberately breaking
+  `ConsentGate.filter_memory_ids()` to include everything and watching exactly these two "no
+  rules_engine" tests fail — and no others, including the `get_retriever()` factory tests, which
+  stayed green because `hybrid`/`fts` mode's own second-layer rules-engine check independently
+  caught it. That's defense-in-depth working as designed, not a test-quality problem.
+- A `never_store` memory smuggled directly into the DB (bypassing the write-time guard
+  entirely) is still never surfaced by `HybridRetriever` or a direct `FTSClient.search()` call.
+- Revoking consent (deleting the `memory_consent` row) mid-session immediately re-excludes the
+  memory on the same retriever instance's next call — no caching/staleness bypass.
+- Two now-permanent regression guards, replacing what used to be one-time manual audits: an
+  AST-based repo scan (`bartholomew/`, `bartholomew_api_bridge_v0_1/`, `identity_interpreter/`)
+  proving no production call site ever passes `apply_consent_gate=False`, and a signature check
+  proving no public `.retrieve()` facade (`HybridRetriever`, `FTSOnlyRetriever`,
+  `VectorRetrieverAdapter`) exposes a parameter capable of disabling the gate at all.
+
+**One residual nuance surfaced, left as a documented observation, not fixed this pass:**
+`get_retriever(mode="vector")` doesn't pass a `memory_store` through by default, so
+`Retriever._load_memory()` returns a content-less stub (`{"id": ..., "kind": "unknown"}`) for that
+mode, degrading its own second-layer rule check to a no-op for content-based rules specifically.
+Harmless under today's code — the first-layer `ConsentGate` inside `VectorStore.search()` gates
+unconditionally regardless — but "vector" mode has one fewer redundant layer than "hybrid"/"fts"
+if that first layer were ever independently broken. No test requires fixing it and doing so was
+outside this session's scope; flagged in RISKS.md's R1 entry for a future pass.
+
+**Acceptance:** no production retrieval surface — factory-constructed or built directly per a
+class's own documented usage — ever surfaces a `never_store` or unconsented `ask_before_store`
+memory; the fail-closed regression (consented memories wrongly excluded) stays caught; the
+bypass knob (`apply_consent_gate=False`) is now a permanent, tested non-event in production code.
+
+**Verify:** `pytest -q tests/test_consent_bypass_redteam.py tests/test_consent_gates.py
+tests/test_retrieval_consent_enforcement.py` — 28 passed, 1 pre-existing conditional skip
+unrelated to this change (`test_consent_gates.py`'s own `pytest.skip("Memory blocked by privacy
+guard...")` guard); full `pytest -q` — clean (zero failures/errors; one flaky, unrelated
+`test_wal_cleanup_concurrent_processes` failure seen once under full-suite concurrency load and
+not on retry, tracked separately as item 11.18's own open tech debt, not this change).
+
+---
+
 ### P0 — Make the build trustworthy
 5. **Canonical SSOT docs (done in this repo snapshot)**
    - **Acceptance:** canonical docs exist; cross-linked; "Next 3 Moves" current.
