@@ -59,6 +59,15 @@ which runs automatically, measures all first-party packages, and installs `pytes
 
 ---
 
+## Lint/format tool versions are pinned
+
+`.pre-commit-config.yaml` pins `ruff` and `black`, and `requirements-dev.txt` now pins the
+**same** versions. Without that pin, `ci.yml`'s bare `ruff check .` installed whichever ruff was
+newest and reported rules the pinned pre-commit hook does not — the same tree was simultaneously
+"clean" under `pre-commit` and "68 errors" under CI. When bumping either file, bump both.
+
+---
+
 ## ⚠️ `pytest -q` does NOT run every test
 
 `pyproject.toml` sets:

@@ -30,11 +30,10 @@ import pkgutil
 import re
 import subprocess
 import sys
-from importlib.metadata import packages_distributions
+from importlib.metadata import packages_distributions, requires
 from pathlib import Path
 
 import pytest
-import tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +62,15 @@ GUARDED_OPTIONAL_IMPORTS = {
     "ollama",
 }
 
+# Modules whose import name differs from the distribution that provides them.
+# Used as a deterministic fallback when installed metadata cannot resolve the
+# mapping (see test_no_undeclared_third_party_runtime_imports).
+MODULE_TO_DISTRIBUTION = {
+    "yaml": "pyyaml",
+    "dateutil": "python-dateutil",
+    "prometheus_client": "prometheus-client",
+}
+
 # Modules that are known to fail a bare import because they are legacy
 # duplicate entry points requiring a specific working directory, rather than
 # part of the supported import surface. Kept explicit (not silently skipped)
@@ -81,8 +89,23 @@ def _dist_base(spec: str) -> str:
 
 
 def _declared_runtime_distributions() -> set[str]:
-    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return {_dist_base(d) for d in data["project"]["dependencies"]}
+    """Runtime dependencies declared by the *installed* distribution.
+
+    Read from installed package metadata rather than by parsing
+    `pyproject.toml`: it needs no TOML parser (`tomllib` is 3.11+ and this
+    project supports 3.10), and it checks the contract that actually ships --
+    what `pip install bartholomew` would pull in -- rather than what the source
+    tree happens to say.
+
+    Requirements carrying an `extra ==` marker are optional extras, not runtime
+    dependencies, so they are excluded.
+    """
+    declared = set()
+    for spec in requires("bartholomew") or []:
+        if "extra ==" in spec:
+            continue
+        declared.add(_dist_base(spec))
+    return declared
 
 
 def _iter_first_party_modules():
@@ -190,12 +213,25 @@ def test_no_undeclared_third_party_runtime_imports() -> None:
     for module, files in sorted(_third_party_imports_in_runtime_code().items()):
         if module in GUARDED_OPTIONAL_IMPORTS:
             continue
-        dists = {d.lower().replace("_", "-") for d in module_to_dists.get(module, [])}
-        if dists & declared:
+
+        # Resolve the module to the distribution(s) that provide it. Three
+        # sources, because no single one is reliable everywhere:
+        #   1. installed metadata (accurate, but packages_distributions()
+        #      returns nothing for some wheels on Python 3.10);
+        #   2. an explicit alias map for modules whose import name differs
+        #      from the distribution name;
+        #   3. the module name itself, which matches for the common case
+        #      (fastapi, numpy, typer, ...).
+        # Using all three keeps the check deterministic across interpreters
+        # instead of failing loudly when metadata is merely incomplete.
+        candidates = {d.lower().replace("_", "-") for d in module_to_dists.get(module, [])}
+        candidates |= {MODULE_TO_DISTRIBUTION.get(module, module).lower().replace("_", "-")}
+
+        if candidates & declared:
             continue
         offenders.append(
-            f"{module} (installed as {sorted(dists) or 'nothing'}) "
-            f"imported by {sorted(files)[0]} but not in pyproject dependencies",
+            f"{module} (resolved to {sorted(candidates)}) "
+            f"imported by {sorted(files)[0]} but not in the declared runtime dependencies",
         )
 
     assert not offenders, (
