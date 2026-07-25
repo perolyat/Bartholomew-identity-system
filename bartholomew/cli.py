@@ -243,8 +243,8 @@ def embeddings_rebuild_vss(
 @brake_app.command("on")
 def brake_on(
     scope: list[str] = typer.Option(
-        default=None,
-        param_decls=["--scope"],
+        None,
+        "--scope",
         help="Scopes to block (global, skills, sight, voice, scheduler)",
     ),
     db: str = typer.Option(

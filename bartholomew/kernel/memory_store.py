@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -281,16 +280,21 @@ class MemoryStore:
             if cipher_summary is not None:
                 summary = cipher_summary
 
-        # Privacy guard fallback: check for sensitive content
+        # Privacy guard fallback: check for sensitive content.
+        #
+        # `request_permission_to_store` is a coroutine and `upsert_memory` is
+        # itself `async def`, so this is simply awaited. The previous code
+        # called `asyncio.run(...)` here with a `nest_asyncio` fallback for
+        # "event loop is already running": because this method only ever runs
+        # inside a running loop, `asyncio.run()` raised RuntimeError *every*
+        # time, so the fallback branch was always taken -- and `nest_asyncio`
+        # is not a declared dependency, so any sensitive-content write raised
+        # ModuleNotFoundError even when the user approved it. Awaiting removes
+        # both the guaranteed crash and the undeclared dependency; consent
+        # stays fail-closed (request_permission_to_store returns False when no
+        # consent handler is registered).
         if is_sensitive(value):
-            try:
-                allowed = asyncio.run(request_permission_to_store(value))
-            except RuntimeError:
-                # Handles "event loop is already running" errors
-                import nest_asyncio
-
-                nest_asyncio.apply()
-                allowed = asyncio.run(request_permission_to_store(value))
+            allowed = await request_permission_to_store(value)
 
             if not allowed:
                 print("[Bartholomew] OK, I won't store that kernel memory.")

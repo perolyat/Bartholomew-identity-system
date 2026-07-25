@@ -1,10 +1,16 @@
 name: pre-commit + smoke
 
+# Runs the pre-commit hook set itself (black, ruff, end-of-file-fixer,
+# trailing-whitespace, detect-private-key, check-yaml, check-added-large-files)
+# plus the default test suite. Broader verification -- packaging contract,
+# Windows, coverage, and the integration/lifecycle tests the default marker
+# expression excludes -- lives in ci.yml.
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   lint-test:
@@ -32,5 +38,8 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure
       - name: Run smoke tests
         run: pytest -q -m smoke
-      - name: Run full test suite
+      # NOTE: pyproject sets addopts = -m 'not integration and not slow', so
+      # this is the DEFAULT suite, not literally every test. The excluded
+      # integration/slow tests run explicitly in ci.yml's `critical` job.
+      - name: Run default test suite (excludes integration/slow markers)
         run: pytest -q
