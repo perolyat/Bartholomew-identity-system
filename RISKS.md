@@ -114,6 +114,13 @@
 
 ## Tech debt watchlist
 
+- ~~**Scheduler-schema startup readiness race** (GitHub issue #24).~~ **Resolved by S5.0**
+  (2026-07-25): `KernelDaemon.start()` now ensures the scheduler schema synchronously (fail-closed)
+  before returning, so `ticks`/`scheduled_tasks` exist before the API serves requests — closing the
+  "no such table: ticks" 500 window at the source. PR #23 fixed the symptom at the endpoint; S5.0
+  fixes the cause. See DECISIONS.md's "Scheduler schema is created synchronously during
+  KernelDaemon.start()..." entry. Distinct from the two open scheduler tech-debt items below (WAL
+  checkpoint instrumentation; mixed sqlite ownership), which S5.0 does **not** address.
 - Legacy “implementation notes” docs are useful but currently compete with SSOT.
 - ~~Retrieval mode factory mismatches (explicit mode returns wrong retriever).~~ Appears
   resolved: `tests/test_retrieval_factory.py` has explicit coverage for `fts`/`vector`/`hybrid`

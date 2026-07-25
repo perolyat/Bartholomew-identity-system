@@ -1481,7 +1481,26 @@ exit criterion is left partial.
 gate; it does not itself pause P3 — that requires separate, explicit user sign-off.
 
 ### P3 — Initiative engine (proactive nudges) and workflows
-12. **Scheduler-driven check-ins + workflows**
+
+**S5.0 — Deterministic scheduler-schema readiness at startup (prerequisite; closes issue #24).**
+✅ implemented 2026-07-25 (separate narrow PR, landed before Stage 5 feature work). `KernelDaemon.
+start()` now `await`s `scheduler_store.ensure_schema()` immediately after `MemoryStore.init()` and
+before any side-effectful init or the scheduler task, so `scheduled_tasks`/`ticks` (and the
+additive `nudges`/`reflections` integer columns) exist before `start()` returns. **Fail-closed:** a
+schema-init error closes the scheduler store (no worker-thread leak) and propagates, so a
+half-initialized daemon never comes up. Row-seeding stays in `run_scheduler()` (idempotent);
+PR #23's endpoint tolerance is retained as defense in depth. Rationale, alternatives, and the four
+locked sub-decisions (fail-closed / no-outer-timeout / schema-only / endpoint-tolerance) are in
+DECISIONS.md's "Scheduler schema is created synchronously during KernelDaemon.start()..." entry.
+**Verify:** `pytest -q tests/test_scheduler_startup_readiness.py` (5 tests: tables-exist-at-return;
+ordered-record + asyncio-barrier proofs that schema readiness precedes scheduler-task creation and
+the loop's first DB op; fail-closed cleanup with a not-poisoned later startup) — green on the
+3.10 + 3.11 matrix; full `pytest -q` clean.
+
+12. **Scheduler-driven check-ins + workflows** *(revised Stage 5 sequence — safety scaffolding
+   before live proactivity: typed cadence → default-OFF consent + functional mute → quiet-hours
+   defer-not-suppress → dry-run → rationale logging → then live check-in/weekly/next-best-action
+   drives under a default-deny `allow_proactive` governance category)*
    - Morning/evening check-in; weekly review; “next best action” suggestion engine.
    - **Acceptance:** runs on schedule, respects quiet hours and parking brake; produces suggestions only (no Act).
    - **Verify:** `pytest -q tests/test_scheduler_checkins.py` + dry-run mode.

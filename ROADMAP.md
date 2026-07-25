@@ -262,6 +262,20 @@ not itself grant.
 
 **Goal:** Proactive suggestions and check-ins that are safe, useful, and not naggy.
 
+**Prerequisite — S5.0 (closes issue #24):** deterministic scheduler-schema readiness at startup —
+`KernelDaemon.start()` ensures the scheduler tables synchronously (fail-closed) before returning,
+so Stage 5's proactive drives and their user-visible state are not built on nondeterministic
+scheduler initialization. ✅ implemented 2026-07-25 as a separate narrow PR. See MASTER_PLAN.md's
+P3 "S5.0" note and DECISIONS.md.
+
+**Sequencing (locked):** safety scaffolding lands before any live proactivity — typed cadence
+(interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** →
+quiet-hours *defer* (not suppress, with coalescing/expiry) → dry-run → structured rationale
+logging → *then* live check-in / weekly-review / next-best-action drives under a default-deny
+`allow_proactive` governance category (suggestion-only, brake-blocked, excluded from `tool_use`,
+no self-maintenance exemption). Default-off consent and working mute are prerequisites for live
+delivery, not later enhancements.
+
 **Exit criteria:**
 - Scheduler runs check-ins (morning/evening) and weekly review in dry-run + live.
 - Quiet-hours respected; parking brake scope coverage tested.

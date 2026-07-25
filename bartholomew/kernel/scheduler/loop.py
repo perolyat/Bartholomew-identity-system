@@ -105,7 +105,15 @@ async def run_scheduler(ctx: Any) -> None:
         ctx.scheduler_store = store
 
     try:
-        # Ensure schema exists
+        # Ensure schema exists. As of S5.0 (issue #24), the normal
+        # KernelDaemon-driven path already ensured this synchronously in
+        # KernelDaemon.start() before this task was ever created, so here it is
+        # an idempotent no-op (CREATE TABLE IF NOT EXISTS + duplicate-column-
+        # tolerant). It is retained unconditionally for the standalone path --
+        # a caller that runs run_scheduler() against a ctx whose scheduler_store
+        # was not pre-ensured (including the owns_store branch above) -- and as
+        # defense in depth. It must never be the *first* place the schema is
+        # created in the daemon path.
         print("[Scheduler] Initializing schema...")
         await store.ensure_schema()
 

@@ -148,6 +148,44 @@ class KernelDaemon:
     async def start(self) -> None:
         await self.mem.init()
 
+        # S5.0 (closes issue #24): ensure the scheduler's schema
+        # (scheduled_tasks, ticks, and the nudges/reflections integer-timestamp
+        # columns) exists *before* start() returns, as early as practical --
+        # immediately after MemoryStore init and before any side-effectful
+        # initialization (experience kernel, skills, narrator) or the scheduler
+        # task itself. Previously run_scheduler() created this schema
+        # asynchronously as a fire-and-forget task, so the API bridge could
+        # serve requests during a startup window where `ticks`/`scheduled_tasks`
+        # did not yet exist -- external readers (e.g. /api/liveness/ticks) hit
+        # "no such table" and 500'd. This runs on SchedulerStore's dedicated
+        # worker thread (off the event loop) and is awaited here so schema
+        # readiness is a synchronous precondition of a started daemon.
+        #
+        # Fail closed (A1): if the schema cannot be created, the daemon does not
+        # come up -- a "started" daemon with no scheduler tables is exactly the
+        # broken half-initialized state issue #24 is about. On failure, close
+        # the scheduler store so its worker thread does not leak; stop() may
+        # never be called after a failed start(). No outer asyncio.wait_for is
+        # added (A2): the underlying wal_db() call is already bounded, and
+        # cancelling the awaiting coroutine cannot stop the worker-thread
+        # operation, so an outer timeout would abandon-not-cancel.
+        #
+        # The primary schema-initialization error is what callers must see. If
+        # cleanup (close()) *also* fails, that secondary failure must not
+        # replace or mask the primary one: log it as secondary and still
+        # propagate the original schema-init error.
+        try:
+            await self.scheduler_store.ensure_schema()
+        except Exception:
+            try:
+                await self.scheduler_store.close()
+            except Exception:
+                logger.exception(
+                    "Scheduler store cleanup failed after schema-initialization error; "
+                    "propagating the original schema-init error as primary",
+                )
+            raise
+
         # Stage 3: Initialize experience kernel state
         self._init_experience_kernel()
 
