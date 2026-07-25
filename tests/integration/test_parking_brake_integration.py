@@ -97,7 +97,16 @@ def test_sight_blocked_when_engaged(temp_db):
 
 
 def test_sight_allowed_when_disengaged(temp_db):
-    """Test that sight pipeline works when brake disengaged."""
+    """Test that sight pipeline works when brake disengaged AND device consent
+    is granted.
+
+    As of item 11.21, start_capture() routes through the governed Runtime
+    Contract seam, which requires fail-closed device consent in addition to
+    the parking brake. Disengaging the brake alone is no longer sufficient --
+    an approving consent handler must also be registered (no identity_context
+    is wired here, so the Identity Policy gate is additively skipped, exactly
+    as for chat/scheduler/skill)."""
+    from bartholomew.kernel.memory.privacy_guard import set_consent_handler
     from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
     from identity_interpreter.adapters.sight.pipeline import start_capture
 
@@ -106,10 +115,14 @@ def test_sight_allowed_when_disengaged(temp_db):
     brake = ParkingBrake(storage)
     brake.disengage()
 
-    # Start capture should not be blocked
-    result = start_capture(temp_db)
-    assert result.get("blocked", False) is False
-    assert result["status"] == "capturing"
+    set_consent_handler(lambda _prompt: True)
+    try:
+        # Start capture should not be blocked
+        result = start_capture(temp_db)
+        assert result.get("blocked", False) is False
+        assert result["status"] == "capturing"
+    finally:
+        set_consent_handler(None)
 
 
 def test_voice_blocked_when_engaged(temp_db):
@@ -128,10 +141,17 @@ def test_voice_blocked_when_engaged(temp_db):
 
 
 def test_voice_allowed_when_disengaged(temp_db):
-    """Test that voice stream starts when brake disengaged."""
+    """Test that voice stream starts when brake disengaged AND device consent
+    is granted.
+
+    As of item 11.21, start_stream() routes through the governed Runtime
+    Contract seam, which requires fail-closed device consent in addition to
+    the parking brake (see test_sight_allowed_when_disengaged for the full
+    rationale)."""
     import io
     import sys
 
+    from bartholomew.kernel.memory.privacy_guard import set_consent_handler
     from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
     from identity_interpreter.adapters.voice_io.stream_bridge import start_stream
 
@@ -139,6 +159,8 @@ def test_voice_allowed_when_disengaged(temp_db):
     storage = BrakeStorage(temp_db)
     brake = ParkingBrake(storage)
     brake.disengage()
+
+    set_consent_handler(lambda _prompt: True)
 
     # Capture stdout to verify stream started
     captured = io.StringIO()
@@ -150,6 +172,7 @@ def test_voice_allowed_when_disengaged(temp_db):
         assert "Voice stream started" in output
     finally:
         sys.stdout = sys.__stdout__
+        set_consent_handler(None)
 
 
 def test_scheduler_blocked_when_engaged(temp_db):

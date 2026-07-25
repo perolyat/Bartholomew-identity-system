@@ -2,11 +2,13 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-07-24 (two tech debt items added — see below — from the scheduler/WAL
-> concurrency fix found while merging item 11.17; MASTER_PLAN.md item 11.18 and DECISIONS.md's
-> "Scheduler persistence moved off the event loop..." entry have the full writeup. R1/R3/R5/R6
-> last independently re-verified 2026-07-21, not re-checked this pass; R2/R4 and the
-> pre-existing tech debt items likewise left as last recorded)
+> **Last updated:** 2026-07-24 (R2 updated for the voice/sight governance seam — MASTER_PLAN.md
+> item 11.21; R1's red-team test suite added and independently re-verified — MASTER_PLAN.md item
+> 11.20; two tech debt items added earlier the same day from the scheduler/WAL concurrency fix
+> found while merging item 11.17 — MASTER_PLAN.md item 11.18 and DECISIONS.md's "Scheduler
+> persistence moved off the event loop..." entry have the full writeup. R3/R5/R6 last
+> independently re-verified 2026-07-21, not re-checked this pass; R4 and the pre-existing tech
+> debt items likewise left as last recorded)
 
 ## Risk register (top)
 
@@ -15,15 +17,35 @@
 - **What could go wrong:** A caller retrieves or surfaces a memory that should be excluded (never_store / ask_before_store / context_only).
 - **Current controls:** ConsentGate applied by default at FTS/vector layers; memory rules engine; redaction; encryption.
 - **Mitigation:** Add bypass-path red-team tests; audit any `apply_consent_gate=False` call sites; enforce “admin-only” paths.
-- **Status:** Partially mitigated (2026-07-21) — audited every `apply_consent_gate` call site by
-  grep: the only `=False` uses anywhere in the repo are two tests intentionally exercising the
-  "gate off" baseline (`tests/test_consent_gates.py`); no production/live call site ever
-  overrides the default. Separately (not this risk, but the same subsystem) found and fixed a
-  real bug in the *other* direction: `Retriever`/`FTSOnlyRetriever`/`HybridRetriever`'s own
-  rules-engine layer excluded every `requires_consent` memory unconditionally regardless of
-  actual consent state, ignoring `ConsentGate` entirely (fail-closed, not a leak — see
-  MASTER_PLAN.md's "Retrieval consent-enforcement bug" section, fixed 2026-07-21). No red-team
-  test suite for bypass paths exists yet; that mitigation item remains open.
+- **Status:** Mitigated (2026-07-24) — the "no red-team test suite exists yet" gap is now closed:
+  `tests/test_consent_bypass_redteam.py` (10 tests, see MASTER_PLAN.md item 11.20) drives content
+  through the real `memories`/FTS/vector tables (bypassing `upsert_memory()`'s write-time guard,
+  since `MemoryRulesEngine.should_store()` already hard-blocks `requires_consent` content there —
+  the scenario worth red-teaming is content that reaches storage some other way: a rules.yaml
+  reclassification after the fact, a migration, direct DB access) and proves it's never surfaced
+  through every production retrieval surface: `get_retriever()`'s three modes, and
+  `HybridRetriever`/`FTSOnlyRetriever` constructed directly with no `rules_engine` — the exact
+  construction each class's own docstring usage example shows. That last case surfaced a real
+  structural finding, not a bug: `HybridRetriever`/`FTSOnlyRetriever` skip their own optional
+  rules-engine re-filtering entirely when constructed without one, but the retrieval-layer
+  `ConsentGate` baked unconditionally into `FTSClient.search()`/`VectorStore.search()` (default
+  `apply_consent_gate=True`) still holds regardless — confirmed by deliberately breaking
+  `ConsentGate.filter_memory_ids()` and watching exactly those "no rules_engine" tests fail (and
+  no others), proving the tests watch the right thing rather than passing vacuously. Also
+  formalized the 2026-07-21 one-time grep audit into two permanent regression guards: an
+  AST-based scan that no production call site ever passes `apply_consent_gate=False`, and a
+  signature check that no public `.retrieve()` facade (`HybridRetriever`, `FTSOnlyRetriever`,
+  `VectorRetrieverAdapter`) exposes a parameter capable of disabling the gate at all. One residual
+  nuance, not a leak under current code: `get_retriever(mode="vector")` doesn't pass a
+  `memory_store` through by default, so `Retriever`'s own second-layer rule check degrades to a
+  content-less stub for that mode specifically — harmless today because the first-layer
+  `ConsentGate` inside `VectorStore.search()` already gates unconditionally, but it means "vector"
+  mode has one fewer redundant layer than "hybrid"/"fts" if that first layer were ever
+  independently broken. Left as a documented, non-blocking observation rather than fixed in this
+  pass — no test currently requires it and fixing it wasn't part of this session's scope. The
+  earlier fail-closed bug (`Retriever`/`FTSOnlyRetriever`/`HybridRetriever` excluding every
+  `requires_consent` memory unconditionally regardless of actual consent) stays fixed and covered
+  by `tests/test_retrieval_consent_enforcement.py`, re-verified green as part of this pass.
 
 ### R2 — Over-automation / unsafe side effects
 - **Category:** Safety
@@ -32,11 +54,20 @@
 - **Mitigation:** Ensure every “Act” path checks brake; keep Stage 1 strictly read/ack/dismiss; add integration tests.
 - **Status:** Controlled, and the "add integration tests" mitigation is well satisfied: `pytest
   -q tests/integration/test_parking_brake_integration.py tests/test_parking_brake_scoped_blocks.py
-  tests/unit/safety/test_parking_brake.py` (17 tests, 2026-07-21) covers all five live scopes
-  (`skills`, `scheduler`, `sight`, `voice`, `global`) both engaged and disengaged. See
-  `COGNITIVE_RUNTIME.md`'s "Governance checkpoints" section for the current call-site list.
-  Expansion risk (new "Act" paths forgetting the brake check) remains the open-ended part of
-  this risk — not something a point-in-time audit closes permanently.
+  tests/unit/safety/test_parking_brake.py` (2026-07-21) covers all five live scopes
+  (`skills`, `scheduler`, `sight`, `voice`, `global`) both engaged and disengaged. As of item
+  11.21 (2026-07-24) the `sight`/`voice` paths are no longer brake-*only*: their governed seams
+  (`runtime_contract.run_sight_/run_voice_through_runtime_contract()`, which the `start_capture()`/
+  `start_stream()` adapters now delegate to exclusively) additionally consult the Identity Policy
+  Decision and an *always-required, fail-closed* device consent gate before any (currently inert)
+  capability call — so a future real capture/stream is gated by consent + policy + brake, not
+  brake alone. Covered by `tests/test_voice_sight_runtime_contract_seam.py` (45 tests, including
+  deliberate per-gate neutralisation non-vacuity controls). See `COGNITIVE_RUNTIME.md`'s
+  "Governance checkpoints" and "Device surfaces" sections for the current call-site list.
+  Expansion risk (new "Act" paths forgetting the governed seam) remains the open-ended part of
+  this risk — not something a point-in-time audit closes permanently; the item 11.21 AST
+  structural test (placeholder capability never callable outside the seam) is one guard against
+  that specific regression for voice/sight.
 
 ### R3 — SQLite / FTS feature variability causes false confidence
 - **Category:** Reliability

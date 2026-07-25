@@ -25,6 +25,7 @@ from . import policy_engine
 from .memory.privacy_guard import get_consent_handler
 from .redaction_engine import redact_pii
 from .reflection import ActionReflection, record_action_reflection
+from .runtime_contract import CandidateAction, Interpretation, Observation
 from .skill_base import SkillBase, SkillContext, SkillResult, SkillState
 from .skill_manifest import SkillManifest, discover_manifests
 from .skill_permissions import PERMISSION_CATEGORIES, PermissionChecker, get_permission_checker
@@ -514,6 +515,20 @@ class SkillRegistry:
         parking brake's "skills" scope at all (a documented, supported
         scope per INTERFACES.md that nothing acted on).
 
+        MASTER_PLAN.md item 11.19 (Runtime Convergence): this method now
+        builds the same `Observation`/`Interpretation`/`CandidateAction`
+        shape chat (`run_chat_through_runtime_contract()`) and scheduler
+        drives (`run_drive_through_runtime_contract()`) use, and those
+        objects genuinely drive the Governance stage below (the Identity
+        Policy check reads `candidate_action.kind`, not a bare local) and
+        the Reflection stage (`_finish()` sources `surface` from
+        `observation.source`) -- not just constructed and discarded.
+        `bartholomew.kernel.runtime_contract.run_skill_through_runtime_
+        contract()` is the named production entry point that leads here
+        (`Planner.handle_skill_request()`'s sole call target); this method
+        remains the directly-callable, directly-tested execution primitive
+        underneath it, not a competing path.
+
         Args:
             skill_id: ID of skill
             action: Action name to execute
@@ -522,10 +537,24 @@ class SkillRegistry:
         Returns:
             SkillResult from the skill
         """
+        # Stage 1: Observation. Stage 2: Interpretation -- a skill request
+        # carries no natural-language prompt, so (like a scheduler drive's
+        # task_id) its "<skill_id>.<action>" is the whole content.
+        observation = Observation(source="skill", raw_content=f"{skill_id}.{action}")
+        interpretation = Interpretation(observation=observation, prompt=observation.raw_content)
+        # Stage 3: Executive -- propose a candidate action. `kind=skill_id`
+        # (not "<skill_id>.<action>") deliberately matches the exact grain
+        # `evaluate_tool_policy()`/`Identity.yaml`'s `tool_use.allowlist`
+        # already operate on -- confirmed by
+        # tests/test_runtime_convergence_policy.py's ALLOW_CONTEXT, which
+        # allowlists "tasks" (a skill_id), not an "<id>.<action>" pair.
+        candidate_action = CandidateAction(kind=skill_id, interpretation=interpretation)
+
         loaded = self._loaded.get(skill_id)
         if not loaded:
             return await self._finish(
-                skill_id,
+                observation,
+                candidate_action,
                 action,
                 params,
                 SkillResult.fail(f"Skill not loaded: {skill_id}"),
@@ -533,7 +562,8 @@ class SkillRegistry:
 
         if not loaded.instance.is_ready:
             return await self._finish(
-                skill_id,
+                observation,
+                candidate_action,
                 action,
                 params,
                 SkillResult.fail(
@@ -545,32 +575,42 @@ class SkillRegistry:
         manifest_action = loaded.manifest.get_action(action)
         if not manifest_action:
             return await self._finish(
-                skill_id,
+                observation,
+                candidate_action,
                 action,
                 params,
                 SkillResult.fail(f"Unknown action: {action} for skill {skill_id}"),
             )
 
-        # Parking brake: fail-closed operational kill-switch, scope="skills".
+        # Stage 4: Governance -- parking brake: fail-closed operational
+        # kill-switch, scope="skills".
         if self._is_blocked_by_brake():
             return await self._finish(
-                skill_id,
+                observation,
+                candidate_action,
                 action,
                 params,
                 SkillResult.fail("Blocked by parking brake (scope=skills)"),
             )
 
-        # Executive Policy Decision: consult the same IdentityContext-derived
-        # tool-use policy scheduler drives consult (see
-        # bartholomew.kernel.policy_engine and scheduler/loop.py's
-        # _run_drive()). Skipped entirely if no IdentityContext was wired in
-        # (see __init__'s docstring) -- this is additive, not a replacement
-        # for the manifest-permission/parking-brake checks above.
+        # Governance (cont.) -- Executive Policy Decision: consult the same
+        # IdentityContext-derived tool-use policy scheduler drives consult
+        # (see bartholomew.kernel.policy_engine and scheduler/loop.py's
+        # _run_drive()), evaluated against `candidate_action.kind` -- the
+        # CandidateAction constructed above, not a re-derived value -- so
+        # this is the Executive/Governance stage genuinely consuming it.
+        # Skipped entirely if no IdentityContext was wired in (see
+        # __init__'s docstring) -- this is additive, not a replacement for
+        # the manifest-permission/parking-brake checks above.
         if self._identity_context is not None:
-            policy_decision = policy_engine.evaluate_tool_policy(self._identity_context, skill_id)
+            policy_decision = policy_engine.evaluate_tool_policy(
+                self._identity_context,
+                candidate_action.kind,
+            )
             if not policy_decision.allowed:
                 return await self._finish(
-                    skill_id,
+                    observation,
+                    candidate_action,
                     action,
                     params,
                     SkillResult.fail(
@@ -582,14 +622,15 @@ class SkillRegistry:
         # executing (see _resolve_permissions()'s docstring).
         consent_result = await self._resolve_permissions(loaded.manifest)
         if consent_result is not None:
-            return await self._finish(skill_id, action, params, consent_result)
+            return await self._finish(observation, candidate_action, action, params, consent_result)
 
-        # Execute
+        # Stage 5+6: Capability + Execution -- only reached once every
+        # Governance check above has allowed the CandidateAction.
         try:
             loaded.instance._set_state(SkillState.RUNNING)
             result = await loaded.instance.execute(action, params or {})
             loaded.instance._set_state(SkillState.READY)
-            return await self._finish(skill_id, action, params, result)
+            return await self._finish(observation, candidate_action, action, params, result)
         except Exception as e:
             logger.exception(
                 "Skill %s action %s failed: %s",
@@ -598,7 +639,13 @@ class SkillRegistry:
                 e,
             )
             loaded.instance._set_error(str(e))
-            return await self._finish(skill_id, action, params, SkillResult.fail(str(e)))
+            return await self._finish(
+                observation,
+                candidate_action,
+                action,
+                params,
+                SkillResult.fail(str(e)),
+            )
 
     def _is_blocked_by_brake(self) -> bool:
         """
@@ -674,7 +721,8 @@ class SkillRegistry:
 
     async def _finish(
         self,
-        skill_id: str,
+        observation: Observation,
+        candidate_action: CandidateAction,
         action: str,
         params: dict[str, Any] | None,
         result: SkillResult,
@@ -686,14 +734,23 @@ class SkillRegistry:
         unified per-action Reflection into the shared Memory sink
         (`_record_reflection`) that chat also writes -- closing Exit Gate #4's
         "one Reflection shape through one sink" gap (see
-        `bartholomew.kernel.reflection`).
+        `bartholomew.kernel.reflection`). Exactly one call each, for every
+        outcome (success, failure, permission denial, parking-brake block) --
+        `execute_action()` has exactly one path to `_finish()` per attempt.
+
+        `candidate_action.kind` is the skill_id the Governance stage in
+        `execute_action()` actually evaluated -- reused here (rather than a
+        separately threaded skill_id) so the audit row and Reflection are
+        provably describing the same CandidateAction Governance decided on.
         """
+        skill_id = candidate_action.kind
         self._audit_execution(skill_id, action, params, result)
-        await self._record_reflection(skill_id, action, params, result)
+        await self._record_reflection(observation, skill_id, action, params, result)
         return result
 
     async def _record_reflection(
         self,
+        observation: Observation,
         skill_id: str,
         action: str,
         params: dict[str, Any] | None,
@@ -704,9 +761,13 @@ class SkillRegistry:
         every attempt (success, failure, permission denial, parking-brake
         block), the same set `_audit_execution` covers. Best-effort: never
         raises (see `record_action_reflection`).
+
+        `surface` is sourced from `observation.source` ("skill") rather than
+        a hardcoded literal, so the Reflection is genuinely describing the
+        Observation `execute_action()` constructed, not just labeling itself.
         """
         reflection = ActionReflection(
-            surface="skill",
+            surface=observation.source,
             action=f"{skill_id}.{action}",
             outcome=result.status.value,
             summary=f"Skill '{skill_id}.{action}': {result.status.value}",

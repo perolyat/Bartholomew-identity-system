@@ -199,7 +199,7 @@ pytest -q tests/test_end_to_end_tasks_and_audit.py
 
 ---
 
-### Stage 4.5 — Runtime Convergence (architectural prerequisite; recommended, pending sign-off)
+### Stage 4.5 — Runtime Convergence (architectural prerequisite) ✅ (Complete 2026-07-24)
 
 **Goal:** Close the gap a grounded architectural audit found (2026-07-21): the project
 effectively has "two brains" (`bartholomew/kernel` and `identity_interpreter/`) with four
@@ -229,17 +229,32 @@ One — Uniform Cognition, the Architectural Invariant), and the Runtime Contrac
 - Chat wired into the Experience Kernel.
 - `COGNITIVE_RUNTIME.md` authored as the canonical "how does Bartholomew think" document. —
   ✅ done 2026-07-21. Its own "Exit Gate status" table is the honest, continuously-updated
-  scorecard. As of item 11.17 (2026-07-23), chat, skill execution, *and* scheduler drives all
-  construct an Observation/CandidateAction and consult the Identity Context → Policy Decision
-  path (each surface exempting its own known-safe kinds); voice/sight adapters remain
-  parking-brake-only stubs with no Observation/CandidateAction at all (Stage 6), and skill
-  execution's choke-point still isn't modeled as an explicit `Observation`/`CandidateAction`
-  object — the concrete remaining gaps. See `COGNITIVE_RUNTIME.md`'s Exit Gate table for the
-  live, per-question status rather than restating it here.
+  scorecard. As of item 11.21 (2026-07-24), **all five live surfaces** — chat, skill execution,
+  scheduler drives, *and* voice/sight — construct an Observation/CandidateAction that genuinely
+  drives the Governance decision (not just constructed and discarded — proven per-surface, and for
+  voice/sight by `tests/test_voice_sight_runtime_contract_seam.py` including deliberate
+  gate-neutralisation non-vacuity controls) and pass through the shared Governance path. Voice/
+  sight additionally require a fail-closed device consent gate; their capture/stream capability
+  stays an inert Stage 6 placeholder reachable only through the governed seam. See
+  `COGNITIVE_RUNTIME.md`'s Exit Gate table for the live, per-question status rather than restating
+  it here.
 
-**Note:** Stage 5 (below) is recommended to wait until this stage's exit gate is fully green —
-that sequencing is a recommendation, not yet a binding decision; it requires explicit
-user sign-off before treated as blocking.
+**Status (2026-07-24): complete.** All seven Exit Gate questions are satisfied within Stage 4.5's
+scope. Questions **#1–#6 are "yes"** for every surface that exists today (item 11.21 closed the
+last current-production governance gap, voice/sight). Question **#7 (personality uniformity) is
+"yes" within Stage 4.5's scope**: every personality-bearing interface (chat, CLI `explain`,
+`chat.py`) sources persona from the single authority (`PersonaPackManager`); the `Identity.yaml`
+`traits` split is deliberate-by-design, not a convergence gap. Q7's only residual — voice/sight
+consulting persona — was **formally reclassified to Stage 6** (item 11.22, 2026-07-24), because a
+surface producing no persona-bearing output cannot expose a personality until Stage 6 builds that
+output; it is a Stage 6 dependency, not a Stage 4.5 deliverable left undone. No official exit
+criterion is left partial. Real voice/sight functionality (capture, streaming, transcription,
+sessions, persona output) remains Stage 6.
+
+**Note:** Stage 5 (below) was recommended to wait until this stage's exit gate is fully green.
+With all seven questions now satisfied within scope, that prerequisite is met — though pausing/
+resuming P3 (Stage 5) still requires separate, explicit user sign-off, which this completion does
+not itself grant.
 
 ---
 
@@ -266,6 +281,26 @@ pytest -q tests/test_scheduler_checkins.py
 **Exit criteria:**
 - Token auth; cross-device client shows same timeline/state.
 - Voice endpoints degrade gracefully when binaries missing.
+
+**Carried-forward requirements from item 11.21 (voice/sight governance seam):**
+- Real capture/streaming/transcription/computer-vision/device-driver work slots *into* the
+  existing governed seams (`run_voice_/run_sight_through_runtime_contract()`), which already
+  construct the Observation/CandidateAction and run brake + Identity Policy + fail-closed device
+  consent. Do not add a second, ungoverned capture path — the inert `_perform_stream`/
+  `_perform_capture` placeholders are the slot.
+- Governance approval at the seam authorizes a **single start attempt** only. Continuous sessions,
+  consent renewal, and revocation are new mechanisms to design here — not an extension of the
+  single-start grant.
+- **Safety invariant:** safely stopping or tearing down an active capture session must NEVER
+  depend on obtaining permission to *continue* capturing. Teardown is not a governed "start" and
+  must not be gated as one (a stuck consent/policy path must not be able to trap the device "on").
+- **Personality uniformity for voice/sight (reclassified here from Stage 4.5 Exit Gate question
+  #7, item 11.22, 2026-07-24):** once voice/sight produce persona-bearing output, that output must
+  source persona from the single authority (`PersonaPackManager`'s active pack), the same way the
+  text interfaces already do — so Bartholomew presents "one personality, not one per interface"
+  across voice/sight too. This could not be done in Stage 4.5: a surface with no persona-bearing
+  output has no personality to converge. Satisfying it is part of building real voice/sight
+  functionality here; it closes the last residual of Exit Gate question #7.
 
 **Verify:**
 ```bash

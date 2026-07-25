@@ -9,7 +9,7 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-07-21
+> **Last updated:** 2026-07-24
 
 ## The governing principles
 
@@ -44,14 +44,19 @@ Observation -> Interpretation -> Executive -> Governance -> Capability -> Execut
 | Reflection | A durable record of what happened, written *before* returning. | one canonical `ActionReflection` (`bartholomew/kernel/reflection.py`) for **both** surfaces, plus each surface's own store (chat still adds a Working Memory item; skills still write a `skill_action_audit` row) — see "Unified Reflection" below |
 | Memory | The Reflection becoming durable, queryable state. | the shared sink: `MemoryStore.reflections` (kind `action_reflection`), written every action for chat and skills alike; plus `WorkingMemoryManager.persist_snapshot()` (chat context, on `KernelDaemon.stop()`) and the `skill_action_audit` table (skill compliance, immediate) |
 
-**No exceptions is the goal, not yet the reality.** Today three surfaces run through an
-explicit, code-level version of this shape — chat (`run_chat_through_runtime_contract()`),
-skill execution (`SkillRegistry.execute_action()`, which is the single choke-point every skill
-call flows through, whatever triggered it), and, as of item 11.17 (2026-07-23), scheduler
-drives (`run_drive_through_runtime_contract()`, which `scheduler/loop.py`'s `_run_drive()`
-delegates to). Voice, sight, and future sensors are still named in the Runtime Contract's
-design but do not yet construct an `Observation`/`CandidateAction` — see "What's not converged
-yet" below.
+**Every live surface now runs through an explicit, code-level version of this shape.** Chat
+(`run_chat_through_runtime_contract()`), scheduler drives (item 11.17,
+`run_drive_through_runtime_contract()`, which `scheduler/loop.py`'s `_run_drive()` delegates
+to), skill execution (item 11.19, `SkillRegistry.execute_action()` builds the shape and
+`run_skill_through_runtime_contract()` is the named seam `Planner.handle_skill_request()`
+calls), and — as of item 11.21 (2026-07-24) — the voice and sight device surfaces:
+`run_voice_through_runtime_contract()` / `run_sight_through_runtime_contract()` construct the
+same `Observation`/`CandidateAction`, run parking brake + Identity Policy + fail-closed device
+consent before any capability call, and emit one `ActionReflection` per attempt. The historical
+adapters (`start_stream()` / `start_capture()`) are now thin compatibility wrappers that
+delegate exclusively to those seams; their capture/stream *capability* stays an inert Stage 6
+placeholder, reachable only through the governed seam. See "Device surfaces (voice/sight)" below
+for what is and isn't in scope.
 
 ## Ownership table
 
@@ -94,7 +99,7 @@ scope; `engage()` with no args defaults to `"global"`, which blocks everything. 
 if the brake check itself errors, treat it as blocked (see `SkillRegistry._is_blocked_by_brake()`
 and `runtime_contract.py`'s governance stage — both catch-and-deny rather than catch-and-allow).
 
-Five live call sites today, each checking a different scope:
+Live call sites today, each checking a different scope:
 
 | Scope | Call site |
 |---|---|
@@ -102,8 +107,12 @@ Five live call sites today, each checking a different scope:
 | `skills` | `runtime_contract.py`'s chat Governance stage |
 | `skills` | `identity_interpreter/orchestrator/orchestrator.py`'s `handle_input()` (the chat backend itself — a second, independent check of the same scope; belt-and-suspenders, not yet unified into one check) |
 | `scheduler` | `bartholomew/kernel/scheduler/loop.py` (via `runtime_contract.run_drive_through_runtime_contract()`, item 11.17) |
-| `sight` | `identity_interpreter/adapters/sight/pipeline.py` (stub adapter) |
-| `voice` | `identity_interpreter/adapters/voice_io/stream_bridge.py` (stub adapter) |
+| `sight` | `runtime_contract.run_sight_through_runtime_contract()` (item 11.21); `identity_interpreter/adapters/sight/pipeline.py`'s `start_capture()` delegates here |
+| `voice` | `runtime_contract.run_voice_through_runtime_contract()` (item 11.21); `identity_interpreter/adapters/voice_io/stream_bridge.py`'s `start_stream()` delegates here |
+
+As of item 11.21, the `sight`/`voice` scopes are no longer brake-*only*: those two seams run the
+brake check, then the same additive Identity Policy Decision the other surfaces use, then an
+always-required fail-closed device consent gate, before their (inert Stage 6) capability.
 
 ### Identity Context → Executive → Policy Decision
 
@@ -233,24 +242,54 @@ exists today:
 
 | # | Question | Status | Evidence |
 |---|---|---|---|
-| 1 | Can every input source create an Observation? | **Partial** | Chat does (`runtime_contract.Observation`, `source="chat"`). As of item 11.17 (2026-07-23), scheduler drives do too (`source="scheduler"`, via `run_drive_through_runtime_contract()`). Skill execution has an equivalent choke-point (`execute_action()`) but no explicit `Observation` object. Voice/sight adapters still have only their own `ParkingBrake` checks and never construct one — the remaining gap. |
-| 2 | Does every proposed action pass through the Executive? | **Partial** | Chat's `CandidateAction` (`kind="chat_response"`) is explicit. As of item 11.17, scheduler drives are too (`kind=task_id`). Skill execution is a single choke-point in practice but not modeled as a `CandidateAction`. Voice/sight bypass this entirely. |
-| 3 | Does every execution pass through the same Governance path? | **Partial** | All five live call sites share the same `ParkingBrake` class, but scopes differ by surface. The Identity Context → Policy Decision check (item 11.2) is wired for skill execution, chat's Governance stage (item 11.6, 2026-07-21), and, as of item 11.17 (2026-07-23), scheduler drives — each surface exempting its own known-safe kinds (`_CONVERSATIONAL_KINDS` for chat, `_SELF_MAINTENANCE_DRIVES` for scheduler drives) from the `tool_use.allowlist` check, so a *future* non-exempt action on any of the three surfaces is genuinely gated. Voice/sight remain `ParkingBrake`-only stubs (Stage 6) — the remaining gap. |
+| 1 | Can every input source create an Observation? | **Yes** (for every surface that exists today) | Chat (`source="chat"`), scheduler drives (item 11.17, `source="scheduler"`), skill execution (item 11.19, `source="skill"`), and — as of item 11.21 (2026-07-24) — voice and sight: `run_voice_through_runtime_contract()` / `run_sight_through_runtime_contract()` build `Observation(source="voice"/"sight", raw_content="voice_stream_start"/"sight_capture_start")` at their governed entry point, and the compat adapters (`start_stream()`/`start_capture()`) delegate exclusively to them. The capture/stream *capability* is an inert Stage 6 placeholder reachable only through the seam, so any future real device input flows through an Observation by construction. Proven by `tests/test_voice_sight_runtime_contract_seam.py`. No other input source exists today; future sensors are Stage 6. |
+| 2 | Does every proposed action pass through the Executive? | **Yes** | Chat (`kind="chat_response"`), scheduler (`kind=task_id`, item 11.17), skill (`kind=skill_id`, item 11.19), and voice/sight (`kind="voice_stream_start"`/`"sight_capture_start"`, item 11.21) each build an explicit `CandidateAction` that is *genuinely consumed* by Governance, not decorative. For voice/sight, `tests/test_voice_sight_runtime_contract_seam.py::TestGovernanceGenuinelyGatesExecution` captures both the constructed `kind` and the value `evaluate_tool_policy()` receives and asserts they're equal, proves denied starts never invoke the underlying capability (a call-counting spy stays at 0), and shows an unrelated-but-present allowlist entry still denies (ruling out a hardcoded/drifted stand-in). |
+| 3 | Does every execution pass through the same Governance path? | **Yes** | All five live surfaces share the same `ParkingBrake` class (scopes differ by surface, by design) plus the additive Identity Context → Policy Decision check (chat item 11.6, scheduler 11.17, skill 11.19, voice/sight 11.21 — each exempting only its own known-safe kinds where applicable; voice/sight have no exemption, so every start is policy-evaluated). Voice/sight additionally *always* require a fail-closed device consent gate (`privacy_guard.get_consent_handler()`, the same channel skill "ask" permissions reuse) — absent/declined/unresolved all deny. `tests/test_voice_sight_runtime_contract_seam.py` proves ordering (policy, then consent, then capability — strictly), exactly-once execution and reflection, that the compat wrappers delegate only to the seam, and — the required non-vacuity controls — that deliberately neutralising *any one* of the three gates (brake, policy, consent) makes exactly that gate's denial tests execute the placeholder, so none of the denial tests pass vacuously. A separate AST structural test proves the placeholder capability is never invoked outside the governed seam. |
 | 4 | Does every completed action produce a Reflection? | **Yes** | Item 11.16 (2026-07-23) — chat turns and skill executions now emit the same `ActionReflection` into the same sink (`MemoryStore.reflections`, kind `action_reflection`), for every outcome. Shape *and* sink are unified (see "Unified Reflection" above); each surface's own store (Working Memory for chat context, `skill_action_audit` for skill compliance) is retained additively. |
 | 5 | Does every Reflection update Memory? | **Yes** | Working Memory snapshots persist on daemon stop; `skill_action_audit` writes immediately; daily/weekly reflections persist via `MemoryStore.insert_reflection()`. |
 | 6 | Does every conversation see the Experience Kernel? | **Yes, for chat** | Item 11.4 — `/api/chat` routes through `run_chat_through_runtime_contract()`, whose Interpretation stage reads `daemon.experience.get_active_goals()`, `daemon.persona_manager.get_active_pack_id()`, and (item 11.7) `daemon.working_memory.get_context_string()` for prior-turn content. Falls back to the unwrapped path only when the kernel isn't running (startup/shutdown window). No other conversational surface exists today to check. |
-| 7 | Does every interface expose the same personality? | **Closer, still partial** | The deprecated `identity_interpreter/policies/persona.py` was removed (item 11.12, 2026-07-22) — its two legacy callers (CLI `explain`, standalone `chat.py`) now source tone from `PersonaPackManager`'s active pack, so every text interface shares the live kernel's persona *tone*. Two dimensions still short of "yes": (a) `PersonaPack` carries no `traits`, so those two callers still read `traits` from `Identity.yaml` directly (a stable identity descriptor, not persona-pack state — a deliberate split, not a duplication); (b) voice/sight adapters don't consult persona at all yet (Stage 6). |
+| 7 | Does every interface expose the same personality? | **Yes** (Stage 4.5 scope; voice/sight persona formally reclassified to Stage 6 — see note below the table) | The Stage 4.5 goal this question encodes — *"one personality, not one personality per interface"* (MASTER_PLAN.md's P2.5 finding) — is met for every interface that produces personality-bearing output today: chat, CLI `explain`, and standalone `chat.py` all source tone from the single persona authority (`PersonaPackManager`'s active pack) after the deprecated `identity_interpreter/policies/persona.py` was removed (item 11.12, 2026-07-22). The `traits` those callers read from `Identity.yaml` are a stable identity descriptor, not persona-pack state — a deliberate split, not a convergence gap. The one remaining piece — voice/sight consulting persona — is **formally reclassified to Stage 6 (2026-07-24)**: a surface that produces no personality-bearing output cannot "expose" a personality, so converging persona onto voice/sight is inseparable from Stage 6's persona-producing voice/sight functionality (the already-approved Stage 6 boundary), not a Stage 4.5 deliverable left undone. |
 
-**Reading this table:** the loop shape is real, tested, and load-bearing for chat, skills, and
-now the scheduler — this is not aspirational. What's not yet true is *uniformity across every
-surface*, which is exactly what Principle One demands. The gaps still open (voice/sight being
-parking-brake-only stubs with no Observation/CandidateAction/Policy Decision at all; skill
-execution lacking an explicit `Observation`/`CandidateAction` object even though its choke-point
-behaves like one; two reflection-narrative pipelines; persona/traits not reaching voice/sight)
-are the concrete backlog for closing this gate, not a restatement of the plan. The
-two-Reflection-shapes gap was closed by item 11.16 (2026-07-23); the scheduler-drive gap was
-closed by item 11.17 (2026-07-23); the four duplicate-concept pairs were resolved by items
-11.12–11.15.
+**Reading this table:** the loop shape is real, tested, and load-bearing for chat, skills, the
+scheduler, and (for the single-start attempt) voice/sight — this is not aspirational. As of item
+11.21 (2026-07-24) the governance questions **1–3 are all "yes" for every surface that exists
+today** — the last current-production governance gap (voice/sight being parking-brake-only stubs)
+is closed. Questions **4–6** are "yes" for the surfaces that exist (#6 notes chat is the only
+conversational surface). Question **7** is "yes within Stage 4.5's scope": every personality-
+bearing interface shares the one persona authority, and its only residual — voice/sight persona —
+was **formally reclassified to Stage 6 on 2026-07-24** (see the Q7 row and ROADMAP.md Stage 6),
+because a surface with no persona-bearing output cannot expose a personality until Stage 6 builds
+that output. With that reclassification recorded, **all seven exit-gate questions are satisfied
+within Stage 4.5's scope, and Stage 4.5's Runtime Convergence is complete.** One non-gate item
+remains open but was never a Stage 4.5 exit criterion: two reflection-narrative pipelines (Stage
+3's "Still open" note). Timeline: two-Reflection-shapes gap closed by 11.16; scheduler-drive gap
+by 11.17; skill-execution Observation/CandidateAction gap by 11.19; voice/sight governance gap by
+11.21; the Q7 voice/sight-persona residual reclassified to Stage 6 by 11.22; the four
+duplicate-concept pairs by 11.12–11.15.
+
+### Device surfaces (voice/sight) — scope boundary (item 11.21)
+
+What item 11.21 established is strictly the **governed architectural seam**, not any device
+capability:
+
+- Every executable voice/sight *start* creates the appropriate `Observation`/`CandidateAction`,
+  passes ParkingBrake → Identity Policy → fail-closed device consent **before** any capability
+  call, executes the (inert) capability at most once, and writes exactly one `ActionReflection`
+  to the shared sink — success, policy denial, consent denial, brake denial, or execution error
+  alike.
+- The `start_stream()`/`start_capture()` adapters remain as public compatibility entry points but
+  delegate *exclusively* to the seam; their capability bodies (`_perform_stream`/`_perform_capture`)
+  are inert Stage 6 placeholders, reachable only through the seam (an AST test forbids any direct
+  call).
+- **Governance approval here authorizes exactly one start attempt** — never indefinite or
+  continuing microphone/camera access. The action kinds are suffixed `_start` to encode this.
+
+Explicitly **Stage 6, not implemented here**: real microphone/camera/streaming/transcription/
+computer-vision/device-driver behaviour; continuous capture sessions; consent renewal and
+revocation; and stop/teardown semantics. One safety requirement is recorded for Stage 6 now so it
+isn't lost: **safely stopping or tearing down a future active capture session must never depend on
+obtaining permission to *continue* capturing** — teardown is not a governed "start" and must not
+be gated as one.
 
 ## Verify
 

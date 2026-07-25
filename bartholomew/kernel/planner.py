@@ -55,10 +55,17 @@ class Planner:
         actual skill execution. The "decide" step here is routing/
         validation -- confirming the request names a real, loaded skill
         and action before it goes any further -- while the actual
-        consent-resolution, parking-brake check, execution, and audit
-        trail all live in SkillRegistry.execute_action() (the single
+        Observation/CandidateAction construction, Governance (parking-brake
+        check, Identity policy decision), consent-resolution, execution, and
+        audit trail all live in SkillRegistry.execute_action() (the single
         choke-point every skill execution flows through, regardless of
         caller).
+
+        Calls `runtime_contract.run_skill_through_runtime_contract()` --
+        not `SkillRegistry.execute_action()` directly -- so this, the one
+        production route into skill execution, goes through the same named
+        Runtime Contract seam chat and scheduler drives use (MASTER_PLAN.md
+        item 11.19).
 
         Args:
             skill_id: ID of the skill to invoke
@@ -81,4 +88,11 @@ class Planner:
         if manifest.get_action(action) is None:
             return SkillResult.fail(f"Unknown action '{action}' for skill '{skill_id}'")
 
-        return await self._skill_registry.execute_action(skill_id, action, params)
+        from .runtime_contract import run_skill_through_runtime_contract
+
+        return await run_skill_through_runtime_contract(
+            self._skill_registry,
+            skill_id,
+            action,
+            params,
+        )

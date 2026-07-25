@@ -362,6 +362,72 @@ all passed locally (clean venv; see item 11.6's note on the sandbox's system-Pyt
 
 ---
 
+## RISKS.md R1 (consent bypass / privacy leakage): red-team test suite — added 2026-07-24
+
+**The gap:** R1's own status note (2026-07-21) had already audited every `apply_consent_gate`
+call site by grep (no production bypass found) and fixed the fail-*closed* bug above, but named
+one mitigation still open: "No red-team test suite for bypass paths exists yet."
+
+**Why not through `MemoryStore.upsert_memory()`:** `MemoryRulesEngine.should_store()` already
+hard-blocks any `requires_consent` memory at write time (not "store but hide from retrieval" —
+see that method's own docstring: "Block memories that require consent until explicit consent is
+captured and a separate promotion path is used"). So the scenario R1 actually names — a memory
+that *should* be excluded already existing and being retrieved — can only be reproduced the way
+it would happen for real: content that reaches the `memories`/FTS/vector tables some other way (a
+`memory_rules.yaml` reclassification after the fact, a migration, direct DB access, a future
+write-path bug), not via the normal write path. `tests/test_consent_bypass_redteam.py` lands
+content that way, then drives it through every production retrieval surface a real caller would
+use.
+
+**What the suite proves (10 tests):**
+- `get_retriever()`'s three modes (hybrid/vector/fts) never surface an unconsented
+  `ask_before_store` memory, and correctly still surface a consented one (regression guard for
+  the fail-closed bug fixed above) and a plain one, from a single query that makes all three
+  raw candidates.
+- `HybridRetriever(db_path=...)` and `FTSOnlyRetriever(db_path=...)` constructed directly with no
+  `rules_engine` — the exact construction each class's own docstring usage example shows — still
+  never leak. This surfaced a genuine structural finding (not a bug): both classes skip their own
+  optional rules-engine re-filtering entirely when `rules_engine` is `None` (`if self.rules_engine:`
+  in each `retrieve()`), but the `ConsentGate` baked unconditionally into
+  `FTSClient.search()`/`VectorStore.search()` (`apply_consent_gate=True` by default, one layer
+  down) still holds regardless. Confirmed genuine, not vacuous, by deliberately breaking
+  `ConsentGate.filter_memory_ids()` to include everything and watching exactly these two "no
+  rules_engine" tests fail — and no others, including the `get_retriever()` factory tests, which
+  stayed green because `hybrid`/`fts` mode's own second-layer rules-engine check independently
+  caught it. That's defense-in-depth working as designed, not a test-quality problem.
+- A `never_store` memory smuggled directly into the DB (bypassing the write-time guard
+  entirely) is still never surfaced by `HybridRetriever` or a direct `FTSClient.search()` call.
+- Revoking consent (deleting the `memory_consent` row) mid-session immediately re-excludes the
+  memory on the same retriever instance's next call — no caching/staleness bypass.
+- Two now-permanent regression guards, replacing what used to be one-time manual audits: an
+  AST-based repo scan (`bartholomew/`, `bartholomew_api_bridge_v0_1/`, `identity_interpreter/`)
+  proving no production call site ever passes `apply_consent_gate=False`, and a signature check
+  proving no public `.retrieve()` facade (`HybridRetriever`, `FTSOnlyRetriever`,
+  `VectorRetrieverAdapter`) exposes a parameter capable of disabling the gate at all.
+
+**One residual nuance surfaced, left as a documented observation, not fixed this pass:**
+`get_retriever(mode="vector")` doesn't pass a `memory_store` through by default, so
+`Retriever._load_memory()` returns a content-less stub (`{"id": ..., "kind": "unknown"}`) for that
+mode, degrading its own second-layer rule check to a no-op for content-based rules specifically.
+Harmless under today's code — the first-layer `ConsentGate` inside `VectorStore.search()` gates
+unconditionally regardless — but "vector" mode has one fewer redundant layer than "hybrid"/"fts"
+if that first layer were ever independently broken. No test requires fixing it and doing so was
+outside this session's scope; flagged in RISKS.md's R1 entry for a future pass.
+
+**Acceptance:** no production retrieval surface — factory-constructed or built directly per a
+class's own documented usage — ever surfaces a `never_store` or unconsented `ask_before_store`
+memory; the fail-closed regression (consented memories wrongly excluded) stays caught; the
+bypass knob (`apply_consent_gate=False`) is now a permanent, tested non-event in production code.
+
+**Verify:** `pytest -q tests/test_consent_bypass_redteam.py tests/test_consent_gates.py
+tests/test_retrieval_consent_enforcement.py` — 28 passed, 1 pre-existing conditional skip
+unrelated to this change (`test_consent_gates.py`'s own `pytest.skip("Memory blocked by privacy
+guard...")` guard); full `pytest -q` — clean (zero failures/errors; one flaky, unrelated
+`test_wal_cleanup_concurrent_processes` failure seen once under full-suite concurrency load and
+not on retry, tracked separately as item 11.18's own open tech debt, not this change).
+
+---
+
 ### P0 — Make the build trustworthy
 5. **Canonical SSOT docs (done in this repo snapshot)**
    - **Acceptance:** canonical docs exist; cross-linked; "Next 3 Moves" current.
@@ -532,7 +598,7 @@ its own tests in isolation. Fixed:
   action.
 - Verified: full `pytest -q` remains green. `ruff check` clean.
 
-### P2.5 — Runtime Convergence (architectural prerequisite; recommended, pending sign-off)
+### P2.5 — Runtime Convergence (architectural prerequisite) ✅ Complete 2026-07-24 (item 11.22)
 
 > **Source:** Architect review, 2026-07-21, responding to the P2 skill-registry wiring
 > write-up above and the grounded architectural audit that preceded it (subsystem map,
@@ -1221,6 +1287,175 @@ No exceptions. Not even chat.
       the daemon's split `aiosqlite`/sync-`sqlite3` database ownership should eventually
       consolidate.
 
+11.19. **Skill-execution convergence — Observation, Executive/CandidateAction for the skill
+    surface; closes Exit Gate questions #1-2 for that surface, strengthens #3** — ✅ implemented
+    2026-07-24
+    - **The gap:** unlike chat (11.3/11.6) and scheduler drives (11.17), `SkillRegistry.
+      execute_action()` was already a real, single choke-point (parking brake, Identity Policy
+      Decision, unified Reflection into the shared sink) — so, unlike those two surfaces,
+      nothing was actually missing from Governance/Reflection behavior. The gap
+      `COGNITIVE_RUNTIME.md`'s Exit Gate table named was narrower and purely representational:
+      none of that behavior was expressed as an `Observation`/`CandidateAction`, so the table
+      couldn't honestly answer "yes" to questions #1-2 for this surface even though the
+      underlying mechanics already matched chat/scheduler's shape.
+    - **The requirement this had to satisfy, not just the shape:** merely constructing an
+      `Observation`/`CandidateAction` object and discarding it would not have closed anything —
+      the objects had to be genuinely consumed by the Governance decision before any skill side
+      effect, not decorative. So `execute_action()` now builds `Observation(source="skill",
+      raw_content=f"{skill_id}.{action}")` and `CandidateAction(kind=skill_id, ...)` at entry (
+      `kind=skill_id`, not `"<skill_id>.<action>"`, deliberately matching the exact grain
+      `evaluate_tool_policy()`/`Identity.yaml`'s `tool_use.allowlist` already operate on — the
+      same grain `tests/test_runtime_convergence_policy.py`'s `ALLOW_CONTEXT` already allowlists
+      by skill_id, not skill_id+action), and the Identity Policy check now evaluates
+      `candidate_action.kind` itself rather than a separately-derived local. `_finish()`/
+      `_record_reflection()` source the Reflection's `surface` from `observation.source` rather
+      than the previous hardcoded literal.
+    - **New named production seam, mirroring the established pattern exactly:**
+      `runtime_contract.run_skill_through_runtime_contract()` — unlike
+      `run_chat_through_runtime_contract()`/`run_drive_through_runtime_contract()`, which had to
+      build Governance from scratch for their surfaces, this one is a thin delegator to
+      `execute_action()` (which already owns the real logic), the same shape
+      `scheduler/loop.py`'s `_run_drive()` already is relative to
+      `run_drive_through_runtime_contract()`. `Planner.handle_skill_request()` — the sole
+      production caller of `execute_action()` — now calls this instead of `execute_action()`
+      directly. `execute_action()` remains directly callable as the execution primitive
+      underneath (still exercised directly by ~5 pre-existing test files); this is not a second,
+      parallel Governance path, and behavioral-equivalence between the two is directly tested.
+    - **Proven, not assumed — new tests
+      (`tests/test_skill_runtime_contract_seam.py`, 15 tests):**
+      - The policy authority receives the exact CandidateAction constructed inside
+        `execute_action()`: a spy on both the `CandidateAction` constructor and
+        `evaluate_tool_policy()`'s incoming `tool_name` asserts they're the same value.
+      - Denied actions never invoke the underlying skill (a `SpySkill` whose `execute()` logs an
+        unmistakable side effect never logs it under a denying `IdentityContext`), including an
+        "unrelated tool allowlisted" context that rules out a hardcoded/drifted stand-in kind.
+      - Execution occurs only after the Governance decision: an ordering assertion proves the
+        policy check completes strictly before `SkillBase.execute()` runs.
+      - A structural (AST-based, not textual — avoids false positives from prose that merely
+        *mentions* `execute_action()`) repo scan of `bartholomew/`, `bartholomew_api_bridge_v0_1/`,
+        `identity_interpreter/` proves no production call site outside `runtime_contract.py`
+        invokes `.execute_action(` directly, plus a behavioral patch-and-assert test that
+        `Planner.handle_skill_request()` actually calls the named seam function.
+      - Exactly one `ActionReflection` per attempt — success, parking-brake denial, policy
+        denial, execution exception — verified by direct row counts against the shared
+        `reflections` sink and the `skill_action_audit` table (no duplicate writes).
+    - **Acceptance:** `SkillRegistry.execute_action()` builds and genuinely consumes an
+      `Observation`/`CandidateAction` for every request; `Planner.handle_skill_request()` is the
+      one production route into skill execution and it goes through
+      `run_skill_through_runtime_contract()`; existing skill behavior (permissions, consent,
+      parking brake, audit trail) is unchanged.
+    - **Verify:** `pytest -q tests/test_skill_runtime_contract_seam.py` — 15 passed; `pytest
+      tests/test_skill_runtime_contract_seam.py tests/test_skill_registry.py
+      tests/test_reflection_unification.py tests/test_runtime_convergence_policy.py
+      tests/test_end_to_end_tasks_and_audit.py tests/test_scheduler_drive_convergence.py
+      tests/test_runtime_contract_chat_seam.py tests/test_api_chat_runtime_contract.py` — 112
+      passed, no regressions; full `pytest -q` — clean (zero failures/errors).
+
+11.20. **RISKS.md R1 red-team test suite (consent bypass / privacy leakage)** — ✅ added
+    2026-07-24. Not a Runtime Convergence item per se, but the risk mitigation gated on the same
+    milestone. Full write-up in the standalone "RISKS.md R1 (consent bypass / privacy leakage):
+    red-team test suite" section above and in RISKS.md's R1 entry. Summary: `tests/
+    test_consent_bypass_redteam.py` (10 tests) proves no production retrieval surface ever
+    surfaces a `never_store`/unconsented `ask_before_store` memory, plus two permanent structural
+    guards (no `apply_consent_gate=False` in production; no `.retrieve()` facade exposes a
+    gate-bypass parameter). Non-vacuity confirmed by deliberately breaking `ConsentGate` and
+    watching exactly the right tests fail.
+
+11.21. **Voice/sight convergence — Observation/CandidateAction + governed seam for the two
+    remaining device surfaces; closes Exit Gate questions #1-3 for them (the last
+    current-production governance gap)** — ✅ implemented 2026-07-24
+    - **The gap:** voice (`identity_interpreter/adapters/voice_io/stream_bridge.py:start_stream()`)
+      and sight (`identity_interpreter/adapters/sight/pipeline.py:start_capture()`) were
+      parking-brake-only stubs with no production caller (only
+      `tests/integration/test_parking_brake_integration.py`), no `Observation`/`CandidateAction`,
+      no Identity Policy consultation, and no consent gate or Reflection at all — the last
+      surfaces `COGNITIVE_RUNTIME.md`'s Exit Gate table named "Partial" for questions #1-3.
+    - **Strictly architectural scope:** this adds *only* the governed seam and its invariants. No
+      real microphone/camera/streaming/transcription/computer-vision/device-lifecycle work, and no
+      Stage 6 capture architecture, is introduced — the capability bodies
+      (`_perform_stream`/`_perform_capture`) stay inert placeholders.
+    - **The seam:** `runtime_contract.run_voice_through_runtime_contract()` /
+      `run_sight_through_runtime_contract()` build `Observation(source="voice"/"sight")` and
+      `CandidateAction(kind="voice_stream_start"/"sight_capture_start")` — distinct, stable kinds
+      for a *single start attempt* (the `_start` suffix is deliberate: approval authorizes one
+      start, never continuing access), not generic skill kinds. Governance runs three gates,
+      strictly before any capability call: (1) ParkingBrake (scope, preserving the pre-existing
+      `except ImportError: pass` behaviour); (2) additive Identity Policy Decision (skipped when no
+      `IdentityContext`, matching chat/scheduler/skill; under real `Identity.yaml` these kinds are
+      denied by default); (3) an *always-required, fail-closed* device consent gate reusing the one
+      interactive consent channel (`privacy_guard.get_consent_handler()`) that skill "ask"
+      permissions use — absent handler, declined, or unresolved (falsy) all deny. Exactly one
+      `ActionReflection` into the shared sink for every outcome (started / policy denial / consent
+      denial / brake denial / execution error).
+    - **Sole production entry, no bypass:** `start_stream()`/`start_capture()` remain as public
+      compatibility wrappers (unchanged signatures/return shapes) but delegate *exclusively* to the
+      seam; the inert capability is passed in as `stream_fn`/`capture_fn` and is reachable only
+      through the seam. An AST structural test forbids any direct call to
+      `_perform_stream`/`_perform_capture` anywhere in production and asserts the wrappers delegate
+      to the named seam.
+    - **Proven, not assumed — new tests (`tests/test_voice_sight_runtime_contract_seam.py`, 45
+      tests, both surfaces parametrized):** the CandidateAction is genuinely consumed (constructor
+      + `evaluate_tool_policy` spies agree on the exact kind); denied starts (policy / consent-absent
+      / consent-declined / consent-unresolved / brake) never invoke the capability (call-count 0);
+      approved starts execute exactly once; governance completes strictly before execution
+      (ordering assertion `["policy","consent","capability"]`); exactly one Reflection per attempt
+      for every outcome; compat wrappers delegate only to the seam. **Required non-vacuity
+      controls:** three mutation tests neutralise each gate (force-allow policy, force-allow consent,
+      force `is_blocked` False) *in the test only* and assert the placeholder then executes —
+      plus a manual pre-commit check that deliberately broke each of the three gates in the
+      production seam and confirmed exactly that gate's denial tests (and only those) failed.
+    - **Two existing tests updated (not weakened):** `test_sight_allowed_when_disengaged` /
+      `test_voice_allowed_when_disengaged` now register an approving consent handler, because
+      disengaging the brake alone is no longer sufficient to start — device consent is
+      additionally required. The three brake-*engaged* tests pass unmodified (the brake is checked
+      first and still short-circuits).
+    - **A recorded Stage 6 safety requirement (not implemented now):** safely stopping/tearing down
+      a future active capture session must never depend on obtaining permission to *continue*
+      capturing — teardown is not a governed "start". See COGNITIVE_RUNTIME.md's "Device surfaces"
+      section.
+    - **Acceptance:** every executable voice/sight start creates the right Observation/
+      CandidateAction; consent + Identity Policy + parking brake all decide before any device or
+      downstream action; denied requests produce no side effect; approved requests execute exactly
+      once; reflection/audit occur exactly once; production callers cannot bypass the seam; the
+      inert adapters stay inert behind it.
+    - **Verify:** `pytest -q tests/test_voice_sight_runtime_contract_seam.py` — 45 passed;
+      `pytest -q tests/test_voice_sight_runtime_contract_seam.py
+      tests/integration/test_parking_brake_integration.py tests/test_parking_brake_scoped_blocks.py
+      tests/unit/safety/test_parking_brake.py` — all passed; full `pytest -q` — 879 passed, 2
+      skipped, 0 failures.
+
+11.22. **Exit Gate question #7 (personality uniformity): reclassify the voice/sight-persona
+    residual to Stage 6; declare Stage 4.5 complete** — ✅ documentation-only, 2026-07-24 (no
+    production code changed).
+    - **Why this was needed:** after item 11.21, Q7 was the only exit-gate question not marked
+      "yes", which is inconsistent with declaring Stage 4.5's convergence complete. Precise
+      resolution required determining, from the authoritative stage definition, whether Q7's
+      remaining residual is a Stage 4.5 deliverable or a Stage 6 dependency.
+    - **The authoritative determination:** Q7 *is* a genuine Stage 4.5 criterion — the P2.5
+      finding above states the milestone's own goal as *"Bartholomew should have one personality,
+      not one personality per interface"* (an architectural inconsistency), so personality
+      uniformity is central to this stage, not peripheral, and was **not** hand-waved wholesale to
+      Stage 6. What Q7 architecturally demands — every personality-bearing interface sourcing
+      persona from the single authority (`PersonaPackManager`) rather than a duplicated
+      implementation — is **done** for every interface that exists as a personality-bearing surface
+      today (chat, CLI `explain`, standalone `chat.py`; the duplicated `identity_interpreter/
+      policies/persona.py` was removed in item 11.12). The `traits` split is a deliberate
+      stable-identity-vs-persona-state design decision, already documented as "not a duplication",
+      i.e. not an open convergence gap.
+    - **What is reclassified (the residual only, not the question):** the one thing still
+      outstanding under Q7 — voice/sight *consulting* persona — is a Stage 6 **dependency**, not a
+      Stage 4.5 shortcut: a surface that produces no personality-bearing output cannot "expose the
+      same personality", so converging persona onto voice/sight is architecturally impossible until
+      Stage 6 gives them persona-producing output. That work is the already-approved Stage 6
+      boundary for real voice/sight functionality (see item 11.21's Stage 6 note). It is moved to
+      ROADMAP.md Stage 6's carried-forward requirements, with this reason recorded.
+    - **Result:** with the residual reclassified, all seven exit-gate questions are satisfied
+      within Stage 4.5's scope; no official Stage 4.5 exit criterion is left partial while the
+      stage is marked complete. Stage 4.5 (Runtime Convergence) is **complete**. Real voice/sight
+      functionality — including persona-producing output — remains Stage 6.
+    - **Scope:** documentation only (`COGNITIVE_RUNTIME.md`, `MASTER_PLAN.md`, `ROADMAP.md`). No
+      production code, tests, or behaviour changed.
+
 **Runtime Convergence Exit Gate** — before P3 (below) resumes, all seven must be "yes":
 1. Can every input source create an Observation?
 2. Does every proposed action pass through the Executive?
@@ -1229,6 +1464,18 @@ No exceptions. Not even chat.
 5. Does every Reflection update Memory?
 6. Does every conversation see the Experience Kernel?
 7. Does every interface expose the same personality?
+
+**Status as of item 11.22 (2026-07-24): all seven satisfied within Stage 4.5's scope — Stage 4.5
+Runtime Convergence is complete.** Questions **1–6 are "yes"** for every surface that exists
+today (item 11.21 closed the last current-production governance gap, voice/sight). Question **7
+is "yes" within Stage 4.5's scope**: every personality-bearing interface (chat, CLI `explain`,
+`chat.py`) sources persona from the one authority (`PersonaPackManager`); the `traits` read from
+`Identity.yaml` are a deliberate stable-identity/persona-state split, not a convergence gap. Q7's
+only residual — voice/sight consulting persona — was **formally reclassified to Stage 6 by item
+11.22** (see that item for the reason); it is architecturally impossible to satisfy inside Stage
+4.5 because voice/sight produce no persona-bearing output until Stage 6 builds it. See
+`COGNITIVE_RUNTIME.md`'s Exit Gate table for the per-question evidence. No official Stage 4.5
+exit criterion is left partial.
 
 **Note:** this section records the architect's recommendation and gives it a measurable exit
 gate; it does not itself pause P3 — that requires separate, explicit user sign-off.

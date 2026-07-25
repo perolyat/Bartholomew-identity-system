@@ -26,6 +26,7 @@ regression -- that's a deliberate, tracked follow-up, not an oversight.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -33,11 +34,16 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import policy_engine
+from .memory.privacy_guard import get_consent_handler
 from .reflection import ActionReflection, record_action_reflection
 
 
 if TYPE_CHECKING:
+    from identity_interpreter.identity_context import IdentityContext
+
     from .daemon import KernelDaemon
+    from .skill_base import SkillResult
+    from .skill_registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -427,3 +433,337 @@ async def run_drive_through_runtime_contract(
         logger.exception("Drive %s crashed", task_id)
         await _record_drive_reflection(ctx, candidate_action, outcome="error")
         return None, 0
+
+
+async def run_skill_through_runtime_contract(
+    registry: SkillRegistry,
+    skill_id: str,
+    action: str,
+    params: dict[str, Any] | None = None,
+) -> SkillResult:
+    """
+    Trace a skill execution through the Runtime Contract seam, by name --
+    the production entry point every skill invocation is meant to go
+    through (MASTER_PLAN.md item 11.19, closing Exit Gate questions #1-2
+    for the skill surface; see COGNITIVE_RUNTIME.md's Exit Gate table).
+
+    Unlike chat (item 11.3, `run_chat_through_runtime_contract()`) and
+    scheduler drives (item 11.17, `run_drive_through_runtime_contract()`),
+    skill execution already had a real, single choke-point before this --
+    `SkillRegistry.execute_action()` -- so there is nothing to reimplement
+    here: Observation/Interpretation/CandidateAction construction, the
+    Governance stage (ParkingBrake + Identity Context -> Policy Decision,
+    evaluated against the constructed CandidateAction), and the unified
+    Reflection write into the shared Memory sink all now live *inside*
+    `execute_action()` itself (see that method's docstring for the detail).
+
+    This function exists so every surface's production entry point shares
+    the same `run_*_through_runtime_contract()` naming convention --
+    mirroring `scheduler/loop.py`'s `_run_drive()`, which is exactly this
+    shape: a thin, named wrapper around the surface's real seam function.
+    `Planner.handle_skill_request()` is this function's sole production
+    caller; `execute_action()` remains directly callable (and directly
+    tested by ~5 existing test files) as the primitive underneath, not a
+    parallel/competing path.
+    """
+    return await registry.execute_action(skill_id, action, params)
+
+
+# =============================================================================
+# Voice / Sight device surfaces (MASTER_PLAN.md item 11.21, closing Exit Gate
+# questions #1-3 for the two remaining surfaces).
+#
+# Distinct, stable action kinds for a SINGLE device-start attempt. Deliberately
+# NOT generic skill kinds, and deliberately suffixed "_start" to encode that
+# governance approval here authorizes exactly one capture/stream *initiation* --
+# never indefinite or continuing microphone/camera access. Continuous sessions,
+# consent renewal, revocation, stop/teardown semantics, streaming lifecycle and
+# device-driver behaviour are all Stage 6 work (see COGNITIVE_RUNTIME.md's
+# "Device surfaces" note). In particular, safely *stopping* a future active
+# capture session must never depend on obtaining permission to *continue*
+# capturing -- a Stage 6 requirement recorded, not implemented here.
+# =============================================================================
+
+_SIGHT_CAPTURE_KIND = "sight_capture_start"
+_VOICE_STREAM_KIND = "voice_stream_start"
+
+
+@dataclass
+class DeviceRuntimeResult:
+    """Outcome of one voice/sight start attempt through the Runtime Contract.
+
+    `governance_allowed` is whether every Governance gate (parking brake,
+    Identity Policy, device consent) passed. `started` is whether the
+    underlying capability then actually executed to completion -- these differ
+    only when execution itself raised after governance approved (outcome
+    "error"). `outcome` is one of: "started", "parking_brake_denied",
+    "governance_denied", "consent_denied", "error".
+    """
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    started: bool
+    outcome: str
+    reason: str | None
+    result: Any
+
+
+def _resolve_device_db_path(db_path: str | None) -> str | None:
+    """The db path used for the parking-brake read and the Reflection write.
+    Mirrors the pre-existing stubs' own `db_path or _default_db_path()`
+    resolution, kept lazy to avoid importing daemon at module load."""
+    if db_path:
+        return db_path
+    try:
+        from .daemon import _default_db_path
+
+        return _default_db_path()
+    except Exception:
+        logger.exception("Failed to resolve default db path for device surface")
+        return None
+
+
+async def _record_device_reflection(
+    db_path: str | None,
+    surface: str,
+    kind: str,
+    outcome: str,
+    reason: str | None,
+) -> None:
+    """Exactly one ActionReflection into the shared Memory sink for a
+    voice/sight start attempt -- every outcome (started or any denial/error).
+    Best-effort: `record_action_reflection` swallows and logs any failure, so
+    a missing/uninitialised store never breaks the surface (same posture as
+    `_record_drive_reflection`)."""
+    mem = None
+    if db_path:
+        try:
+            from .memory_store import MemoryStore
+
+            mem = MemoryStore(db_path)
+        except Exception:
+            logger.exception("Failed to construct MemoryStore for device reflection")
+            mem = None
+    reflection = ActionReflection(
+        surface=surface,
+        action=kind,
+        outcome=outcome,
+        summary=f"{surface.capitalize()} {kind}: {outcome}",
+        details={"reason": reason} if reason else {},
+    )
+    await record_action_reflection(mem, reflection)
+
+
+async def _resolve_device_consent(device_label: str) -> tuple[bool, str, str | None]:
+    """Fail-closed device consent for a single voice/sight start attempt.
+
+    Returns (allowed, outcome, reason). Reuses the one interactive consent
+    channel (`privacy_guard.get_consent_handler()`) that skill "ask"
+    permissions also use -- not a second consent mechanism. An absent handler,
+    a declined request, or an unresolved (falsy) ask result all deny. Shared
+    by both device seams *only* for this fail-closed check itself; each seam
+    still runs its own brake/policy gates inline. Grants authorize a single
+    start attempt only -- never continuing access (see the module note above)."""
+    handler = get_consent_handler()
+    if handler is None:
+        return False, "consent_denied", "No consent handler registered (fail-closed)"
+    approved = handler(f"Bartholomew requests to start {device_label} (single start attempt)")
+    if inspect.isawaitable(approved):
+        approved = await approved
+    if not approved:
+        return False, "consent_denied", "Device consent declined or unresolved"
+    return True, "started", None
+
+
+async def run_sight_through_runtime_contract(
+    *,
+    db_path: str | None = None,
+    capture_fn: Callable[[], Any] | None = None,
+    identity_context: IdentityContext | None = None,
+) -> DeviceRuntimeResult:
+    """
+    Trace a single sight-capture *start* through the Runtime Contract seam:
+    Observation -> Interpretation -> Executive -> Governance -> Capability ->
+    Execution -> Reflection -> Memory. The governed production entry point for
+    the sight surface (item 11.21).
+
+    Governance runs three gates, all strictly before `capture_fn` is ever
+    called:
+      1. ParkingBrake("sight") -- unchanged from the pre-existing stub's own
+         check, including its `except ImportError: pass` tolerance.
+      2. Identity Policy Decision (`evaluate_tool_policy`, kind
+         "sight_capture_start"). Additive: skipped when no `IdentityContext`
+         is wired in, matching chat/scheduler/skill. Under real `Identity.yaml`
+         (`tool_use.allowlist = [web_fetch, browser_action]`, default_allowed
+         false), this kind is denied by default -- the safe outcome, since
+         nothing live calls this path yet.
+      3. Device consent -- ALWAYS required for a device start (these are
+         exactly `policy.yaml`'s `safety.do_not: record audio/video without
+         explicit approval` category). Fail-closed via the one interactive
+         consent channel (`privacy_guard.get_consent_handler()`) that skill
+         "ask" permissions also reuse: an absent handler, a declined request,
+         or an unresolved (falsy) result all deny.
+
+    Only if all three pass does `capture_fn` run, exactly once. Every outcome
+    -- success or any denial/error -- produces exactly one ActionReflection
+    into the shared sink.
+
+    `capture_fn` is injected (like chat's `respond_fn` / drive's `drive_fn`)
+    rather than imported, so this seam owns Governance while the surface owns
+    its (currently inert) capability -- and so the capability is reachable
+    *only* through this governed path.
+    """
+    observation = Observation(source="sight", raw_content=_SIGHT_CAPTURE_KIND)
+    interpretation = Interpretation(observation=observation, prompt=observation.raw_content)
+    candidate_action = CandidateAction(kind=_SIGHT_CAPTURE_KIND, interpretation=interpretation)
+    resolved_db_path = _resolve_device_db_path(db_path)
+
+    allowed = True
+    outcome = "started"
+    reason: str | None = None
+
+    # Governance gate 1: ParkingBrake("sight"), preserving the pre-existing
+    # ImportError tolerance exactly.
+    try:
+        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+
+        if resolved_db_path is not None:
+            brake = ParkingBrake(BrakeStorage(resolved_db_path))
+            if brake.is_blocked("sight"):
+                allowed = False
+                outcome = "parking_brake_denied"
+                reason = "Blocked by parking brake (scope=sight)"
+    except ImportError:
+        pass
+
+    # Governance gate 2: Identity Policy Decision (additive; see docstring).
+    if allowed and identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, candidate_action.kind)
+        if not decision.allowed:
+            allowed = False
+            outcome = "governance_denied"
+            reason = f"Denied by Identity policy: {decision.reason}"
+
+    # Governance gate 3: device consent -- always required, fail-closed.
+    if allowed:
+        allowed, outcome, reason = await _resolve_device_consent("camera capture")
+
+    # Capability + Execution -- reached only after all three gates allowed.
+    governance_allowed = allowed
+    started = False
+    capture_result: Any = None
+    if governance_allowed:
+        try:
+            capture_result = capture_fn() if capture_fn is not None else None
+            if inspect.isawaitable(capture_result):
+                capture_result = await capture_result
+            outcome, reason, started = "started", None, True
+        except Exception as exc:
+            logger.exception("Sight capture failed after governance approval")
+            outcome, reason, started = "error", str(exc), False
+
+    await _record_device_reflection(
+        resolved_db_path,
+        "sight",
+        candidate_action.kind,
+        outcome,
+        reason,
+    )
+
+    return DeviceRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=governance_allowed,
+        started=started,
+        outcome=outcome,
+        reason=reason,
+        result=capture_result,
+    )
+
+
+async def run_voice_through_runtime_contract(
+    *,
+    db_path: str | None = None,
+    stream_fn: Callable[[], Any] | None = None,
+    identity_context: IdentityContext | None = None,
+) -> DeviceRuntimeResult:
+    """
+    Trace a single voice-stream *start* through the Runtime Contract seam --
+    the governed production entry point for the voice surface (item 11.21).
+
+    Identical governance shape to `run_sight_through_runtime_contract()`
+    (parking brake, then additive Identity Policy, then always-required
+    fail-closed device consent -- all before `stream_fn` runs), for the
+    "voice" scope / "voice_stream_start" kind / "microphone" device. The
+    per-surface gates (brake scope, policy kind) are written inline in each
+    seam rather than shared, so a change to one surface's gate cannot silently
+    weaken the other's; only the fail-closed consent *primitive*
+    (`_resolve_device_consent`) is shared, since getting fail-closed exactly
+    right in one place is safer than duplicating it.
+    """
+    observation = Observation(source="voice", raw_content=_VOICE_STREAM_KIND)
+    interpretation = Interpretation(observation=observation, prompt=observation.raw_content)
+    candidate_action = CandidateAction(kind=_VOICE_STREAM_KIND, interpretation=interpretation)
+    resolved_db_path = _resolve_device_db_path(db_path)
+
+    allowed = True
+    outcome = "started"
+    reason: str | None = None
+
+    # Governance gate 1: ParkingBrake("voice"), preserving ImportError tolerance.
+    try:
+        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+
+        if resolved_db_path is not None:
+            brake = ParkingBrake(BrakeStorage(resolved_db_path))
+            if brake.is_blocked("voice"):
+                allowed = False
+                outcome = "parking_brake_denied"
+                reason = "Blocked by parking brake (scope=voice)"
+    except ImportError:
+        pass
+
+    # Governance gate 2: Identity Policy Decision (additive; see sight docstring).
+    if allowed and identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, candidate_action.kind)
+        if not decision.allowed:
+            allowed = False
+            outcome = "governance_denied"
+            reason = f"Denied by Identity policy: {decision.reason}"
+
+    # Governance gate 3: device consent -- always required, fail-closed.
+    if allowed:
+        allowed, outcome, reason = await _resolve_device_consent("microphone streaming")
+
+    # Capability + Execution -- reached only after all three gates allowed.
+    governance_allowed = allowed
+    started = False
+    stream_result: Any = None
+    if governance_allowed:
+        try:
+            stream_result = stream_fn() if stream_fn is not None else None
+            if inspect.isawaitable(stream_result):
+                stream_result = await stream_result
+            outcome, reason, started = "started", None, True
+        except Exception as exc:
+            logger.exception("Voice stream failed after governance approval")
+            outcome, reason, started = "error", str(exc), False
+
+    await _record_device_reflection(
+        resolved_db_path,
+        "voice",
+        candidate_action.kind,
+        outcome,
+        reason,
+    )
+
+    return DeviceRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=governance_allowed,
+        started=started,
+        outcome=outcome,
+        reason=reason,
+        result=stream_result,
+    )
