@@ -1,7 +1,10 @@
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
 from bartholomew_api_bridge_v0_1.services.api.app import app
+from bartholomew_api_bridge_v0_1.services.api.routes import liveness
 
 
 @pytest.fixture(scope="module")
@@ -20,6 +23,24 @@ def test_liveness_ticks_endpoint(client):
     assert r.status_code == 200, f"Unexpected status: {r.status_code}"
     data = r.json()
     assert isinstance(data, list)
+
+
+def test_get_ticks_returns_empty_when_table_missing(tmp_path, monkeypatch):
+    """Regression guard for the startup race: the `ticks` table is created by
+    the scheduler's ensure_schema() as a fire-and-forget task that
+    KernelDaemon.start() does not await, so the API can serve a request before
+    the table exists. The endpoint must return an empty list (200), not 500
+    with "no such table: ticks".
+
+    Exercises the endpoint function directly against a DB that has no `ticks`
+    table, so it's deterministic (no reliance on winning/losing the real
+    startup race) and version-independent.
+    """
+    db = tmp_path / "no_ticks.db"
+    sqlite3.connect(str(db)).close()  # empty DB: no `ticks` table
+    monkeypatch.setattr(liveness, "DB_PATH", str(db))
+
+    assert liveness.get_ticks(limit=5, offset=0) == []
 
 
 def test_liveness_nudges_endpoint(client):
