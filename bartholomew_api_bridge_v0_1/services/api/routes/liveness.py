@@ -56,6 +56,22 @@ def get_ticks(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
     with db_ctx.wal_db(DB_PATH, timeout=30.0) as conn:
         conn.execute("PRAGMA busy_timeout = 5000")
 
+        # The `ticks` table is created by the scheduler's ensure_schema(),
+        # which KernelDaemon.start() launches as a fire-and-forget background
+        # task (asyncio.create_task(run_scheduler(...))) and does NOT await.
+        # The API therefore begins serving requests during a brief startup
+        # window in which the table may not exist yet -- unlike `nudges` and
+        # `reflections`, which MemoryStore.init() creates synchronously during
+        # start(). A request landing in that window would otherwise raise
+        # "no such table: ticks" and 500. No ticks can exist before the table
+        # does, so the correct liveness answer for that window is an empty
+        # list, not an error.
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ticks'",
+        ).fetchone()
+        if not table_exists:
+            return []
+
         # Get results
         cur = conn.execute(
             """SELECT id, task_id, started_ts, finished_ts, success,
