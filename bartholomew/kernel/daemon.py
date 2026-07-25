@@ -163,67 +163,79 @@ class KernelDaemon:
         #
         # Fail closed (A1): if the schema cannot be created, the daemon does not
         # come up -- a "started" daemon with no scheduler tables is exactly the
-        # broken half-initialized state issue #24 is about. On failure, close
-        # the scheduler store so its worker thread does not leak; stop() may
-        # never be called after a failed start(). No outer asyncio.wait_for is
-        # added (A2): the underlying wal_db() call is already bounded, and
-        # cancelling the awaiting coroutine cannot stop the worker-thread
-        # operation, so an outer timeout would abandon-not-cancel.
+        # broken half-initialized state issue #24 is about. No outer
+        # asyncio.wait_for is added (A2): the underlying wal_db() call is
+        # already bounded, and cancelling the awaiting coroutine cannot stop
+        # the worker-thread operation, so an outer timeout would
+        # abandon-not-cancel.
         #
-        # The primary schema-initialization error is what callers must see. If
-        # cleanup (close()) *also* fails, that secondary failure must not
-        # replace or mask the primary one: log it as secondary and still
-        # propagate the original schema-init error.
+        # Protected region (Codex review on PR #25): once the first awaited
+        # ensure_schema() call has activated SchedulerStore (spawning its
+        # dedicated worker thread), EVERY abnormal exit from start() before
+        # successful scheduler-task creation must close the store -- stop()
+        # may never run after a failed start(), and an aborted ASGI startup
+        # is not guaranteed to invoke it either. That includes cancellation:
+        # asyncio.CancelledError inherits BaseException, so the cleanup guard
+        # catches BaseException, runs close() under asyncio.shield() (so the
+        # in-flight cancellation cannot interrupt the cleanup itself), and
+        # then ALWAYS re-raises the original exception or CancelledError --
+        # nothing is swallowed or translated. Cleanup cannot hang: it reuses
+        # SchedulerStore.close()'s existing bounded drain (default 5s), which
+        # never waits indefinitely. If cleanup itself fails, that failure is
+        # logged as secondary and must never replace the primary error.
         try:
             await self.scheduler_store.ensure_schema()
-        except Exception:
+
+            # Stage 3: Initialize experience kernel state
+            self._init_experience_kernel()
+
+            # Stage 4: Load skills. load_enabled_skills() loads whatever was
+            # previously enabled (skill_registry_state), which is empty on a
+            # fresh database -- fall back to loading every discovered starter
+            # skill so they work out of the box rather than requiring a manual
+            # enable step first, since they're documented as "safe and
+            # reversible".
+            loaded_count = await self.skill_registry.load_enabled_skills()
+            if loaded_count == 0 and not self.skill_registry.list_loaded():
+                for skill_id in self.skill_registry.list_available():
+                    await self.skill_registry.load_skill(skill_id)
+
+            # Stage 3: Subscribe narrator to workspace events
+            self.narrator.subscribe_to_workspace()
+
+            # Stage 3: Emit startup event
+            self.workspace.publish(
+                channel="system",
+                event_type=EventType.SYSTEM_EVENT,
+                source="kernel_daemon",
+                payload={
+                    "event": "startup",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            # Give the scheduled skill event-handler tasks (see
+            # SkillRegistry._setup_subscriptions()) a chance to start running
+            # before we move on -- publish() is sync and only schedules them.
+            await asyncio.sleep(0)
+
+            # Start background tasks
+            self._tick_task = asyncio.create_task(self._system_tick())
+            self._consumer_task = asyncio.create_task(self._system_consumer())
+            self._dream_task = asyncio.create_task(self._dream_loop())
+
+            # Start scheduler (autonomy loop)
+            from .scheduler.loop import run_scheduler
+
+            self._scheduler_task = asyncio.create_task(run_scheduler(self))
+        except BaseException:  # includes CancelledError; re-raised below
             try:
-                await self.scheduler_store.close()
-            except Exception:
+                await asyncio.shield(self.scheduler_store.close())
+            except BaseException:  # secondary only; primary re-raised below
                 logger.exception(
-                    "Scheduler store cleanup failed after schema-initialization error; "
-                    "propagating the original schema-init error as primary",
+                    "Scheduler store cleanup failed during aborted startup; "
+                    "propagating the original startup error as primary",
                 )
             raise
-
-        # Stage 3: Initialize experience kernel state
-        self._init_experience_kernel()
-
-        # Stage 4: Load skills. load_enabled_skills() loads whatever was
-        # previously enabled (skill_registry_state), which is empty on a
-        # fresh database -- fall back to loading every discovered starter
-        # skill so they work out of the box rather than requiring a manual
-        # enable step first, since they're documented as "safe and
-        # reversible".
-        loaded_count = await self.skill_registry.load_enabled_skills()
-        if loaded_count == 0 and not self.skill_registry.list_loaded():
-            for skill_id in self.skill_registry.list_available():
-                await self.skill_registry.load_skill(skill_id)
-
-        # Stage 3: Subscribe narrator to workspace events
-        self.narrator.subscribe_to_workspace()
-
-        # Stage 3: Emit startup event
-        self.workspace.publish(
-            channel="system",
-            event_type=EventType.SYSTEM_EVENT,
-            source="kernel_daemon",
-            payload={"event": "startup", "timestamp": datetime.now(timezone.utc).isoformat()},
-        )
-        # Give the scheduled skill event-handler tasks (see
-        # SkillRegistry._setup_subscriptions()) a chance to start running
-        # before we move on -- publish() is sync and only schedules them.
-        await asyncio.sleep(0)
-
-        # Start background tasks
-        self._tick_task = asyncio.create_task(self._system_tick())
-        self._consumer_task = asyncio.create_task(self._system_consumer())
-        self._dream_task = asyncio.create_task(self._dream_loop())
-
-        # Start scheduler (autonomy loop)
-        from .scheduler.loop import run_scheduler
-
-        self._scheduler_task = asyncio.create_task(run_scheduler(self))
 
     def _init_experience_kernel(self) -> None:
         """Initialize experience kernel from last snapshot or defaults."""

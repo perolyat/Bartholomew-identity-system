@@ -286,6 +286,155 @@ async def test_primary_schema_error_survives_a_failing_cleanup(config_files, mon
 
 
 # =============================================================================
+# T3c -- cancellation during ensure_schema(): the protected cleanup runs (the
+#        store is closed via the shielded path) and the ORIGINAL CancelledError
+#        propagates -- not swallowed, not translated -- with no background
+#        task created.
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_ensure_schema_cleans_up_and_propagates(
+    config_files,
+    monkeypatch,
+):
+    entered = asyncio.Event()
+
+    async def hanging_ensure(self):
+        entered.set()
+        await asyncio.sleep(3600)  # parked until task.cancel() lands here
+
+    monkeypatch.setattr(SchedulerStore, "ensure_schema", hanging_ensure)
+
+    daemon = _make_daemon(config_files)
+    task = asyncio.create_task(daemon.start())
+    await entered.wait()  # deterministically mid-ensure_schema
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Protected cleanup ran: the real close() was reached via the shield.
+    assert daemon.scheduler_store._closed is True
+    # Fail-closed: nothing was started.
+    assert daemon._scheduler_task is None
+    assert daemon._tick_task is None
+    assert daemon._consumer_task is None
+    assert daemon._dream_task is None
+
+
+# =============================================================================
+# T3d -- a later startup-stage exception AFTER schema readiness (the store's
+#        worker thread is genuinely activated) closes the store, creates no
+#        scheduler task, propagates the original error, and does not poison a
+#        subsequent startup attempt.
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_later_stage_failure_after_schema_closes_store(config_files, monkeypatch):
+    primary = RuntimeError("post-schema boom")
+
+    daemon = _make_daemon(config_files)
+
+    def raising_init_experience():
+        raise primary
+
+    # First statement after ensure_schema() inside the protected region --
+    # the real ensure_schema runs first, so the store worker is genuinely
+    # activated before the failure.
+    monkeypatch.setattr(daemon, "_init_experience_kernel", raising_init_experience)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await daemon.start()
+
+    assert excinfo.value is primary
+    assert daemon.scheduler_store._closed is True
+    assert daemon._scheduler_task is None
+    assert daemon._tick_task is None
+    assert daemon._consumer_task is None
+    assert daemon._dream_task is None
+    # Schema had already been created before the failure -- and a later,
+    # fresh startup against the same DB works (not poisoned).
+    assert {"ticks", "scheduled_tasks"} <= _table_names(config_files["db_path"])
+
+    daemon2 = _make_daemon(config_files)
+    await daemon2.start()
+    try:
+        assert daemon2._scheduler_task is not None
+    finally:
+        await daemon2.stop()
+
+
+# =============================================================================
+# T3e -- cleanup failure on the CANCELLATION path stays secondary: the
+#        original CancelledError still propagates (never replaced by the
+#        cleanup error) and the cleanup failure is logged.
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_mask_cancellation(config_files, monkeypatch, caplog):
+    import logging
+
+    entered = asyncio.Event()
+
+    async def hanging_ensure(self):
+        entered.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(SchedulerStore, "ensure_schema", hanging_ensure)
+
+    daemon = _make_daemon(config_files)
+
+    async def raising_close(*args, **kwargs):
+        raise ValueError("cleanup boom")
+
+    monkeypatch.setattr(daemon.scheduler_store, "close", raising_close)
+
+    task = asyncio.create_task(daemon.start())
+    await entered.wait()
+    task.cancel()
+
+    try:
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert daemon._scheduler_task is None
+        assert "Scheduler store cleanup failed" in caplog.text
+        assert any(rec.exc_info for rec in caplog.records)
+    finally:
+        # Restore the real close() and actually shut the worker down (the
+        # monkeypatched close() above skipped the real cleanup).
+        monkeypatch.undo()
+        await daemon.scheduler_store.close()
+
+
+# =============================================================================
+# T3f -- successful startup must NOT prematurely close the store: after
+#        start() returns normally, the store is open and the scheduler task
+#        exists; stop() then closes it.
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_successful_startup_leaves_store_open(config_files, monkeypatch):
+    monkeypatch.setattr(
+        "bartholomew.kernel.scheduler.loop.run_scheduler",
+        lambda ctx: asyncio.sleep(0),
+    )
+    daemon = _make_daemon(config_files)
+    await daemon.start()
+    try:
+        assert daemon.scheduler_store._closed is False
+        assert daemon._scheduler_task is not None
+    finally:
+        await daemon.stop()
+    assert daemon.scheduler_store._closed is True
+
+
+# =============================================================================
 # T4 -- the retained run_scheduler-side ensure_schema is idempotent, so calling
 #       it after start() already ensured the schema is a harmless no-op.
 # =============================================================================
