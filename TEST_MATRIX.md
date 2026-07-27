@@ -2,9 +2,15 @@
 
 > Minimum test coverage by subsystem. Add to this when adding a subsystem.
 >
-> **Last updated:** 2026-07-21 (Experience Kernel section's "not yet implemented" scenario
-> replay note corrected; added sections for the self-state API bridge and retrieval consent
-> enforcement, both new this session)
+> **Last updated:** 2026-07-27 (planning-document reconciliation: added the subsystems whose
+> tests landed between 2026-07-23 and Phase A — runtime-contract seams for skills and
+> voice/sight, consent-bypass red team, scheduler startup readiness, packaging contract,
+> clean-start lifecycle, sensitive-memory consent. This matrix had recorded none of them, so a
+> reader would have concluded those subsystems were untested.)
+>
+> **Counts below are from `pytest --collect-only` on 2026-07-27, not from memory.** Total suite:
+> 915 collected; `pytest -q` runs 912 (3 `integration`/`slow` tests are deselected by
+> `addopts`). See [CI.md](CI.md).
 
 ## Legend
 
@@ -68,6 +74,67 @@
 - **Unit/Integration:**
   - `tests/test_parking_brake_persistence_roundtrip.py`
   - `tests/test_parking_brake_scoped_blocks.py`
+
+### Runtime Contract seams (Stage 4.5 convergence)
+
+Each live surface must construct an `Observation`/`CandidateAction` that is *genuinely consumed*
+by Governance, and emit exactly one `ActionReflection` per attempt.
+
+- **Unit/Integration:**
+  - `tests/test_runtime_contract_chat_seam.py` (chat), `tests/test_api_chat_runtime_contract.py`
+  - `tests/test_scheduler_drive_convergence.py` (drives; includes the item-11.2 regression guard
+    and the `_SELF_MAINTENANCE_DRIVES` registry-parity check)
+  - `tests/test_skill_runtime_contract_seam.py` — **15 tests** (item 11.19)
+  - `tests/test_voice_sight_runtime_contract_seam.py` — **45 tests** (item 11.21)
+  - `tests/test_runtime_convergence_policy.py`
+- **Non-vacuity requirement:** these suites include deliberate gate-neutralisation controls —
+  breaking a single gate must make exactly that gate's denial tests fail. A new seam test that
+  cannot fail when its gate is removed is not coverage.
+
+### Consent-bypass red team (RISKS.md R1)
+
+- **Integration:** `tests/test_consent_bypass_redteam.py` — **10 tests** (item 11.20). Drives
+  content through the real `memories`/FTS/vector tables and proves it is never surfaced by any
+  production retrieval surface, including retrievers constructed with no rules engine. Includes
+  permanent structural guards: an AST scan that no production call site passes
+  `apply_consent_gate=False`, and a signature check that no public `.retrieve()` facade exposes a
+  parameter capable of disabling the gate.
+
+### Scheduler startup readiness (S5.0, issue #24)
+
+- **Integration:** `tests/test_scheduler_startup_readiness.py` — **10 tests**. Tables exist when
+  `start()` returns; ordered-record and `asyncio` barrier proofs that schema readiness precedes
+  scheduler-task creation and the loop's first DB operation; fail-closed cleanup, including that a
+  failing cleanup does not mask the primary exception; cancellation and later-stage failure;
+  idempotent `ensure_schema`.
+
+### Packaging / dependency contract (Phase A)
+
+- **Smoke:** `tests/smoke/test_packaging_contract.py` — **9 tests**. Every first-party package and
+  submodule imports; every declared console script runs `--help`; the API app imports by its
+  canonical path; no undeclared third-party runtime import; and every entry claimed to be a
+  "guarded optional" import really is inside a `try`/`except` (so the allow-list cannot be used to
+  silence a real undeclared dependency).
+- **Why it exists:** a green suite never caught that the `bartholomew` console script was broken at
+  import time, because no test imported `bartholomew.cli`. See `ASSUMPTIONS.md` A1b.
+
+### Clean-start persistence + lifecycle (Phase A)
+
+- **Integration/E2E:** `tests/test_clean_start_lifecycle.py` — **6 tests**. Fresh database gets
+  core *and* scheduler schema; bounded start/stop (hang detectors, not performance policy);
+  no leaked scheduler threads or pending tasks; database handles released well enough to delete
+  the temp directory (the property that fails first on Windows); clean restart against the same
+  database; no "missing table" window for scheduler-backed API endpoints.
+- **Note:** these *characterise* current persistence behaviour. They do not restructure it —
+  that is Phase B, which is not approved.
+
+### Sensitive-memory consent (Phase A regression)
+
+- **Unit/Integration:** `tests/test_memory_store_sensitive_consent.py` — **5 tests**. Regression
+  cover for the defect where `MemoryStore.upsert_memory()` called `asyncio.run()` from inside an
+  `async def`, always raising `RuntimeError` and falling through to an undeclared
+  `import nest_asyncio` — so approved sensitive content raised `ModuleNotFoundError` instead of
+  being stored. Consent remains fail-closed with no handler registered.
 
 ## When adding a new subsystem
 

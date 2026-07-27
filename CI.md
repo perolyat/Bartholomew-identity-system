@@ -2,10 +2,16 @@
 
 > How to run quality checks locally and what CI enforces.
 >
-> **Last updated:** 2026-07-25 (Phase A: `ci.yml` added — automatic PR/push/dispatch CI with
-> Ubuntu + Windows, packaging-contract checks, explicit integration/lifecycle tests and
-> coverage across all first-party packages; broken manual-only `tests.yml` removed; the
-> "`pytest -q` runs the full test suite" claim corrected — it does not)
+> **Last updated:** 2026-07-27 (planning-document reconciliation: Phase A recorded as merged
+> with its real merge commit and first cross-platform results; test counts refreshed against
+> actual collection; two references to a `docs/STATUS_2026-01-19.md` that has never existed
+> replaced. Earlier, 2026-07-25 — Phase A: `ci.yml` added, broken manual-only `tests.yml`
+> removed, and the "`pytest -q` runs the full test suite" claim corrected — it does not.)
+
+**Phase A is merged.** Merge commit `8b96319c4059d9dfada2579ca5f6da22b34e1f31` (PR #26,
+2026-07-27). All **9** checks were green on the merged head `e923fb9`: `quality`; `tests` on
+Ubuntu 3.10 and 3.11; `critical` on Ubuntu 3.10 and 3.11; `windows` on 3.11; `lint-test` on 3.10
+and 3.11; and `smoke`. The Windows job was the first ever run in this repository.
 
 ## GitHub Actions Workflows
 
@@ -77,8 +83,10 @@ newest and reported rules the pinned pre-commit hook does not — the same tree 
 addopts = "-q -m 'not integration and not slow'"
 ```
 
-So a plain `pytest -q` **deselects every `integration`- and `slow`-marked test**. As of
-2026-07-25 that is 3 tests out of 895:
+So a plain `pytest -q` **deselects every `integration`- and `slow`-marked test**. Verified by
+collection on 2026-07-27: **915 tests collected in total, 3 deselected, so `pytest -q` runs
+912.** (The earlier figure of 895 was correct when written and has simply grown; the 3
+deselected tests are unchanged.)
 
 - `test_cold_boot.py::test_cold_boot_reload`
 - `test_integration.py::test_model_integration`
@@ -205,9 +213,17 @@ pytest --cov=bartholomew --cov=identity_interpreter \
 ### Quarantine Strategy
 
 Platform-specific test failures should be:
-1. Marked with `@pytest.mark.windows_quirk` or similar
+1. Marked with `@pytest.mark.windows_quirk` or similar (both `windows_quirk` and `database` are
+   registered in the root `conftest.py`, not in `pyproject.toml`)
 2. Documented in [ASSUMPTIONS.md](ASSUMPTIONS.md) with justification
 3. Not allowed to hide real logic bugs
+
+**Prefer running the platform over quarantining it (Phase A posture, 2026-07-27).** Quarantine is
+the fallback, not the first move. Phase A deliberately did the opposite of the historical plan: it
+added a Windows CI job and a test asserting the exact database-handle-release property that fails
+first under Windows locking, rather than marking such failures as noise. Note also that no formal
+quarantine list has ever been created (see [ASSUMPTIONS.md](ASSUMPTIONS.md) A1) — so "we quarantine
+with justification" describes an intention, not an existing artifact.
 
 **Example:**
 ```python
@@ -221,7 +237,10 @@ def test_sqlite_wal_cleanup():
 
 ## Common Failure Patterns
 
-See `docs/STATUS_2026-01-19.md` (or latest STATUS snapshot) for current test health.
+For current test health see [REVIEWS.md](REVIEWS.md)'s "Last Review Snapshot". *(Corrected
+2026-07-27: this line pointed at `docs/STATUS_2026-01-19.md`, a file that has never existed in
+this repository. The only STATUS snapshot on disk is `docs/STATUS_2025-12-29.md`, which carries
+an explicit stale-doc banner and must not be read as current.)*
 
 ### Environmental (Platform Noise)
 
@@ -247,6 +266,13 @@ See `docs/STATUS_2026-01-19.md` (or latest STATUS snapshot) for current test hea
 2025-12-29 snapshot) were all fixed in the 38 -> 0 sweep on 2026-07-20 — see MASTER_PLAN.md's
 "Full test suite investigation". Verified 2026-07-25: default suite and
 `-m "integration or slow"` both pass locally on Python 3.10 and 3.11.
+
+**One known intermittent failure, deliberately not hidden (added 2026-07-27):**
+`tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes` failed
+once under full-suite load during Phase A verification and passed 3/3 in isolation immediately
+afterwards. It was **not** retried, quarantined, re-marked, or given a longer timeout, and it is
+not counted as environmental noise — it is preserved as evidence for the Phase B persistence
+audit (see [RISKS.md](RISKS.md)). If it fails in CI, diagnose it; do not paper over it.
 
 **Process:**
 - Fix one at a time (smallest surface first)
@@ -304,11 +330,13 @@ Before any merge to main:
 
 ## CI stabilisation status
 
-**Done (Phase A, 2026-07-25):** the goal this section previously tracked — "enable auto-run so
-all PRs are validated" — is met by `ci.yml`, which runs automatically on every pull request and
-push to main. Manual dispatch is retained on all three workflows.
+**Done (Phase A, merged 2026-07-27, `8b96319`):** the goal this section previously tracked —
+"enable auto-run so all PRs are validated" — is met by `ci.yml`, which runs automatically on every
+pull request and push to main. Manual dispatch is retained on all three workflows. Confirmed by a
+real run, not by inspection: 9/9 checks green on PR #26's head `e923fb9`.
 
-**Deliberately still open (deferred to Phase B):** persistence ownership is mixed
+**Deliberately still open (Phase B — proposed, NOT approved for implementation):** persistence
+ownership is mixed
 (synchronous `sqlite3`, `aiosqlite`, the scheduler's dedicated DB thread, and two near-duplicate
 `db_ctx` modules all touch the same file). Phase A adds regression tests that *characterise*
 clean-start and shutdown behaviour but does not restructure it. See RISKS.md's tech-debt
@@ -321,4 +349,5 @@ watchlist.
 - [TEST_MATRIX.md](TEST_MATRIX.md) - Test coverage by subsystem
 - [CHECKLISTS.md](CHECKLISTS.md) - Pre-merge checklist
 - [PERF_BUDGETS.md](PERF_BUDGETS.md) - Performance expectations
-- `docs/STATUS_2026-01-19.md` - Latest test health snapshot
+- [REVIEWS.md](REVIEWS.md) - Latest project/test health snapshot (replaces the
+  `docs/STATUS_2026-01-19.md` link that stood here; that file has never existed)

@@ -2,8 +2,11 @@
 
 > Living list of uncertainties that matter. Each must have a validation plan.
 >
-> **Last updated:** 2026-07-21 (A1, A3 re-verified against this session's findings; A1b added;
-> A2/A4/A5 and the three brainstorm-era assumptions below not re-checked this pass)
+> **Last updated:** 2026-07-27 (planning-document reconciliation: A1 and A2 updated for the
+> Phase A CI matrix; A3's "no red-team bypass-path test suite exists yet" corrected — one has
+> existed since 2026-07-24, which `RISKS.md` R1 already recorded, so these two canonical docs
+> had been contradicting each other. A4/A5 and the three brainstorm-era assumptions below were
+> not re-checked this pass and are left as last recorded.)
 
 ## Format
 
@@ -30,6 +33,13 @@
   no test exercised those exact paths — "Linux CI green" was never false, but it also wasn't
   sufficient on its own to mean "no bugs," only "no bugs in what's tested." The quarantine-list
   mitigation itself still doesn't exist as a formal artifact.
+- **Update (2026-07-27, post-Phase A):** the assumption is now **weaker by design, and that is
+  the point**. Windows is no longer only a source of dismissable noise: `ci.yml`'s `windows` job
+  runs on every pull request and passed its first run (PR #26, head `e923fb9`). Linux remains the
+  primary baseline — the coverage gate and the full default suite run there — but a Windows-only
+  failure is now a red check that must be diagnosed, not a label that can be applied without
+  evidence. The quarantine list still does not exist, and Phase A deliberately chose *running*
+  Windows over quarantining it (see `CI.md`'s "Quarantine Strategy").
 
 ## A1b — "Tests are green" implies the tested code path is bug-free
 - **ASSUMPTION (added 2026-07-21, generalizing from this session's findings):** A passing test
@@ -51,7 +61,15 @@
 - **Why it matters:** Retrieval correctness and stability depend on it.
 - **Risk if wrong:** Retrieval works only on the developer’s machine.
 - **How to validate:** CI matrix across at least two Python/SQLite variants; explicit fallback-path tests.
-- **Status:** unverified
+- **Status:** **partially validated (2026-07-27, corrected from "unverified").** The validation
+  plan's first half now exists: `ci.yml` runs Python 3.10 and 3.11 on Ubuntu plus 3.11 on
+  Windows, so at least three interpreter/SQLite-build combinations are exercised on every pull
+  request. Its second half also exists: `tests/test_retrieval_fts5_fallback.py`,
+  `tests/test_fts_schema_hygiene.py` and `tests/test_bm25_udf_fallback.py` cover fallback paths.
+  What remains genuinely unverified is the assumption's *premise* — no environment in the current
+  matrix actually **lacks** FTS5/matchinfo, so the graceful-degradation behaviour is exercised by
+  its unit-level fallbacks rather than by a real feature-poor SQLite build. Do not read the green
+  matrix as proof that a feature-poor build works.
 
 ## A3 — Consent gates at the storage/retrieval layer are sufficient defense-in-depth
 - **ASSUMPTION:** Filtering at the lowest layer prevents meaningful privacy leakage even if upstream callers are sloppy.
@@ -67,7 +85,20 @@
   — fail-closed, not a leak, but it means "defense-in-depth" in this codebase has so far meant
   "the upper layers can only make things *more* restrictive than the lowest layer, never less,"
   which held here by accident (a bug that happened to fail closed) rather than by a verified
-  design guarantee. No red-team bypass-path test suite exists yet.
+  design guarantee.
+- **Corrected 2026-07-27:** this entry ended "No red-team bypass-path test suite exists yet."
+  That has been false since 2026-07-24 — `tests/test_consent_bypass_redteam.py` (10 tests,
+  MASTER_PLAN.md item 11.20) exists and `RISKS.md` R1 already recorded it, so these two canonical
+  docs were contradicting each other. The suite proves consented-but-should-be-excluded content is
+  never surfaced through any production retrieval surface, including retrievers constructed
+  without a rules engine, and it is non-vacuous: deliberately breaking
+  `ConsentGate.filter_memory_ids()` makes exactly those tests fail and no others. It also
+  converted the one-time `apply_consent_gate=False` grep audit into two permanent structural
+  guards. **The assumption is therefore now supported by evidence rather than by accident** —
+  though "defense-in-depth" in this codebase still means the upper layers can only be *more*
+  restrictive than the lowest, never less. One documented, non-blocking residual:
+  `get_retriever(mode="vector")` passes no `memory_store`, so that mode has one fewer redundant
+  layer than `hybrid`/`fts` (see `RISKS.md` R1).
 
 ## A4 — Single SQLite DB remains viable through Stage 2
 - **ASSUMPTION:** SQLite will be sufficient for persistence, retrieval, and test workloads through Stage 2.

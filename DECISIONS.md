@@ -2,8 +2,10 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-07-23 (one new entry added: scheduler drives get Identity-derived
-> gating via a category exemption, closing item 11.17)
+> **Last updated:** 2026-07-27 (planning-document reconciliation: no decisions added or
+> reversed; two existing entries amended where the repository had moved past what they described
+> — the canonical-doc set's membership, and the Linux-only CI baseline. The 2026-07-25 S5.0
+> entry at the foot of this document is the most recent actual decision.)
 
 ## Format
 
@@ -21,6 +23,12 @@
 - **Why:** Prevent drift; force dependency-aware planning; keep governance verifiable.
 - **Consequences:** Legacy docs become references only; any new work must update the canonical docs.
 - **Date:** 2026-01-19
+- **Amended 2026-07-27 (membership only, not the decision):** the set is now **13** documents —
+  the 11 listed above plus `COGNITIVE_RUNTIME.md` (added 2026-07-21, item 11.5) and
+  `CONSTITUTION.md` (added 2026-07-22, see the "Adopt `CONSTITUTION.md`..." entry below).
+  `MASTER_PLAN.md`'s "Canonical docs" section is the registry and now lists all 13; it had been
+  listing 12, omitting `CONSTITUTION.md`, which contradicted both this document and
+  `CONSTITUTION.md`'s own handover note. That contradiction is resolved in favour of 13.
 
 ## Decision: Fail-closed safety controls (parking brake)
 - **Decision:** Maintain a persistent, scoped “parking brake” that can block subsystems at runtime.
@@ -56,6 +64,15 @@
 - **Why:** Windows file locking and SQLite/FTS feature variability can create false negatives.
 - **Consequences:** Must document quarantines and ensure real logic failures aren’t masked.
 - **Date:** 2025-12-29 (status snapshot)
+- **Amended 2026-07-27 (scope narrowed by evidence, decision not reversed):** Linux remains the
+  baseline — it is where the full default suite and the coverage gate run. But "quarantine
+  Windows-only flakiness" no longer describes practice. Phase A (merged `8b96319`) added a
+  Windows job to `ci.yml` that runs on every pull request and passed its first run, so Windows
+  failures are now observed and must be diagnosed rather than labelled as noise without evidence.
+  Two things sharpen this further: the 2026-07-20 FTS5 investigation found that two failures
+  previously attributed to "Windows quirks" were real logic bugs reproducible on Linux, and no
+  formal quarantine list was ever created (`ASSUMPTIONS.md` A1). Treat "it's just Windows" as a
+  claim requiring proof.
 
 
 ## Decision: Prompt-size discipline for agent execution (Cline)

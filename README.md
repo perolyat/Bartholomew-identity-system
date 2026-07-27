@@ -33,11 +33,17 @@ pip install -r requirements.txt
 pip install -e .
 
 # Validate Identity.yaml
-barth lint Identity.yaml
+python -m identity_interpreter.cli lint Identity.yaml
 
 # Explain policy decisions
-barth explain Identity.yaml --task-type code --confidence 0.4
+python -m identity_interpreter.cli explain Identity.yaml --task-type code --confidence 0.4
 ```
+
+> **Corrected 2026-07-27.** These commands previously read `barth lint` / `barth explain`. The
+> `barth` console script is declared in `setup.py` but **not installed** — `pyproject.toml` is
+> the manifest that actually installs, and it declares `bartholomew` and
+> `bartholomew-backfill-fts` instead. Verified with `which`. The competing-manifest problem
+> itself is tracked as finding **F9** in [RISKS.md](RISKS.md) and is not fixed.
 
 ## Getting Started (Development)
 
@@ -115,9 +121,19 @@ The repository ignores local SQLite databases and WAL/SHM files by default:
 
 Run tests with pytest:
 
+> ⚠️ **A plain `pytest` does not run every test.** `pyproject.toml` sets
+> `addopts = "-q -m 'not integration and not slow'"`, so 3 of the 915 collected tests are
+> deselected. Use `pytest -m ""` to run genuinely everything. See [CI.md](CI.md).
+
 ```bash
-# Run all tests
+# Default suite (deselects integration/slow — 912 of 915 tests)
 pytest
+
+# Genuinely everything, no marker deselection
+pytest -m ""
+
+# Only what the default command skips
+pytest -m "integration or slow"
 
 # Run specific test categories
 pytest -m database        # Database-related tests
@@ -171,7 +187,10 @@ Smoke tests verify core functionality and can run in seconds.
 
 - ✅ JSON Schema validation of Identity.yaml
 - ✅ Pydantic v2 type-safe models
-- ✅ Policy engines (model routing, tool control, safety, persona)
+- ✅ Policy engines (model selection, safety, confidence). *Tool-use policy and persona moved out
+  of `identity_interpreter` in items 11.12/11.14 — they are now owned by
+  `bartholomew/kernel/policy_engine.py` and `bartholomew/kernel/persona_pack.py` respectively,
+  one authority per concept.*
 - ✅ Explainable decisions with YAML path references
 - ✅ CLI tools (lint, explain, simulate)
 - ✅ Adapter stubs (LLM, tools, consent, metrics, storage)
@@ -179,7 +198,20 @@ Smoke tests verify core functionality and can run in seconds.
 
 ## Documentation
 
-See [docs/README.md](docs/README.md) for full documentation.
+**Start with [MASTER_PLAN.md](MASTER_PLAN.md)** — it is the Single Source of Truth for what
+exists, where the project is, and what is authorised next. It lists the 13 canonical documents.
+Everything else in this repository, including this README and `docs/`, is a reference and is
+**not** an authority on project status.
+
+Most useful entry points:
+
+- [MASTER_PLAN.md](MASTER_PLAN.md) — SSOT: stage status, backlog, approval ledger
+- [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md) — how Bartholomew actually thinks (the runtime loop)
+- [ROADMAP.md](ROADMAP.md) — stage gates and engineering workstreams with exit criteria
+- [CI.md](CI.md) — what CI runs and how to reproduce it locally
+- [RISKS.md](RISKS.md) — risk register and tech-debt watchlist, including known open findings
+
+See [docs/README.md](docs/README.md) for the `identity_interpreter` module reference.
 
 ### Key Documentation
 

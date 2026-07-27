@@ -2,9 +2,9 @@
 
 > Weekly check-ins and stage gate review rituals.
 >
-> **Last updated:** 2026-07-22 (governance addendum: Lead Architect transition recorded; see
-> "Last Review Snapshot" below — the underlying content snapshot itself is from 2026-07-21,
-> refreshed after going stale since 2026-01-19)
+> **Last updated:** 2026-07-27 (snapshot refreshed against the post-Phase-A repository state;
+> the previous snapshot dated 2026-07-21/22 had gone stale on four counts — Stage 4.5 status,
+> CI health, the consent red-team gap, and the "Next Moves" list — all corrected below)
 
 ## Purpose
 
@@ -127,92 +127,102 @@ If this stage introduces risk:
 > complete" sections). Refreshed 2026-07-21 against what this session directly verified plus
 > the historical record in `MASTER_PLAN.md`/`ROADMAP.md`.
 >
-> **Governance addendum, 2026-07-22:** the Lead Architect role transitioned from Bartholomew to
-> Claude this date (see `DECISIONS.md`'s "Lead Architect role transitions from Bartholomew to
-> Claude"). `CONSTITUTION.md` was added as a 13th canonical doc (see `DECISIONS.md`'s "Adopt
-> `CONSTITUTION.md` as a canonical SSOT doc"). This addendum does not re-verify the rest of this
-> snapshot's content — see the 2026-07-21 refresh below for what was directly checked then.
-
-**Date:** 2026-07-21 (governance addendum 2026-07-22)
-**Type:** Ad-hoc snapshot refresh (found stale while auditing canonical docs for currency)
-**Reviewer:** Claude (autonomous session) — also current Architect of record as of 2026-07-22
+**Date:** 2026-07-27
+**Type:** Planning-document reconciliation against the post-Phase-A repository state
+**Reviewer:** Claude (Architect of record since 2026-07-22, per `DECISIONS.md`)
+**Basis:** current code, `git log`, executable test collection, and the merged PR #26 CI results.
+Roadmap labels, prior AI summaries and implementation notes were treated as claims to check, not
+as evidence.
 
 ### Current Project State
 
 **Stage Progress:**
 - **Stage 0:** ✅ Complete (kernel alive, stable, dreaming)
 - **Stage 0.5:** ✅ Complete 2026-07-20 (packaging/architecture fixes)
-- **Stage 1:** 📋 Still not started (console/UI integration — no evidence of work on this
-  found this session)
-- **Stage 2:** ✅ P0 complete 2026-07-20 (all 6 failures below fixed; full suite green on Linux)
-- **Stage 3:** ✅ Largely done (Experience Kernel/Narrator/Persona wired since before this
-  session; this session closed the "still open" items: a scenario-replay test harness and
-  reconciling the two reflection-narrative pipelines — see items 11.8–11.9 below)
+- **Stage 1:** 📋 **Deferred console/UI product slice. Not started, and never a prerequisite for
+  Stages 2–4.5** (no code evidence found; historical numbering retained deliberately)
+- **Stage 2:** ✅ P0 complete 2026-07-20 (all 6 previously-listed failures fixed)
+- **Stage 3:** ✅ Largely done; the "still open" items closed 2026-07-21 (items 11.8–11.9)
 - **Stage 4:** ✅ Done 2026-07-21 (skill registry wired into the live daemon)
-- **Stage 4.5 (Runtime Convergence):** 🚧 In progress, substantial movement this session —
-  items 11.1–11.11 done (see MASTER_PLAN.md); Exit Gate still mostly "partial," not "yes" (see
-  `COGNITIVE_RUNTIME.md`'s Exit Gate status table for the honest per-question breakdown)
-- **Stages 5–7:** 📋 Still planned/future
+- **Stage 4.5 (Runtime Convergence):** ✅ **Complete 2026-07-24** — *corrected from the previous
+  snapshot, which still read "🚧 In progress ... Exit Gate still mostly partial."* All seven Exit
+  Gate questions are satisfied within Stage 4.5's scope; Q7's voice/sight-persona residual was
+  formally reclassified to Stage 6 (item 11.22), so no official exit criterion is left partial.
+  See `COGNITIVE_RUNTIME.md`'s Exit Gate table for the per-question evidence.
+- **Stage 5:** 📋 **Not started.** Only prerequisite S5.0 has landed (PR #25, `3496cfb`, closes
+  issue #24). **S5.1 has not begun** and is paused pending explicit approval.
+- **Stages 6–7:** 📋 Future. Issue #22 (forward `IdentityContext` through the voice/sight compat
+  wrappers) is open and deferred to Stage 6.
 - **Echo Integration:** 💡 Still future (conceptual roadmap, unchanged)
 
-**CI Health:**
-- ✅ `pre-commit.yml` — auto-run on push/PR; now also runs `pytest -q` (the **full** suite, not
-  just smoke tests) as of 2026-07-20 — CI.md itself hadn't mentioned this until today
-- ✅ `smoke.yml` — auto-run on push/PR (server health checks)
-- ⚠️ `tests.yml` — still manual-only (coverage-gated full suite); still not auto-enabled
+**Engineering workstreams:**
+- **Phase A (truthful cross-platform verification):** ✅ **Complete and merged 2026-07-27**,
+  merge commit `8b96319c4059d9dfada2579ca5f6da22b34e1f31` (PR #26).
+- **Phase B (persistence ownership stabilisation):** 📋 **Proposed, NOT approved for
+  implementation.** No design, branch or code exists.
+
+**CI Health** *(corrected — the previous snapshot's entry was wrong in both directions)*:
+- ✅ `ci.yml` — **new in Phase A**, auto-run on every pull request, every push to `main`, and
+  manual dispatch. Four jobs: `quality`, `tests` (Ubuntu 3.10/3.11 + coverage gate),
+  `critical` (Ubuntu 3.10/3.11), `windows` (3.11).
+- ✅ `pre-commit.yml` — auto-run on push/PR; hooks + `pytest -q -m smoke` + `pytest -q`.
+- ✅ `smoke.yml` — auto-run on push/PR; the only workflow that boots a real HTTP server.
+- ❌ `tests.yml` — **removed in Phase A.** The previous snapshot called it "manual-only ...
+  still not auto-enabled"; the sharper truth is that it *could never have passed* — it ran
+  `pytest --cov=...` while `pytest-cov` was declared in no manifest.
+- **Evidence:** 9/9 checks green on PR #26's merged head `e923fb9`, including the first Windows
+  job in this repository's history.
 
 **Documentation:**
-- ✅ 13/13 canonical docs present (`COGNITIVE_RUNTIME.md` added 2026-07-21, per MASTER_PLAN.md
-  item 11.5; `CONSTITUTION.md` added 2026-07-22, see DECISIONS.md)
-- ✅ `docs/STATUS_2025-12-29.md` now carries an explicit stale-doc banner (2026-07-21) pointing
-  back to `MASTER_PLAN.md`, rather than silently contradicting current docs
-- This session also re-verified and corrected several other canonical docs against current
-  code/tests: `RISKS.md`, `ASSUMPTIONS.md`, `INTERFACES.md`, `TEST_MATRIX.md`, `CI.md`
+- ✅ 13/13 canonical docs present. *(Reconciled 2026-07-27: `MASTER_PLAN.md`'s own canonical-docs
+  list had omitted `CONSTITUTION.md`, listing 12 while `DECISIONS.md` and `CONSTITUTION.md` both
+  said 13. `MASTER_PLAN.md` was the incorrect one and is now fixed.)*
+- ✅ `docs/STATUS_2025-12-29.md` carries an explicit stale-doc banner.
+- ⚠️ `docs/README.md` (identity_interpreter contributor guide) documented three modules deleted
+  in items 11.12–11.14 as current API; corrected 2026-07-27.
+- ⚠️ Root `README.md` documented the `barth` console script, which is not installed (finding F9);
+  corrected 2026-07-27.
 
-**Test Health:**
-- ✅ The 6 P0 non-environmental failures this snapshot previously listed (summarization
-  fallback, encryption round-trip, embeddings lifecycle, embed_store defaulting, retrieval
-  factory mismatch, metrics idempotency) were **all fixed 2026-07-20** — verified again this
-  session: `pytest -q` across the encryption/metrics/retrieval-factory test files passes
-  locally in a clean venv.
-- This session found and fixed several new, real bugs (not previously known/tracked):
-  retrieval silently over-excluding consented memories; a restart-persistence bug where
-  Experience Kernel state was never actually restored despite a log line claiming it was; five
-  live 500s in the `self_state` API router (zero HTTP-level tests existed for that whole
-  router before this session).
-- **Not independently re-verified this session:** a single `pytest -q` run across the
-  *entire* suite in one command (targeted, relevant subsets were run per change instead,
-  30+ separate invocations covering ~400 distinct tests with no failures) — see this doc's
-  own "Verification-first" best practice below; no reason to doubt full-suite health given
-  every touched area passed, but this is named explicitly rather than assumed.
+**Test Health (verified 2026-07-27 by collection + the merged CI run, not assumed):**
+- 915 tests collected in total; the default `pytest -q` runs 912 of them, because
+  `addopts = -m 'not integration and not slow'` deselects exactly 3. `ci.yml`'s `critical` job
+  runs those 3 explicitly, on both interpreter legs.
+- Coverage baseline **73.5%** across all three first-party packages against the pre-existing
+  declared 70% gate. The gate was measured before being enforced and was **not** lowered.
+- ⚠️ **One known intermittent failure, deliberately left visible:**
+  `tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes` failed
+  once under full-suite load and passed 3/3 in isolation immediately afterwards. It was **not**
+  retried, quarantined, re-marked, or given a longer timeout — it is preserved as Phase B
+  evidence. Treat "the suite is green" as conditional on this.
 
-**Tech Stack:** unchanged from the 2026-01-19 snapshot (not re-verified this session).
+**Tech Stack:** unchanged from the 2026-01-19 snapshot (not re-verified this pass).
 
 ### Active Blockers
 
-**None.**
+**None blocking.** Two things are *paused by decision*, not blocked: S5.1 and Phase B, both
+awaiting explicit approval.
 
-### Next Moves (per MASTER_PLAN.md, current as of this refresh)
+### Next Moves
 
-The Runtime Convergence Exit Gate (`COGNITIVE_RUNTIME.md`) names the concrete remaining gaps
-under Stage 4.5, in rough priority order:
-1. Scheduler drives still don't construct an Observation/CandidateAction or consult the
-   Policy Decision (a known, deliberately-deferred gap — an earlier attempt caused a real
-   production regression, see DECISIONS.md).
-2. Voice/sight adapters remain parking-brake-only stubs (Stage 6 future work).
-3. Two Reflection *shapes* remain unreconciled (chat's Working Memory item vs. skills'
-   `skill_action_audit` row) — distinct from the two reflection *narrative pipelines*, which
-   this session did reconcile (item 11.8).
-4. ~~One persona-duplication caller remains~~ — **resolved 2026-07-22 (item 11.12):**
-   `identity_interpreter/policies/persona.py` removed; both legacy callers (CLI `explain`,
-   standalone `chat.py`) migrated to `PersonaPackManager`. (Voice/sight adapters still don't
-   consult persona — Stage 6 — so Exit Gate #7 is "closer, still partial," not yet "yes.")
-5. Stage 1 (console/UI) hasn't been started at all.
+Nothing is in flight. In priority order, each requiring separate explicit approval to start:
+
+1. **Phase B — persistence ownership stabilisation** (proposed next engineering work).
+2. **Stage 5 / S5.1** — initiative engine, under the locked safety-scaffolding-first sequence.
+3. **Stage 1** — console/UI slice; the oldest unstarted product gate.
+
+Unscheduled and non-blocking: issue #22 (Stage 6); Phase A's deferred findings F9–F11
+(`RISKS.md`); the two unreconciled reflection *narrative* pipelines (never a Stage 4.5 exit
+criterion — see `ROADMAP.md` Stage 3).
+
+*(The previous snapshot's "Next Moves" list is fully superseded: its items 1 and 2 — scheduler
+drives not consulting the Policy Decision, and voice/sight being parking-brake-only stubs — were
+closed by items 11.17 and 11.21; its item 3, the two Reflection *shapes*, was closed by item
+11.16.)*
 
 ### Links to Key Context
 
-- [MASTER_PLAN.md](MASTER_PLAN.md) — overall project plan + Next 3 Moves (P0 section) + P2.5
-  Runtime Convergence backlog (items 11.1–11.11)
+- [MASTER_PLAN.md](MASTER_PLAN.md) — overall project plan, stage-gate status table, Next 3 Moves,
+  the P2.5 Runtime Convergence backlog (items 11.1–11.22, complete), and the Approval Ledger
 - [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md) — the cognitive-loop/ownership/governance
   reference, including the honest Exit Gate status table
 - [ROADMAP.md](ROADMAP.md) — stage gates with exit criteria
@@ -224,6 +234,15 @@ under Stage 4.5, in rough priority order:
 ---
 
 ## Review History (Recent)
+
+### 2026-07-27 - Planning-Document Reconciliation (post-Phase A)
+- **Type:** Documentation-only reconciliation against the merged repository state (`8b96319`)
+- **Outcome:** Phase A recorded as complete and merged with its real merge commit; Stage 4.5
+  corrected from "in progress" to complete; S5.1 and Phase B stated plainly as not started /
+  not approved; CI matrix reconciled with the workflows that actually run; deleted-module and
+  broken-entry-point claims corrected in the contributor guides; Phase A's deferred findings
+  F9–F11 preserved in `RISKS.md`; the Approval Ledger populated with verified commit hashes
+- **Next:** Await approval for Phase B or Stage 5 / S5.1; neither has begun
 
 ### 2026-07-21 - Snapshot Refresh + Canonical Doc Audit
 - **Type:** Ad-hoc review (found this snapshot stale while auditing docs for currency)
