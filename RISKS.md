@@ -2,7 +2,11 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-07-25 (Phase A stabilisation: two tech-debt entries added — the
+> **Last updated:** 2026-07-27 (planning-document reconciliation: Phase A recorded as merged
+> (`8b96319`); R3/R4's "first Windows evidence will come from the first CI run" replaced with
+> the actual result; Phase A's deferred findings F9–F11 added to the tech-debt watchlist, where
+> they had previously existed only in PR #26's description and so were at risk of being lost.
+> Earlier: 2026-07-25 Phase A stabilisation added two tech-debt entries — the
 > undeclared-dependency defect class, one instance of which was a live crash on the sensitive-
 > memory write path, and the persistence-ownership characterisation preserved for Phase B.
 > Earlier same-week entries: R2 updated for the voice/sight governance seam — MASTER_PLAN.md item
@@ -82,9 +86,12 @@
   test_retrieval_fts5_fallback.py`/`tests/test_fts_schema_hygiene.py` pass locally as of
   2026-07-21. Cross-platform variability itself is an inherent, ongoing category (not a single
   bug to close permanently). Windows behaviour is untestable in this sandbox, but as of Phase A
-  (2026-07-25) `ci.yml`'s `windows` job runs the packaging contract, clean-start lifecycle and
-  smoke suites on `windows-latest`, so Windows results are now produced automatically by CI
-  rather than assumed.
+  (merged 2026-07-27, `8b96319`) `ci.yml`'s `windows` job runs the packaging contract,
+  clean-start lifecycle, scheduler readiness and smoke suites on `windows-latest`, so Windows
+  results are now produced automatically by CI rather than assumed. **First real result:** the
+  Windows job passed on PR #26's head `e923fb9` — the first Windows CI run in this repository's
+  history. One green run is a baseline, not proof of cross-platform robustness; the value is
+  that a Windows regression now fails a pull request instead of going unobserved.
 
 ### R4 — Windows file locking causing flaky tests and masking real failures
 - **Category:** Reliability, Maintainability
@@ -96,8 +103,12 @@
   test_shutdown_releases_database_handles_for_tempdir_cleanup` asserts the exact property that
   fails first under Windows locking (a temp directory containing the database must be deletable
   after `stop()`). That test runs on both Linux and Windows, so a handle leak fails CI instead of
-  being written off as platform noise. Still unverified *in this sandbox* (Linux-only); the first
-  real Windows evidence will come from the first CI run of this workflow.
+  being written off as platform noise. **Updated 2026-07-27:** the first real Windows evidence
+  now exists — the `windows` job passed on PR #26's head `e923fb9`, so this property currently
+  holds on `windows-latest` rather than merely being asserted. Still unverifiable *in this
+  sandbox* (Linux-only), so local runs remain no evidence for Windows either way. The underlying
+  risk — Windows-specific flakiness being written off rather than diagnosed — is now detectable,
+  not eliminated.
 
 ### R5 — Encryption envelope round-trip bugs
 - **Category:** Security, Reliability
@@ -137,7 +148,9 @@
   and any declared console script that will not run `--help`. **The underlying risk is not
   closed** — it is now detected rather than latent.
 - **(2026-07-25, Phase A) Persistence ownership remains mixed — characterised, not fixed
-  (Phase B).** Phase A deliberately added no database owner and no checkpoint path. Evidence
+  (Phase B).** **Status 2026-07-27: unchanged and still open.** Phase A is merged (`8b96319`);
+  **Phase B is proposed but not approved for implementation**, so nothing below has been
+  restructured. Phase A deliberately added no database owner and no checkpoint path. Evidence
   preserved for the Phase B audit: `bartholomew/kernel/memory_store.py` (aiosqlite),
   `bartholomew/kernel/scheduler/persistence.py` (sync `sqlite3` behind `SchedulerStore`'s
   dedicated thread), `bartholomew/kernel/persona_pack.py` and `narrator.py` (sync `sqlite3`
@@ -159,6 +172,28 @@
     rather than retried, quarantined, or given a longer timeout: it is direct evidence for the
     Phase B persistence-ownership audit, and the existing "unresolved root cause: why a `TRUNCATE`
     checkpoint outlasted its own busy-timeout" item below is the likely same root cause.
+- **(2026-07-25, Phase A) Three deferred findings, recorded here so they are not silently
+  treated as fixed.** Each was found during Phase A verification, judged non-blocking, and
+  deliberately left out of that change set. None is fixed as of 2026-07-27. They had previously
+  been written down only in PR #26's description, which is not a canonical document.
+  - **F9 — two competing packaging manifests.** `setup.py` declares `name="identity_interpreter"`
+    with a console script `barth`; `pyproject.toml` declares `name="bartholomew"` with console
+    scripts `bartholomew` and `bartholomew-backfill-fts`. `pyproject.toml` is what actually
+    installs: `bartholomew` and `bartholomew-backfill-fts` are on `PATH`, `barth` is not
+    (re-verified 2026-07-27 with `which`). Root `README.md` documented `barth lint` / `barth
+    explain` as the quick-start commands — corrected 2026-07-27, but the duplicate manifest
+    itself remains. Risk: the two manifests can drift further, and it is not obvious which one
+    a contributor should edit.
+  - **F10 — legacy API shim fails a bare import.** `bartholomew_api_bridge_v0_1/app.py` does
+    `from services.api.app import app`, which only resolves when the working directory is
+    `bartholomew_api_bridge_v0_1/`. The supported entry points (the repo-root `app.py` and
+    `bartholomew_api_bridge_v0_1.services.api.app`) both work. It is **explicitly allow-listed**
+    in `tests/smoke/test_packaging_contract.py`'s `KNOWN_NON_IMPORTABLE` rather than silently
+    skipped, so the exception is reviewable. Risk: a duplicate entry point that looks canonical.
+  - **F11 — test-only dependencies in the runtime manifest.** `requirements.txt` lists
+    `pytest-asyncio` and `pytest-timeout`, which are test tooling, not runtime dependencies.
+    Harmless today (the `quality` CI job installs from `pyproject.toml` only, so the runtime
+    contract is still checked honestly) but it misrepresents what the application needs to run.
 - ~~**Scheduler-schema startup readiness race** (GitHub issue #24).~~ **Resolved by S5.0**
   (2026-07-25): `KernelDaemon.start()` now ensures the scheduler schema synchronously (fail-closed)
   before returning, so `ticks`/`scheduled_tasks` exist before the API serves requests — closing the
@@ -166,7 +201,21 @@
   fixes the cause. See DECISIONS.md's "Scheduler schema is created synchronously during
   KernelDaemon.start()..." entry. Distinct from the two open scheduler tech-debt items below (WAL
   checkpoint instrumentation; mixed sqlite ownership), which S5.0 does **not** address.
-- Legacy “implementation notes” docs are useful but currently compete with SSOT.
+- **Legacy “implementation notes” docs are useful but currently compete with SSOT.**
+  **Partially mitigated 2026-07-27, cleanup deferred:** `MASTER_PLAN.md`'s "Canonical docs"
+  section now states an explicit precedence rule — the 13 canonical docs are the only authority
+  on project status, and every other `*.md` (implementation notes, `docs/*`, `STATUS_*`,
+  `README`s, the now-retired `CHANGELOG.md`) is a reference that loses to a canonical doc on any
+  conflict. That rule is deliberately the *whole* mitigation for now. **Open follow-up, not
+  approved and not scheduled:** a separate pass to review the ~20 legacy implementation, audit,
+  report and completion documents (`PHASE_2A`–`PHASE_2D_IMPLEMENTATION.md`, `FTS*_IMPLEMENTATION
+  .md`, `SAFETY_NETS_IMPLEMENTATION.md`, `METRICS_SECURITY_IMPLEMENTATION.md`,
+  `CONSENT_GATES_IMPLEMENTATION.md`, `ORCHESTRATION_INTEGRATION.md`, `VALIDATION_REPORT.md`,
+  `STAGE_0_COMPLETION.md`, `DEV_SETUP_NOTES.md`, `UI_INTEGRATION_GUIDE.md`, `QUICKSTART.md`,
+  `docs/*_IMPLEMENTATION.md`, `docs/STATUS_2025-12-29.md`, `docs/brain.md`) and either banner,
+  archive or delete them individually. None of those files was inspected or edited in the
+  2026-07-27 reconciliation, so **their contents remain unverified against current code** — the
+  precedence rule bounds the damage, it does not correct them.
 - ~~Retrieval mode factory mismatches (explicit mode returns wrong retriever).~~ Appears
   resolved: `tests/test_retrieval_factory.py` has explicit coverage for `fts`/`vector`/`hybrid`
   mode selection, invalid-mode handling, and env/config override precedence, all passing

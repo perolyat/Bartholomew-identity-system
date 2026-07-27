@@ -1,5 +1,17 @@
 # Changelog
 
+> ## ⚠️ RETIRED — noncanonical, incomplete, historical artifact only (2026-07-27)
+>
+> **This file is no longer maintained and must not be read as a record of what has changed.**
+> It stopped being updated long before the work described in `MASTER_PLAN.md`, so it is missing
+> most of the project's history; the gaps are **not** going to be backfilled.
+>
+> - **Authoritative change record:** git history and merged pull requests.
+> - **Authoritative current project status:** [MASTER_PLAN.md](MASTER_PLAN.md), with the latest
+>   health snapshot in [REVIEWS.md](REVIEWS.md).
+>
+> Retained unedited below purely as a historical artifact.
+
 All notable changes to Bartholomew will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

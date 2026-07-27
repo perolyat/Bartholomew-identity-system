@@ -2,7 +2,10 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-01-19 (Australia/Sydney)
+> **Last updated:** 2026-07-27 (planning-document reconciliation against the repository state
+> established by Phase A, merged as `8b96319`. The "Last updated" line had itself read
+> 2026-01-19 while the body was edited repeatedly through July; "Stage gates / milestones",
+> "Next 3 Moves" and the Approval Ledger were the stale sections and are corrected below.)
 
 ## Vision / North Star
 
@@ -45,7 +48,13 @@ See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHEC
 
 ## Canonical docs
 
+**13 documents.** This list is the registry; `DECISIONS.md`'s "Canonical SSOT docs" entry and
+`CONSTITUTION.md`'s handover note describe the same set. (Corrected 2026-07-27: this list
+previously omitted `CONSTITUTION.md`, contradicting `DECISIONS.md`'s "Adopt `CONSTITUTION.md`
+as a canonical SSOT doc" entry, which explicitly puts the count at 13.)
+
 - **MASTER_PLAN.md** (this doc)
+- [CONSTITUTION.md](CONSTITUTION.md)
 - [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md)
 - [ROADMAP.md](ROADMAP.md)
 - [DECISIONS.md](DECISIONS.md)
@@ -57,6 +66,10 @@ See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHEC
 - [CI.md](CI.md)
 - [TEST_MATRIX.md](TEST_MATRIX.md)
 - [PERF_BUDGETS.md](PERF_BUDGETS.md)
+
+Every other `*.md` in the repository (implementation notes, `docs/*`, `STATUS_*`, `README`s)
+is a **reference**, not an authority on project status. Where one contradicts a canonical doc,
+the canonical doc wins.
 
 ## Current architecture
 
@@ -96,19 +109,54 @@ logs/    (runtime logs)
 
 ## Stage gates / milestones
 
-**Completed**
-- **Stage 0: Kernel alive + stable + dreaming** (see `STAGE_0_COMPLETION.md`).
+> **Rewritten 2026-07-27.** This section had gone stale: it listed only Stage 0 as complete,
+> described Phases 2A–2D as "in progress ... known failing tests" citing the explicitly-stale
+> `docs/STATUS_2025-12-29.md`, and named "Green core on CI Linux" as the next gate — all of
+> which the repository had long since overtaken. Statuses below are stated only where current
+> code, a merge commit, or an executable test supports them.
 
-**In progress (engineering reality)**
-- **Governance hardening (Phase 2A–2D)**: redaction, encryption, summarization, embeddings, vector store, FTS + hybrid retrieval.
-  - Current snapshot includes known failing tests and platform variability (see `docs/STATUS_2025-12-29.md`).
+**Complete**
 
-**Next gate (the next thing that should be “done” end-to-end)**
-- **Gate: “Green core on CI Linux”**
-  - A minimal, reproducible CI run that is green on Linux for the core governance + memory + retrieval path.
-  - Windows-only flakiness is tolerated only if clearly quarantined.
+| Stage | Status | Evidence |
+|---|---|---|
+| Stage 0 — Kernel alive/stable/dreaming | ✅ | `STAGE_0_COMPLETION.md`, `tests/test_stage0_alive.py` |
+| Stage 0.5 — Packaging & architecture fixes | ✅ 2026-07-20 | P0 items 0–3 below; `ROADMAP.md` |
+| Stage 2 — Governance hardening + memory stack (2A–2F) | ✅ P0 complete 2026-07-20 | "Full test suite investigation" below (38 → 0) |
+| Stage 3 — Unified Persona Core (Experience Kernel) | ✅ largely done, gaps closed 2026-07-20/21 | `ROADMAP.md` Stage 3; items 11.8–11.9 |
+| Stage 4 — Skill registry + starter skills | ✅ 2026-07-21 | `ROADMAP.md` Stage 4 |
+| Stage 4.5 — Runtime Convergence | ✅ 2026-07-24 | `COGNITIVE_RUNTIME.md` Exit Gate table (all 7 satisfied in scope); items 11.12–11.22 |
 
-See [ROADMAP.md](ROADMAP.md) for concrete exit criteria.
+**Not started**
+
+- **Stage 1 — Console/UI integration.** Stage 1 is a deferred console/UI product slice. It has
+  not started and was never a prerequisite for Stages 2–4.5. No code evidence of work on it.
+  Its historical numbering is retained deliberately; stages were sequenced by architectural
+  dependency, not by number.
+- **Stage 5 — Initiative engine.** Only its prerequisite **S5.0** has landed (see P3 below).
+  **S5.1 has not begun.** No Stage 5 feature code exists.
+- **Stages 6–7, Echo gates.** Future.
+
+**Engineering workstreams (cross-cutting, not stage gates)**
+
+- **Phase A — truthful cross-platform verification.** ✅ **Complete and merged 2026-07-27**,
+  merge commit **`8b96319c4059d9dfada2579ca5f6da22b34e1f31`** (PR #26). Established
+  `.github/workflows/ci.yml` (auto-run on every PR and push to `main`; Ubuntu 3.10 + 3.11 and
+  Windows 3.11), a packaging/dependency contract, clean-start lifecycle tests, and coverage
+  measured across all three first-party packages with the pre-existing 70% gate enforced. It
+  also fixed two live production defects found by refusing to trust prior status labels: the
+  sensitive-memory consent path (`asyncio.run()` inside `async def` → unguarded
+  `import nest_asyncio`) and the broken `bartholomew` console script. All 9 GitHub checks were
+  green on the merged head `e923fb9`, including the first Windows job in the repository's
+  history. See `CI.md` and `RISKS.md`.
+- **Phase B — persistence ownership stabilisation.** **Proposed next engineering work; NOT
+  approved for implementation.** Scope is the mixed SQLite ownership Phase A deliberately
+  characterised rather than restructured, and the intermittent concurrent-process WAL failure.
+  See `RISKS.md`'s tech-debt watchlist for the evidence being preserved for it. No design,
+  branch, or code exists.
+
+**The "Green core on CI Linux" gate this section used to name is met** — and superseded by
+Phase A, which made verification automatic and cross-platform rather than Linux-only and
+partly manual. See [ROADMAP.md](ROADMAP.md) for per-stage exit criteria.
 
 ## Backlog (prioritized, smallest safe slices)
 
@@ -1492,10 +1540,18 @@ half-initialized daemon never comes up. Row-seeding stays in `run_scheduler()` (
 PR #23's endpoint tolerance is retained as defense in depth. Rationale, alternatives, and the four
 locked sub-decisions (fail-closed / no-outer-timeout / schema-only / endpoint-tolerance) are in
 DECISIONS.md's "Scheduler schema is created synchronously during KernelDaemon.start()..." entry.
-**Verify:** `pytest -q tests/test_scheduler_startup_readiness.py` (5 tests: tables-exist-at-return;
-ordered-record + asyncio-barrier proofs that schema readiness precedes scheduler-task creation and
-the loop's first DB op; fail-closed cleanup with a not-poisoned later startup) — green on the
-3.10 + 3.11 matrix; full `pytest -q` clean.
+**Verify:** `pytest -q tests/test_scheduler_startup_readiness.py` (**10 tests** — count corrected
+2026-07-27 from "5", which was wrong when written: tables-exist-at-return; ordered-record +
+asyncio-barrier proofs that schema readiness precedes scheduler-task creation and the loop's first
+DB op; fail-closed cleanup, including that a failing cleanup does not mask the primary error;
+cancellation and later-stage-failure cleanup; successful startup leaves the store open; idempotent
+`ensure_schema`) — green on the 3.10 + 3.11 matrix; full `pytest -q` clean. Merged 2026-07-25 in
+PR #25, merge commit `3496cfb`; **closes issue #24** (confirmed closed).
+
+**S5.1 onwards — NOT STARTED (as of 2026-07-27).** No Stage 5 feature code exists: no typed
+cadence, no proactive consent/mute, no quiet-hours defer, no dry-run, no rationale logging, no
+`allow_proactive` governance category. S5.0 is a *prerequisite* that landed early; it is not
+Stage 5 in progress. Beginning S5.1 requires separate explicit approval.
 
 12. **Scheduler-driven check-ins + workflows** *(revised Stage 5 sequence — safety scaffolding
    before live proactivity: typed cadence → default-OFF consent + functional mute → quiet-hours
@@ -2032,10 +2088,31 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 ## Next 3 Moves (always current)
 
-> **Updated:** 2026-07-20 — items 0–3 (packaging/dependency/config/input() P0s), the
-> dependency-pin/CI-install/test-hang follow-ups, the `consent_terminal.py` input() gap, and
-> the full-suite failure sweep (38 → 9 → 4 → 2 → 0) are all done. `pytest -q` is now fully
-> green with no known-deferred failures left — see "Full test suite investigation" above.
+> **Updated:** 2026-07-27 (planning-document reconciliation). The 2026-07-20 list below is kept
+> as history; it had stopped being "current" the moment Stage 4.5, S5.0 and Phase A landed.
+
+**The actual next moves, as of 2026-07-27:**
+
+1. **Nothing is in flight.** Phase A is merged (`8b96319`); no branch carries unmerged
+   engineering work.
+2. **Phase B — persistence ownership stabilisation** is the *proposed* next engineering work
+   and is **not approved for implementation**. Its evidence base is already preserved
+   (`RISKS.md` tech-debt watchlist: mixed `aiosqlite`/sync-`sqlite3`/scheduler-thread ownership
+   of one file, two near-duplicate `db_ctx` modules, the unresolved `TRUNCATE`-outlasts-its-
+   busy-timeout question, and the intermittent `test_wal_cleanup_concurrent_processes` failure
+   under full-suite load).
+3. **Stage 5 / S5.1 remains paused** pending explicit approval. The locked sequence (safety
+   scaffolding before live proactivity) is recorded under P3 above and in `ROADMAP.md`.
+
+Also open but unscheduled (each requiring separate approval): Stage 1, a deferred console/UI
+product slice that has never been started; issue #22 (forward `IdentityContext` through the
+voice/sight compat wrappers), open and deferred to Stage 6; Phase A's deferred findings F9–F11,
+recorded in `RISKS.md`; and a **legacy-document cleanup/archive pass** over the ~20 non-canonical
+implementation, audit, report and completion docs — the precedence rule above is the only
+mitigation applied so far, and those files' contents remain unverified against current code
+(see `RISKS.md`).
+
+**Historical (2026-07-20 list, all done):**
 
 1. ✅ ~~Fix P0 packaging issues (items 0–1)~~ — done 2026-07-20.
 2. ✅ ~~Fix malformed memory_rules.yaml + refactor `input()` out of kernel (items 2–3)~~ — done 2026-07-20.
@@ -2057,11 +2134,15 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 All P0 backlog items (0–7, "Packaging & Architecture" and "Make the build trustworthy") are
 done: packaging/dependency fixes, config bugs, blocking-`input()` refactors, the full
-38 → 0 test-failure sweep, and the full-suite CI gate above. The next gate
-("Green core on CI Linux" — see "Stage gates / milestones") is met pending a real CI run
-confirming the new `Run full test suite` step passes on GitHub Actions (should mirror the
-local, fully-green `pytest -q` result). Remaining work moves to P1 (Experience Kernel MVP)
-and beyond — see the Backlog above.
+38 → 0 test-failure sweep, and the full-suite CI gate above.
+
+**Caveat resolved 2026-07-27:** this section previously said the "Green core on CI Linux" gate
+was "met pending a real CI run confirming the new `Run full test suite` step passes on GitHub
+Actions." That confirmation now exists — `pre-commit.yml`'s `lint-test` job (3.10 and 3.11) has
+run green on merged pull requests, most recently on PR #26's head `e923fb9`, alongside Phase A's
+`ci.yml`. The gate is met, not pending.
+
+Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlog above.
 
 ## Pending Approvals
 
@@ -2072,11 +2153,28 @@ and beyond — see the Backlog above.
 > **Rule:** Never mark anything as committed without a commit hash.
 
 ### Pending (awaiting user approval)
-- *None* (last updated: 2026-01-19)
+- 2026-07-27 — Planning-document reconciliation (documentation-only; no production code, tests,
+  dependencies, workflows, configuration or schema touched) — **not yet committed**
 
 ### Approval Ledger
-Record of approved changes with commit tracking (max 5 entries):
-- *No entries yet*
+Record of approved changes with commit tracking (most recent 5):
+
+> Populated 2026-07-27. This ledger read "*No entries yet*" (dated 2026-01-19) while five
+> approved changes had in fact been merged to `main` — the ledger was unused, not empty by
+> fact. Each entry below cites a real merge commit verified with `git log`; nothing here is
+> recorded as committed without one.
+
+- 2026-07-27 — Phase A: truthful cross-platform verification (PR #26) — Approved by project
+  owner — Commit: `8b96319c4059d9dfada2579ca5f6da22b34e1f31`
+- 2026-07-25 — S5.0 scheduler startup readiness, closes issue #24 (PR #25) — Approved by
+  project owner — Commit: `3496cfb8364b22c4df63f803d939df4883c52af3`
+- 2026-07-25 — Items 11.19–11.22: skill + voice/sight runtime convergence, consent-bypass
+  red-team suite (PR #21) — Approved by project owner — Commit: `187ef02`
+- 2026-07-25 — `/api/liveness/ticks` missing-table tolerance (PR #23) — Approved by project
+  owner — Commit: `cb98c65`
+- 2026-07-24 — Item 11.18: scheduler persistence off the event loop; WAL checkpoint default
+  — Approved by project owner — Commits: `bc5f24d`, `29d0ec9` (landed as direct commits on
+  `main`, not via a merge commit; no PR number is recorded in either commit message)
 
 **Ledger format:**
 - YYYY-MM-DD — <short description> — Approved by <user> — Commit: <hash> (or **not yet committed**)

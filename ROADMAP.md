@@ -2,7 +2,65 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-01-19
+> **Last updated:** 2026-07-27 (planning-document reconciliation: Phase A recorded as merged;
+> Phase B recorded as proposed-not-approved; S5.1 explicitly marked not started; the Stage 0.5
+> "nothing catches undeclared imports" process gap closed. The "Last updated" line had read
+> 2026-01-19 while stage sections were edited through July.)
+
+## Engineering workstreams (cross-cutting; not stage gates)
+
+Stage gates describe product capability. These describe the engineering foundation underneath
+them, and are tracked here so a stage label is never read as a claim about verification quality.
+
+### Phase A — Truthful cross-platform verification ✅ (Complete, merged 2026-07-27)
+
+**Goal:** make verification of this repository automatic, cross-platform and trustworthy before
+Stage 5 resumes — trusting no roadmap label, prior summary, comment or log unless confirmed
+against current code and executable tests.
+
+**Merged:** PR #26, merge commit **`8b96319c4059d9dfada2579ca5f6da22b34e1f31`**.
+All 9 GitHub checks green on the merged head `e923fb9` (Quality; Tests + coverage on Ubuntu 3.10
+and 3.11; Critical integration + lifecycle on 3.10 and 3.11; Windows 3.11; `lint-test` 3.10 and
+3.11; `smoke`) — the Windows job was the first in this repository's history.
+
+**Delivered:**
+- `.github/workflows/ci.yml` — auto-run on every pull request, every push to `main`, and manual
+  dispatch; four jobs across Ubuntu (3.10, 3.11) and Windows (3.11). See `CI.md` for the matrix.
+- Packaging/dependency contract (`tests/smoke/test_packaging_contract.py`, 9 tests) that fails CI
+  on an undeclared third-party runtime import, a first-party module that will not import, or a
+  declared console script that will not run `--help`.
+- Clean-start lifecycle characterisation (`tests/test_clean_start_lifecycle.py`, 6 tests),
+  including the database-handle-release property that fails first on Windows.
+- Coverage widened from one first-party package to all three, with the project's **pre-existing**
+  declared 70% gate enforced (measured baseline 73.5%; the gate was not lowered).
+- Two live production defects fixed, both found by disbelieving prior status: the sensitive-memory
+  consent path (`asyncio.run()` called inside `async def`, always falling through to an
+  undeclared `import nest_asyncio`) and the `bartholomew` console script (broken at import time).
+
+**Deliberately not done (deferred, recorded not fixed):** persistence restructuring; the
+intermittent concurrent-process WAL failure; findings F9–F11. See `RISKS.md`.
+
+### Phase B — Persistence ownership stabilisation 📋 (Proposed; NOT approved for implementation)
+
+**Status as of 2026-07-27:** no design, no branch, no code. This is the *proposed* next
+engineering workstream and requires explicit approval before any implementation begins.
+
+**Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
+owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
+`bartholomew/kernel/scheduler/persistence.py` uses synchronous `sqlite3` behind `SchedulerStore`'s
+dedicated worker thread; `bartholomew/kernel/persona_pack.py` and `narrator.py` use synchronous
+`sqlite3` called directly from async methods; and `bartholomew/kernel/db_ctx.py` and
+`bartholomew_api_bridge_v0_1/services/api/db_ctx.py` are near-duplicate context modules with the
+same WAL/checkpoint pattern, the latter still checkpointing per call in `liveness.py`/`db.py`.
+
+**Evidence preserved for it:** `tests/test_sqlite_wal_concurrent_processes.py::
+test_wal_cleanup_concurrent_processes` failed once under full-suite load and passed 3/3 in
+isolation immediately afterwards; it was deliberately **not** retried, quarantined, re-marked or
+given a longer timeout. The unresolved "why did a `TRUNCATE` checkpoint outlast its own
+busy-timeout" question and its temporary DEBUG instrumentation are the likely same root cause.
+See `RISKS.md`'s tech-debt watchlist.
+
+---
 
 ## Guiding rule
 
@@ -69,7 +127,13 @@ git checkout -- bartholomew/__init__.py pyproject.toml bartholomew/config/memory
 carried forward rather than fixed here:
 - The dependency audit that scoped this stage missed `jsonschema`, `requests`, and
   `pydantic[email]` — also added, but the underlying process gap (nothing catches
-  undeclared imports until a fresh install fails) is unaddressed.
+  undeclared imports until a fresh install fails) was unaddressed. **Closed by Phase A
+  (2026-07-27, `8b96319`):** `tests/smoke/test_packaging_contract.py` now fails CI on any
+  undeclared third-party runtime import, and `ci.yml`'s `quality` job installs from declared
+  dependencies only, so a missing declaration fails a pull request rather than a user's first
+  clean install. The gap had in fact bitten twice more in the interim — an undeclared
+  `nest_asyncio` on the sensitive-memory write path and an undeclared `pytest-cov` that made
+  the old `tests.yml` unable to pass at all.
 - `identity_interpreter/adapters/consent_terminal.py` has the same blocking-`input()`
   shape as the fixed `privacy_guard.py`; out of this stage's stated scope
   (`bartholomew/kernel/` only) but should get the same fix.
@@ -79,7 +143,12 @@ carried forward rather than fixed here:
 
 ---
 
-### Stage 1 — Console/UI integration (Next product-facing slice)
+### Stage 1 — Console/UI integration 📋 (Deferred product slice; NOT STARTED)
+
+**Status:** Stage 1 is a deferred console/UI product slice. It has not started and was never a
+prerequisite for Stages 2–4.5. Its historical numbering is retained deliberately — the later
+stages were sequenced by architectural dependency, not by stage number, so a lower number here
+does not imply it blocked anything.
 
 **Goal:** A minimal user-facing console or UI on top of the API bridge that can:
 - display current state (nudges, last reflections)
@@ -258,15 +327,22 @@ not itself grant.
 
 ---
 
-### Stage 5 — Initiative engine (scheduled check-ins + workflows)
+### Stage 5 — Initiative engine (scheduled check-ins + workflows) 📋 NOT STARTED
+
+**Status as of 2026-07-27:** **S5.1 has not begun.** Only the prerequisite S5.0 has landed. No
+Stage 5 feature code exists — no typed cadence, no proactive consent or mute, no quiet-hours
+defer, no dry-run mode, no structured rationale logging, and no `allow_proactive` governance
+category. Resuming Stage 5 requires separate explicit approval; S5.0 landing early does not
+constitute Stage 5 being in progress.
 
 **Goal:** Proactive suggestions and check-ins that are safe, useful, and not naggy.
 
 **Prerequisite — S5.0 (closes issue #24):** deterministic scheduler-schema readiness at startup —
 `KernelDaemon.start()` ensures the scheduler tables synchronously (fail-closed) before returning,
 so Stage 5's proactive drives and their user-visible state are not built on nondeterministic
-scheduler initialization. ✅ implemented 2026-07-25 as a separate narrow PR. See MASTER_PLAN.md's
-P3 "S5.0" note and DECISIONS.md.
+scheduler initialization. ✅ merged 2026-07-25, PR #25, merge commit `3496cfb`; issue #24 is
+confirmed closed. Proven by `tests/test_scheduler_startup_readiness.py` (10 tests) on the
+3.10 + 3.11 matrix. See MASTER_PLAN.md's P3 "S5.0" note and DECISIONS.md.
 
 **Sequencing (locked):** safety scaffolding lands before any live proactivity — typed cadence
 (interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** →
@@ -476,17 +552,30 @@ python -c "import json; from pathlib import Path; f = json.loads(Path('logs/brai
 
 ## Near-term milestone plan (recommended)
 
-> **Updated:** 2026-01-22 based on Cline audit
+> **Updated:** 2026-07-27. The 2026-01-22 Cline-audit plan that stood here was entirely
+> completed or superseded and is kept below as history.
 
-1. **Stage 0.5: Packaging & Architecture Fixes** (NEW - immediate priority)
-   - Add `bartholomew/__init__.py`
-   - Consolidate deps in `pyproject.toml`
-   - Fix `memory_rules.yaml` malformed rule
-   - Refactor `input()` out of kernel
-2. **Linux CI green for P0 core**
-3. **Fix P0 logic bugs** (summarization/encryption/embeddings/retrieval factory/metrics idempotency)
-4. **Quarantine or parameterize platform-specific tests** (Windows file locking; SQLite/FTS limitations)
-5. **Stage 1 UI/console slice**
+**Current (nothing is in flight; each item needs explicit approval to start):**
+
+1. **Phase B — persistence ownership stabilisation.** Proposed next engineering work; not
+   approved. See the workstream section at the top of this document.
+2. **Stage 5 / S5.1 — initiative engine.** Paused. The locked sequence (safety scaffolding
+   before live proactivity) is recorded in the Stage 5 section above.
+3. **Stage 1 — console/UI slice.** A deferred product slice: not started, and never a
+   prerequisite for Stages 2–4.5.
+
+**Historical (2026-01-22 Cline audit plan — all items done or superseded):**
+
+1. ~~**Stage 0.5: Packaging & Architecture Fixes**~~ — done 2026-07-20.
+2. ~~**Linux CI green for P0 core**~~ — done; superseded by Phase A's automatic, cross-platform CI.
+3. ~~**Fix P0 logic bugs**~~ (summarization/encryption/embeddings/retrieval factory/metrics
+   idempotency) — done 2026-07-20 (38 → 0 sweep, MASTER_PLAN.md).
+4. **Quarantine or parameterize platform-specific tests** — *not done, and deliberately not done
+   that way.* Phase A took the opposite approach: rather than quarantining Windows behaviour, it
+   added a Windows CI job and a test asserting the exact handle-release property that fails first
+   under Windows locking. No quarantine list was ever created (see `ASSUMPTIONS.md` A1).
+5. **Stage 1 UI/console slice** — a deferred product slice; not started, and never a
+   prerequisite for Stages 2–4.5 (carried forward above).
 
 ## What we will not do yet
 

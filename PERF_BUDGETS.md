@@ -2,7 +2,16 @@
 
 > Rough performance budgets for core loops. These are guardrails, not trophies.
 >
-> **Last updated:** 2026-01-19
+> **Last updated:** 2026-07-27 (planning-document reconciliation)
+>
+> ⚠️ **None of the budgets below are currently measured or enforced.** There is no benchmark
+> suite, no timing harness, and no CI job that checks any figure on this page — the "How to
+> measure" section describes an intention, not an existing artifact. Treat every number here as
+> a target proposed on 2026-01-19, not as an observed characteristic of the system. The only
+> timing assertions that actually run are the clean-start lifecycle bounds in
+> `tests/test_clean_start_lifecycle.py`, and those are deliberately generous **hang detectors**
+> (60s), not performance policy. Stated here rather than left implicit so a green CI is not
+> mistaken for a met performance budget.
 
 ## Measurement principles
 
@@ -34,7 +43,14 @@
 - **Envelope encrypt/decrypt (small payload):** p95 < 10ms
 
 ### WAL / DB maintenance
-- **Checkpoint on shutdown:** < 500ms typical; log if >2s
+- **Checkpoint on shutdown:** < 500ms typical; log if >2s. **Contradicted by observed
+  behaviour (noted 2026-07-27, budget deliberately not rewritten):** a `PRAGMA
+  wal_checkpoint(TRUNCATE)` once outlasted its own 30s timeout in CI, which is what prompted
+  item 11.18. Shutdown checkpointing is also no longer unconditional — `KernelDaemon.stop()`
+  skips it if `SchedulerStore`'s bounded drain does not complete. Why this budget was missed by
+  three orders of magnitude is an open question owned by the proposed Phase B workstream; see
+  `RISKS.md`'s "unresolved root cause" entry. The figure is left as written rather than raised
+  to match the failure, because the behaviour is not proven correct.
 
 ## How to measure (pragmatic)
 

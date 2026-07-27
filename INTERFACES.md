@@ -2,7 +2,10 @@
 
 > Contracts between core modules. If a contract changes, update this doc and add/adjust tests.
 >
-> **Last updated:** 2026-01-19
+> **Last updated:** 2026-07-27 (planning-document reconciliation: the header had read 2026-01-19
+> while sections were appended through July. §2's table list and WAL-checkpoint invariant, §4's
+> consent-gate bypass wording and §6's endpoint list are corrected against current code; the
+> per-subsystem sections appended 2026-07-20/21/23 were already accurate and are unchanged.)
 
 ## 1) Identity configuration
 
@@ -27,15 +30,38 @@
 - `BARTH_DB_PATH` env var wins; otherwise default `data/barth.db`.
 
 ### Tables (high-level)
-- `memories` + related governance metadata
-- `memory_consent`
-- `nudges`
-- `reflections`
-- vector/fts tables as implemented
+
+*(Corrected 2026-07-27 — enumerated from a fresh database created by a real `KernelDaemon`
+start/stop cycle, not from memory. The previous list named four tables and "vector/fts tables as
+implemented"; a fresh database actually contains 37.)*
+
+- **Memory substrate:** `memories`, `memory_consent`, `memory_chunks`, `memory_fts*`,
+  `chunk_fts*`, `episode_fts*` (FTS5 shadow tables)
+- **Kernel output:** `nudges`, `reflections`
+- **Experience Kernel:** `experience_snapshots`, `working_memory_snapshots`, `episodic_entries`,
+  `persona_switch_log`
+- **Scheduler:** `scheduled_tasks`, `ticks` — created synchronously during `KernelDaemon.start()`
+  and guaranteed to exist before it returns (S5.0; see DECISIONS.md and issue #24)
+- **Governance / skills:** `system_flags` (parking-brake state), `skill_permissions`,
+  `permission_audit`, `skill_action_audit`, `skill_registry_state`, plus per-skill tables
+  (`skill_tasks`, `skill_notifications`, `skill_calendar_events`)
 
 **Invariants:**
 - Timestamps stored as UTC.
-- WAL mode with clean checkpoint on shutdown.
+- WAL mode. **Checkpointing is not per-call** — corrected 2026-07-27: `wal_db()` defaults to
+  `checkpoint=None` since item 11.18, relying on SQLite's own automatic WAL checkpoint, because
+  an unconditional blocking `TRUNCATE` on every scheduler tick deadlocked the event loop. WAL
+  mode already guarantees readers see committed writes regardless of checkpoint timing, so this
+  is a disk-layout choice, not a correctness one. Explicit `TRUNCATE` is retained for controlled
+  maintenance and shutdown (`MemoryStore.close()`, the API bridge's `atexit` hook).
+- **Shutdown checkpointing is conditional, not guaranteed.** If `SchedulerStore.close()`'s
+  bounded drain (default 5s) does not complete, `KernelDaemon.stop()` deliberately skips the
+  shutdown `TRUNCATE` rather than contend with a possibly-live worker thread; WAL cleanup is
+  deferred to the next startup and logged. The former "WAL mode with clean checkpoint on
+  shutdown" invariant overstated this.
+- **No single owner.** `aiosqlite`, synchronous `sqlite3`, and `SchedulerStore`'s dedicated
+  worker thread all access this one file. This is characterised, not resolved — see `RISKS.md`
+  and `ROADMAP.md`'s Phase B workstream (proposed, not approved).
 
 ---
 
@@ -67,8 +93,14 @@
 - **hybrid**: fusion of vector + fts with recency shaping
 
 ### Consent gate
-- Must be applied by default at the lowest layer.
-- Bypass (`apply_consent_gate=False`) is **admin-only** and must never be used in user-facing flows.
+- Must be applied by default at the lowest layer (`FTSClient.search()` / `VectorStore.search()`,
+  `apply_consent_gate=True` by default).
+- Bypass (`apply_consent_gate=False`) is **admin-only** and must never be used in user-facing
+  flows. **Enforced, not merely stated (2026-07-24, item 11.20):** an AST-based regression test
+  asserts no production call site ever passes `apply_consent_gate=False`, and a signature check
+  asserts no public `.retrieve()` facade (`HybridRetriever`, `FTSOnlyRetriever`,
+  `VectorRetrieverAdapter`) even exposes a parameter capable of disabling the gate. See
+  `tests/test_consent_bypass_redteam.py` and `RISKS.md` R1.
 
 **Output contract:**
 - Returns ordered results with:
@@ -97,8 +129,18 @@
 - Reflections: fetch latest daily/weekly; manual trigger (dev/testing)
 - Health: kernel online + last beat + db path + counts
 
+**Also live (added 2026-07-27; this list had not been updated since 2026-01-19):**
+- Liveness: `/api/liveness/ticks`, `/api/liveness/nudges`, `/api/liveness/reflections`.
+  `/ticks` returns `[]` rather than 500 when the `ticks` table is absent — retained as defense in
+  depth even though S5.0 removed the startup window that made it reachable (issue #24, PR #23).
+- Chat: `/api/chat`, routed through `run_chat_through_runtime_contract()` when the kernel is
+  running (item 11.4).
+- Self-state: self-snapshot, goals, persona, drives, attention and episode routers
+  (`tests/test_self_state_api.py`).
+
 **Security stance (today):**
-- Treat as local/dev surface until auth is introduced.
+- Treat as local/dev surface until auth is introduced. Unchanged: there is still no
+  authentication. Token auth is Stage 6 work.
 
 ---
 
