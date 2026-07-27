@@ -50,6 +50,21 @@ jobs:
       - name: pip check (dependency graph is consistent)
         run: python -m pip check
 
+      - name: Security floor — Starlette >= 1.3.1 (CVE-2026-54283 / GHSA-82w8-qh3p-5jfq)
+        run: |
+          python -c "
+          import sys
+          from importlib.metadata import version
+          from packaging.version import Version
+          installed = Version(version('starlette'))
+          minimum = Version('1.3.1')
+          if installed < minimum:
+              sys.exit(f'starlette {installed} is below the required security floor '
+                        f'{minimum} (CVE-2026-54283 / GHSA-82w8-qh3p-5jfq). '
+                        f'Check the starlette pin in pyproject.toml.')
+          print(f'starlette {installed} OK (>= {minimum})')
+          "
+
       - name: Ruff
         run: python -m ruff check .
 
