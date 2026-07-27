@@ -2,84 +2,97 @@
 
 > How to run quality checks locally and what CI enforces.
 >
-> **Last updated:** 2026-07-21 (pre-commit.yml's description corrected — a "Run full test
-> suite: pytest -q" step was added 2026-07-20, per MASTER_PLAN.md's "Next 3 Moves" item 6, and
-> this doc was never updated to mention it)
+> **Last updated:** 2026-07-25 (Phase A: `ci.yml` added — automatic PR/push/dispatch CI with
+> Ubuntu + Windows, packaging-contract checks, explicit integration/lifecycle tests and
+> coverage across all first-party packages; broken manual-only `tests.yml` removed; the
+> "`pytest -q` runs the full test suite" claim corrected — it does not)
 
 ## GitHub Actions Workflows
 
-### 1. pre-commit.yml ✅ AUTO-RUN
+### 1. ci.yml ✅ AUTO-RUN (primary)
 
-**Status:** Enabled on push/PR to main
+**Status:** Runs automatically on **every pull request**, **every push to main**, and
+**manual dispatch** (`workflow_dispatch`).
 
-**Configuration:**
-- **Runs on:** Ubuntu
-- **Python matrix:** 3.10, 3.11
-- **Actions:**
-  - `pre-commit run --all-files --show-diff-on-failure` (format, lint, security)
-  - `pytest -q -m smoke` (fast sanity checks)
-  - `pytest -q` (full test suite — every test file under the default collection root, no
-    `-k`/path filter; this is what actually runs every test added this session)
+**Jobs:**
 
-**What it catches:**
-- Code formatting issues (black)
-- Linting issues (ruff)
-- Security issues (detect-private-key, etc.)
-- Fast smoke test failures
-- Any full-suite regression (not just smoke-tagged tests)
-
-### 2. smoke.yml ✅ AUTO-RUN
-
-**Status:** Enabled on push/PR to main/master
-
-**Configuration:**
-- **Runs on:** Ubuntu
-- **Python:** 3.11
-- **Actions:**
-  - Start uvicorn server on port 5173
-  - Test `/healthz` endpoint (verify status == "ok", version == "0.1.0")
-  - Test `/api/health` endpoint
-  - Test `/docs` endpoint (Swagger/OpenAPI)
+| Job | Runner | Python | What it does |
+|---|---|---|---|
+| `quality` | Ubuntu | 3.11 | Installs from **declared** deps only (`pip install -e .`), `pip check`, `ruff check .`, `black --check .`, packaging contract |
+| `tests` | Ubuntu | 3.10, 3.11 | `pip check`, smoke tests, default suite **with coverage across all first-party packages**, gate line >= 70%, uploads `coverage.xml` |
+| `critical` | Ubuntu | 3.10, 3.11 | The `integration`/`slow` tests **excluded by the default marker expression**, clean-start lifecycle, scheduler startup readiness, parking-brake governance |
+| `windows` | Windows | 3.11 | `pip check`, packaging contract, clean-start lifecycle (DB handle release / temp cleanup), scheduler readiness, smoke |
 
 **What it catches:**
-- Server startup failures
-- API endpoint regressions
-- Health check contract violations
+- A runtime dependency missing from `pyproject.toml` (the `quality` job installs *only* declared deps)
+- A console script or first-party module broken at import time
+- Integration/lifecycle regressions that the default `pytest -q` silently skips
+- Windows-only failures (file locking, path handling, DB handle release)
+- Coverage regressions across `bartholomew`, `identity_interpreter`, `bartholomew_api_bridge_v0_1`
 
-### 3. tests.yml ⚠️ MANUAL-ONLY
+### 2. pre-commit.yml ✅ AUTO-RUN
 
-**Status:** Manual dispatch only (`workflow_dispatch`)
-
-**Why manual:** "Enable on push/PR once Stage 1 stabilizes" (per workflow comment)
+**Status:** push/PR to main, plus manual dispatch.
 
 **Configuration:**
-- **Runs on:** Ubuntu
-- **Python:** 3.11
-- **Actions:**
-  - Full test suite: `pytest --cov=bartholomew --cov-branch`
-  - Coverage gates:
-    - Line coverage: >=70% (enforced)
-    - Branch coverage: >=60% (enforced)
-  - Artifacts: coverage.xml, htmlcov/
+- **Runs on:** Ubuntu | **Python matrix:** 3.10, 3.11
+- `pre-commit run --all-files --show-diff-on-failure` (black, ruff, end-of-file-fixer,
+  trailing-whitespace, detect-private-key, check-yaml, check-added-large-files)
+- `pytest -q -m smoke`
+- `pytest -q` — **the default suite, which is not every test** (see the marker note below)
 
-**What it catches:**
-- Unit test failures
-- Integration test failures
-- Coverage regressions
+### 3. smoke.yml ✅ AUTO-RUN
 
-**To enable auto-run:**
-1. Fix P0 non-environmental failures (see Phase 3 in action plan)
-2. Verify Linux CI is green
-3. Change workflow trigger from `workflow_dispatch` to:
-   ```yaml
-   on:
-     push:
-       branches: [main]
-     pull_request:
-       branches: [main]
-   ```
-4. Update ROADMAP "Next 3 Moves"
-5. Record decision in DECISIONS.md
+**Status:** push/PR to main/master, plus manual dispatch.
+
+- Starts a real uvicorn server and exercises `/healthz`, `/api/health`, `/docs`.
+- This is the only workflow that boots an actual HTTP server, which is why it is kept
+  alongside `ci.yml`.
+
+### Removed: tests.yml
+
+`tests.yml` was manual-only (`workflow_dispatch`) **and could never have passed**: it ran
+`pytest --cov=...` while `pytest-cov` was declared in no manifest, so the command failed with
+`unrecognized arguments: --cov`. Its coverage role is now served by `ci.yml`'s `tests` job,
+which runs automatically, measures all first-party packages, and installs `pytest-cov` from
+`requirements-dev.txt`.
+
+---
+
+## Lint/format tool versions are pinned
+
+`.pre-commit-config.yaml` pins `ruff` and `black`, and `requirements-dev.txt` now pins the
+**same** versions. Without that pin, `ci.yml`'s bare `ruff check .` installed whichever ruff was
+newest and reported rules the pinned pre-commit hook does not — the same tree was simultaneously
+"clean" under `pre-commit` and "68 errors" under CI. When bumping either file, bump both.
+
+---
+
+## ⚠️ `pytest -q` does NOT run every test
+
+`pyproject.toml` sets:
+
+```toml
+[tool.pytest.ini_options]
+addopts = "-q -m 'not integration and not slow'"
+```
+
+So a plain `pytest -q` **deselects every `integration`- and `slow`-marked test**. As of
+2026-07-25 that is 3 tests out of 895:
+
+- `test_cold_boot.py::test_cold_boot_reload`
+- `test_integration.py::test_model_integration`
+- `tests/test_experience_kernel.py::TestExperienceKernelIntegration::test_kernel_with_identity_drives_integration`
+
+They pass, but nothing ran them automatically before Phase A. `ci.yml`'s `critical` job now
+runs them explicitly via `-m "integration or slow"`.
+
+To run genuinely everything locally:
+
+```bash
+pytest -m ""            # all markers, no deselection
+pytest -m "integration or slow"   # only what the default command skips
+```
 
 ---
 
@@ -123,11 +136,13 @@ pytest -q -m smoke
 # Integration tests
 pytest -q -m integration
 
-# With coverage report
-pytest --cov=bartholomew --cov-report=term-missing
+# With coverage report (all first-party runtime packages, as CI measures)
+pytest --cov=bartholomew --cov=identity_interpreter \
+       --cov=bartholomew_api_bridge_v0_1 --cov-report=term-missing
 
-# With coverage enforcement (CI gates)
-pytest --cov=bartholomew --cov-branch --cov-fail-under=70
+# With coverage enforcement (matches ci.yml's gate)
+pytest --cov=bartholomew --cov=identity_interpreter \
+       --cov=bartholomew_api_bridge_v0_1 --cov-branch --cov-fail-under=70
 
 # Specific test file
 pytest -q tests/test_stage0_alive.py
@@ -139,11 +154,16 @@ pytest -q -k test_kernel_boots_and_shuts_down
 ### Full CI simulation
 
 ```bash
-# Run what CI runs (pre-commit + smoke)
-pre-commit run --all-files && pytest -q -m smoke
+# Run what pre-commit.yml runs
+pre-commit run --all-files && pytest -q -m smoke && pytest -q
 
-# Run full test suite like tests.yml
-pytest --cov=bartholomew --cov-branch --cov-fail-under=70
+# Run what ci.yml's `critical` job runs (the tests `pytest -q` skips)
+pytest -m "integration or slow"
+pytest tests/test_clean_start_lifecycle.py tests/test_scheduler_startup_readiness.py
+
+# Run what ci.yml's `tests` job runs (coverage + gate)
+pytest --cov=bartholomew --cov=identity_interpreter \
+       --cov=bartholomew_api_bridge_v0_1 --cov-branch --cov-fail-under=70
 ```
 
 ---
@@ -163,13 +183,18 @@ Windows-specific failures are documented as environmental noise unless proven to
 
 ### Coverage Gates
 
-**Enforced by tests.yml:**
-- Line coverage: >=70%
-- Branch coverage: >=60%
+**Enforced by ci.yml's `tests` job:**
+- Line coverage: >=70% (measured baseline 2026-07-25: **73.52%**)
+- Scope: `bartholomew`, `identity_interpreter`, `bartholomew_api_bridge_v0_1`
+
+The threshold is the project's pre-existing declared value (`.coveragerc`
+`[report] fail_under`). Widening the scope from one package to three was measured first and
+still clears it, so the gate was enforced rather than lowered.
 
 **Local verification:**
 ```bash
-pytest --cov=bartholomew --cov-branch --cov-fail-under=70
+pytest --cov=bartholomew --cov=identity_interpreter \
+       --cov=bartholomew_api_bridge_v0_1 --cov-branch --cov-fail-under=70
 ```
 
 **Regression policy:**
@@ -218,13 +243,10 @@ See `docs/STATUS_2026-01-19.md` (or latest STATUS snapshot) for current test hea
 
 ### Non-Environmental (Real Bugs - Priority to Fix)
 
-**Current P0 failures** (as of 2025-12-29, needs refresh):
-1. Summarization truncation fallback
-2. Encryption envelope round-trip
-3. Embeddings persist lifecycle (`persist_embeddings_for` returns 0)
-4. `embed_store` defaulting logic
-5. Retrieval factory mode mismatch (`mode="fts"` returns VectorRetriever)
-6. Metrics registry idempotency (Prometheus `Duplicated timeseries`)
+**Current P0 failures:** none. The six failures this section used to list (from the
+2025-12-29 snapshot) were all fixed in the 38 -> 0 sweep on 2026-07-20 — see MASTER_PLAN.md's
+"Full test suite investigation". Verified 2026-07-25: default suite and
+`-m "integration or slow"` both pass locally on Python 3.10 and 3.11.
 
 **Process:**
 - Fix one at a time (smallest surface first)
@@ -253,7 +275,7 @@ All checks passed. Safe to merge (pending code review).
    - Check recent changes to `app.py` or `bartholomew_api_bridge_v0_1/`
    - Test locally: `uvicorn app:app --port 5173`, then `curl http://localhost:5173/healthz`
 
-2. **tests.yml (if enabled):** Unit/integration test failure
+2. **ci.yml:** quality/tests/critical/windows job failure
    - Check test logs for failure details
    - Reproduce locally: `pytest -q -k <failing_test>`
    - Fix root cause, not just the test
@@ -272,34 +294,25 @@ Coverage close to threshold or non-critical issues. Review but may not block mer
 
 Before any merge to main:
 
-- [ ] `pre-commit.yml` passes (format + lint + smoke)
-- [ ] `smoke.yml` passes (server health)
-- [ ] `tests.yml` passes (once enabled; currently manual-only)
-- [ ] No new P0 failures introduced
-- [ ] Coverage gates met (line >=70%, branch >=60%)
+- [ ] `ci.yml` passes (quality + tests/coverage + critical + windows)
+- [ ] `pre-commit.yml` passes (hooks + smoke + default suite)
+- [ ] `smoke.yml` passes (live server health)
+- [ ] Coverage gate met (line >=70% across all first-party packages)
 - [ ] Governance invariants preserved (see [CHECKLISTS.md](CHECKLISTS.md))
 
 ---
 
-## Stage 1 Stabilization Plan
+## CI stabilisation status
 
-**Current state:** tests.yml is manual-only
+**Done (Phase A, 2026-07-25):** the goal this section previously tracked — "enable auto-run so
+all PRs are validated" — is met by `ci.yml`, which runs automatically on every pull request and
+push to main. Manual dispatch is retained on all three workflows.
 
-**Goal:** Enable auto-run tests.yml so all PRs are validated
-
-**Blockers:**
-- 6 P0 non-environmental test failures (see `docs/STATUS_2025-12-29.md`)
-
-**Path to green:**
-1. Refresh STATUS snapshot (Phase 2)
-2. Fix P0 failures one-by-one (Phase 3)
-3. Verify Linux CI green
-4. Enable auto-run (Phase 4)
-5. Update ROADMAP "Next 3 Moves #2" to complete
-
-**Target:** End of Stage 2 (governance hardening complete)
-
----
+**Deliberately still open (deferred to Phase B):** persistence ownership is mixed
+(synchronous `sqlite3`, `aiosqlite`, the scheduler's dedicated DB thread, and two near-duplicate
+`db_ctx` modules all touch the same file). Phase A adds regression tests that *characterise*
+clean-start and shutdown behaviour but does not restructure it. See RISKS.md's tech-debt
+watchlist.
 
 ## Links
 

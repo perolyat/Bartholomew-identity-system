@@ -1,8 +1,13 @@
 [run]
 branch = True
 parallel = True
+# All first-party runtime packages. Previously only `bartholomew` was measured,
+# so identity_interpreter/ and bartholomew_api_bridge_v0_1/ (~5,800 lines of
+# runtime code) were invisible to every coverage number the project reported.
 source =
     bartholomew
+    identity_interpreter
+    bartholomew_api_bridge_v0_1
 omit =
     */__init__.py
     */__main__.py

@@ -2,13 +2,13 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-07-24 (R2 updated for the voice/sight governance seam — MASTER_PLAN.md
-> item 11.21; R1's red-team test suite added and independently re-verified — MASTER_PLAN.md item
-> 11.20; two tech debt items added earlier the same day from the scheduler/WAL concurrency fix
-> found while merging item 11.17 — MASTER_PLAN.md item 11.18 and DECISIONS.md's "Scheduler
-> persistence moved off the event loop..." entry have the full writeup. R3/R5/R6 last
-> independently re-verified 2026-07-21, not re-checked this pass; R4 and the pre-existing tech
-> debt items likewise left as last recorded)
+> **Last updated:** 2026-07-25 (Phase A stabilisation: two tech-debt entries added — the
+> undeclared-dependency defect class, one instance of which was a live crash on the sensitive-
+> memory write path, and the persistence-ownership characterisation preserved for Phase B.
+> Earlier same-week entries: R2 updated for the voice/sight governance seam — MASTER_PLAN.md item
+> 11.21; R1's red-team suite — item 11.20; the scheduler/WAL concurrency items — item 11.18.
+> R3/R5/R6 last independently re-verified 2026-07-21, not re-checked this pass; R4 and the
+> pre-existing tech debt items likewise left as last recorded)
 
 ## Risk register (top)
 
@@ -81,15 +81,23 @@
   full suite (`pytest -q`) is fully green on Linux as of 2026-07-20, and `tests/
   test_retrieval_fts5_fallback.py`/`tests/test_fts_schema_hygiene.py` pass locally as of
   2026-07-21. Cross-platform variability itself is an inherent, ongoing category (not a single
-  bug to close permanently) — Windows behavior specifically is untested in this sandbox.
+  bug to close permanently). Windows behaviour is untestable in this sandbox, but as of Phase A
+  (2026-07-25) `ci.yml`'s `windows` job runs the packaging contract, clean-start lifecycle and
+  smoke suites on `windows-latest`, so Windows results are now produced automatically by CI
+  rather than assumed.
 
 ### R4 — Windows file locking causing flaky tests and masking real failures
 - **Category:** Reliability, Maintainability
 - **What could go wrong:** Temp DB cleanup fails; tests go red for non-product reasons; teams ignore failures.
 - **Current controls:** Some retry cleanup patterns in fixtures.
 - **Mitigation:** Close connections deterministically; tighten async fixtures; quarantine truly platform-only failures with markers.
-- **Status:** Active — not re-verified this pass (this sandbox is Linux-only; no Windows CI run
-  available to check against).
+- **Status:** Active, but no longer invisible. As of Phase A (2026-07-25) `ci.yml` has a
+  `windows` job, and `tests/test_clean_start_lifecycle.py::
+  test_shutdown_releases_database_handles_for_tempdir_cleanup` asserts the exact property that
+  fails first under Windows locking (a temp directory containing the database must be deletable
+  after `stop()`). That test runs on both Linux and Windows, so a handle leak fails CI instead of
+  being written off as platform noise. Still unverified *in this sandbox* (Linux-only); the first
+  real Windows evidence will come from the first CI run of this workflow.
 
 ### R5 — Encryption envelope round-trip bugs
 - **Category:** Security, Reliability
@@ -114,6 +122,43 @@
 
 ## Tech debt watchlist
 
+- **(2026-07-25, Phase A) Undeclared-dependency class of defect — one instance fixed, the
+  detection gap closed.** `MemoryStore.upsert_memory()` called `asyncio.run()` from inside an
+  `async def`, so it raised `RuntimeError` on *every* sensitive-content write and always fell
+  through to an unguarded `import nest_asyncio` — a package declared in no manifest. Any content
+  `is_sensitive()` flagged (e.g. containing "routine", "location", "name") that the rules engine
+  did not block earlier therefore raised `ModuleNotFoundError`, **even when the user approved
+  storing it**. Reproduced directly, then fixed by awaiting the coroutine (consent remains
+  fail-closed). Two further latent instances were also uncovered and fixed: `pytest-cov` was
+  undeclared while `tests.yml` depended on it (that workflow could never have passed), and the
+  `bartholomew` console script was broken at import time by a `typer.Option(param_decls=...)`
+  call incompatible with the installed typer. `tests/smoke/test_packaging_contract.py` now fails
+  CI on any undeclared third-party runtime import, any first-party module that will not import,
+  and any declared console script that will not run `--help`. **The underlying risk is not
+  closed** — it is now detected rather than latent.
+- **(2026-07-25, Phase A) Persistence ownership remains mixed — characterised, not fixed
+  (Phase B).** Phase A deliberately added no database owner and no checkpoint path. Evidence
+  preserved for the Phase B audit: `bartholomew/kernel/memory_store.py` (aiosqlite),
+  `bartholomew/kernel/scheduler/persistence.py` (sync `sqlite3` behind `SchedulerStore`'s
+  dedicated thread), `bartholomew/kernel/persona_pack.py` and `narrator.py` (sync `sqlite3`
+  called from async methods), plus two near-duplicate context modules —
+  `bartholomew/kernel/db_ctx.py` and `bartholomew_api_bridge_v0_1/services/api/db_ctx.py` —
+  all read/write the same SQLite file. `tests/test_clean_start_lifecycle.py` now characterises
+  the observable consequences (fresh-DB schema creation, bounded start/stop, handle release
+  sufficient for temp-directory deletion, clean restart, no leaked scheduler threads or pending
+  tasks) so a regression fails CI. No failure was concealed with a retry or an inflated timeout;
+  the bounds are hang detectors, not performance policy.
+  - **Reproduced under full-suite load (2026-07-25):**
+    `tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes` failed
+    once in a full run (`1 failed, 909 passed, 2 skipped, 3 deselected`) with
+    `Worker process failed with code 1`, then passed 3/3 when run in isolation immediately
+    afterwards. The same test failed once earlier in the week during item 11.21's verification and
+    likewise passed on retry. It is **order/load-dependent, not deterministic**, it exercises
+    multi-process WAL cleanup, and it is unrelated to the Phase A changes (which touch neither the
+    WAL/checkpoint paths nor multi-process access). Left failing-under-load and recorded here
+    rather than retried, quarantined, or given a longer timeout: it is direct evidence for the
+    Phase B persistence-ownership audit, and the existing "unresolved root cause: why a `TRUNCATE`
+    checkpoint outlasted its own busy-timeout" item below is the likely same root cause.
 - ~~**Scheduler-schema startup readiness race** (GitHub issue #24).~~ **Resolved by S5.0**
   (2026-07-25): `KernelDaemon.start()` now ensures the scheduler schema synchronously (fail-closed)
   before returning, so `ticks`/`scheduled_tasks` exist before the API serves requests — closing the

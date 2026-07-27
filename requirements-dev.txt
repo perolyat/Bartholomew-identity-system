@@ -1,8 +1,18 @@
 pytest
 pytest-asyncio
 pytest-mock
-ruff
-black
+# Required by the coverage steps in .github/workflows/ci.yml (and by the
+# legacy tests.yml). It was previously undeclared, so any `pytest --cov=...`
+# invocation failed with "unrecognized arguments: --cov".
+pytest-cov
+# Pinned to the exact versions .pre-commit-config.yaml pins, so a bare
+# `ruff check .` / `black --check .` (run by ci.yml and by developers locally)
+# agrees with what the pre-commit hooks enforce. Unpinned, CI installed a newer
+# ruff whose additional rules reported 68 errors that the pinned hook does not,
+# making the same tree simultaneously "clean" and "failing".
+# Keep these in sync with .pre-commit-config.yaml when bumping either.
+ruff==0.14.3
+black==25.9.0
 pre-commit
 mypy
 httpx
