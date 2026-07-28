@@ -311,26 +311,12 @@ identity_interpreter/
 
 ## Next Steps
 
-1. **Wire Real Backends**: Replace adapter stubs with actual implementations
-   - Connect to Llama.cpp/Ollama for local models
-   - Implement cloud model APIs (OpenAI, Anthropic)
-   - Add real tool execution with sandboxing
-
-2. **Enhanced Safety**: Upgrade red line detection
-   - Use NLP models for semantic analysis
-   - Add context-aware violation detection
-   - Implement graduated responses
-
-3. **Metrics Dashboard**: Visualize alignment metrics
-   - Track value_alignment_score over time
-   - Monitor confidence distributions
-   - Alert on policy violations
-
-4. **Scenario Testing**: Build comprehensive test suite
-   - Medical consent scenarios
-   - Crisis protocol activation
-   - Budget exhaustion fallback
-   - Tool sandbox violations
+**Removed 2026-07-28** (documentation reconciliation pass 2) — this independent list (wiring real
+backends, enhanced safety, a metrics dashboard, scenario testing) competed with the canonical
+roadmap and had not been updated to reflect how much of it (real backends, metrics, scenario-style
+testing via `tests/test_scenario_replay.py`) already shipped. For current priorities, see
+`MASTER_PLAN.md`'s "Next 3 Moves" and `ROADMAP.md`'s "Near-term milestone plan," both of which
+require separate explicit approval before any listed step begins.
 
 ## License
 

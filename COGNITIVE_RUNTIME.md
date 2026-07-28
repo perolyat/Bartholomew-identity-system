@@ -9,7 +9,13 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-07-24
+> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: reflection ownership section
+> rewritten to distinguish current-implementation concatenation from the approved target
+> architecture, resolving a contradiction with `ROADMAP.md`/`MASTER_PLAN.md`; added the mapping to
+> `CONSTITUTION.md`'s Observe/Interpret/Recommend/Act pipeline and the Observe/Interpret/Recommend/
+> Govern/Act/Learn naming, with an explicit statement that the Executive is a decision-owning
+> pillar, not a passive step; added the `awaiting_response` obligation-state requirement, not yet
+> implemented. Previously: 2026-07-24.)
 
 ## The governing principles
 
@@ -57,6 +63,70 @@ adapters (`start_stream()` / `start_capture()`) are now thin compatibility wrapp
 delegate exclusively to those seams; their capture/stream *capability* stays an inert Stage 6
 placeholder, reachable only through the governed seam. See "Device surfaces (voice/sight)" below
 for what is and isn't in scope.
+
+### Mapping to `CONSTITUTION.md`'s simple cognitive model (added 2026-07-28)
+
+`CONSTITUTION.md`'s "Observation Philosophy" section states a simpler four-stage pipeline —
+**Observe → Interpret → Recommend → Act** — for describing how reality-first observation becomes
+action. That pipeline and this document's eight-stage Runtime Contract are not competing models;
+the simple pipeline is a coarser view of the same loop. The authoritative mapping:
+
+| `CONSTITUTION.md`'s stage | Runtime Contract stage(s) |
+|---|---|
+| Observe | Observation |
+| Interpret | Interpretation |
+| Recommend | **Executive** produces a recommendation or `CandidateAction` |
+| *(implicit — see below)* | **Governance** evaluates the proposed `CandidateAction` |
+| Act | Capability + Execution |
+| *(implicit — see below)* | Reflection + Memory |
+
+`CONSTITUTION.md`'s four-stage version compresses Governance into "Recommend → Act" (a
+recommendation that is acted on is implicitly understood to have been approved) and does not
+separately name the Reflection/Memory stages this document tracks explicitly. Nothing in
+`CONSTITUTION.md` should be read as omitting Governance, Reflection, or Memory — they are simply
+folded into the coarser four-stage description there, and this table is the explicit unfolding.
+A fuller six-stage naming that some product discussion uses — **Observe, Interpret, Recommend,
+Govern, Act, Learn** — maps onto the same eight Runtime Contract stages as: Observe = Observation;
+Interpret = Interpretation; Recommend = Executive produces a `CandidateAction`; Govern = Governance
+evaluates the proposal; Act = Capability + Execution; Learn = Reflection + Memory.
+
+**The Executive is a decision-owning pillar, not a passive pipeline step.** Per `CONSTITUTION.md`'s
+Five Pillars, the Executive "decides. It does not observe. It does not remember. It decides." In
+the Runtime Contract, this means the Executive's `CandidateAction` is a genuine proposal that
+Governance can and does deny (see the Exit Gate table below and the non-vacuity test requirements
+noted throughout this document) — it is not a rubber-stamp step that always leads to execution.
+Any future surface added to the Runtime Contract must preserve this: constructing a
+`CandidateAction` that Governance cannot meaningfully deny is not a valid implementation of the
+Executive stage.
+
+### The `awaiting_response` obligation state (added 2026-07-28)
+
+When Bartholomew sends a message (or the user sends one) that requires an external reply before
+the underlying matter can be considered resolved, that matter enters an **`awaiting_response`**
+state rather than being treated as complete the moment the message is sent. This is a runtime
+lifecycle concept — an obligation that persists across the gap between Action and the eventual
+Reflection that resolves it — and a cognitive-accessibility mechanism (per `CONSTITUTION.md`):
+users who may mentally dismiss a matter after sending the original message should not have
+Bartholomew do the same.
+
+**Required properties of this state (recorded here as a canonical requirement; not yet
+implemented — see below):**
+- The matter remains visible to the Executive as an open obligation, not archived as resolved.
+- It resumes automatically — without the user having to re-raise it — when a response arrives.
+- It escalates or reminds appropriately when overdue, subject to the same governed notification
+  controls (adaptive notifications, mute, quiet-hours) as any other Bartholomew-initiated contact.
+- Provenance and every state transition (opened, reminded, escalated, resolved) remain auditable,
+  the same as any other governed action.
+- It is subject to the same Governance path as any other Capability/Execution — creating,
+  escalating, or resolving an `awaiting_response` entry is itself an action that traverses
+  Observation → Interpretation → Executive → Governance → Capability → Execution → Reflection →
+  Memory, not a side channel that bypasses it.
+
+**Implementation status:** this state does not exist in code today. It is recorded here as a
+canonical runtime-lifecycle requirement so that Stage 1 (the minimal consumer web governance
+shell, which must expose an awaiting-response queue — see `ROADMAP.md`) and any future proactive
+Stage 5 behaviour are built against a single, already-agreed shape rather than inventing one ad
+hoc. Building it is separate, approved work, not authorised by this documentation entry.
 
 ## Ownership table
 
@@ -225,13 +295,44 @@ short-term context buffer, feeding `get_context_string()`); skill execution stil
 audit). What changed is that there is now *also* one canonical Reflection type flowing into one
 sink, which there wasn't before. Retiring or deriving the surface-specific stores from the
 unified record (so there's genuinely one write, not three) is a possible future simplification,
-not done here.
+not done here. **This unified-shape item is distinct from, and does not resolve, the
+reflection-*ownership* question below** — it unifies the record type both surfaces write, not
+which subsystem composes daily/weekly reflection *content*.
 
-**Two reflection *pipelines* also remain unreconciled** (noted, not new here): `daemon.py`'s
-daily/weekly `ReflectionGenerator` (via `identity_interpreter.adapters.reflection_generator`)
-and `narrator.py`'s own `generate_daily_reflection_narrative()` /
-`generate_weekly_reflection_narrative()` both exist and neither has been retired in favor of
-the other (tracked in `ROADMAP.md` Stage 3's "Still open" note).
+### Reflection ownership (corrected 2026-07-28)
+
+**Current implementation:** `daemon.py`'s `_run_daily_reflection()`/`_run_weekly_reflection()`
+call **both** `identity_interpreter.adapters.reflection_generator.ReflectionGenerator` (LLM-based,
+safety-checked, produces `content`) **and** `narrator.py`'s
+`generate_daily_reflection_narrative()`/`generate_weekly_reflection_narrative()` (template-based,
+built from real persisted episodes), and string-concatenate the two outputs
+(`content = f"{content}\n\n---\n\n{episodic_narrative}"`, added in item 11.8, 2026-07-21). **This
+is concatenation, not architectural unification.** Both pipelines run unconditionally and
+independently; the code does not enforce a single authority over reflection composition today.
+This document previously stated the two pipelines "remain unreconciled" while `ROADMAP.md`
+separately stated they were "✅ reconciled... additively" and referenced a "Still open" note in
+`ROADMAP.md` Stage 3 that no longer exists there (it had been overwritten by the "reconciled"
+text in the same 2026-07-27 pass that removed it) — those two canonical documents gave literally
+opposite answers to the same question. That contradiction is resolved by this section: neither
+past phrasing was quite right; "additive concatenation, not unification" is the precise, single
+description now used consistently in `MASTER_PLAN.md`, `ROADMAP.md`, and here.
+
+**Approved target architecture (recorded 2026-07-28):** `ReflectionGenerator` is the authoritative
+owner of reflection composition and final reflection output. `NarratorEngine`'s episodic
+narrative is supplementary evidence supplied *to* that authoritative process — not an
+independent, co-equal, or competing reflection pipeline.
+
+**The gap between current implementation and approved target:** closing this gap requires a real
+code change — routing `NarratorEngine`'s episodic narrative into `ReflectionGenerator` as an input
+(e.g. as additional context/evidence it composes with, rather than an appended, separately-produced
+block) — plus tests verifying `ReflectionGenerator` is the sole point of final composition. **That
+code change has not been made.** It is out of scope for this documentation-only pass and requires
+its own separate authorisation.
+
+**Binding consequence for Stage 5:** live proactive *reflection* behaviour (`ROADMAP.md` Stage 5)
+remains blocked until this gap is closed by a separately authorised code change and verified by
+tests — concatenation of two independently-running pipelines is not an acceptable foundation for
+new proactive behaviour built on top of reflection output.
 
 ## Exit Gate status
 

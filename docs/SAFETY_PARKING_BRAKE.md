@@ -59,7 +59,7 @@ from bartholomew.orchestrator.safety.parking_brake import (
 )
 
 # Initialize with database path
-storage = BrakeStorage("data/bartholomew.db")
+storage = BrakeStorage("data/barth.db")  # corrected 2026-07-28: real default is data/barth.db
 brake = ParkingBrake(storage)
 
 # Check current state
@@ -214,7 +214,7 @@ bartholomew brake off
 
 Verify database permissions and that `system_flags` table exists:
 ```bash
-sqlite3 data/bartholomew.db ".schema system_flags"
+sqlite3 data/barth.db ".schema system_flags"
 ```
 
 **Audit trail not recording**

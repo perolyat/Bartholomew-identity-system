@@ -1,3 +1,11 @@
+> **ARCHIVED 2026-07-28 — historical only, not current status.** This is a point-in-time manual
+> validation from October 2025, ~9 months stale relative to the current repository. It uses the
+> wrong database filename (`memory.db`; the current default is `data/barth.db`) and describes an
+> architecture (e.g. the print-only kill-switch adapter) since restructured — see `DECISIONS.md`.
+> For current project status, use `MASTER_PLAN.md` and `REVIEWS.md`. Moved here from the repo
+> root as part of the 2026-07-28 documentation reconciliation (see `RISKS.md`'s tech-debt
+> watchlist).
+
 # Bartholomew Integration Validation Report
 **Date:** October 29, 2025
 **Validator:** Cline

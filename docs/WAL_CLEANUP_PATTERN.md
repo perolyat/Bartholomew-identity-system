@@ -122,23 +122,16 @@ def get_conn():
     # Automatic cleanup when context exits
 ```
 
-### Memory Manager (Future Enhancement)
+### Memory Manager — this suggestion is now contradicted by `DECISIONS.md` (removed 2026-07-28)
 
-`identity_interpreter/adapters/memory_manager.py` currently manages connections directly. Consider refactoring to use `wal_db` for consistency:
-
-```python
-# Current pattern (manual)
-with sqlite3.connect(self.db_path) as conn:
-    conn.execute("PRAGMA journal_mode = WAL;")
-    # ... work ...
-
-# Recommended pattern
-from bartholomew_api_bridge_v0_1.services.api import db_ctx
-
-with db_ctx.wal_db(self.db_path) as conn:
-    # ... work ...
-# Automatic WAL cleanup
-```
+This section previously suggested refactoring `identity_interpreter/adapters/memory_manager.py`
+to use `wal_db()`. `DECISIONS.md`'s "chat's conversational-memory context comes from Working
+Memory, not `identity_interpreter`'s `ContextBuilder`/`MemoryManager`" entry has since clarified
+that `MemoryManager` is deliberately **not** being revived/aligned with the authoritative
+`bartholomew.kernel.memory_store.MemoryStore` path — it retains its own genuinely different,
+narrower live use (backing `ReflectionGenerator`'s own `Orchestrator(identity_config=...)`
+construction) and is not slated for this kind of consolidation. Do not treat this as an open
+enhancement.
 
 ## Performance Considerations
 

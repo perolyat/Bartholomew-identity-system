@@ -2,9 +2,14 @@
 
 > Stage 3: Unified Persona Core
 >
-> **Status:** In Progress (Phase 3.1)
+> **Status:** ✅ Complete — all phases below (3.1–3.6) shipped; Stage 3 is marked done in
+> `MASTER_PLAN.md`/`ROADMAP.md`. This document's "Planned"/"Coming next" markers for phases 3.2–3.6
+> are stale (corrected 2026-07-28) — see `docs/PERSONA_PACK_IMPLEMENTATION.md`,
+> `docs/GLOBAL_WORKSPACE_IMPLEMENTATION.md`, `docs/WORKING_MEMORY_IMPLEMENTATION.md`,
+> `docs/NARRATOR_EPISODIC_LAYER_IMPLEMENTATION.md`, and `docs/STAGE_3_6_INTEGRATION.md` for each
+> phase's actual (also complete) implementation record.
 > **Started:** 2026-01-20
-> **Last Updated:** 2026-01-20
+> **Last Updated:** 2026-01-20 (content); status line corrected 2026-07-28
 
 ## Overview
 
@@ -210,25 +215,25 @@ The Experience Kernel reads from Identity.yaml:
 
 ---
 
-## Phase 3.2: Global Workspace (Planned)
+## Phase 3.2: Global Workspace — ✅ done, see docs/GLOBAL_WORKSPACE_IMPLEMENTATION.md
 
-*Coming next...*
+*Shipped — see the linked implementation doc above (corrected 2026-07-28).*
 
-## Phase 3.3: Working Memory Manager (Planned)
+## Phase 3.3: Working Memory Manager — ✅ done, see docs/WORKING_MEMORY_IMPLEMENTATION.md
 
-*Coming next...*
+*Shipped — see the linked implementation doc above (corrected 2026-07-28).*
 
-## Phase 3.4: Narrator Episodic Layer (Planned)
+## Phase 3.4: Narrator Episodic Layer — ✅ done, see docs/NARRATOR_EPISODIC_LAYER_IMPLEMENTATION.md
 
-*Coming next...*
+*Shipped — see the linked implementation doc above (corrected 2026-07-28).*
 
-## Phase 3.5: Persona Pack System (Planned)
+## Phase 3.5: Persona Pack System — ✅ done, see docs/PERSONA_PACK_IMPLEMENTATION.md
 
-*Coming next...*
+*Shipped — see the linked implementation doc above (corrected 2026-07-28).*
 
-## Phase 3.6: Integration & Wiring (Planned)
+## Phase 3.6: Integration & Wiring — ✅ done, see docs/STAGE_3_6_INTEGRATION.md
 
-*Coming next...*
+*Shipped — see the linked implementation doc above (corrected 2026-07-28).*
 
 ---
 

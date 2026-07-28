@@ -2,10 +2,20 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-07-27 (planning-document reconciliation: Phase A recorded as merged;
-> Phase B recorded as proposed-not-approved; S5.1 explicitly marked not started; the Stage 0.5
-> "nothing catches undeclared imports" process gap closed. The "Last updated" line had read
-> 2026-01-19 while stage sections were edited through July.)
+> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: Echo Integration Gates moved
+> to non-canonical `docs/incubator/ECHO_IDEAS.md`; approved sequencing corrected so Stage 1
+> precedes Stage 5/S5.1; Stage 1 scoped as a minimal consumer web governance shell with host-device
+> onboarding; Stage 6 auth criterion corrected to require a threat model rather than assuming
+> simple token auth is sufficient; jurisdiction-aware capture, adaptive notifications, and data
+> portability added to Stage 6; the Stage 3/Stage 5 reflection-ownership entries corrected to
+> distinguish current concatenation from the approved target architecture; the Stage 0 water-logging
+> exit criterion annotated as historical, not current product direction. See `DECISIONS.md`'s
+> "Deployment architecture: hybrid local-first" entry and `COGNITIVE_RUNTIME.md`'s reflection-
+> ownership section for the underlying decisions.
+>
+> **Previously (2026-07-27):** Phase A recorded as merged; Phase B recorded as proposed-not-approved;
+> S5.1 explicitly marked not started; the Stage 0.5 "nothing catches undeclared imports" process gap
+> closed. The "Last updated" line had read 2026-01-19 while stage sections were edited through July.
 
 ## Engineering workstreams (cross-cutting; not stage gates)
 
@@ -76,11 +86,16 @@ See `RISKS.md`'s tech-debt watchlist.
 
 **Goal:** A running kernel that can persist state, generate nudges, and produce daily/weekly reflections with governance constraints.
 
-**Evidence:** `STAGE_0_COMPLETION.md`, `tests/test_stage0_alive.py`, exports under `exports/`.
+**Evidence:** `docs/archive/STAGE_0_COMPLETION.md`, `tests/test_stage0_alive.py`, exports under `exports/`.
 
-**Exit criteria:**
+**Exit criteria (historical — Stage 0's original 2025-10-30 bar, not current product direction):**
 - Kernel lifecycle start/stop cleanly.
-- Water logging works.
+- Water logging works. *(Note added 2026-07-28: hydration/water logging was Stage 0's original,
+  simplest example feature and is not part of current active product direction or
+  `ExperienceKernel`'s governed drives — see `CONSTITUTION.md`'s consumer-value gate. The
+  underlying endpoints/table/UI panel still exist in code as a legacy, working feature; removing
+  them is an unapproved future code-cleanup decision, not scheduled ahead of current architectural
+  work. This line records what Stage 0 verified historically; it is not forward guidance.)*
 - Nudge pipeline persists and respects cadence/quiet-hours.
 - Daily + weekly reflection generation persists + exports.
 
@@ -148,20 +163,45 @@ carried forward rather than fixed here:
 **Status:** Stage 1 is a deferred console/UI product slice. It has not started and was never a
 prerequisite for Stages 2–4.5. Its historical numbering is retained deliberately — the later
 stages were sequenced by architectural dependency, not by stage number, so a lower number here
-does not imply it blocked anything.
+does not imply it blocked anything. **Scope updated 2026-07-28** (planning only — this update does
+not authorise implementation): Stage 1 is now sequenced *before* Stage 5/S5.1 (see "Near-term
+milestone plan" above) because Stage 5's live proactive behaviour needs a real, user-facing
+governance surface that only Stage 1 can provide.
 
-**Goal:** A minimal user-facing console or UI on top of the API bridge that can:
-- display current state (nudges, last reflections)
-- acknowledge/dismiss nudges
-- trigger reflections (dev/testing)
+**Goal:** A minimal consumer web governance shell on top of the API bridge, consistent with the
+hybrid local-first deployment architecture (`DECISIONS.md`) — browser-based, reaching the trusted
+local Bartholomew runtime — that can, at minimum:
+- display current state (nudges, last reflections) and overall system status
+- acknowledge/dismiss nudges; trigger reflections (dev/testing)
+- provide **parking-brake access** (view/engage/disengage, by scope)
+- provide a **consent and approval inbox** (pending "ask"-level permission requests, memory-consent
+  prompts)
+- provide **notification settings** and **mute / quiet-hours controls**
+- provide an **awaiting-response queue** (see `COGNITIVE_RUNTIME.md`'s `awaiting_response` state) —
+  matters the user or Bartholomew is waiting on a reply for, so they aren't silently forgotten
+- provide relevant **audit and provenance visibility** (who/what approved a given action and when)
+
+**Also in scope:** host-device onboarding guidance — during setup, show the user the realistic
+advantages and limitations of running the trusted local Bartholomew runtime on a phone, a personal
+computer, a home server/hub, a hosted cloud service, or a hybrid local-plus-cloud deployment (see
+`DECISIONS.md`'s deployment-architecture entry for the approved direction this onboarding must be
+consistent with).
 
 **Constraints:**
 - Must honor parking brake and consent gates.
 - Must not widen tool surface without governance review.
+- Must not expose remote/cross-device access to the local runtime until authentication,
+  authorization, transport security, and a threat model are separately designed and approved (see
+  `DECISIONS.md` and `ASSUMPTIONS.md`) — a Stage 1 shell is not itself an authentication project.
 
 **Exit criteria:**
 - API endpoints stable and documented.
-- Basic UI/console can safely perform: list/ack/dismiss nudges; fetch latest reflections.
+- Basic UI/console can safely perform: list/ack/dismiss nudges; fetch latest reflections;
+  engage/disengage the parking brake by scope; view and resolve pending consent/approval requests;
+  set mute/quiet-hours/notification preferences; view the awaiting-response queue; view audit
+  history for a given action.
+- Host-device onboarding presents the trade-offs above without recommending a specific device
+  as though it were the only supported option.
 - No “Act” capability beyond these actions.
 
 **Verify:**
@@ -187,7 +227,7 @@ bash bartholomew_api_bridge_v0_1/scripts/curl_smoke.sh
 - **2F** Chunking (ingest + retrieval + snippet assembly)
 
 **Exit criteria (minimum):**
-- P0 failing tests identified in `docs/STATUS_2025-12-29.md` are green on Linux CI.
+- P0 failing tests identified in `docs/archive/STATUS_2025-12-29.md` are green on Linux CI.
 - Explicit retriever modes behave correctly (`vector`, `fts`, `hybrid`).
 - Consent gates applied by default at the lowest layer.
 - Metrics registry is idempotent.
@@ -229,11 +269,18 @@ this subsystem — episodic entries and self-model snapshots bypassed `ConsentGa
   see `MASTER_PLAN.md` item 11.9). Found and fixed a real restart-persistence bug in the
   process: `ExperienceKernel` state (goals/affect/attention/drives) was never actually
   restored on daemon restart despite a log line claiming it was.
-- The two non-unified reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs.
-  `narrator.py`'s episodic-narrative generators) — ✅ reconciled 2026-07-21, additively:
-  `daemon.py`'s daily/weekly reflection generation now appends `narrator.py`'s real
-  episodic-narrative output alongside `ReflectionGenerator`'s own content, rather than either
-  replacing the other. See `MASTER_PLAN.md` item 11.8.
+- The two reflection pipelines (`daemon.py`'s `ReflectionGenerator` vs. `narrator.py`'s
+  episodic-narrative generators) — ⚠️ **partially addressed, not fully unified.** 2026-07-21:
+  `daemon.py`'s daily/weekly reflection generation was changed to append `narrator.py`'s real
+  episodic-narrative output alongside `ReflectionGenerator`'s own content (`MASTER_PLAN.md` item
+  11.8), replacing a placeholder that had never run at all. **Corrected 2026-07-28: this is
+  concatenation, not architectural unification.** Both pipelines still execute independently and
+  neither is the codebase's enforced single authority. See `COGNITIVE_RUNTIME.md`'s "Reflection
+  ownership" section for the approved target architecture (`ReflectionGenerator` authoritative,
+  `NarratorEngine` supplementary) and the tracked implementation gap between that target and the
+  current appending behaviour. **Stage 5 live proactive reflection behaviour remains blocked until
+  a separately authorised code change makes the implementation conform to the approved ownership
+  model and tests verify it** — this exit criterion is not satisfied by concatenation alone.
 
 **Verify:**
 ```bash
@@ -333,7 +380,14 @@ not itself grant.
 Stage 5 feature code exists — no typed cadence, no proactive consent or mute, no quiet-hours
 defer, no dry-run mode, no structured rationale logging, and no `allow_proactive` governance
 category. Resuming Stage 5 requires separate explicit approval; S5.0 landing early does not
-constitute Stage 5 being in progress.
+constitute Stage 5 being in progress. **Sequencing corrected 2026-07-28:** Stage 5 now also
+requires Stage 1's minimal consumer web governance shell (parking-brake access, consent/approval
+inbox, mute/notification controls, awaiting-response queue) to exist and be proven working before
+live proactive delivery is permitted — see "Near-term milestone plan" above. Additionally, live
+proactive *reflection* behaviour specifically remains blocked on the reflection-ownership
+implementation gap tracked in `COGNITIVE_RUNTIME.md` (current concatenation vs. approved
+`ReflectionGenerator`-authoritative target) until that gap is closed by a separately authorised
+code change with verifying tests.
 
 **Goal:** Proactive suggestions and check-ins that are safe, useful, and not naggy.
 
@@ -366,10 +420,18 @@ pytest -q tests/test_scheduler_checkins.py
 
 ### Stage 6 — Distributed being (cross-device) + voice adapters
 
-**Goal:** Same Bartholomew across devices with minimal, secure auth and optional voice.
+**Goal:** Same Bartholomew across devices with secure auth and optional voice, consistent with the
+hybrid local-first deployment architecture (`DECISIONS.md`): the trusted local runtime remains
+authoritative for sensitive memory and governance; cross-device access is an explicitly-designed,
+threat-modelled extension of it, not a default assumption.
 
 **Exit criteria:**
-- Token auth; cross-device client shows same timeline/state.
+- **Auth updated 2026-07-28:** remote/cross-device exposure of the local runtime must not occur
+  until authentication, authorization, transport security, and a threat model are designed and
+  separately approved — a "simple token auth" scheme is explicitly **not** assumed sufficient (see
+  `ASSUMPTIONS.md` and `DECISIONS.md`). "Token auth" alone is not an acceptable exit criterion;
+  the exit criterion is a reviewed threat model plus an implementation that satisfies it.
+- Cross-device client shows same timeline/state once that auth work is approved and implemented.
 - Voice endpoints degrade gracefully when binaries missing.
 
 **Carried-forward requirements from item 11.21 (voice/sight governance seam):**
@@ -384,6 +446,12 @@ pytest -q tests/test_scheduler_checkins.py
 - **Safety invariant:** safely stopping or tearing down an active capture session must NEVER
   depend on obtaining permission to *continue* capturing. Teardown is not a governed "start" and
   must not be gated as one (a stuck consent/policy path must not be able to trap the device "on").
+- **Jurisdiction-aware capture/recording compliance (added 2026-07-28, per `CONSTITUTION.md`'s
+  capture-and-recording-safety invariant):** before any real microphone/camera/public-recording
+  capability ships here, the design must account for whether recording is legal in the current
+  jurisdiction, whether consent or notice is required, whether audio and video rules differ,
+  retention limitations, deletion/revocation, public-vs-private environments, and a changing
+  jurisdiction while travelling. This is design scope for Stage 6, not implemented yet.
 - **Personality uniformity for voice/sight (reclassified here from Stage 4.5 Exit Gate question
   #7, item 11.22, 2026-07-24):** once voice/sight produce persona-bearing output, that output must
   source persona from the single authority (`PersonaPackManager`'s active pack), the same way the
@@ -391,6 +459,18 @@ pytest -q tests/test_scheduler_checkins.py
   across voice/sight too. This could not be done in Stage 4.5: a surface with no persona-bearing
   output has no personality to converge. Satisfying it is part of building real voice/sight
   functionality here; it closes the last residual of Exit Gate question #7.
+
+**Also in scope for Stage 6 (added 2026-07-28, design-only):**
+- **Data portability/export delivery** — implement the export guarantee recorded in
+  `CONSTITUTION.md` (memories, preferences, personal model, identity/governance settings,
+  provenance, approvals/audit history, active goals and unresolved matters) as an actual,
+  user-triggerable feature. Cross-device sync work in this stage should not ship without this,
+  since portability is meant to prevent lock-in, not just describe an intention.
+- **Adaptive notifications / awaiting-response delivery beyond the Stage 1 baseline** — Stage 1
+  ships the minimal mute/notification-settings/awaiting-response-queue controls; genuinely adaptive
+  notification behaviour (adapting to subject matter, urgency, time sensitivity, risk, user
+  preferences, current context, and previous responses, per `CONSTITUTION.md`) is design/build
+  scope here, once cross-device delivery exists to adapt across.
 
 **Verify:**
 ```bash
@@ -409,153 +489,61 @@ pytest -q tests/test_voice_adapters.py
 
 ---
 
-## Echo Integration Gates (Brainstorm-Derived, Future Exploration)
+## Echo ideas — moved off the canonical roadmap (2026-07-28)
 
-> **Source:** 45 features extracted from 81 design conversations
-> **Status:** Conceptual roadmap for companion AI agent with multi-domain capabilities
-> **Prerequisites:** Bartholomew Stages 0-3 complete; governance + consent framework mature
-
-### Echo Gate 0 — Foundation (5 features)
-
-**Goal:** Establish core agent architecture with local-first execution and security baseline.
-
-**Scope:**
-- LangGraph kernel implementing full perceive→retrieve→decide→act→learn loop
-- Episodic (SQLite) + semantic (Chroma) memory with RAG
-- YAML-based permissions system (ask/auto/never)
-- Tauri + Python architecture for desktop-first offline operation
-- Code signing + runtime attestation for supply chain integrity
-
-**Exit criteria:**
-- Agent kernel can complete full loop with capped steps/timeouts
-- Memory stores persist and retrieve with consent gates
-- All binaries signed; verification on startup
-- Permissions enforced for all actions
-
-**Verify:**
-```bash
-pytest -q tests/test_echo_kernel_loop.py
-pytest -q tests/test_echo_permissions.py
-```
-
----
-
-### Echo Gate 1 — Core Capabilities (16 features)
-
-**Goal:** Add gaming mentor, device identity, and organic immune system (EOIS) foundation.
-
-**Scope:**
-- Gaming: session detection, build guidance, inventory coaching
-- Permissions-aware memory with context metadata
-- Modular skill manifests (hot-load/unload)
-- Context-aware modes (In-Game, Life, Work, Focus, Car)
-- Device Identity (EDID) with TPM/Secure Enclave binding
-- Mutual TLS pairing, MFA gates for sensitive operations
-- Tamper-evident logging (ed25519 signatures)
-- Device bridge services (Rust) for USB/Bluetooth/mDNS
-- EOIS three-layer defense (Border/Detection/Containment)
-
-**Exit criteria:**
-- Gaming mentor provides build advice without external wikis
-- Each device has cryptographic identity; pairing is secure
-- All privileged actions logged with signatures
-- EOIS detects and contains basic threats (signature + baseline)
-
-**Verify:**
-```bash
-pytest -q tests/test_echo_gaming_mentor.py
-pytest -q tests/test_echo_edid_pairing.py
-pytest -q tests/test_echo_eois_detection.py
-```
-
----
-
-### Echo Gate 2 — Advanced Integration (21 features)
-
-**Goal:** Cross-device sync, smart home, car mode, and full EOIS with quarantine/forensics.
-
-**Scope:**
-- Smart home (Matter/Home Assistant) with scenes
-- Android Auto car mode (PTT, <6s replies, safety constraints)
-- Real-time cross-device sync (desktop/mobile/car)
-- Personality packs (Coach, Gamer Ally, Calm Mentor)
-- Human-readable audit trail with rationale
-- Shadow + Smoke UI theme (Bartholomew-inspired)
-- Local voice I/O (Vosk STT, Piper/Coqui TTS)
-- USB PC rescue mode, Smart TV voice remote
-- Device troubleshooting KB, trusted device whitelist
-- IoT protocol adapters (DLNA, WebOS, Tizen, Chromecast, HDMI-CEC)
-- Behavioral baseline detection, canary tokens, honey traps
-- Encrypted quarantine, network isolation, restore points
-- Forensics export, binary watermarking
-
-**Exit criteria:**
-- Tasks sync instantly across all devices
-- Car mode enforces safety constraints (<6s, no risky tools)
-- Smart home scenes execute with consent gates
-- EOIS quarantines threats and exports forensics bundles
-- All actions reversible via restore points
-
-**Verify:**
-```bash
-pytest -q tests/test_echo_cross_device_sync.py
-pytest -q tests/test_echo_car_mode_safety.py
-pytest -q tests/test_echo_smart_home_consent.py
-pytest -q tests/test_echo_eois_quarantine.py
-```
-
----
-
-### Echo Gate 3 — Ecosystem (3 features)
-
-**Goal:** Community extensibility with security vetting and privacy-preserving intelligence.
-
-**Scope:**
-- Local skill marketplace (install/remove live, no restart)
-- Skill vetting (static analysis + author signatures)
-- Opt-in differential privacy telemetry for threat intelligence
-
-**Exit criteria:**
-- Community skills installable from UI with vetting
-- Marketplace prevents malicious skill distribution
-- Telemetry aggregation mathematically preserves privacy
-
-**Verify:**
-```bash
-pytest -q tests/test_echo_marketplace_vetting.py
-pytest -q tests/test_echo_differential_privacy.py
-```
-
----
-
-### Echo Integration Notes
-
-**Constraints:**
-- Must inherit all Bartholomew governance (parking brake, consent gates, redaction/encryption)
-- No Echo features ship without: threat model, acceptance criteria, tests, rollback plan
-- Privacy-first: local execution default; cloud features strictly opt-in
-
-**Feature manifest location:**
-- Full JSON: `logs/brainstorm/merged/features_master.json`
-- Per-chunk JSONs: `logs/brainstorm/extracted/features_chunk_*.json`
-- Verbatim source: `logs/brainstorm/BARTHOLOMEW_BRAINSTORM_NOTES_VERBATIM.md`
-
-**Verification:**
-```bash
-# View all features
-cat logs/brainstorm/merged/features_master.json | python -m json.tool
-# Feature count by gate
-python -c "import json; from pathlib import Path; f = json.loads(Path('logs/brainstorm/merged/features_master.json').read_text()); g = {}; [g.setdefault(x['suggested_stage_gate'], []).append(x['feature']) for x in f]; [print(f'{k}: {len(v)}') for k, v in sorted(g.items())]"
-```
+The brainstorm-derived "Echo" feature set (45 features across 4 conceptual gates: agent kernel,
+gaming/device-identity, cross-device/smart-home/car-mode, and marketplace/ecosystem) previously
+lived here as "Echo Integration Gates." It has been moved to
+**[docs/incubator/ECHO_IDEAS.md](docs/incubator/ECHO_IDEAS.md)**, which is explicitly
+non-canonical and non-authoritative, because embedding a second agent kernel (LangGraph), a second
+memory architecture (Chroma+RAG), and a second permissions system as canonical roadmap content
+directly conflicted with `CONSTITUTION.md`'s "one architectural authority per concept" principle.
+Every individual idea in that document requires independent evaluation against `CONSTITUTION.md`,
+`COGNITIVE_RUNTIME.md`'s ownership table, and the hybrid local-first deployment architecture
+(`DECISIONS.md`) before any adoption — none of it is scheduled, approved, or a stage gate.
 
 ---
 
 ## Near-term milestone plan (recommended)
 
-> **Updated:** 2026-07-27. The 2026-01-22 Cline-audit plan that stood here was entirely
-> completed or superseded and is kept below as history.
+> **Updated:** 2026-07-28 (planning-document reconciliation, approved sequencing). Supersedes the
+> 2026-07-27 ordering below, which listed Phase B, then Stage 5/S5.1, then Stage 1. That ordering
+> is corrected: Stage 1 (a minimal consumer web governance shell) is sequenced **before** Stage
+> 5/S5.1, because Stage 5's live proactive behaviour requires a user-facing governance surface
+> (parking brake, consent/approval inbox, mute, notification controls, awaiting-response queue)
+> that does not exist until Stage 1 ships. **This is a planning/sequencing decision only — it does
+> not authorise implementation of any step below.** Each step still requires its own separate,
+> explicit approval before work begins.
 
-**Current (nothing is in flight; each item needs explicit approval to start):**
+**Approved sequence (nothing is in flight; each numbered step requires its own separate approval):**
+
+1. **Documentation reconciliation and the deployment-architecture decision** (this pass). See
+   `DECISIONS.md`'s "Deployment architecture: hybrid local-first" entry.
+2. **Design Phase B** — persistence-ownership stabilisation — against the approved hybrid
+   local-first architecture. Design only; no implementation.
+3. **Implement Phase B**, only after separate, explicit approval of the design from step 2.
+4. **Build a minimal Stage 1 consumer web governance shell**, only after separate, explicit
+   approval. At minimum this shell must eventually provide: parking-brake access; system status;
+   a consent and approval inbox; notification settings; mute and quiet-hours controls; an
+   awaiting-response queue; and relevant audit/provenance visibility (see Stage 1's own section
+   above for the full exit-criteria treatment once scoped).
+5. **Add Stage 5 safety scaffolding and dry-run behaviour**, only after separate, explicit
+   approval. The locked internal sequence (typed cadence → default-off consent + functional mute
+   → quiet-hours defer → dry-run → rationale logging) is recorded in the Stage 5 section above and
+   is unchanged by this reordering.
+6. **Permit live proactive Stage 5 behaviour** only after the Stage 1 user-facing governance
+   controls above have shipped and are proven working — not merely designed. This is the concrete
+   reason Stage 1 now precedes Stage 5 in this sequence: users need a real governance surface
+   before Bartholomew begins live proactive intervention.
+
+**Also open but unscheduled** (each requiring separate approval, not part of the sequence above):
+issue #22 (forward `IdentityContext` through the voice/sight compat wrappers, deferred to Stage 6);
+Phase A's deferred findings F9–F11 (`RISKS.md`); jurisdiction-aware capture/recording work (Stage
+6/7, see `ROADMAP.md`'s Stage 6/7 sections); adaptive-notification and awaiting-response delivery
+work beyond the Stage 1 shell's baseline controls; data-export/portability delivery (see the Stage
+1/6 notes added 2026-07-28); host-device onboarding guidance (Stage 1, see above).
+
+**Historical (2026-07-27 ordering, superseded by the sequence above — kept for record):**
 
 1. **Phase B — persistence ownership stabilisation.** Proposed next engineering work; not
    approved. See the workstream section at the top of this document.

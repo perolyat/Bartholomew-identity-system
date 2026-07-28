@@ -1,7 +1,10 @@
 
 # Bartholomew API Bridge v0.1 (FastAPI) + Minimal UI
 
-This package adds a stable REST bridge and a tiny local UI so you can chat with Bartholomew and log water without relying on a fragile builder preview.
+This package adds a stable REST bridge and a tiny local UI so you can chat with Bartholomew
+without relying on a fragile builder preview. *(Corrected 2026-07-28: "and log water" removed
+from the headline description — water logging is a legacy Stage 0 example endpoint still present
+in the API, not the package's current primary purpose; see `RISKS.md`'s tech-debt watchlist.)*
 
 ## Files
 - `app.py` — root shim so you can run `uvicorn app:app --reload --port 5173`
@@ -30,6 +33,8 @@ bash scripts/curl_smoke.sh
 ```
 
 ## Notes
-- Timezone is **Australia/Brisbane** for daily water totals.
-- If the `identity_interpreter` import fails, the API uses a benign stub for `/api/chat` so the UI still works. Once paths are correct, it will call your real Orchestrator.
+- Timezone is **Australia/Brisbane** for day-boundary ("today") calculations; the legacy
+  water-logging endpoints are one example of this, not the reason for it.
+- If the `identity_interpreter` import fails, the API uses a benign stub for `/api/chat` so the UI still works. Once paths are correct, it will call your real Orchestrator (via the governed
+  Runtime Contract seam when the kernel is running — see `COGNITIVE_RUNTIME.md`).
 - Database file is created at `data/barth.db` automatically.

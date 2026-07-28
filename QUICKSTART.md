@@ -1,5 +1,11 @@
 # Quick Start Guide
 
+> **Corrected 2026-07-28** (documentation reconciliation pass 2): removed the uninstalled `barth`
+> CLI command (replaced with the actual working `python -m identity_interpreter.cli ...`
+> invocation throughout), removed a code sample importing the deleted `check_tool_allowed`
+> function, and reframed the legacy water-logging example endpoints as a minor example rather
+> than a headline feature. See `RISKS.md` finding F9 and `MASTER_PLAN.md` for current status.
+
 ## Installation
 
 ```bash
@@ -53,8 +59,9 @@ The API provides:
 - **`/api/liveness/self`** - Quick self-test snapshot for Brain Console
 - **`/metrics`** - Prometheus metrics endpoint
 - **`/api/chat`** - Chat with Bartholomew
-- **`/api/water/log`** - Log water intake
-- **`/api/water/today`** - Get today's water total
+- **`/api/water/log`**, **`/api/water/today`** - a legacy Stage 0 example feature (hydration
+  logging), still live but not part of current active product direction — see `RISKS.md`'s
+  tech-debt watchlist for the pending, unapproved code-cleanup decision
 
 ### Liveness & Metrics Endpoints
 
@@ -173,7 +180,8 @@ ALLOWED_ORIGINS=http://localhost:3000,http://myapp.com TZ=Australia/Brisbane uvi
 ### Timezone Handling
 
 All timestamps are handled in **Australia/Brisbane** timezone:
-- Water logs use Brisbane time for "today" calculations
+- Day-boundary ("today") calculations use Brisbane time (the legacy water-logging example
+  endpoints are one instance of this, not the reason for it)
 - ISO8601 timestamps are timezone-aware
 - Server exposes current timezone via `/api/health`
 
@@ -183,8 +191,15 @@ See `bartholomew_api_bridge_v0_1/README_API_BRIDGE.md` for full details.
 
 ### 1. Validate Your Identity Configuration
 
+*(Corrected 2026-07-28: this section previously used a `barth` command, which is not installed —
+`setup.py`'s `barth` console-script entry point is superseded by `pyproject.toml`'s `bartholomew`/
+`bartholomew-backfill-fts` scripts, and `bartholomew` itself is a separate admin CLI for
+embeddings/parking-brake, not lint/explain. The commands below — `python -m
+identity_interpreter.cli ...` — are the actual, currently-working way to run these; see
+`RISKS.md`'s finding F9 and `INTERFACES.md` §1 for the canonical reference.)*
+
 ```bash
-barth lint Identity.yaml
+python -m identity_interpreter.cli lint Identity.yaml
 ```
 
 Output:
@@ -198,7 +213,7 @@ Identity is valid!
 ### 2. Explain Policy Decisions
 
 ```bash
-barth explain Identity.yaml --task-type code --confidence 0.4 --tool web_fetch
+python -m identity_interpreter.cli explain Identity.yaml --task-type code --confidence 0.4 --tool web_fetch
 ```
 
 This shows:
@@ -209,9 +224,18 @@ This shows:
 
 ### 3. Use in Code
 
+*(Corrected 2026-07-28: this sample previously imported `check_tool_allowed` from
+`identity_interpreter.policies`, which was deleted 2026-07-22 — see `DECISIONS.md`'s "Retire the
+deprecated tool-policy module" entry. Its functional successor is
+`bartholomew.kernel.policy_engine.evaluate_tool_policy()`, consulted via a declarative
+`IdentityContext` rather than a direct `Identity.yaml` parse. `docs/README.md` already carries the
+corrected example this one now matches.)*
+
 ```python
 from identity_interpreter import load_identity, normalize_identity
-from identity_interpreter.policies import select_model, check_tool_allowed
+from identity_interpreter.policies import select_model
+from identity_interpreter.identity_context import build_identity_context
+from bartholomew.kernel.policy_engine import evaluate_tool_policy
 
 # Load identity
 identity = load_identity("Identity.yaml")
@@ -222,10 +246,11 @@ model_decision = select_model(identity, task_type="code")
 print(f"Model: {model_decision.decision['model']}")
 print(f"Because: {model_decision.rationale}")
 
-# Check tool access
-tool_decision = check_tool_allowed(identity, "web_fetch")
-print(f"Allowed: {tool_decision.decision['allowed']}")
-print(f"Requires consent: {tool_decision.requires_consent}")
+# Check tool access via the Executive's Policy Decision (not Identity parsing directly)
+identity_context = build_identity_context(identity)
+policy_decision = evaluate_tool_policy(identity_context, "web_fetch")
+print(f"Allowed: {policy_decision.allowed}")
+print(f"Requires consent: {policy_decision.requires_consent}")
 ```
 
 ## Key Features Demonstrated
@@ -239,10 +264,14 @@ print(f"Requires consent: {tool_decision.requires_consent}")
 
 ## Next Steps
 
+For a new contributor exploring this codebase locally:
 1. **Run Tests**: `pytest tests/`
 2. **Explore Policies**: Check `identity_interpreter/policies/` for all policy engines
-3. **Wire Backends**: Replace adapter stubs with real implementations
-4. **Add Scenarios**: Create test scenarios in `scenarios/` directory
+
+*(Trimmed 2026-07-28: this section previously also listed "Wire Backends"/"Add Scenarios" as
+project priorities — an independent list that competed with the canonical roadmap. For actual
+current project priorities, see `MASTER_PLAN.md`'s "Next 3 Moves" and `ROADMAP.md`'s "Near-term
+milestone plan," both of which require separate explicit approval before any listed step begins.)*
 
 ## Documentation
 
@@ -327,10 +356,10 @@ Snippet: Protecting user privacy is fundamental...
 
 ```bash
 # Lint with different identity file
-barth lint path/to/identity.yaml
+python -m identity_interpreter.cli lint path/to/identity.yaml
 
 # Explain with different parameters
-barth explain Identity.yaml --task-type general --confidence 0.8
+python -m identity_interpreter.cli explain Identity.yaml --task-type general --confidence 0.8
 
 # Run tests
 pytest tests/

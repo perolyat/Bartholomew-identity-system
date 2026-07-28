@@ -18,8 +18,14 @@ pip install -r requirements.txt
 uvicorn app:app --reload --port 5173
 
 # Test the kernel is alive (nudges will print in console every ~15s)
-curl -X POST http://127.0.0.1:5173/kernel/command/water_log_250
+curl http://127.0.0.1:5173/api/health
 ```
+
+*(Corrected 2026-07-28: this smoke-test example previously used `/kernel/command/water_log_250`
+— a legacy Stage 0 example endpoint, not a current product priority; hydration/water-logging is
+not part of current active product direction, see `CONSTITUTION.md`'s consumer-value gate and
+`RISKS.md`'s tech-debt watchlist. `/api/health` is a neutral liveness check that doesn't imply any
+particular feature is the point of the demo.)*
 
 The kernel runs an autonomy loop with scheduled drives that monitor system health and generate proactive nudges.
 
@@ -234,10 +240,10 @@ See [docs/README.md](docs/README.md) for the `identity_interpreter` module refer
 
 ## Next Steps
 
-1. Wire real backends (Llama.cpp, Ollama, cloud APIs)
-2. Implement real tool sandboxing
-3. Add scenario-based testing
-4. Build metrics dashboard
+**Removed 2026-07-28** (documentation reconciliation pass 2) — this independent list competed
+with the canonical roadmap. For current priorities, see `MASTER_PLAN.md`'s "Next 3 Moves" and
+`ROADMAP.md`'s "Near-term milestone plan," both of which require separate explicit approval
+before any listed step begins.
 
 ## License
 

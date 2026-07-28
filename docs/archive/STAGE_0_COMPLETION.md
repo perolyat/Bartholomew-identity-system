@@ -1,3 +1,11 @@
+> **ARCHIVED 2026-07-28 — historical completion record only, not current guidance.** Dated
+> 2025-10-30. Its "Ready for Stage 1" framing should not be read as current — `MASTER_PLAN.md`/
+> `ROADMAP.md` state plainly that Stage 1 is a deferred, unstarted, unapproved product slice, and
+> the hydration/water-logging content below is historical Stage 0 scope, not current product
+> direction (see `ROADMAP.md`'s Stage 0 section for the current, annotated version of this
+> record). For current project status, use `MASTER_PLAN.md` and `REVIEWS.md`. Moved here from the
+> repo root as part of the 2026-07-28 documentation reconciliation.
+
 # Stage 0 Complete: Bartholomew Kernel - Alive, Stable, and Dreaming
 
 **Status:** ✅ Complete

@@ -2,17 +2,23 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-07-27 (planning-document reconciliation: Phase A recorded as merged
-> (`8b96319`); R3/R4's "first Windows evidence will come from the first CI run" replaced with
-> the actual result; Phase A's deferred findings F9–F11 added to the tech-debt watchlist, where
-> they had previously existed only in PR #26's description and so were at risk of being lost.
-> Earlier: 2026-07-25 Phase A stabilisation added two tech-debt entries — the
-> undeclared-dependency defect class, one instance of which was a live crash on the sensitive-
-> memory write path, and the persistence-ownership characterisation preserved for Phase B.
-> Earlier same-week entries: R2 updated for the voice/sight governance seam — MASTER_PLAN.md item
-> 11.21; R1's red-team suite — item 11.20; the scheduler/WAL concurrency items — item 11.18.
-> R3/R5/R6 last independently re-verified 2026-07-21, not re-checked this pass; R4 and the
-> pre-existing tech debt items likewise left as last recorded)
+> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: the legacy-implementation-
+> notes cleanup deferred on 2026-07-27 is done — see the tech-debt watchlist entry below for the
+> full disposition; the FastAPI-lifespan-migration ticket merged in from its own standalone file
+> (still open); three new items added — hydration/water-logging code cleanup recorded as a future
+> unapproved decision, the cross-device auth threat model gap, and jurisdiction-aware
+> capture/recording compliance.)
+>
+> **Previously (2026-07-27):** Phase A recorded as merged (`8b96319`); R3/R4's "first Windows
+> evidence will come from the first CI run" replaced with the actual result; Phase A's deferred
+> findings F9–F11 added to the tech-debt watchlist, where they had previously existed only in
+> PR #26's description and so were at risk of being lost. Earlier: 2026-07-25 Phase A
+> stabilisation added two tech-debt entries — the undeclared-dependency defect class, one instance
+> of which was a live crash on the sensitive-memory write path, and the persistence-ownership
+> characterisation preserved for Phase B. Earlier same-week entries: R2 updated for the
+> voice/sight governance seam — MASTER_PLAN.md item 11.21; R1's red-team suite — item 11.20; the
+> scheduler/WAL concurrency items — item 11.18. R3/R5/R6 last independently re-verified
+> 2026-07-21; R4 and the pre-existing tech debt items left as recorded then.
 
 ## Risk register (top)
 
@@ -78,7 +84,7 @@
 - **What could go wrong:** Retrieval works on one platform/build and silently breaks on another (FTS5/matchinfo/bm25 behavior differences).
 - **Current controls:** FTS fallback implementations exist; tests exercise some fallbacks.
 - **Mitigation:** Linux CI baseline; explicit environment detection; fallback-path tests; consider bundling SQLite build if needed.
-- **Status:** Largely mitigated on Linux (2026-07-20/21) — `docs/STATUS_2025-12-29.md` is stale
+- **Status:** Largely mitigated on Linux (2026-07-20/21) — `docs/archive/STATUS_2025-12-29.md` is stale
   and superseded on this topic (MASTER_PLAN.md flags it as such): two FTS5 bugs this doc
   attributed to Windows-only quirks were actually real logic bugs, reproduced identically on
   Linux and fixed (see MASTER_PLAN.md's "FTS5 external-content `upsert()` bug..." section); the
@@ -202,20 +208,49 @@
   KernelDaemon.start()..." entry. Distinct from the two open scheduler tech-debt items below (WAL
   checkpoint instrumentation; mixed sqlite ownership), which S5.0 does **not** address.
 - **Legacy “implementation notes” docs are useful but currently compete with SSOT.**
-  **Partially mitigated 2026-07-27, cleanup deferred:** `MASTER_PLAN.md`'s "Canonical docs"
-  section now states an explicit precedence rule — the 13 canonical docs are the only authority
-  on project status, and every other `*.md` (implementation notes, `docs/*`, `STATUS_*`,
-  `README`s, the now-retired `CHANGELOG.md`) is a reference that loses to a canonical doc on any
-  conflict. That rule is deliberately the *whole* mitigation for now. **Open follow-up, not
-  approved and not scheduled:** a separate pass to review the ~20 legacy implementation, audit,
-  report and completion documents (`PHASE_2A`–`PHASE_2D_IMPLEMENTATION.md`, `FTS*_IMPLEMENTATION
-  .md`, `SAFETY_NETS_IMPLEMENTATION.md`, `METRICS_SECURITY_IMPLEMENTATION.md`,
-  `CONSENT_GATES_IMPLEMENTATION.md`, `ORCHESTRATION_INTEGRATION.md`, `VALIDATION_REPORT.md`,
-  `STAGE_0_COMPLETION.md`, `DEV_SETUP_NOTES.md`, `UI_INTEGRATION_GUIDE.md`, `QUICKSTART.md`,
-  `docs/*_IMPLEMENTATION.md`, `docs/STATUS_2025-12-29.md`, `docs/brain.md`) and either banner,
-  archive or delete them individually. None of those files was inspected or edited in the
-  2026-07-27 reconciliation, so **their contents remain unverified against current code** — the
-  precedence rule bounds the damage, it does not correct them.
+  **Mitigated 2026-07-28:** the deferred cleanup pass named here on 2026-07-27 has been done —
+  every file in the list below was individually inspected and either updated in place, given a
+  stale/historical banner, moved to `docs/archive/`, merged into a canonical doc, or deleted as
+  actively misleading. `UI_INTEGRATION_GUIDE.md` and both copies of `DEV_SETUP_NOTES.md` (root and
+  `docs/design_conversations/`) were deleted — all three described either a governed-seam bypass
+  (direct `Orchestrator.handle_input()`, direct SQLite access) or an entirely different, unrelated
+  tech stack. `VALIDATION_REPORT.md`, `STAGE_0_COMPLETION.md`, `docs/archive/STATUS_2025-12-29.md`, and
+  `docs/audits/S0.3_checklist.md` were moved to `docs/archive/`. `.github/copilot-instructions.md`
+  (the highest-risk file, since coding agents read it automatically) had its stale `barth` CLI
+  references, hardcoded dev path, and self-description as "the constitutional framework"
+  corrected. See the changed-file list presented alongside this reconciliation for the complete
+  disposition of all ~20 files originally named here.
+- **(2026-07-28) `docs/audits/S0_fastapi_lifespan_migration.md` — still-open backlog ticket,
+  merged here from its own standalone file.** Migrating `bartholomew_api_bridge_v0_1/services/api/
+  app.py` from FastAPI's deprecated `@app.on_event("startup"/"shutdown")` decorators to the
+  `lifespan` context-manager pattern. **Verified still open 2026-07-28:** `app.py` lines 98 and
+  139 still use `@app.on_event`. Low urgency (the decorators still work; this is a deprecation,
+  not a current failure) but tracked here now rather than in a standalone, easily-missed ticket
+  file — the original ticket has been archived to `docs/archive/` with a pointer back to this
+  entry.
+- **(2026-07-28) Hydration/water-logging code cleanup — future, unapproved, not prioritised
+  ahead of current architectural work.** The 2026-07-28 documentation reconciliation removed
+  hydration/water-logging from onboarding examples, headline demonstrations, and current product
+  positioning (see `README.md`, `QUICKSTART.md`, `bartholomew_api_bridge_v0_1/README_API_BRIDGE.md`,
+  `ROADMAP.md`'s Stage 0 section). The underlying code was **not** touched — `/api/water/log`,
+  `/api/water/today`, the `water_logs` table, and the minimal UI panel
+  (`bartholomew_api_bridge_v0_1/ui/minimal/index.html`) remain live, working, legacy code. Whether
+  to actually remove that code is a separate, future, unapproved decision — recorded here so it
+  is not lost, and explicitly **not** placed ahead of Phase B/Stage 1/Stage 5 in priority merely
+  because it exists.
+- **(2026-07-28) Cross-device auth threat model does not yet exist.** The hybrid local-first
+  deployment architecture (`DECISIONS.md`) explicitly rejects "simple token auth is sufficient" as
+  an assumption (see the corrected entry in `ASSUMPTIONS.md`) and requires a reviewed threat model
+  before any remote/cross-device exposure of the local runtime. That threat model does not exist
+  yet. This is a genuine open risk, not merely a documentation gap: any Stage 6 work that exposes
+  the local runtime remotely before this threat model exists and is reviewed would violate the
+  deployment-architecture decision.
+- **(2026-07-28) Jurisdiction-aware recording/capture compliance is unresolved.** Per
+  `CONSTITUTION.md`'s capture-and-recording-safety invariant (recording legality, consent/notice
+  requirements, retention, deletion/revocation, public-vs-private context, and travel between
+  jurisdictions), no jurisdictional analysis exists yet for any future microphone/camera capture
+  capability. This is design-scope risk for Stage 6 (see `ROADMAP.md`), tracked here so it is not
+  silently assumed away when real capture work begins.
 - ~~Retrieval mode factory mismatches (explicit mode returns wrong retriever).~~ Appears
   resolved: `tests/test_retrieval_factory.py` has explicit coverage for `fts`/`vector`/`hybrid`
   mode selection, invalid-mode handling, and env/config override precedence, all passing

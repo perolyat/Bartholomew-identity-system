@@ -343,8 +343,15 @@ pytest -q tests/test_persona_pack.py
 
 ## Future Enhancements
 
-- **Stage 3.6**: Wire PersonaPackManager into daemon for runtime switching
-- **API endpoints**: GET /api/persona/active, POST /api/persona/switch
-- **UI panel**: Persona selection dropdown in minimal UI
-- **Narrator wiring**: Have Narrator query pack templates automatically
-- **Context detection**: Automatic context tag inference from user input
+*(Note added 2026-07-28: the first four items below shipped — see `docs/STAGE_3_6_INTEGRATION.md`
+for daemon wiring/API endpoints, and `DECISIONS.md` item 11.12 for the narrator-wiring migration.
+"Context detection" remains the one genuinely open item.)*
+
+- ✅ **Stage 3.6**: Wire PersonaPackManager into daemon for runtime switching — done.
+- ✅ **API endpoints**: `GET /api/persona/active`, `POST /api/persona/switch` (and
+  `list`/`current`/`history`) — done, see `docs/STAGE_3_6_INTEGRATION.md`.
+- **UI panel**: Persona selection dropdown in minimal UI — status not verified this pass; check
+  `bartholomew_api_bridge_v0_1/ui/minimal/index.html` before assuming either way.
+- ✅ **Narrator wiring**: `NarratorEngine` queries the active pack's templates via `_get_templates()`
+  — done, see `DECISIONS.md` item 11.12.
+- **Context detection**: Automatic context tag inference from user input — still open.

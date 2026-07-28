@@ -2,11 +2,16 @@
 
 > Living list of uncertainties that matter. Each must have a validation plan.
 >
-> **Last updated:** 2026-07-27 (planning-document reconciliation: A1 and A2 updated for the
-> Phase A CI matrix; A3's "no red-team bypass-path test suite exists yet" corrected — one has
-> existed since 2026-07-24, which `RISKS.md` R1 already recorded, so these two canonical docs
-> had been contradicting each other. A4/A5 and the three brainstorm-era assumptions below were
-> not re-checked this pass and are left as last recorded.)
+> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: A4's scope corrected from
+> "through Stage 2" — now complete — to "pending Phase B"; the cross-device token-auth assumption
+> rewritten to reflect the hybrid local-first deployment decision, which explicitly rejects
+> "simple token auth is sufficient" rather than merely leaving it unverified.)
+>
+> **Previously (2026-07-27):** A1 and A2 updated for the Phase A CI matrix; A3's "no red-team
+> bypass-path test suite exists yet" corrected — one has existed since 2026-07-24, which
+> `RISKS.md` R1 already recorded, so these two canonical docs had been contradicting each other.
+> A5 and the two remaining brainstorm-era assumptions were not re-checked this pass and are left
+> as last recorded.
 
 ## Format
 
@@ -100,9 +105,17 @@
   `get_retriever(mode="vector")` passes no `memory_store`, so that mode has one fewer redundant
   layer than `hybrid`/`fts` (see `RISKS.md` R1).
 
-## A4 — Single SQLite DB remains viable through Stage 2
-- **ASSUMPTION:** SQLite will be sufficient for persistence, retrieval, and test workloads through Stage 2.
-- **Why it matters:** Architectural simplicity hinges on it.
+## A4 — Single SQLite DB remains viable under the current architecture, pending Phase B
+- **ASSUMPTION:** SQLite will be sufficient for persistence, retrieval, and test workloads under the
+  current mixed-ownership architecture, pending Phase B's persistence-ownership stabilisation.
+- **Corrected 2026-07-28:** this assumption previously read "...through Stage 2." Stage 2 is now
+  ✅ complete (per `MASTER_PLAN.md`/`ROADMAP.md`), so scoping the assumption to a completed stage
+  made it read as already resolved when it isn't — the live open question has moved forward to
+  Phase B (proposed, not approved), whose evidence base is the mixed `aiosqlite`/sync-`sqlite3`/
+  scheduler-thread ownership of one file tracked in `RISKS.md`'s tech-debt watchlist.
+- **Why it matters:** Architectural simplicity hinges on it; the hybrid local-first deployment
+  architecture (`DECISIONS.md`) also depends on the local runtime's persistence layer being sound
+  before any cross-device/sync work builds on top of it.
 - **Risk if wrong:** Forced migration mid-stream.
 - **How to validate:** Track perf budgets; measure WAL growth/lock contention; define migration triggers in DECISIONS.
 - **Status:** unverified
@@ -122,9 +135,24 @@
 - **How to validate:** Run a standard chunking pipeline on a 10MB transcript and confirm stable completion.
 - **Status:** verified (observed rate-limit failure on mega-prompt)
 
-## ASSUMPTION: Cross-device ‘one mind’ is achievable with simple token auth first
-- **Statement:** A minimal token-based auth layer is sufficient for early cross-device experiments.
-- **Why it matters:** Avoid premature complex auth/SSO.
-- **Risk if wrong:** Security holes; we must upgrade to OAuth/SSO sooner.
-- **How to validate:** Threat model + penetration-style tests on auth endpoints.
-- **Status:** unverified
+## ASSUMPTION: Cross-device 'one mind' requires a reviewed threat model before any remote exposure — corrected 2026-07-28
+- **Statement (superseded):** this entry previously assumed "a minimal token-based auth layer is
+  sufficient for early cross-device experiments." **That assumption is explicitly rejected** by
+  the hybrid local-first deployment architecture decision recorded in `DECISIONS.md`
+  (2026-07-28): simple token authentication is **not** assumed sufficient. Remote/cross-device
+  exposure of the trusted local Bartholomew runtime must not occur until authentication,
+  authorization, transport security, and a reviewed threat model are designed and separately
+  approved.
+- **Current statement:** no cross-device auth mechanism (token-based or otherwise) may be treated
+  as sufficient until a threat model for it has been designed and reviewed. This is a gate, not a
+  simplification to avoid "premature complex auth/SSO" — the previous framing had that backwards.
+- **Why it matters:** Bartholomew's local runtime is the authority for sensitive memory and
+  governance (including the parking brake and emergency shutdown); an under-specified auth scheme
+  for reaching it remotely is a direct path to compromising that authority, not a minor UX
+  shortcut.
+- **Risk if wrong:** Security holes in the exact subsystem responsible for privacy, consent, and
+  safety enforcement.
+- **How to validate:** Threat model + penetration-style tests on auth endpoints, completed and
+  reviewed *before* any remote-exposure feature ships — not retrofitted after.
+- **Status:** unverified (and, per the correction above, must remain unverified-and-unshipped
+  until the threat model exists — this is not merely an open question to track passively)

@@ -1,5 +1,12 @@
 # Metrics Endpoint Security Implementation
 
+> **Note (2026-07-28):** this document's content overlaps substantially with `QUICKSTART.md`'s own
+> metrics section (same `METRICS_INTERNAL_ONLY` env var, same behavior). Evaluated for a full
+> merge; retained standalone instead because this document carries implementation-level detail
+> (exact code, specific test file names) that `QUICKSTART.md`'s onboarding-level summary doesn't
+> need. Use `QUICKSTART.md` for the quick "how do I use this" answer and this document for the
+> "how was it implemented, what exactly does it test" detail.
+
 ## Summary
 
 Implemented production security for the `/metrics` Prometheus endpoint while maintaining zero breaking changes for development and testing environments.

@@ -103,7 +103,7 @@ Central coordinator for skill lifecycle:
 ```python
 registry = SkillRegistry(
     skills_dir="config/skills",
-    db_path="./data/bartholomew.db",
+    db_path="./data/barth.db",  # corrected 2026-07-28: real default is data/barth.db
     workspace=global_workspace,
     kernel=experience_kernel,
 )
