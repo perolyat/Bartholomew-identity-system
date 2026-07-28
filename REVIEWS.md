@@ -270,7 +270,7 @@ no longer merely "unreconciled" with no resolution in view.)*
 - [DECISIONS.md](DECISIONS.md) — decision log
 - [RISKS.md](RISKS.md) / [ASSUMPTIONS.md](ASSUMPTIONS.md) — both re-verified 2026-07-21
 - [CI.md](CI.md) — CI infrastructure + local commands (corrected 2026-07-21)
-- `docs/STATUS_2025-12-29.md` — historical snapshot, now explicitly marked stale
+- `docs/archive/STATUS_2025-12-29.md` — historical snapshot, now explicitly marked stale
 
 ---
 
