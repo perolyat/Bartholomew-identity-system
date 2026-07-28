@@ -2,9 +2,12 @@
 
 > Operational and engineering checklists. If it’s not checked, it’s not real.
 >
-> **Last updated:** 2026-07-27 (planning-document reconciliation: the PR checklist's
-> "`pytest -q` passes" item was misleading — that command deselects 3 tests — and the checklist
-> predated the `ci.yml` gates entirely)
+> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: added a "Product & safety
+> invariants" checklist covering the six invariants added to `CONSTITUTION.md` this pass, plus
+> consistency with the deployment-architecture decision.)
+>
+> **Previously (2026-07-27):** the PR checklist's "`pytest -q` passes" item was misleading — that
+> command deselects 3 tests — and the checklist predated the `ci.yml` gates entirely.
 
 ## Non-negotiables checklist (Before “ready to Act”)
 
@@ -38,6 +41,31 @@ Mark each as **PASS** or **BLOCKED**.
 - [ ] No new bypass paths introduced (consent gate / parking brake)
 - [ ] User approval obtained for all doc/code changes before commit
 - [ ] Changes presented with clear diff/summary for review
+
+## Product & safety invariants checklist (added 2026-07-28)
+
+Mark each as **PASS** or **BLOCKED** for any change that touches a new capability, subsystem, or
+user-facing behaviour. See `CONSTITUTION.md`'s "Safety, Accessibility, and Product Invariants"
+section for the full rationale behind each item.
+
+- **Consumer-value gate:** the change materially reduces cognitive burden, reduces life
+  administration, prevents an important matter being forgotten, improves the user's outcomes, or
+  preserves/increases trust — architectural sophistication alone does not pass this check.
+- **Independent emergency control:** if the change adds or touches a capability that could
+  interfere with the user's normal controls (UI, input devices, screen), the emergency-shutdown
+  path independent of that capability is unaffected/still reachable.
+- **Capture teardown safety:** if the change touches voice/sight/any capture capability, stopping
+  or tearing down capture does not require passing a consent/policy gate (teardown is not a
+  governed "start").
+- **Notification-fatigue consideration:** any new notification/reminder respects existing
+  mute/quiet-hours controls and does not repeat without new information.
+- **Accessibility consideration:** any change touching obligations/follow-ups uses (or does not
+  bypass) the `awaiting_response` state rather than silently treating a sent message as resolved.
+- **Data portability:** any new kind of user data (memory, preference, goal, approval, audit
+  record) is exportable via the data-portability mechanism, or an explicit exception is recorded.
+- **Deployment-architecture consistency:** the change is consistent with the hybrid local-first
+  architecture (`DECISIONS.md`) — sensitive memory/governance/emergency-shutdown stay local-
+  authoritative; any remote/cross-device exposure has a reviewed threat model.
 
 ## Release checklist (Stage gate)
 

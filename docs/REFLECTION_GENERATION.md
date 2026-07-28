@@ -1,8 +1,21 @@
 # Reflection Generation with Identity Interpreter
 
+> **Corrected 2026-07-28:** "This replaces the previous templated approach" (below) is not
+> accurate and never fully was — `narrator.py`'s template-based
+> `generate_daily_reflection_narrative()`/`generate_weekly_reflection_narrative()` is a **second,
+> still-live pipeline**, not replaced. `daemon.py` calls **both** `ReflectionGenerator` (described
+> here) and the narrator's episodic narrative, and concatenates their output. See
+> `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section and `DECISIONS.md`'s "Reflection
+> ownership — target architecture" entry for the current, accurate picture: `ReflectionGenerator`
+> (this document's subject) is the **approved target authority** for reflection composition, with
+> `NarratorEngine` supplying supplementary episodic evidence — but that target is not yet what the
+> code enforces today (both still run independently).
+
 ## Overview
 
-Daily and weekly reflections are now generated using the Identity Interpreter orchestrator with LLM adapters and baked-in safety/policy prompts. This replaces the previous templated approach with actual LLM-generated content while maintaining strict safety guardrails.
+Daily and weekly reflections are generated using the Identity Interpreter orchestrator with LLM
+adapters and baked-in safety/policy prompts, described below. See the correction above regarding
+this pipeline's relationship to `narrator.py`'s separate template-based pipeline.
 
 ## Architecture
 
@@ -25,8 +38,10 @@ Daily and weekly reflections are now generated using the Identity Interpreter or
    - Falls back to stub responses when backends unavailable
 
 4. **KernelDaemon Integration** (`bartholomew/kernel/daemon.py`)
-   - `_run_daily_reflection()` now calls ReflectionGenerator
-   - `_run_weekly_reflection()` now calls ReflectionGenerator
+   - `_run_daily_reflection()` calls `ReflectionGenerator` first, then appends `narrator.py`'s
+     episodic narrative to its output (see the correction above — this is concatenation, not a
+     replacement of one pipeline by the other)
+   - `_run_weekly_reflection()` does the same
    - Maintains same export paths and API compatibility
    - Stores safety metadata in reflection records
 

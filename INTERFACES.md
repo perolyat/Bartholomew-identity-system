@@ -2,10 +2,15 @@
 
 > Contracts between core modules. If a contract changes, update this doc and add/adjust tests.
 >
-> **Last updated:** 2026-07-27 (planning-document reconciliation: the header had read 2026-01-19
-> while sections were appended through July. §2's table list and WAL-checkpoint invariant, §4's
-> consent-gate bypass wording and §6's endpoint list are corrected against current code; the
-> per-subsystem sections appended 2026-07-20/21/23 were already accurate and are unchanged.)
+> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: §6's security stance updated
+> for the hybrid local-first deployment decision; a new "Proposed contracts" subsection added
+> under §6 for emergency-shutdown, capture-control, data-export, notification, and
+> awaiting-response interfaces — all explicitly unimplemented and unapproved for implementation.)
+>
+> **Previously (2026-07-27):** the header had read 2026-01-19 while sections were appended
+> through July. §2's table list and WAL-checkpoint invariant, §4's consent-gate bypass wording and
+> §6's endpoint list were corrected against current code; the per-subsystem sections appended
+> 2026-07-20/21/23 were already accurate and unchanged.
 
 ## 1) Identity configuration
 
@@ -140,7 +145,38 @@ implemented"; a fresh database actually contains 37.)*
 
 **Security stance (today):**
 - Treat as local/dev surface until auth is introduced. Unchanged: there is still no
-  authentication. Token auth is Stage 6 work.
+  authentication. Auth is Stage 6 work, and is now explicitly scoped by the hybrid local-first
+  deployment architecture (`DECISIONS.md`, 2026-07-28): remote/cross-device exposure of this API
+  must not occur until authentication, authorization, transport security, and a reviewed threat
+  model are designed and separately approved — a simple token-auth scheme is explicitly **not**
+  assumed sufficient (see `ASSUMPTIONS.md`).
+
+### Proposed contracts — NOT implemented, NOT approved for implementation (added 2026-07-28)
+
+The following interfaces are recorded here only so that a future, separately-approved
+implementation has a single agreed shape to build against. None of them exist in code today.
+Listing them here does not authorise building them.
+
+- **Emergency shutdown (out-of-process).** A control path independent of Bartholomew's own
+  application code, per `CONSTITUTION.md`'s independent-emergency-shutdown invariant. Proposed
+  shape: unspecified pending design; must not depend on Bartholomew's own process, UI, or network
+  stack being responsive.
+- **Capture-control (start/stop/teardown).** Per `COGNITIVE_RUNTIME.md`'s "Device surfaces" section,
+  the existing governed seam (`run_voice_/run_sight_through_runtime_contract()`) already covers a
+  single *start* attempt. A proposed *teardown* interface must never itself require passing the
+  same consent/policy gates a *start* does (teardown is not a governed "start").
+  Jurisdiction-aware capture/recording compliance (`CONSTITUTION.md`) is design scope for whatever
+  real capture capability Stage 6 eventually builds.
+- **Data export / portability.** Per `CONSTITUTION.md`'s data-portability invariant: memories,
+  preferences, personal model, identity/governance settings, provenance, approvals/audit history,
+  and active goals/unresolved matters. Proposed shape: unspecified pending design (see `ROADMAP.md`
+  Stage 6).
+- **Notification preferences / adaptive notifications.** Mute, quiet-hours, and per-category
+  preferences (minimum viable version scoped to Stage 1's governance shell — see `ROADMAP.md`);
+  genuinely adaptive behaviour (per `CONSTITUTION.md`'s adaptive-notifications invariant) is
+  Stage 6 design scope.
+- **`awaiting_response` queue.** Per `COGNITIVE_RUNTIME.md`'s `awaiting_response` obligation-state
+  section: list/resolve open obligations, minimum viable version scoped to Stage 1.
 
 ---
 

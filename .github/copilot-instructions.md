@@ -1,6 +1,19 @@
 # Bartholomew AI Identity System - Copilot Instructions
 
-> **GOLDEN RULE**: This document defines the canonical approach for the Bartholomew AI Identity System. All development, architecture decisions, and integrations MUST align with these principles and patterns. This is not just documentation—it's the constitutional framework for building a production-ready, ethically-grounded AI companion system.
+> **Corrected 2026-07-28** (documentation reconciliation pass 2): this file is read automatically
+> by Copilot/coding agents, so it is corrected in place rather than archived. Fixes below: removed
+> the uninstalled `barth` CLI command; removed hardcoded `D:/workspace/bartholomew0.0.1` /
+> `d:\workspace\bartholomew0.0.1` developer-machine paths; fixed the `model_mapping` example's
+> internal inconsistency; removed the "constitutional framework" self-description (this is a
+> Copilot-facing pattern guide, not the enduring architecture document — see `CONSTITUTION.md` for
+> that); added a pointer to the governed Runtime Contract seam so agents don't call
+> `Orchestrator.handle_input()` directly as if it were the primary integration point.
+>
+> **GOLDEN RULE**: This document defines Copilot-facing patterns for the Bartholomew AI Identity
+> System. Development, architecture decisions, and integrations should align with these patterns
+> and with the canonical documentation set (`CONSTITUTION.md`, `MASTER_PLAN.md`,
+> `COGNITIVE_RUNTIME.md`, `ROADMAP.md`, `DECISIONS.md`) — where this file and those disagree, the
+> canonical docs win, per `MASTER_PLAN.md`'s "Canonical docs" section.
 
 ## Strategic Vision & End Goals
 
@@ -42,11 +55,21 @@
 2. **Model**: Convert to Pydantic types for type safety and validation
 3. **Normalize**: Compute derived values (dynamic memory sizing, effective model parameters)
 
-**Policy Engine Pattern**: Each policy (model selection, tool use, safety) follows the same pattern:
+**Policy Engine Pattern**: Model-selection policy:
 ```python
-from identity_interpreter.policies import select_model, check_tool_allowed
+from identity_interpreter.policies import select_model
 decision = select_model(identity, task_type="code", budget_exhausted=False)
 # Decision includes 'decision', 'rationale', 'confidence', 'requires_consent'
+```
+Tool-use policy (corrected 2026-07-28: `identity_interpreter.policies.check_tool_allowed` was
+deleted 2026-07-22 — see `DECISIONS.md`'s "Retire the deprecated tool-policy module" entry — its
+functional successor is `evaluate_tool_policy()`, consulted via a declarative `IdentityContext`):
+```python
+from identity_interpreter.identity_context import build_identity_context
+from bartholomew.kernel.policy_engine import evaluate_tool_policy
+context = build_identity_context(identity)
+policy_decision = evaluate_tool_policy(context, "web_fetch")
+# PolicyDecision includes 'allowed', 'requires_consent', 'rationale', 'reason'
 ```
 
 **Adapter Stub Pattern**: External integrations use consistent interface stubs in `adapters/`:
@@ -61,6 +84,14 @@ decision = select_model(identity, task_type="code", budget_exhausted=False)
 data = orchestrator.handle_input(user_input)
 # Logs to logs/orchestrator/orchestrator.log with timing and session tracking
 ```
+**Do not call `orchestrator.handle_input()` directly as the primary integration point for new
+code** (corrected 2026-07-28). The live `/api/chat` endpoint and any new agent-facing integration
+should go through the governed Runtime Contract seam,
+`bartholomew.kernel.runtime_contract.run_chat_through_runtime_contract()`, which wraps
+`handle_input()` and additionally runs the Observation/Interpretation/Governance/Reflection stages
+(parking brake, Identity Policy Decision, Experience Kernel context, memory persistence) — see
+`COGNITIVE_RUNTIME.md`. `handle_input()` remains the actual backend `respond_fn` the seam calls;
+it is not itself the governed entry point.
 
 ## Critical Configuration Sections
 
@@ -76,58 +107,55 @@ data = orchestrator.handle_input(user_input)
 ## Development Workflows
 
 **Environment Setup**:
-```powershell
+```bash
 pip install -e .                    # Install in development mode
-# OR use the entry point:
-pip install -e . ; barth lint Identity.yaml
 ```
 
-**CLI Commands** (Windows PowerShell - always use virtual env):
-```powershell
+**CLI Commands** (run from your activated virtual environment, any OS — corrected 2026-07-28: the
+`barth` entry point below was never installed by `pyproject.toml`; use `python -m
+identity_interpreter.cli ...`, and the hardcoded developer-machine path previously shown here was
+removed — activate your own virtualenv first, e.g. `.venv/bin/activate` or `.venv\Scripts\activate`):
+```bash
 # Primary validation workflow
-D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe -m identity_interpreter.cli lint Identity.yaml
+python -m identity_interpreter.cli lint Identity.yaml
 
 # Policy decision tracing
-D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe -m identity_interpreter.cli explain Identity.yaml --task-type code --confidence 0.4 --tool web_fetch
-
-# Alternative using installed entry point
-barth lint Identity.yaml
-barth explain Identity.yaml --task-type general --confidence 0.7
-barth health  # System health checks
+python -m identity_interpreter.cli explain Identity.yaml --task-type code --confidence 0.4 --tool web_fetch
 ```
 
 **Testing & Development**:
-- `D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe test_bartholomew.py` - Basic integration test with Ollama
+- `python test_bartholomew.py` - Basic integration test with Ollama
 - `pytest tests/` - Full test suite with policy engine tests
-- `D:/workspace/bartholomew0.0.1/.venv/Scripts/python.exe chat.py` - Interactive chat interface for end-to-end testing
+- `python chat.py` - Interactive chat interface for end-to-end testing
 - `ollama list` - Verify available local models before testing
 
-**API Bridge Development**:
-```powershell
-# Setup PYTHONPATH for API bridge
-cd d:\workspace\bartholomew0.0.1\bartholomew_api_bridge_v0_1
-$env:PYTHONPATH="d:\workspace\bartholomew0.0.1"
-uvicorn app:app --host 127.0.0.1 --port 8000
-# Test endpoints: /api/health, /api/chat, /api/water/log
+**API Bridge Development** (corrected 2026-07-28: removed the hardcoded developer-machine path;
+run from the repository root):
+```bash
+uvicorn app:app --reload --port 5173
+# Test endpoints: /api/health, /api/chat, /api/water/log (legacy example, see RISKS.md)
 ```
 
 **Model Integration**: The `LLMAdapter` maps Identity.yaml model names to Ollama models:
 ```python
 model_mapping = {
-    "Mistral-7B-Instruct-GGUF-Q4_K_M": "qwen2.5-coder:7b",
+    "Mistral-7B-Instruct-GGUF-Q4_K_M": "mistral:7b-instruct",
     "TinyLlama 1.1B": "tinyllama",
     "Phi-4 3B": "phi3:mini"
 }
 ```
+*(Corrected 2026-07-28: this example previously mapped an "Instruct" model name to
+`qwen2.5-coder:7b`, a coder model — an internal inconsistency. Verify the exact mapping against
+`identity_interpreter/adapters/llm_stub.py`'s actual `model_mapping` before relying on this
+example.)*
 
-**Entry Point Usage**: Package installs `barth` command via setup.py:
-```python
-entry_points={
-    "console_scripts": [
-        "barth=identity_interpreter.cli:main",
-    ],
-}
-```
+**Entry Point Usage** (corrected 2026-07-28): `pyproject.toml` — not `setup.py` — is the manifest
+that actually installs. It declares `bartholomew` (an admin CLI for embeddings/parking-brake, see
+`bartholomew/cli.py`) and `bartholomew-backfill-fts`, not `barth`. `setup.py` separately declares a
+`barth` entry point pointing at `identity_interpreter.cli:main`, but `pyproject.toml` is what
+actually installs when you `pip install -e .` — `barth` is **not** on `PATH`. This is tracked as an
+open item (two competing packaging manifests) in `RISKS.md` finding F9; use `python -m
+identity_interpreter.cli ...` for lint/explain until that's resolved.
 
 ## Critical File Dependencies
 
@@ -135,7 +163,8 @@ entry_points={
 - **Schema validation**: All changes must pass `identity.schema.json` validation
 - **Model parameters**: Use `get_model_parameters(identity, model_name)` for runtime config
 - **Budget-aware model selection**: `get_available_models(identity, budget_exhausted)`
-- **PYTHONPATH setup**: API bridge requires `d:\workspace\bartholomew0.0.1` in PYTHONPATH
+- **PYTHONPATH setup**: run `uvicorn app:app` from the repository root (the root `app.py` import
+  stub resolves correctly from there); no hardcoded developer-machine path is required
 
 ## Project Structure Patterns
 

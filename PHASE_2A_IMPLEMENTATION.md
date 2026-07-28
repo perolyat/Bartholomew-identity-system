@@ -172,6 +172,10 @@ All functionality verified:
 
 ## Next Steps
 
+*(Note added 2026-07-28: both phases below are done — see `PHASE_2B_IMPLEMENTATION.md` and
+`PHASE_2C_IMPLEMENTATION.md`. Retained here as historical context for what this phase anticipated,
+not as an open TODO.)*
+
 ### Phase 2b: Encryption Enforcement
 - Implement `encrypt: standard` (current AES-256)
 - Implement `encrypt: strong` (future upgrade path, e.g., AES-256-GCM with key rotation)

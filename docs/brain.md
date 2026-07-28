@@ -1,5 +1,12 @@
 # Bartholomew's Brain
 
+> **Updated 2026-07-28.** This document predates Stage 3/4 and does not mention the Experience
+> Kernel, Global Workspace, Working Memory, Narrator, Persona Pack, or Skill Registry at all — for
+> the current, code-grounded architecture (the Runtime Contract, the ownership table, governance
+> checkpoints), use `COGNITIVE_RUNTIME.md`. The metaphor-driven overview below retains onboarding
+> value; the Persona/Policy component descriptions have been corrected to name the actual
+> authoritative modules (see below) rather than the thin stub files they previously named.
+
 ## Overview
 
 This workspace represents **Bartholomew's Brain** - a cognitive architecture that implements the core mental processes of an AI entity. Rather than just a collection of code modules, this system is designed as an integrated brain with distinct cognitive subsystems that work together to create coherent, ethical, and contextually-aware behavior.
@@ -62,27 +69,42 @@ The memory store is Bartholomew's ability to remember, learn, and build context 
 
 **Think of it as**: The hippocampus and long-term memory systems - where experiences become knowledge.
 
-### 3. **Persona System** (`bartholomew/kernel/persona.py`, `config/persona.yaml`)
+### 3. **Persona System** (`bartholomew/kernel/persona_pack.py`'s `PersonaPackManager`, `config/persona_packs/*.yaml`) — corrected 2026-07-28
 **Cognitive Function**: Personality & Self-Model
 
-The persona defines who Bartholomew is - core traits, values, communication style, and self-concept. It:
-- Defines personality traits and preferences
-- Shapes communication style and tone
-- Maintains consistent behavioral patterns
-- Represents core values and priorities
-- Provides identity continuity across interactions
+*(`bartholomew/kernel/persona.py`/`config/persona.yaml`, named here previously, are trivial stub
+files — the authoritative persona system, wired into `NarratorEngine`/`ExperienceKernel` and
+switchable via config/UI, is `PersonaPackManager`; see `DECISIONS.md` item 11.12 and
+`CONSTITUTION.md`'s Personality section for the split between switchable tone/style, owned here,
+and stable `traits`, owned by `Identity.yaml`.)*
 
-**Think of it as**: The stable sense of self - personality, character, and personal values.
+The persona pack defines how Bartholomew presents — tone, style, drive-boosts, and narrative
+overrides. It:
+- Defines switchable tone/style presets (default, tactical, caregiver, etc.)
+- Shapes communication style and tone, logged to an audit trail (`persona_switch_log`)
+- Maintains consistent behavioral patterns within an active pack
+- Provides identity continuity across interactions (the underlying `traits` come from
+  `Identity.yaml`, not the persona pack — a deliberate split, not a gap)
 
-### 4. **Policy System** (`bartholomew/kernel/policy.py`, `config/policy.yaml`)
+**Think of it as**: The switchable presentation layer — how Bartholomew currently sounds, not the
+stable character underneath it (see `CONSTITUTION.md`'s enduring character values for that).
+
+### 4. **Policy System** (`bartholomew/kernel/policy_engine.py`'s `evaluate_tool_policy()`, `bartholomew/orchestrator/safety/parking_brake.py`'s `ParkingBrake`) — corrected 2026-07-28
 **Cognitive Function**: Executive Control & Safety
 
+*(`bartholomew/kernel/policy.py`/`config/policy.yaml`, named here previously, are trivial stub
+files — the authoritative safety/policy mechanisms are `ParkingBrake` (the persistent, scoped
+kill-switch) and `evaluate_tool_policy()` (the Executive's Policy Decision, built from a
+declarative `IdentityContext`); see `COGNITIVE_RUNTIME.md`'s "Governance checkpoints" section.)*
+
 The policy system is Bartholomew's ethical reasoning and safety mechanisms. It:
-- Enforces behavioral boundaries
-- Makes risk assessments
+- Enforces behavioral boundaries via `Identity.yaml`'s `tool_use.allowlist`/red lines
+- Makes risk assessments per proposed action (allow / require consent / deny)
 - Ensures ethical compliance
-- Controls what actions are permissible
-- Provides safety guardrails
+- Controls what actions are permissible, fail-closed on error
+- Provides safety guardrails, including an independent emergency-shutdown path (see
+  `CONSTITUTION.md`'s safety invariants — the parking brake is the current implementation, not yet
+  a fully out-of-process mechanism)
 
 **Think of it as**: The prefrontal cortex - executive function, self-control, and ethical reasoning.
 

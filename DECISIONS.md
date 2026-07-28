@@ -2,10 +2,15 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-07-27 (planning-document reconciliation: no decisions added or
-> reversed; two existing entries amended where the repository had moved past what they described
-> — the canonical-doc set's membership, and the Linux-only CI baseline. The 2026-07-25 S5.0
-> entry at the foot of this document is the most recent actual decision.)
+> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: three new decisions added —
+> the hybrid local-first deployment architecture, the Echo roadmap's demotion to a non-canonical
+> incubator document, and the reflection-ownership target architecture. See the entries at the
+> foot of this document.)
+>
+> **Previously (2026-07-27):** no decisions added or reversed; two existing entries amended where
+> the repository had moved past what they described — the canonical-doc set's membership, and the
+> Linux-only CI baseline. The 2026-07-25 S5.0 entry was, at that time, the most recent actual
+> decision.
 
 ## Format
 
@@ -172,3 +177,105 @@
 - **Alternatives:** (a) log-and-continue on schema failure (rejected — reopens a variant of #24, a degraded daemon). (b) An explicit readiness `asyncio.Event` the scheduler sets and the API awaits (heavier; the synchronous-in-`start()` approach makes readiness a plain precondition with no new signalling). (c) Move row-seeding into `start()` too (out of scope for the missing-table defect; keeps S5.0 minimal).
 - **Consequences:** `start()` does one extra off-event-loop schema call (~ms on a local DB) before returning; the scheduler task's create/own/cancel/await lifecycle in `start()`/`stop()` is otherwise unchanged. No schema *change* — same tables/columns, created earlier and deterministically; `ensure_schema` is idempotent, so existing DBs (with or without the scheduler tables) are unaffected and there is no data migration. Determinism is proven by `tests/test_scheduler_startup_readiness.py` (tables exist at return; ordered-record + asyncio-barrier proofs that schema readiness precedes both scheduler-task creation and the loop's first DB op; fail-closed cleanup with a not-poisoned later startup), run on both CI legs. This is the S5.0 prerequisite for Stage 5 (the initiative engine), which adds further scheduler-table readers that must be deterministically readable from startup.
 - **Date:** 2026-07-25 (Stage 5 prerequisite; closes issue #24 on merge)
+
+## Decision: Deployment architecture — hybrid local-first
+- **Decision:** Bartholomew uses a hybrid local-first architecture. The primary consumer
+  experience is browser-based and usable across the user's authorised devices. A trusted local
+  Bartholomew runtime is the authority for sensitive memory, governance enforcement (including the
+  parking brake and emergency shutdown), local device control, and operating-system integration.
+  Cloud services may optionally provide model inference, relay, synchronisation, and other
+  explicitly approved services. Core governance, the parking brake, and emergency shutdown must
+  not depend on cloud availability. Remote exposure of the local runtime must not occur until
+  authentication, authorization, transport security, and the relevant threat model are designed
+  and approved — a "simple token auth" scheme is explicitly **not** assumed sufficient (see the
+  corrected assumption in `ASSUMPTIONS.md`).
+- **Alternatives considered:** (a) a pure hosted web service, with the "local runtime" reduced to
+  a thin client — rejected because it would make Bartholomew's sensitive memory and governance
+  (including the ability to enforce an emergency shutdown independent of network/cloud
+  availability) dependent on a remote service the user does not fully control, in direct tension
+  with `CONSTITUTION.md`'s sovereignty principle and the newly-recorded independent-emergency-
+  shutdown invariant. (b) a purely local runtime with a local-only UI (no browser-based, multi-
+  device experience) — rejected because it does not deliver the cross-device, "my phone became
+  intelligent" experience `CONSTITUTION.md`'s UX Principles describe, and would make portability
+  and continuity harder rather than easier.
+- **Why:** The hybrid model is the only one of the three that keeps sovereignty, governance, and
+  emergency-shutdown independence intact (by keeping them local-authoritative) while still
+  delivering a modern, cross-device, browser-based experience and leaving room for optional cloud
+  services where the user explicitly wants them (better inference, relay, sync). It also directly
+  addresses the brief's own concern: Phase B changes persistence ownership, and persistence
+  ownership cannot be soundly designed without first knowing which architecture that persistence
+  serves.
+- **Consequences:** `ROADMAP.md` Stage 6's "Token auth" exit criterion is corrected to require a
+  reviewed threat model rather than assuming token auth alone is sufficient. `ROADMAP.md` Stage 1
+  is scoped as a browser-based governance shell reaching the local runtime, not a hosted service.
+  `INTERFACES.md`'s API bridge security stance (currently, accurately, "local/dev surface, no
+  auth") is unchanged by this decision alone — it changes only once Stage 6's auth work is
+  separately designed and approved. This decision does **not** authorise Phase B implementation,
+  cloud services, authentication work, or Stage 1 implementation — it is a documentation-only
+  architectural decision that those future, separately-approved efforts must be consistent with.
+- **Date:** 2026-07-28 (documentation reconciliation pass 2)
+
+## Decision: Echo roadmap demoted to a non-canonical incubator document
+- **Decision:** The brainstorm-derived "Echo" feature set (45 features across 4 conceptual gates:
+  agent kernel, gaming/device-identity, cross-device/smart-home/car-mode, marketplace/ecosystem),
+  previously embedded as canonical roadmap content in both `ROADMAP.md` ("Echo Integration Gates")
+  and `MASTER_PLAN.md` ("Echo Integration Roadmap"), is moved to
+  `docs/incubator/ECHO_IDEAS.md` — explicitly non-canonical and non-authoritative. Every
+  individual idea in that document requires independent evaluation against `CONSTITUTION.md`,
+  `COGNITIVE_RUNTIME.md`'s ownership table, and this document's hybrid local-first entry before
+  any adoption; none of it is scheduled, approved, or a stage gate.
+- **Alternatives considered:** (a) leave it in canonical docs but relabel as "future exploration"
+  — already tried (both sections carried exactly that label) and insufficient: a coding agent
+  reading canonical `ROADMAP.md`/`MASTER_PLAN.md` would still find a fully-specified second
+  kernel (LangGraph), second memory architecture (Chroma+RAG), and second permissions system
+  described in detail, in a canonical document. (b) delete the material outright — rejected
+  because the underlying brainstorm work has some individually-useful ideas once properly
+  evaluated, and deleting it destroys that raw material rather than just its improper canonical
+  status.
+- **Why:** Embedding a second kernel, second memory authority, and second governance system as
+  canonical roadmap content directly conflicts with `CONSTITUTION.md`'s "one architectural
+  authority exists per concept" principle and the ownership table in `COGNITIVE_RUNTIME.md`. A
+  non-canonical incubator document, with an explicit individual-evaluation requirement, preserves
+  the material's value without the risk.
+- **Consequences:** No canonical document may re-embed Echo content as approved roadmap without a
+  new decision recorded here. Any future proposal derived from `docs/incubator/ECHO_IDEAS.md`
+  must be evaluated and approved individually, the same as any other new subsystem proposal.
+- **Date:** 2026-07-28 (documentation reconciliation pass 2)
+
+## Decision: Reflection ownership — target architecture
+- **Decision:** `ReflectionGenerator` (`identity_interpreter.adapters.reflection_generator`,
+  LLM-based, safety-checked) is the authoritative owner of reflection composition and final
+  reflection output. `NarratorEngine`'s episodic narrative
+  (`generate_daily_reflection_narrative()`/`generate_weekly_reflection_narrative()`) is
+  supplementary evidence supplied *to* that authoritative process, not an independent, co-equal,
+  or competing reflection pipeline.
+- **Current implementation does not yet match this decision:** `daemon.py`'s
+  `_run_daily_reflection()`/`_run_weekly_reflection()` currently run both pipelines independently
+  and string-concatenate their output (added in item 11.8, 2026-07-21; see
+  `docs/archive/ENGINEERING_LOG_2026.md`). That is concatenation, not the unified-authority model
+  this decision establishes. Closing that gap requires a separately-authorised code change
+  (routing `NarratorEngine`'s narrative into `ReflectionGenerator` as an input, with tests
+  verifying `ReflectionGenerator` is the sole point of final composition) — not done as part of
+  this documentation-only decision.
+- **Alternatives considered:** (a) `NarratorEngine` owns composition, `ReflectionGenerator`
+  supplies analytical material — rejected because `ReflectionGenerator` already performs the
+  safety-checking step (redraft-on-violation) that reflection output must have, and it is already
+  the pipeline `daemon.py` calls first. (b) a dedicated new Reflection service owns composition,
+  with both existing pipelines becoming inputs to it — rejected for now as unnecessary added
+  surface; making the already-first-called `ReflectionGenerator` authoritative achieves the same
+  single-owner outcome without a new subsystem. (c) leave both pipelines permanently
+  co-equal and merely document that fact — rejected because it leaves reflection composition
+  without a single authoritative owner indefinitely, which `CONSTITUTION.md`'s "one architectural
+  authority exists per concept" principle does not permit for a concept this central to Stage 5.
+- **Why:** This resolves a real, verified contradiction: `ROADMAP.md` had stated the two pipelines
+  were "✅ reconciled... additively," `COGNITIVE_RUNTIME.md` had stated they "remain unreconciled,"
+  and each pointed at the other for the authoritative answer — a genuine cross-document
+  contradiction, not a documentation nitpick. This decision gives both documents (and
+  `MASTER_PLAN.md`) one, single, consistent answer going forward.
+- **Consequences:** Stage 5 (`ROADMAP.md`) live proactive *reflection* behaviour remains blocked
+  until the implementation gap above is closed by separately-authorised code plus verifying tests
+  — concatenation of two independently-running pipelines is not an acceptable foundation for new
+  proactive behaviour built on reflection output. No reflection code was modified as part of this
+  decision; this is a documentation-only architectural decision recording the target, not the
+  implementation of it.
+- **Date:** 2026-07-28 (documentation reconciliation pass 2)

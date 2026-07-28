@@ -140,6 +140,13 @@ count = narrator.get_episode_count()
 
 ### Reflection Generation
 
+*(Note added 2026-07-28: this is one of two reflection pipelines. `daemon.py` calls
+`identity_interpreter.adapters.reflection_generator.ReflectionGenerator` first and appends this
+narrator output to it — see `docs/REFLECTION_GENERATION.md` and `COGNITIVE_RUNTIME.md`'s
+"Reflection ownership" section. The approved target architecture makes `ReflectionGenerator`
+authoritative, with this narrator narrative as supplementary evidence; the code does not yet
+enforce that — both currently run independently.)*
+
 ```python
 # Generate narrative summaries
 daily = narrator.generate_daily_reflection_narrative(date=datetime)

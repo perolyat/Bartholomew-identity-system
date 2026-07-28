@@ -279,6 +279,10 @@ Expected output:
 
 ## Next Steps
 
+*(Note added 2026-07-28: Phase 2c shipped — see `PHASE_2C_IMPLEMENTATION.md`. "Phase 3" as
+envisioned here did not happen as named; Phase 2d (embeddings, see `PHASE_2D_IMPLEMENTATION.md`)
+and later hybrid retrieval/chunking work happened instead. Retained as historical context.)*
+
 Ready for Phase 2c (summarization) or Phase 3 (reflection generation) depending on priorities.
 
 ---

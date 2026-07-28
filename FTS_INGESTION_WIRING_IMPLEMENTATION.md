@@ -289,7 +289,7 @@ No changes needed to backfill script - it already follows the discipline.
 2. **No data migration needed** - existing FTS index is fine
 3. **Optional: Re-index with backfill** if you want to ensure 100% consistency:
    ```bash
-   python scripts/backfill_fts.py --db ./data/memories.db
+   python scripts/backfill_fts.py --db ./data/barth.db
    ```
 
 ### For New Deployments

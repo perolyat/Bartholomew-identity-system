@@ -1,3 +1,15 @@
+> **STALE BANNER (added 2026-07-28, examples corrected 2026-07-28) — reference only, not current
+> guidance on one remaining count.** This document's "Stage 3" numbering predates and does not
+> match the current stage terminology in `MASTER_PLAN.md`/`ROADMAP.md` (Stage 0/1/5, Phase A/B) —
+> do not use "Stage 3" here as a cross-reference to those documents' stage gates. The
+> `ModelRouter`/`ResponseFormatter`/logging descriptions below appear architecturally accurate and
+> are retained for that reference value. **The "Usage Examples" section's direct
+> `orch.handle_input(...)` calls (a banner-only warning, previously) have been replaced below with
+> the actual governed pattern** — `orch.handle_input()` remains real and correct as the injected
+> `respond_fn` *capability* the seam calls, exactly matching what the live `/api/chat` endpoint
+> does (`bartholomew_api_bridge_v0_1/services/api/app.py`'s `chat()`), but it is no longer shown as
+> something to call directly/standalone as the primary integration point.
+
 # Stage 3 Orchestration Integration - Complete
 
 ## ✅ Implementation Summary
@@ -98,29 +110,51 @@ All tests pass successfully:
 
 ## 🚀 Usage Examples
 
-### Basic Orchestration
+### Basic Orchestration (corrected 2026-07-28 — via the governed Runtime Contract seam)
+
+**Do not call `orch.handle_input()` directly as the integration point.** Route it through
+`bartholomew.kernel.runtime_contract.run_chat_through_runtime_contract()`, which runs the full
+Observation → Interpretation → Executive → Governance → Capability → Execution → Reflection →
+Memory seam (see `COGNITIVE_RUNTIME.md`) and is what the live `/api/chat` endpoint actually does.
+`orch.handle_input()` is still real and correct here — as the `respond_fn` capability the seam
+calls, not as something invoked on its own:
+
 ```python
 from identity_interpreter.orchestrator import Orchestrator
+from bartholomew.kernel.runtime_contract import run_chat_through_runtime_contract
 
 # Create orchestrator (memory optional)
 orch = Orchestrator()
 
-# Process input through full pipeline
-response = orch.handle_input("Hello, how are you?")
-print(response)
+async def _respond(prompt: str) -> str:
+    return orch.handle_input(prompt)
+
+# `daemon` is a running KernelDaemon (e.g. the live API bridge's module-level `_kernel`).
+# Governance (parking brake + Identity Policy) runs before `_respond` is ever called.
+result = await run_chat_through_runtime_contract(daemon, "Hello, how are you?", _respond)
+if not result.governance_allowed:
+    raise RuntimeError(result.governance_reason or "Blocked by governance")
+print(result.response)
 ```
 
-### With Tone and Emotion
+### With Tone and Emotion (corrected 2026-07-28 — same governed seam)
 ```python
 orch = Orchestrator()
-
-# Set state for tone/emotion
 orch.state.set("tone", "empathetic")
 orch.state.set("emotion", "warm")
 
-response = orch.handle_input("Tell me about yourself")
+async def _respond(prompt: str) -> str:
+    return orch.handle_input(prompt)
+
+result = await run_chat_through_runtime_contract(daemon, "Tell me about yourself", _respond)
+print(result.response)
 # Output: [tone: empathetic] [emotion: warm] <response text>
 ```
+
+*(The pre-correction versions of both examples called `orch.handle_input(...)` directly, with no
+Runtime Contract seam and no `daemon` — that pattern is what the earlier stale banner on this
+document warned about. It is preserved in `docs/archive/ENGINEERING_LOG_2026.md`'s and
+`RISKS.md`'s historical accounts of the 2026-07-28 reconciliation, not here.)*
 
 ### Custom Routing
 ```python

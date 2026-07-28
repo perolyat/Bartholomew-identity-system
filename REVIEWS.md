@@ -2,9 +2,13 @@
 
 > Weekly check-ins and stage gate review rituals.
 >
-> **Last updated:** 2026-07-27 (snapshot refreshed against the post-Phase-A repository state;
-> the previous snapshot dated 2026-07-21/22 had gone stale on four counts — Stage 4.5 status,
-> CI health, the consent red-team gap, and the "Next Moves" list — all corrected below)
+> **Last updated:** 2026-07-28 (snapshot refreshed against the documentation reconciliation pass 2
+> repository state — see the "Documentation" bullet list below and "Review History" for the full
+> set of changes.)
+>
+> **Previously (2026-07-27):** snapshot refreshed against the post-Phase-A repository state; the
+> previous snapshot dated 2026-07-21/22 had gone stale on four counts — Stage 4.5 status, CI
+> health, the consent red-team gap, and the "Next Moves" list — all corrected then.
 
 ## Purpose
 
@@ -177,11 +181,34 @@ as evidence.
 - ✅ 13/13 canonical docs present. *(Reconciled 2026-07-27: `MASTER_PLAN.md`'s own canonical-docs
   list had omitted `CONSTITUTION.md`, listing 12 while `DECISIONS.md` and `CONSTITUTION.md` both
   said 13. `MASTER_PLAN.md` was the incorrect one and is now fixed.)*
-- ✅ `docs/STATUS_2025-12-29.md` carries an explicit stale-doc banner.
+- ✅ **(2026-07-28) `MASTER_PLAN.md` trimmed from ~2,200 to ~650 lines** — the engineering
+  chronicle (items 11.1–11.22, four bug-fix "rounds," the Experience Kernel MVP write-up) moved
+  verbatim to `docs/archive/ENGINEERING_LOG_2026.md`, with a compact index and preserved item
+  numbers left in place.
+- ✅ **(2026-07-28) Echo Integration Roadmap moved off both `ROADMAP.md` and `MASTER_PLAN.md`**
+  to the new non-canonical `docs/incubator/ECHO_IDEAS.md`.
+- ✅ **(2026-07-28) Reflection-ownership contradiction resolved** — `ROADMAP.md` had said
+  "reconciled... additively," `COGNITIVE_RUNTIME.md` had said "remain unreconciled," and each
+  pointed at the other. Both now consistently state: current implementation is concatenation, not
+  unification; approved target is `ReflectionGenerator`-authoritative (see `DECISIONS.md`).
+- ✅ **(2026-07-28) Legacy-implementation-notes cleanup pass completed** — the ~20-file review
+  deferred on 2026-07-27 (see `RISKS.md`) is done; `UI_INTEGRATION_GUIDE.md` and both copies of
+  `DEV_SETUP_NOTES.md` deleted; four files moved to `docs/archive/`; remainder updated/banner-ed.
+- ✅ **(2026-07-28) Deployment architecture decided** — hybrid local-first, recorded in
+  `DECISIONS.md`; `ROADMAP.md` Stage 6's auth criterion and `ASSUMPTIONS.md`'s token-auth entry
+  corrected to match (no longer assumes simple token auth is sufficient).
+- ✅ **(2026-07-28) Six new safety/product invariants added to `CONSTITUTION.md`**: independent
+  emergency shutdown, capture/recording safety, data portability, cognitive accessibility,
+  adaptive notifications, the consumer-value gate. Personality section split into enduring
+  character values (kept constitutional) vs. default persona inspiration (moved to Experience
+  layer).
+- ✅ `docs/STATUS_2025-12-29.md` carries an explicit stale-doc banner; moved to `docs/archive/`
+  2026-07-28.
 - ⚠️ `docs/README.md` (identity_interpreter contributor guide) documented three modules deleted
   in items 11.12–11.14 as current API; corrected 2026-07-27.
 - ⚠️ Root `README.md` documented the `barth` console script, which is not installed (finding F9);
-  corrected 2026-07-27.
+  corrected 2026-07-27. `QUICKSTART.md` and `.github/copilot-instructions.md` had the same stale
+  `barth` references, uncorrected by the 2026-07-27 pass; corrected 2026-07-28.
 
 **Test Health (verified 2026-07-27 by collection + the merged CI run, not assumed):**
 - 915 tests collected in total; the default `pytest -q` runs 912 of them, because
@@ -204,20 +231,34 @@ awaiting explicit approval.
 
 ### Next Moves
 
-Nothing is in flight. In priority order, each requiring separate explicit approval to start:
+**Sequencing corrected 2026-07-28** (documentation reconciliation pass 2): Stage 1 now precedes
+Stage 5/S5.1 — see `ROADMAP.md`'s "Near-term milestone plan" for the full rationale (Stage 5's
+live proactivity needs the user-facing governance surface only Stage 1 provides). Nothing is in
+flight. In sequence, each step requiring separate explicit approval to start:
 
-1. **Phase B — persistence ownership stabilisation** (proposed next engineering work).
-2. **Stage 5 / S5.1** — initiative engine, under the locked safety-scaffolding-first sequence.
-3. **Stage 1** — console/UI slice; the oldest unstarted product gate.
+1. **Documentation reconciliation and the deployment-architecture decision** — this pass; the
+   deployment decision (hybrid local-first) is recorded in `DECISIONS.md`.
+2. **Design Phase B — persistence ownership stabilisation** against the approved architecture
+   (design only, not approved for implementation).
+3. **Stage 1 — minimal consumer web governance shell** (parking-brake access, consent/approval
+   inbox, notification/mute controls, awaiting-response queue, host-device onboarding).
+4. **Stage 5 / S5.1** — initiative engine, under the locked safety-scaffolding-first sequence;
+   also blocked on the reflection-ownership implementation gap (`COGNITIVE_RUNTIME.md`) for live
+   proactive *reflection* behaviour specifically.
 
 Unscheduled and non-blocking: issue #22 (Stage 6); Phase A's deferred findings F9–F11
-(`RISKS.md`); the two unreconciled reflection *narrative* pipelines (never a Stage 4.5 exit
-criterion — see `ROADMAP.md` Stage 3).
+(`RISKS.md`); jurisdiction-aware capture/recording compliance, adaptive-notification delivery
+beyond the Stage 1 baseline, and data-export/portability delivery (all Stage 6 scope, added
+2026-07-28); the future, unapproved hydration/water-logging code-cleanup decision (`RISKS.md`).
 
-*(The previous snapshot's "Next Moves" list is fully superseded: its items 1 and 2 — scheduler
-drives not consulting the Policy Decision, and voice/sight being parking-brake-only stubs — were
-closed by items 11.17 and 11.21; its item 3, the two Reflection *shapes*, was closed by item
-11.16.)*
+*(The 2026-07-27 snapshot's "Next Moves" list — Phase B, then Stage 5/S5.1, then Stage 1 — is
+superseded by the corrected sequencing above. Its own predecessor list was fully superseded then:
+items 1 and 2 — scheduler drives not consulting the Policy Decision, and voice/sight being
+parking-brake-only stubs — were closed by items 11.17 and 11.21; its item 3, the two Reflection
+*shapes*, was closed by item 11.16. Note also: the reflection-*narrative*-pipeline item this
+snapshot previously called "never a Stage 4.5 exit criterion" now has an approved target
+architecture recorded in `COGNITIVE_RUNTIME.md`/`DECISIONS.md` — it remains unimplemented, but is
+no longer merely "unreconciled" with no resolution in view.)*
 
 ### Links to Key Context
 
@@ -229,11 +270,34 @@ closed by items 11.17 and 11.21; its item 3, the two Reflection *shapes*, was cl
 - [DECISIONS.md](DECISIONS.md) — decision log
 - [RISKS.md](RISKS.md) / [ASSUMPTIONS.md](ASSUMPTIONS.md) — both re-verified 2026-07-21
 - [CI.md](CI.md) — CI infrastructure + local commands (corrected 2026-07-21)
-- `docs/STATUS_2025-12-29.md` — historical snapshot, now explicitly marked stale
+- `docs/archive/STATUS_2025-12-29.md` — historical snapshot, now explicitly marked stale
 
 ---
 
 ## Review History (Recent)
+
+### 2026-07-28 - Documentation Reconciliation Pass 2 (audit + full noncanonical-doc cleanup)
+- **Type:** Documentation-only reconciliation, approved by the project owner following a full
+  written audit (contradiction table, noncanonical-document inventory, unresolved-decisions list)
+- **Outcome:** Echo Integration Roadmap moved off both `ROADMAP.md` and `MASTER_PLAN.md` to
+  non-canonical `docs/incubator/ECHO_IDEAS.md`; `MASTER_PLAN.md` trimmed from ~2,200 to ~650 lines
+  via verbatim extraction to `docs/archive/ENGINEERING_LOG_2026.md`; the reflection-ownership
+  contradiction between `ROADMAP.md` and `COGNITIVE_RUNTIME.md` resolved (concatenation ≠
+  unification; `ReflectionGenerator` is the approved target authority); `CI.md`'s self-
+  contradicting Windows-failure posture corrected; `ASSUMPTIONS.md` A4 rescoped and the
+  cross-device token-auth assumption rewritten; hybrid local-first deployment architecture
+  decided and recorded in `DECISIONS.md`; `CONSTITUTION.md`'s Personality section split
+  (enduring values vs. default persona inspiration) and six new safety/product invariants added
+  (independent emergency shutdown, capture/recording safety, data portability, cognitive
+  accessibility, adaptive notifications, consumer-value gate); `awaiting_response` state and the
+  Observe/Interpret/Recommend/Govern/Act/Learn mapping added to `COGNITIVE_RUNTIME.md`;
+  `CHECKLISTS.md` gained a product/safety-invariants checklist; the ~20-file legacy-
+  implementation-notes cleanup deferred on 2026-07-27 completed (updates, banners, archive moves,
+  merges, and deletions — see the changed-file list presented alongside this reconciliation);
+  Stage 1/Stage 5 sequencing corrected so Stage 1 precedes Stage 5.
+- **Next:** Await approval for Phase B design, Stage 1 implementation, or Stage 5 / S5.1; none
+  has begun. This pass itself awaits separate commit approval (documentation changes made,
+  nothing committed).
 
 ### 2026-07-27 - Planning-Document Reconciliation (post-Phase A)
 - **Type:** Documentation-only reconciliation against the merged repository state (`8b96319`)

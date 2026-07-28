@@ -254,8 +254,13 @@ pytest -q tests/test_working_memory.py
 
 ## Future Enhancements
 
+*(Note added 2026-07-28: item 4 shipped — `WorkingMemoryManager.persist_snapshot()`/
+`load_last_snapshot()` persist across daemon start/stop, confirmed via
+`docs/archive/STATUS_2025-12-29.md` and `docs/STAGE_3_6_INTEGRATION.md`. Items 1, 2, 3, and 5
+remain open — not independently re-verified this pass.)*
+
 1. **Tiktoken integration**: More accurate token counting for GPT models
 2. **SUMMARIZE policy**: Actually summarize items instead of FIFO fallback
 3. **Chunk-level items**: Store memory chunks directly in working memory
-4. **Persistence to SQLite**: Persist working memory across sessions
+4. ✅ **Persistence to SQLite**: Persist working memory across sessions — done.
 5. **Priority scheduling**: Automatic priority boosting based on recency/relevance

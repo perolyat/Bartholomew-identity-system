@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-07-28 — merged into `RISKS.md`'s tech-debt watchlist, kept here for the original
+> detail.** This ticket is still genuinely open (verified 2026-07-28: `bartholomew_api_bridge_v0_1/
+> services/api/app.py` lines 98/139 still use `@app.on_event`, not `lifespan`) — see `RISKS.md`'s
+> "docs/audits/S0_fastapi_lifespan_migration.md — still-open backlog ticket" entry for the
+> canonical, current-tracked version of this item.
+
 # FastAPI Lifespan Migration Ticket
 
 ## Status

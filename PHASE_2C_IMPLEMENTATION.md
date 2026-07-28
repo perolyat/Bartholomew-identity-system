@@ -289,10 +289,14 @@ Storage
 
 ✅ **Phase 2c Complete**
 
-**Next Phase**: Phase 3 - Advanced Features (Vector Search, Global Workspace, etc.)
+**Next Phase (as originally envisioned):** Phase 3 - Advanced Features (Vector Search, Global
+Workspace, etc.). *(Note added 2026-07-28: this happened as Phase 2d — see
+`PHASE_2D_IMPLEMENTATION.md` — and later Global Workspace/Experience Kernel work under Stage 3,
+not a generically-named "Phase 3." The specific test-pass-count below is a historical snapshot;
+for current test health see `TEST_MATRIX.md`/`REVIEWS.md`, not this figure.)*
 
 ---
 
 *Implementation by AI Assistant - November 1, 2025*
-*Test Coverage: 15/17 passing (88%)*
+*Test Coverage (historical, November 2025): 15/17 passing (88%)*
 *Kernel + Identity Integration: Complete*
