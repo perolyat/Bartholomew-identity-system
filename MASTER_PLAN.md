@@ -660,8 +660,9 @@ Record of approved changes with commit tracking (most recent 5):
 
 - 2026-07-28 — Documentation reconciliation pass 2 — canonical-document audit and noncanonical
   documentation cleanup — Approved by project owner — Commit:
-  `8df4efb7ad6a7cda3a8b2d5fd0a90533ace497c0` (committed on
-  `claude/bartholomew-docs-reconciliation-i18mlf`; not yet merged/pushed to `main`)
+  `8df4efb7ad6a7cda3a8b2d5fd0a90533ace497c0` (recorded on
+  `claude/bartholomew-docs-reconciliation-i18mlf`; merge status is evidenced by repository and
+  PR history)
 - 2026-07-27 — Phase A: truthful cross-platform verification (PR #26) — Approved by project
   owner — Commit: `8b96319c4059d9dfada2579ca5f6da22b34e1f31`
 - 2026-07-25 — S5.0 scheduler startup readiness, closes issue #24 (PR #25) — Approved by
