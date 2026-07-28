@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from bartholomew.kernel.narrator import EpisodeType, NarrativeTone
 
-
 router = APIRouter(prefix="/api", tags=["self-state"])
 
 

@@ -6,7 +6,6 @@ from typing import Any
 
 import yaml
 
-
 logger = logging.getLogger(__name__)
 
 # Cache for policy to avoid repeated file reads

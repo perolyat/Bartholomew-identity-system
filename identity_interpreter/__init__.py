@@ -9,7 +9,6 @@ from .loader import load_identity
 from .models import Decision, Identity
 from .normalizer import normalize_identity
 
-
 __all__ = [
     "load_identity",
     "normalize_identity",

@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 
 from identity_interpreter.identity_context import IdentityContext
 
-
 logger = logging.getLogger(__name__)
 
 

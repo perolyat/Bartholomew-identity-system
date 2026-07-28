@@ -3,10 +3,10 @@
 Split BARTHOLOMEW_BRAINSTORM_NOTES_VERBATIM.md into manageable chunks.
 Preserves conversation boundaries and generates manifest.
 """
+
 import json
 import re
 from pathlib import Path
-
 
 MAX_CHARS = 40000
 

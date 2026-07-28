@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-
 if TYPE_CHECKING:
     from bartholomew.kernel.experience_kernel import ExperienceKernel
     from bartholomew.kernel.global_workspace import GlobalWorkspace

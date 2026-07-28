@@ -41,7 +41,6 @@ from bartholomew.kernel.skill_permissions import reset_permission_checker
 from bartholomew.kernel.skill_registry import SkillRegistry, reset_skill_registry
 from identity_interpreter.identity_context import IdentityContext
 
-
 # =============================================================================
 # A spy skill: records exactly what happened and when, so tests can prove
 # ordering (Governance before Execution) and non-invocation on denial.

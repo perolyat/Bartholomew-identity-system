@@ -6,7 +6,6 @@ Provides lint, explain, and simulate commands
 import json
 import sys
 
-
 try:
     import typer
     from rich.console import Console
@@ -25,7 +24,6 @@ from .policies import (
     handle_low_confidence,
     select_model,
 )
-
 
 app = typer.Typer(help="Bartholomew Identity Interpreter CLI")
 console = Console()

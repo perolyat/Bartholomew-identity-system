@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from bartholomew_api_bridge_v0_1.services.api.app import app
 
-
 client = TestClient(app)
 
 

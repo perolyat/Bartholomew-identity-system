@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-
 if TYPE_CHECKING:
     from bartholomew.kernel.experience_kernel import ExperienceKernel
     from bartholomew.kernel.global_workspace import GlobalWorkspace

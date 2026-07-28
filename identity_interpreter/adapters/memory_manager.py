@@ -49,7 +49,6 @@ from bartholomew.kernel.memory_rules import _rules_engine
 from bartholomew.kernel.redaction_engine import apply_redaction
 from bartholomew.kernel.time_utils import utc_now_iso
 
-
 # Schema version for migration management
 CURRENT_SCHEMA_VERSION = 3
 

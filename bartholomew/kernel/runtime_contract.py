@@ -37,7 +37,6 @@ from . import policy_engine
 from .memory.privacy_guard import get_consent_handler
 from .reflection import ActionReflection, record_action_reflection
 
-
 if TYPE_CHECKING:
     from identity_interpreter.identity_context import IdentityContext
 

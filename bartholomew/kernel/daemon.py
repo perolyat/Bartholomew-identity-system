@@ -22,7 +22,6 @@ from .skill_registry import SkillRegistry
 from .state_model import WorldState
 from .working_memory import WorkingMemoryManager
 
-
 logger = logging.getLogger(__name__)
 
 

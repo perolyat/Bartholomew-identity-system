@@ -12,7 +12,6 @@ from typing import Any
 from .health import check_drift
 from .models import Nudge
 
-
 # Drive function signature
 DriveFn = Callable[[Any], Awaitable[Nudge | None]]
 

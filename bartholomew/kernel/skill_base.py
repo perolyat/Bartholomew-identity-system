@@ -15,7 +15,6 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-
 if TYPE_CHECKING:
     from .experience_kernel import ExperienceKernel
     from .global_workspace import GlobalWorkspace, WorkspaceEvent

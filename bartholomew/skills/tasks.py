@@ -24,7 +24,6 @@ from bartholomew.kernel.skill_base import (
     SkillResult,
 )
 
-
 logger = logging.getLogger(__name__)
 
 

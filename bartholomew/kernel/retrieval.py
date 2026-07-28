@@ -20,7 +20,6 @@ from bartholomew.kernel.fts_client import fts5_available
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
 from bartholomew.kernel.vector_store import VectorStore
 
-
 logger = logging.getLogger(__name__)
 
 

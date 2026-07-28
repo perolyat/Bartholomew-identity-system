@@ -36,7 +36,6 @@ from bartholomew.kernel.retrieval import RetrievalFilters, RetrievedItem
 from bartholomew.kernel.types import Result
 from bartholomew.kernel.vector_store import VectorStore
 
-
 logger = logging.getLogger(__name__)
 
 

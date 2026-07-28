@@ -38,7 +38,6 @@ from bartholomew.kernel.memory_rules import _rules_engine
 from bartholomew.kernel.memory_store import _load_fts_index_mode
 from bartholomew.kernel.redaction_engine import apply_redaction
 
-
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

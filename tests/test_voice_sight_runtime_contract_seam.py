@@ -48,7 +48,6 @@ from bartholomew.kernel.runtime_contract import (
 from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
 from identity_interpreter.identity_context import IdentityContext
 
-
 ALLOW_CONTEXT = IdentityContext(tool_use_default_allowed=True, tool_use_allowlist=[])
 DENY_CONTEXT = IdentityContext(tool_use_default_allowed=False, tool_use_allowlist=[])
 # Allowlists an unrelated kind -- if governance ever stopped evaluating the

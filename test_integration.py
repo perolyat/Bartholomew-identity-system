@@ -6,7 +6,6 @@ Integration test for Bartholomew - validates model responses
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path(__file__).parent))
 
 from identity_interpreter import load_identity, normalize_identity

@@ -5,7 +5,6 @@ Provides admin commands for embeddings management and system operations
 
 import sys
 
-
 try:
     import typer
     from rich.console import Console

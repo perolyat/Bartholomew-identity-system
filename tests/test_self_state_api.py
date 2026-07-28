@@ -24,7 +24,6 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-
 _db_dir = pathlib.Path(tempfile.mkdtemp()) / "data"
 _db_dir.mkdir(parents=True, exist_ok=True)
 os.environ["BARTH_DB_PATH"] = str(_db_dir / "test.db")

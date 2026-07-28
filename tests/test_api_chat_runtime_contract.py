@@ -15,7 +15,6 @@ import tempfile
 import pytest
 from fastapi.testclient import TestClient
 
-
 # Set env vars before importing app -- gives this test module its own
 # isolated DB, matching tests/test_stage0_alive.py's established pattern
 # (a shared default DB path across test modules that each start a

@@ -11,7 +11,6 @@ from typing import Any
 
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
 
-
 logger = logging.getLogger(__name__)
 
 

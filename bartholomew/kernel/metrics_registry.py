@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import threading
 
-
 logger = logging.getLogger(__name__)
 
 # Module-level state

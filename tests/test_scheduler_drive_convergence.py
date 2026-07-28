@@ -47,7 +47,6 @@ from bartholomew.kernel.scheduler.loop import _run_drive
 from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
 from identity_interpreter.identity_context import IdentityContext
 
-
 # Identity.yaml's real tool_use section, reproduced exactly -- the shape that
 # caused the original production incident when scheduler drives weren't exempt.
 REAL_PROD_DENY_CONTEXT = IdentityContext(

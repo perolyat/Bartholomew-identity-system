@@ -19,7 +19,6 @@ from bartholomew.kernel.policy import can_index
 from bartholomew.kernel.redaction_engine import apply_redaction
 from bartholomew.kernel.summarization_engine import _summarization_engine
 
-
 logger = logging.getLogger(__name__)
 
 

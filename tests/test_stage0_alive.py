@@ -6,7 +6,6 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-
 # Set env vars before importing app
 os.environ["BARTH_SPEED_FACTOR"] = "0.01"
 _db_dir = pathlib.Path(tempfile.mkdtemp()) / "data"

@@ -22,7 +22,6 @@ import yaml
 
 from bartholomew.kernel.redaction_engine import redact_pii
 
-
 if TYPE_CHECKING:
     from bartholomew.kernel.experience_kernel import AffectState, ExperienceKernel
     from bartholomew.kernel.global_workspace import GlobalWorkspace, WorkspaceEvent

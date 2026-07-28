@@ -12,7 +12,6 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-
 try:
     import yaml  # PyYAML
 except ImportError:  # pragma: no cover

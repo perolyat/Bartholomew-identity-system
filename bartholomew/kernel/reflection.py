@@ -38,7 +38,6 @@ from typing import TYPE_CHECKING, Any
 
 from .redaction_engine import redact_pii
 
-
 if TYPE_CHECKING:
     from .memory_store import MemoryStore
 

@@ -5,7 +5,6 @@ import sys
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-
 _APP_MODULE_NAMES = ("bartholomew_api_bridge_v0_1.services.api.app", "app")
 
 

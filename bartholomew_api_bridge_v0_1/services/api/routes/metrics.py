@@ -24,7 +24,6 @@ from prometheus_client import (
 
 from bartholomew.kernel.metrics_registry import get_metrics_registry
 
-
 router = APIRouter(tags=["metrics"])
 
 # Get shared registry (singleton, safe for reloads)
