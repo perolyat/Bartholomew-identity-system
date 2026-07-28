@@ -20,7 +20,6 @@ from dataclasses import dataclass
 
 import yaml
 
-
 logger = logging.getLogger(__name__)
 
 

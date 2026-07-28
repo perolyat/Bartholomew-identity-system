@@ -16,7 +16,6 @@ from pathlib import Path
 import keyring.backend
 import pytest
 
-
 # bartholomew_api_bridge_v0_1/services/api/db.py resolves BARTH_DB_PATH into a
 # module-level DB_PATH constant the moment that module is first imported, and
 # every later import reuses the cached module (env var changes after that do

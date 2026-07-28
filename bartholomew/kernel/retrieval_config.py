@@ -13,7 +13,6 @@ import threading
 
 from bartholomew.kernel.hybrid_retriever import HybridRetrievalConfig
 
-
 try:
     import yaml
 except ImportError:  # pragma: no cover

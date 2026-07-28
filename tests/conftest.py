@@ -13,7 +13,6 @@ from dataclasses import dataclass
 import pytest
 from freezegun import freeze_time
 
-
 # ============================================================================
 # Windows FTS5/SQLite Skip Marker
 # ============================================================================

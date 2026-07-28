@@ -11,7 +11,6 @@ import os
 import random
 from typing import Any
 
-
 CadenceType = tuple[str, int] | tuple[str, int, int]
 
 

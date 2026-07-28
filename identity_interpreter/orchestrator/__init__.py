@@ -12,7 +12,6 @@ from .pipeline import Pipeline
 from .response_formatter import ResponseFormatter
 from .state_manager import StateManager
 
-
 __all__ = [
     "Orchestrator",
     "Pipeline",

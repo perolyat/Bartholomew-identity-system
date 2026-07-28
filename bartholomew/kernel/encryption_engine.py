@@ -13,7 +13,6 @@ import secrets
 from dataclasses import asdict, dataclass
 from typing import Any
 
-
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 except ImportError:  # pragma: no cover

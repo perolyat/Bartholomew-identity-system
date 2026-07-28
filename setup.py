@@ -4,7 +4,6 @@ Setup script for identity_interpreter package
 
 from setuptools import find_packages, setup
 
-
 with open("requirements.txt") as f:
     requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 

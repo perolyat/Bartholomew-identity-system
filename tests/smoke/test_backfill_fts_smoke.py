@@ -2,6 +2,7 @@
 """
 Smoke test for FTS backfill script
 """
+
 import asyncio
 import os
 import sys
@@ -11,7 +12,6 @@ import pytest
 
 from bartholomew.kernel.memory_store import MemoryStore
 from scripts.backfill_fts import backfill_fts
-
 
 # Add scripts to path for direct import
 sys.path.insert(0, os.path.dirname(__file__))

@@ -7,7 +7,6 @@ Tests a single conversation exchange
 import sys
 from pathlib import Path
 
-
 # Add the package to path for development
 sys.path.insert(0, str(Path(__file__).parent))
 

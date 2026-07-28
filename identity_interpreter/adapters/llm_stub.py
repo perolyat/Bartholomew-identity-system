@@ -8,7 +8,6 @@ from typing import Any
 
 import requests
 
-
 # Try to import official ollama client
 try:
     from ollama import Client as OllamaClient

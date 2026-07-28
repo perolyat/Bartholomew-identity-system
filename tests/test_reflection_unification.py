@@ -25,7 +25,6 @@ from bartholomew.kernel.reflection import (
 from bartholomew.kernel.runtime_contract import run_chat_through_runtime_contract
 from bartholomew.kernel.skill_registry import SkillRegistry
 
-
 # =============================================================================
 # Unit: canonical shape + PII redaction
 # =============================================================================

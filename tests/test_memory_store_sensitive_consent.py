@@ -22,7 +22,6 @@ from bartholomew.kernel.memory.privacy_guard import is_sensitive, set_consent_ha
 from bartholomew.kernel.memory_rules import _rules_engine
 from bartholomew.kernel.memory_store import MemoryStore
 
-
 # Content that is_sensitive() flags (contains "routine") but that the memory
 # rules engine does not block outright -- i.e. it genuinely reaches the privacy
 # guard rather than being rejected earlier by should_store().

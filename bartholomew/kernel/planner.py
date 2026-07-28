@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any
 from .skill_base import SkillResult
 from .state_model import WorldState
 
-
 if TYPE_CHECKING:
     from .skill_registry import SkillRegistry
 

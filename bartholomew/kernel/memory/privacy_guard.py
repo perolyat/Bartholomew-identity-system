@@ -4,7 +4,6 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable
 
-
 SENSITIVE_KEYWORDS = [
     "name",
     "address",

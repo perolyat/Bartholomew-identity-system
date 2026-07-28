@@ -15,7 +15,6 @@ from pydantic import BaseModel
 from .. import db_ctx
 from ..db import DB_PATH
 
-
 router = APIRouter(prefix="/api/liveness", tags=["liveness"])
 
 

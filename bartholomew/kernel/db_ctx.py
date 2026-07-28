@@ -17,7 +17,6 @@ import time
 from collections.abc import Iterable
 from contextlib import contextmanager
 
-
 _checkpoint_log = logging.getLogger("bartholomew.kernel.db_ctx.checkpoint")
 _VALID_CHECKPOINT_MODES = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
 

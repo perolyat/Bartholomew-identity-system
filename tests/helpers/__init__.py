@@ -6,7 +6,6 @@ from .sqlite import (
     insert_test_memory,
 )
 
-
 __all__ = [
     "connect_test_db",
     "create_minimal_memories_table",

@@ -35,7 +35,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Generous upper bounds: a healthy local start/stop is well under a second.
 # These catch hangs (the failure mode that matters), not slowness.
 START_BUDGET_S = 60.0

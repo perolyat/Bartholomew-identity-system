@@ -8,7 +8,6 @@ from pathlib import Path
 
 from bartholomew.kernel.daemon import KernelDaemon
 
-
 _REPO_ROOT = Path(__file__).parent
 
 

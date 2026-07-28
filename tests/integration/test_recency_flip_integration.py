@@ -19,7 +19,6 @@ from bartholomew.kernel.retrieval import get_retriever
 from bartholomew.kernel.vector_store import VectorStore
 from tests.helpers.synthetic import create_synthetic_embeddings
 
-
 # One distinct topic per group. Deliberately real, everyday-sounding nouns
 # (not e.g. "group N" appended to shared boilerplate -- see
 # create_recency_corpus()'s docstring for why that mattered) and screened to

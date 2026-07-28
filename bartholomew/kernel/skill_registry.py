@@ -30,7 +30,6 @@ from .skill_base import SkillBase, SkillContext, SkillResult, SkillState
 from .skill_manifest import SkillManifest, discover_manifests
 from .skill_permissions import PERMISSION_CATEGORIES, PermissionChecker, get_permission_checker
 
-
 if TYPE_CHECKING:
     from identity_interpreter.identity_context import IdentityContext
 

@@ -18,7 +18,6 @@ import yaml
 
 from bartholomew.kernel.db_ctx import set_wal_pragmas
 
-
 logger = logging.getLogger(__name__)
 
 

@@ -16,7 +16,6 @@ from . import cadence as cadence_module
 from . import drives
 from .store import SchedulerStore
 
-
 log = logging.getLogger(__name__)
 DRIVE_TIMEOUT = float(os.getenv("BARTH_DRIVE_TIMEOUT", "5.0"))
 

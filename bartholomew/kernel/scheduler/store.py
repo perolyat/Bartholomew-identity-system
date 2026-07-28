@@ -35,7 +35,6 @@ from typing import Any
 from . import persistence
 from .health import get_system_metrics as _get_system_metrics
 
-
 log = logging.getLogger(__name__)
 
 

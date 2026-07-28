@@ -5,7 +5,6 @@ import aiosqlite
 
 from bartholomew.kernel.memory_store import MemoryStore
 
-
 DB_PATH = "data/test_privacy_guard.db"
 
 

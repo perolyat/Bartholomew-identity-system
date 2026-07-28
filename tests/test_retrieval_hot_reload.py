@@ -11,7 +11,6 @@ import yaml
 
 from conftest import SKIP_WINDOWS_FTS
 
-
 # Skip all tests in this module on Windows (FTS5/matchinfo not available)
 pytestmark = SKIP_WINDOWS_FTS
 

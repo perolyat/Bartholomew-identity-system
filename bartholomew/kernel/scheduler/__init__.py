@@ -8,5 +8,4 @@ persists their ticks and outputs, and exposes activity through /api/liveness end
 from .drives import REGISTRY
 from .loop import run_scheduler
 
-
 __all__ = ["run_scheduler", "REGISTRY"]

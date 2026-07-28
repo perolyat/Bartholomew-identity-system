@@ -10,7 +10,6 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-
 # Load timezone from kernel config (single source of truth)
 with open("config/kernel.yaml", encoding="utf-8") as f:
     _kernel_cfg = yaml.safe_load(f)

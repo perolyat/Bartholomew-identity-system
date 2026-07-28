@@ -4,11 +4,11 @@ Strict validation for extracted features JSON files.
 Enforces schema, gate labels, and quote length constraints.
 Exits with code 1 on any validation error.
 """
+
 import json
 import sys
 from pathlib import Path
 from typing import Any
-
 
 VALID_GATES = {"Gate 0", "Gate 1", "Gate 2", "Gate 3"}
 MAX_QUOTE_LENGTH = 200

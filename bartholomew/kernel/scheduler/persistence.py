@@ -14,7 +14,6 @@ from bartholomew.kernel.db_ctx import wal_db
 # Import canonical schema from MemoryStore
 from bartholomew.kernel.memory_store import SCHEMA as MEMORY_STORE_SCHEMA
 
-
 # Scheduler-specific schema extensions
 SCHEDULER_SCHEMA = """
 -- Scheduled tasks with cadence tracking

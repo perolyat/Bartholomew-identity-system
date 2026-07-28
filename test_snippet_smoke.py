@@ -7,7 +7,6 @@ import tempfile
 
 from bartholomew.kernel.fts_client import FTSClient
 
-
 # Create temp database
 tmpdir = tempfile.mkdtemp()
 db_path = os.path.join(tmpdir, "test.db")
