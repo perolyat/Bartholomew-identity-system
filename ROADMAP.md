@@ -2,13 +2,21 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-07-31 (B1 complete: `docs/B1_SHARED_CONNECTION_POLICY.md` delivered per an
-> explicitly approved B1 plan. The API layer's independent `db_ctx.py` — whose `wal_db()`
-> unconditionally checkpointed on every call, including on read-only liveness GET routes — now
-> re-exports the kernel's already-corrected module (no unrequested checkpoint by default), with a
-> regression test guarding against re-divergence. Every remaining persistence caller B0 found is
-> inventoried and assigned to B2 or a B8 sub-stage. Approval of B1 does not authorise B2 or any
-> later stage.)
+> **Last updated:** 2026-07-31 (B2 complete: `docs/B2_EVENT_LOOP_ISOLATION.md` delivered per an
+> explicitly approved B2 plan. Adds a storage-agnostic `SingleWorkerExecutor` primitive
+> (`bartholomew/kernel/blocking_executor.py`), generalized from `SchedulerStore`'s pre-existing
+> pattern, and migrates all 5 of B1's assigned event-loop-blocking caller groups onto it: FTS
+> startup schema init, `SkillRegistry.load_enabled_skills()`, `ParkingBrake` construction (4
+> `runtime_contract.py` functions plus skill execution), persona/narrator calls, and memory
+> chunking/re-embedding. Every fail-closed governance behavior verified unchanged. Approval of B2
+> does not authorise B8 or any later stage.)
+>
+> **Previously (2026-07-31, same day):** B1 complete: `docs/B1_SHARED_CONNECTION_POLICY.md`
+> delivered per an explicitly approved B1 plan. The API layer's independent `db_ctx.py` — whose
+> `wal_db()` unconditionally checkpointed on every call, including on read-only liveness GET routes
+> — now re-exports the kernel's already-corrected module (no unrequested checkpoint by default),
+> with a regression test guarding against re-divergence. Every remaining persistence caller B0
+> found is inventoried and assigned to B2 or a B8 sub-stage.
 >
 > **Previously (2026-07-31, same day):** B0 complete: `docs/B0_PERSISTENCE_BASELINE.md` delivered as
 > the stage's repository-grounded current-state report, per an explicitly approved B0 plan, then
@@ -82,16 +90,20 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**B0 and B1 are complete (2026-07-31); no other stage has been approved or started.** Each stage's
-plan was presented and explicitly approved before its implementation began, per this document's own
-approval model. B0's exit deliverable is `docs/B0_PERSISTENCE_BASELINE.md`, a repository-grounded
-current-state report (no implementation, per B0's exit condition). B1's exit deliverable is
-`docs/B1_SHARED_CONNECTION_POLICY.md`: the API layer's independent, hand-copied `db_ctx.py` (whose
-`wal_db()` unconditionally checkpointed on every call, including on read-only liveness routes) now
-re-exports the kernel's already-corrected module, and every remaining persistence caller B0 found is
-inventoried and assigned to B2 or a B8 sub-stage. Approval of B1 does **not** authorise B2 or any
-later stage. Each remaining stage requires its own compact, repository-grounded plan — produced only
-as that stage approaches — and its own explicit user approval before implementation begins.
+**B0, B1, and B2 are complete (2026-07-31); no other stage has been approved or started.** Each
+stage's plan was presented and explicitly approved before its implementation began, per this
+document's own approval model. B0's exit deliverable is `docs/B0_PERSISTENCE_BASELINE.md`, a
+repository-grounded current-state report (no implementation, per B0's exit condition). B1's exit
+deliverable is `docs/B1_SHARED_CONNECTION_POLICY.md`: the API layer's independent, hand-copied
+`db_ctx.py` (whose `wal_db()` unconditionally checkpointed on every call, including on read-only
+liveness routes) now re-exports the kernel's already-corrected module, and every remaining
+persistence caller B0 found is inventoried and assigned to B2 or a B8 sub-stage. B2's exit
+deliverable is `docs/B2_EVENT_LOOP_ISOLATION.md`: a new storage-agnostic `SingleWorkerExecutor`
+primitive (generalized from `SchedulerStore`'s pre-existing pattern), with all 5 of B1's B2-assigned
+blocking-caller groups migrated onto it and every fail-closed governance behavior verified
+unchanged. Approval of B2 does **not** authorise B8 or any later stage. Each remaining stage
+requires its own compact, repository-grounded plan — produced only as that stage approaches — and
+its own explicit user approval before implementation begins.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -114,7 +126,7 @@ See `RISKS.md`'s tech-debt watchlist.
 |---|---|---|---|---|
 | **B0** — Verified persistence baseline ✅ | Establish repository/runtime facts later stages need | none | Approved 2026-07-31 | Repository-grounded current-state report; no implementation — delivered as `docs/B0_PERSISTENCE_BASELINE.md` |
 | **B1** — Shared SQLite connection policy ✅ | One connection/pragma/close policy; inventory and assign every remaining consumer migration | B0 | Approved 2026-07-31 | Shared policy implemented and tested; duplicate/hot-path checkpoint problem resolved; every remaining consumer migration inventoried and assigned to B2 or B8 — delivered as `docs/B1_SHARED_CONNECTION_POLICY.md` |
-| **B2** — Event-loop isolation and database execution | Remove blocking sync SQLite calls from the event loop | B1 | Not approved | Known blocking call sites resolved; worker termination confirmed |
+| **B2** — Event-loop isolation and database execution ✅ | Remove blocking sync SQLite calls from the event loop | B1 | Approved 2026-07-31 | Known blocking call sites resolved; worker termination confirmed — delivered as `docs/B2_EVENT_LOOP_ISOLATION.md` |
 | **B3** — Governance schema and Parking Brake persistence | One durable, auditable Governance representation | B2 | Not approved | Schema + transition semantics implemented and tested in isolation |
 | **B4** — Shared Governance runtime integration | One shared Parking Brake instance at every real live-daemon call site | B3 | Not approved | Every real live-daemon construction site (re-inventoried, not assumed) uses the shared instance; standalone CLI construction sites remain out of scope here and are B6's responsibility |
 | **B5** — Startup and shutdown integrity | Reliable failure handling; clean-shutdown evidence for B1–B4's own resources, as lifecycle-terminal-state conditions (no process lock or external-admission draining yet) | B1–B4 | Not approved | Startup/shutdown sequences verified against the concrete B1–B4 runtime; does not yet cover externally admitted work (B7) |

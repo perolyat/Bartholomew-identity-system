@@ -333,3 +333,60 @@
   decision; this is a documentation-only architectural decision recording the target, not the
   implementation of it.
 - **Date:** 2026-07-28 (documentation reconciliation pass 2)
+
+## Decision: Phase B stage B2 generalizes `SchedulerStore`'s pattern into a storage-agnostic shared executor
+- **Decision:** `bartholomew/kernel/blocking_executor.py`'s `SingleWorkerExecutor` (one dedicated
+  worker thread, a submission gate limiting it to one in-flight operation, and a `close()` that
+  bound-waits for confirmed termination rather than assuming it) is the one, reusable mechanism for
+  offloading blocking, non-async-safe work off the event loop — not a second SQLite-specific
+  executor. `scheduler/store.py`'s `SchedulerStore`, the original instance of this pattern, was
+  refactored to delegate to it (a thin `persistence.py`-specific facade) rather than left as an
+  independent duplicate. `KernelDaemon` owns one shared instance (`self.blocking_executor`), closed
+  before `MemoryStore`'s final checkpoint alongside `scheduler_store`, folded into the same
+  drain-confirmation gate. All 5 event-loop-blocking caller groups
+  `docs/B1_SHARED_CONNECTION_POLICY.md` §2 assigned to B2 (FTS startup schema init,
+  `SkillRegistry.load_enabled_skills()`, `ParkingBrake` construction across 4
+  `runtime_contract.py` functions plus skill execution, persona/narrator calls, memory
+  chunking/re-embedding) were migrated onto it via a small `run_off_loop(fn, *args, executor=None,
+  **kwargs)` helper that falls back to a one-off `asyncio.to_thread()` for call sites with no
+  owning daemon instance (`run_sight_through_runtime_contract`/`run_voice_through_runtime_contract`,
+  neither of which take a daemon/ctx parameter).
+- **Alternatives:** (a) Leave `SchedulerStore` as-is and build a second, independent
+  SQLite-specific `DedicatedDbExecutor` per the archived design's original two-lane proposal —
+  rejected: `docs/B0_PERSISTENCE_BASELINE.md` §2 found no such class exists, and building a second
+  bespoke mechanism would repeat exactly the kind of duplicate-implementation problem B1 had just
+  finished resolving for `db_ctx.py`. (b) One dedicated `SingleWorkerExecutor` per subsystem
+  (persona, narrator, parking brake, memory chunking) rather than one shared instance — rejected
+  as unnecessary added complexity for this pass: SQLite's own file-level locking already serializes
+  writes regardless of how many Python threads submit them, and none of B1's 5 assigned groups
+  have a documented cross-group ordering requirement (unlike the scheduler's own tick-loop
+  ordering, which is why `SchedulerStore` correctly keeps its own separate lane rather than sharing
+  this one). (c) Scatter bare `asyncio.to_thread()` calls at every one of the 9 call sites instead
+  of building a reusable primitive — rejected for the same reason `DECISIONS.md`'s prior
+  "Scheduler persistence moved off the event loop" entry already rejected it: no enforced
+  backpressure/sequential-submission invariant, reusing the shared default executor unconditionally
+  even where a dedicated lane is cheap and available. `run_off_loop()`'s fallback to
+  `asyncio.to_thread()` for the two daemon-less sight/voice call sites is a narrow, deliberate
+  exception to this, not a reversal of it.
+- **Why:** `docs/B0_PERSISTENCE_BASELINE.md` §3 (as corrected during PR #33 review) confirmed FTS
+  startup schema init and `SkillRegistry.load_enabled_skills()` run synchronously during
+  `KernelDaemon.start()`'s first and fourth steps respectively, directly on the event loop; §3 also
+  confirmed `ParkingBrake.__init__()` itself performs the blocking SQLite read (`is_blocked()`
+  afterward only reads the in-memory cache that construction populated), and that construction is
+  reachable, unwrapped, from 4 `runtime_contract.py` functions plus skill execution. Every one of
+  these sits on a live, frequently-exercised path (daemon startup, every chat message, every
+  scheduler drive, every skill action) sharing the same event loop as HTTP request handling.
+- **Consequences:** `MemoryStore.__init__()` and `SkillRegistry.__init__()` both gained an optional
+  `blocking_executor` constructor argument (default `None`, fully backward compatible — existing
+  callers/tests that don't pass one get `run_off_loop()`'s `asyncio.to_thread()` fallback, not a
+  new required dependency). `skill_registry.py`'s `_is_blocked_by_brake()` is now `async def`
+  (single call site, `execute_action()`, updated to `await` it). A new shared helper,
+  `bartholomew.orchestrator.safety.parking_brake.construct_parking_brake_off_loop()`, is the one
+  place all 5 `ParkingBrake` construction-and-check call sites route through — a future change to
+  how that construction is offloaded only needs to change one function. Verified against the full
+  governance/runtime-contract test set including `test_chat_returns_503_when_parking_brake_engaged`
+  (the fail-closed path this change touches most directly), plus the full non-integration/non-slow
+  suite — see `docs/B2_EVENT_LOOP_ISOLATION.md` §4 for the complete verification record, including
+  the one pre-existing, already-documented flaky test this pass re-confirmed but did not touch
+  (`tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes`).
+- **Date:** 2026-07-31 (Phase B stage B2)

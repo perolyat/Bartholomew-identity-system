@@ -126,6 +126,7 @@ class SkillRegistry:
         memory_store: MemoryStore | None = None,
         permission_checker: PermissionChecker | None = None,
         identity_context: IdentityContext | None = None,
+        blocking_executor: Any | None = None,
     ) -> None:
         """
         Initialize skill registry.
@@ -149,6 +150,13 @@ class SkillRegistry:
                 class's existing pattern for other optional resources (see
                 _is_blocked_by_brake()) -- so callers that don't wire an
                 Identity Context see no behavior change.
+            blocking_executor: Optional bartholomew.kernel.blocking_executor
+                .SingleWorkerExecutor. When provided, _is_blocked_by_brake()
+                and load_enabled_skills() submit their blocking SQLite work
+                to it instead of a one-off asyncio.to_thread() fallback --
+                see run_off_loop()'s docstring. None (the default) is fully
+                supported, matching this class's existing optional-resource
+                pattern.
         """
         self._skills_dir = Path(skills_dir)
         self._db_path = db_path
@@ -157,6 +165,7 @@ class SkillRegistry:
         self._working_memory = working_memory
         self._memory_store = memory_store
         self._identity_context = identity_context
+        self._blocking_executor = blocking_executor
 
         # Permission checker
         self._permission_checker = permission_checker or get_permission_checker(db_path=db_path)
@@ -583,7 +592,7 @@ class SkillRegistry:
 
         # Stage 4: Governance -- parking brake: fail-closed operational
         # kill-switch, scope="skills".
-        if self._is_blocked_by_brake():
+        if await self._is_blocked_by_brake():
             return await self._finish(
                 observation,
                 candidate_action,
@@ -646,13 +655,17 @@ class SkillRegistry:
                 SkillResult.fail(str(e)),
             )
 
-    def _is_blocked_by_brake(self) -> bool:
+    async def _is_blocked_by_brake(self) -> bool:
         """
         Check the global ParkingBrake's "skills" scope.
 
         Fails closed (treats as blocked) if the check itself errors --
         never silently allow a skill action when the safety gate can't be
         read, matching this codebase's fail-closed governance principle.
+        Construction and check run off the event loop (Phase B stage B2;
+        see docs/B2_EVENT_LOOP_ISOLATION.md) -- ParkingBrake.__init__()
+        itself does the blocking SQLite read; is_blocked() only reads the
+        in-memory cache it populated, so both are submitted as one unit.
         """
         if not self._db_path:
             return False
@@ -662,10 +675,14 @@ class SkillRegistry:
                 BrakeStorage,
                 ParkingBrake,
             )
+            from .blocking_executor import run_off_loop
 
             storage = BrakeStorage(self._db_path)
-            brake = ParkingBrake(storage)
-            return brake.is_blocked("skills")
+
+            def _construct_and_check() -> bool:
+                return ParkingBrake(storage).is_blocked("skills")
+
+            return await run_off_loop(_construct_and_check, executor=self._blocking_executor)
         except Exception:
             logger.exception("Parking brake check failed; failing closed")
             return True
@@ -993,17 +1010,22 @@ class SkillRegistry:
         if not self._db_path:
             return 0
 
-        conn = self._get_connection()
-        try:
-            rows = conn.execute(
-                "SELECT skill_id FROM skill_registry_state WHERE enabled = 1",
-            ).fetchall()
-        finally:
-            conn.close()
+        from .blocking_executor import run_off_loop
+
+        def _read_enabled_skill_ids() -> list[str]:
+            conn = self._get_connection()
+            try:
+                rows = conn.execute(
+                    "SELECT skill_id FROM skill_registry_state WHERE enabled = 1",
+                ).fetchall()
+            finally:
+                conn.close()
+            return [row["skill_id"] for row in rows]
+
+        skill_ids = await run_off_loop(_read_enabled_skill_ids, executor=self._blocking_executor)
 
         loaded = 0
-        for row in rows:
-            skill_id = row["skill_id"]
+        for skill_id in skill_ids:
             if skill_id in self._manifests:
                 if await self.load_skill(skill_id):
                     loaded += 1

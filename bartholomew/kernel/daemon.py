@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 from dateutil import tz
 
+from .blocking_executor import run_off_loop
 from .event_bus import EventBus
 from .experience_kernel import ExperienceKernel
 from .global_workspace import EventType, GlobalWorkspace
@@ -40,7 +41,24 @@ class KernelDaemon:
         self.tz = tz.gettz(self.cfg["timezone"])
         self.interval = int(self.cfg.get("loop_interval_seconds", loop_interval_s))
         self.bus = EventBus()
-        self.mem = MemoryStore(db_path)
+
+        # Shared dedicated worker thread (Phase B stage B2; see
+        # docs/B2_EVENT_LOOP_ISOLATION.md) for the daemon's synchronous,
+        # blocking persistence calls that aren't the scheduler's own
+        # (FTS startup schema init, chunking/re-embedding, ParkingBrake
+        # construction, persona/narrator calls) -- storage-agnostic, not a
+        # second SQLite-specific mechanism; the scheduler keeps its own
+        # dedicated lane below rather than sharing this one, matching its
+        # existing strict-ordering requirement. Construction is cheap (no
+        # I/O, no thread spawned until first use), so it's safe to always
+        # create, even for a KernelDaemon that's never start()ed.
+        from .blocking_executor import SingleWorkerExecutor
+
+        self.blocking_executor = SingleWorkerExecutor(
+            thread_name_prefix="kernel-blocking",
+            label=db_path,
+        )
+        self.mem = MemoryStore(db_path, blocking_executor=self.blocking_executor)
 
         # Owned by this daemon instance for its entire lifetime -- closed
         # in stop(). Construction is cheap (no I/O, no thread spawned
@@ -119,6 +137,7 @@ class KernelDaemon:
             working_memory=self.working_memory,
             memory_store=self.mem,
             identity_context=self.identity_context,
+            blocking_executor=self.blocking_executor,
         )
         self.planner.set_skill_registry(self.skill_registry)
 
@@ -234,6 +253,13 @@ class KernelDaemon:
                     "Scheduler store cleanup failed during aborted startup; "
                     "propagating the original startup error as primary",
                 )
+            try:
+                await asyncio.shield(self.blocking_executor.close())
+            except BaseException:  # secondary only; primary re-raised below
+                logger.exception(
+                    "Blocking executor cleanup failed during aborted startup; "
+                    "propagating the original startup error as primary",
+                )
             raise
 
     def _init_experience_kernel(self) -> None:
@@ -330,23 +356,27 @@ class KernelDaemon:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
 
-        # Close the scheduler's dedicated DB worker thread before the
-        # memory store's own final checkpoint below, so nothing is still
-        # mid-operation on the same file when that checkpoint runs. If it
-        # doesn't drain cleanly within the bound, skip the (blocking,
-        # exclusive) TRUNCATE checkpoint entirely rather than risk
-        # contending with a thread that may still be running -- see
-        # SchedulerStore.close()'s docstring and DECISIONS.md.
+        # Close the scheduler's dedicated DB worker thread and the shared
+        # blocking-call worker thread (Phase B stage B2) before the memory
+        # store's own final checkpoint below, so nothing is still
+        # mid-operation on the same file when that checkpoint runs. If
+        # either doesn't drain cleanly within its bound, skip the
+        # (blocking, exclusive) TRUNCATE checkpoint entirely rather than
+        # risk contending with a thread that may still be running -- see
+        # SchedulerStore.close()'s / SingleWorkerExecutor.close()'s
+        # docstrings and DECISIONS.md.
         scheduler_drained = await self.scheduler_store.close()
-        if not scheduler_drained:
+        blocking_drained = await self.blocking_executor.close()
+        fully_drained = scheduler_drained and blocking_drained
+        if not fully_drained:
             print(
-                "[Kernel] Scheduler store did not drain cleanly on shutdown; "
-                "deferring WAL cleanup to next startup",
+                "[Kernel] Scheduler store and/or blocking executor did not drain "
+                "cleanly on shutdown; deferring WAL cleanup to next startup",
             )
 
-        # Close memory store (checkpoint WAL, unless the scheduler store
-        # above didn't drain -- see comment above)
-        await self.mem.close(checkpoint=scheduler_drained)
+        # Close memory store (checkpoint WAL, unless either worker above
+        # didn't drain -- see comment above)
+        await self.mem.close(checkpoint=fully_drained)
 
     def _is_quiet_hours(self, now: datetime) -> bool:
         """Check if current time is within quiet hours."""
@@ -374,7 +404,11 @@ class KernelDaemon:
 
                 # Stage 3: Check for auto persona activation
                 context_tags = list(self.experience.get_context("tags") or [])
-                self.persona_manager.auto_activate_if_needed(context_tags)
+                await run_off_loop(
+                    self.persona_manager.auto_activate_if_needed,
+                    context_tags,
+                    executor=self.blocking_executor,
+                )
 
                 action = await self.planner.decide(self.state)
                 if action:
@@ -546,7 +580,11 @@ Continue supporting user wellness and autonomy.
         # one's text. Never lets a narrator error break reflection
         # generation.
         try:
-            episodic_narrative = self.narrator.generate_daily_reflection_narrative(now)
+            episodic_narrative = await run_off_loop(
+                self.narrator.generate_daily_reflection_narrative,
+                now,
+                executor=self.blocking_executor,
+            )
             if episodic_narrative:
                 content = f"{content}\n\n---\n\n{episodic_narrative}"
                 meta["episodic_narrative_included"] = True
@@ -635,7 +673,10 @@ Continue current operation. No remediation needed.
         # block above. Appended, not merged; never lets a narrator error
         # break reflection generation.
         try:
-            episodic_narrative = self.narrator.generate_weekly_reflection_narrative()
+            episodic_narrative = await run_off_loop(
+                self.narrator.generate_weekly_reflection_narrative,
+                executor=self.blocking_executor,
+            )
             if episodic_narrative:
                 content = f"{content}\n\n---\n\n{episodic_narrative}"
                 meta["episodic_narrative_included"] = True

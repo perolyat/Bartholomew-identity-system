@@ -232,10 +232,16 @@ async def run_chat_through_runtime_contract(
     governance_allowed = True
     governance_reason: str | None = None
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import (
+            BrakeStorage,
+            construct_parking_brake_off_loop,
+        )
 
         storage = BrakeStorage(daemon.mem.db_path)
-        brake = ParkingBrake(storage)
+        brake = await construct_parking_brake_off_loop(
+            storage,
+            executor=getattr(daemon, "blocking_executor", None),
+        )
         if brake.is_blocked("skills"):
             governance_allowed = False
             governance_reason = "Blocked by parking brake (scope=skills)"
@@ -386,10 +392,21 @@ async def run_drive_through_runtime_contract(
     # Stage 4: Governance -- ParkingBrake, unchanged from the pre-existing
     # check (still raises on block; see docstring above).
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import (
+            BrakeStorage,
+            construct_parking_brake_off_loop,
+        )
 
         storage = BrakeStorage(ctx.mem.db_path)
-        brake = ParkingBrake(storage)
+        # ctx may be the minimal duck-typed context scheduler/loop.py's own
+        # tests use (just .mem.db_path, optionally .identity_context) --
+        # getattr falls back to run_off_loop()'s own asyncio.to_thread()
+        # fallback rather than requiring every such ctx to grow a
+        # blocking_executor attribute.
+        brake = await construct_parking_brake_off_loop(
+            storage,
+            executor=getattr(ctx, "blocking_executor", None),
+        )
         if brake.is_blocked("scheduler"):
             raise RuntimeError("ParkingBrake: scheduler blocked")
     except ImportError:
@@ -625,10 +642,16 @@ async def run_sight_through_runtime_contract(
     # Governance gate 1: ParkingBrake("sight"), preserving the pre-existing
     # ImportError tolerance exactly.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import (
+            BrakeStorage,
+            construct_parking_brake_off_loop,
+        )
 
         if resolved_db_path is not None:
-            brake = ParkingBrake(BrakeStorage(resolved_db_path))
+            # No owning daemon instance here -- construct_parking_brake_off_loop
+            # falls back to a one-off asyncio.to_thread() (see
+            # run_off_loop()'s docstring), still off the event loop.
+            brake = await construct_parking_brake_off_loop(BrakeStorage(resolved_db_path))
             if brake.is_blocked("sight"):
                 allowed = False
                 outcome = "parking_brake_denied"
@@ -712,10 +735,16 @@ async def run_voice_through_runtime_contract(
 
     # Governance gate 1: ParkingBrake("voice"), preserving ImportError tolerance.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import (
+            BrakeStorage,
+            construct_parking_brake_off_loop,
+        )
 
         if resolved_db_path is not None:
-            brake = ParkingBrake(BrakeStorage(resolved_db_path))
+            # No owning daemon instance here -- construct_parking_brake_off_loop
+            # falls back to a one-off asyncio.to_thread() (see
+            # run_off_loop()'s docstring), still off the event loop.
+            brake = await construct_parking_brake_off_loop(BrakeStorage(resolved_db_path))
             if brake.is_blocked("voice"):
                 allowed = False
                 outcome = "parking_brake_denied"

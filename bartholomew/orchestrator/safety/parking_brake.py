@@ -10,6 +10,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -201,3 +202,31 @@ class ParkingBrake:
             kind="safety.audit",
             value={"action": action, "scopes": sorted(scopes)},
         )
+
+
+async def construct_parking_brake_off_loop(
+    storage: BrakeStorage,
+    *,
+    executor: Any | None = None,
+) -> "ParkingBrake":
+    """
+    Construct a ParkingBrake off the event loop.
+
+    ParkingBrake.__init__() synchronously reads its state from storage
+    (BrakeStorage.fetch_flag() -- a blocking sqlite3 call) as part of
+    construction; is_blocked() itself only reads the in-memory cache that
+    construction populated, so both are covered by this one off-loop
+    construction. Off the event loop since Phase B stage B2 (see
+    docs/B2_EVENT_LOOP_ISOLATION.md); every real construction site this
+    covers is fail-closed governance code, so callers must let any
+    exception raised during construction propagate exactly as it would
+    have on the event loop, not swallow it here.
+
+    `executor` is an optional bartholomew.kernel.blocking_executor
+    .SingleWorkerExecutor -- when the caller has none (e.g. no owning
+    daemon instance), this falls back to a one-off asyncio.to_thread()
+    (see run_off_loop()'s docstring), still off the event loop.
+    """
+    from bartholomew.kernel.blocking_executor import run_off_loop
+
+    return await run_off_loop(ParkingBrake, storage, executor=executor)

@@ -276,7 +276,7 @@ async def test_scheduler_store_serializes_calls(tmp_path):
 
     assert peak == 1, f"peak concurrent execution was {peak}, expected exactly 1"
     assert sorted(results) == list(range(10))
-    assert store._executor._max_workers == 1
+    assert store._worker._executor._max_workers == 1
 
 
 # -- 5 & 6. SchedulerStore.close() lifecycle -----------------------------------
