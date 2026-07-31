@@ -390,3 +390,45 @@
   the one pre-existing, already-documented flaky test this pass re-confirmed but did not touch
   (`tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes`).
 - **Date:** 2026-07-31 (Phase B stage B2)
+
+## Decision: Phase B stage B3 builds a new governance schema/store alongside, not in place of, `ParkingBrake`
+- **Decision:** `bartholomew/orchestrator/safety/governance_store.py` introduces a governance-owned
+  schema (`parking_brake_state`, `governance_audit` — narrow, separate from `MemoryStore`'s schema)
+  and a `GovernanceStore` class, tested in isolation, built as a new module alongside the current
+  `ParkingBrake`/`BrakeStorage` rather than modifying them in place. `engage()` keeps simple replace
+  semantics (not union), version-guarded only on the loosening side: `disengage()` defaults its
+  `expected_revision` check to the calling instance's own last-loaded revision, raising
+  `StaleGovernanceWriteError` instead of silently regressing a more-recent, more-restrictive state;
+  `engage()` (tightening) is never refused regardless of staleness. State and its audit record are
+  written in one transaction, closing the gap where `BrakeStorage.append_memory()`'s audit trail was
+  silently dead code in production (no real construction site ever passes a `memory_store`). The
+  archived design's third table, `brake_runtime`, is deferred entirely to B5, where it's actually
+  consumed (it is the write-fence/clean-shutdown-marker mechanism, not part of B3's own scope).
+- **Alternatives:** (a) Modify `parking_brake.py`'s existing `BrakeStorage`/`ParkingBrake` in place
+  — rejected: B3's isolated tests could then accidentally exercise or destabilize the still-live,
+  wired-in code path before B4 has done the runtime-integration work that's supposed to gate that
+  transition. (b) Union/monotonic-widening `engage()` semantics, per the archived design's original
+  proposal — rejected for this stage: `docs/B0_PERSISTENCE_BASELINE.md`/B3's own re-grounding found
+  exactly one real production caller of `engage()` today (`bartholomew/cli.py`'s `brake on`), so
+  building concurrency-safe union semantics now is complexity for a caller that doesn't exist yet;
+  revisit only if B4's live-daemon re-inventory finds a genuine concurrent caller. (c) Guard `engage()`
+  with the same revision check as `disengage()` — rejected: the non-negotiable invariant is that
+  tightening is never refused, only loosening requires confirmation: guarding `engage()` too would
+  let a stale reader block a legitimate emergency tightening. (d) Build `brake_runtime` now for
+  schema-ownership completeness even though nothing consumes it yet — rejected as the same kind of
+  disconnected, untested proposal B0/B1 have been correcting elsewhere in this phase.
+- **Why:** `docs/B0_PERSISTENCE_BASELINE.md`'s re-verification (independently repeated at B3 plan
+  start) found governance state currently lives inside `MemoryStore`'s own `system_flags` table —
+  a real schema-ownership violation of this phase's "one authoritative schema per governance table"
+  invariant — with no version guard of any kind and a completely non-functional audit mechanism.
+- **Consequences:** `ParkingBrake`/`BrakeStorage` are functionally unchanged by this stage; the
+  live runtime still reads/writes `system_flags` exactly as before. Wiring `GovernanceStore` in as
+  the runtime's shared instance, migrating the 9 real construction sites `docs/B0_PERSISTENCE
+  _BASELINE.md` §5 found, and revisiting the replace-vs-union question against real live-daemon
+  callers, are all B4's work, not resolved here. Verified with 19 isolated tests, including two
+  genuine crash-consistency tests: a real SQLite `BEFORE INSERT` trigger injects a failure between
+  the state `UPDATE` and the audit `INSERT` (Python's `sqlite3.Connection` is a C type and can't be
+  monkeypatched, so a DB-level fault injection was used instead of a mock), and a successful write
+  is checked for survival across a full connection/instance drop-and-reopen — see
+  `docs/B3_GOVERNANCE_PERSISTENCE.md` §3 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B3)
