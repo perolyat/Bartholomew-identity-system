@@ -127,11 +127,9 @@ class Orchestrator:
         brake_blocked = False
         try:
             from bartholomew.kernel.daemon import _default_db_path
-            from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+            from bartholomew.orchestrator.safety.parking_brake import check_scope_blocked
 
-            storage = BrakeStorage(_default_db_path())
-            brake = ParkingBrake(storage)
-            brake_blocked = brake.is_blocked("skills")
+            brake_blocked = check_scope_blocked(_default_db_path(), "skills")
         except (ImportError, Exception):
             # Parking brake module not available or schema not initialized
             # Continue normally

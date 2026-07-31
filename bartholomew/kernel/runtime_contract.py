@@ -232,11 +232,9 @@ async def run_chat_through_runtime_contract(
     governance_allowed = True
     governance_reason: str | None = None
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import check_scope_blocked
 
-        storage = BrakeStorage(daemon.mem.db_path)
-        brake = ParkingBrake(storage)
-        if brake.is_blocked("skills"):
+        if check_scope_blocked(daemon.mem.db_path, "skills"):
             governance_allowed = False
             governance_reason = "Blocked by parking brake (scope=skills)"
     except Exception:
@@ -386,11 +384,9 @@ async def run_drive_through_runtime_contract(
     # Stage 4: Governance -- ParkingBrake, unchanged from the pre-existing
     # check (still raises on block; see docstring above).
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import check_scope_blocked
 
-        storage = BrakeStorage(ctx.mem.db_path)
-        brake = ParkingBrake(storage)
-        if brake.is_blocked("scheduler"):
+        if check_scope_blocked(ctx.mem.db_path, "scheduler"):
             raise RuntimeError("ParkingBrake: scheduler blocked")
     except ImportError:
         # Parking brake module not available, continue normally
@@ -625,14 +621,12 @@ async def run_sight_through_runtime_contract(
     # Governance gate 1: ParkingBrake("sight"), preserving the pre-existing
     # ImportError tolerance exactly.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import check_scope_blocked
 
-        if resolved_db_path is not None:
-            brake = ParkingBrake(BrakeStorage(resolved_db_path))
-            if brake.is_blocked("sight"):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = "Blocked by parking brake (scope=sight)"
+        if resolved_db_path is not None and check_scope_blocked(resolved_db_path, "sight"):
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Blocked by parking brake (scope=sight)"
     except ImportError:
         pass
 
@@ -712,14 +706,12 @@ async def run_voice_through_runtime_contract(
 
     # Governance gate 1: ParkingBrake("voice"), preserving ImportError tolerance.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.orchestrator.safety.parking_brake import check_scope_blocked
 
-        if resolved_db_path is not None:
-            brake = ParkingBrake(BrakeStorage(resolved_db_path))
-            if brake.is_blocked("voice"):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = "Blocked by parking brake (scope=voice)"
+        if resolved_db_path is not None and check_scope_blocked(resolved_db_path, "voice"):
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Blocked by parking brake (scope=voice)"
     except ImportError:
         pass
 

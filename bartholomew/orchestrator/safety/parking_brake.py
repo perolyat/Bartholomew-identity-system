@@ -201,3 +201,31 @@ class ParkingBrake:
             kind="safety.audit",
             value={"action": action, "scopes": sorted(scopes)},
         )
+
+
+def check_scope_blocked(db_path: str, scope: str, memory_store=None) -> bool:
+    """
+    One coherent path for the fail-closed "is this scope blocked?" read
+    every live-daemon Governance gate needs (Phase B, stage B4). Replaces
+    each of the 6 real call sites' own inline
+    `storage = BrakeStorage(db_path); brake = ParkingBrake(storage);
+    brake.is_blocked(scope)` with a single shared implementation, so there
+    is one place, not six independently-written copies, that could drift
+    (e.g. one gaining a memory_store= argument the others don't).
+
+    Deliberately still constructs a fresh ParkingBrake on every call rather
+    than holding one long-lived shared instance: ParkingBrake.__init__()
+    loads current state from storage, and is_blocked() reads that load's
+    cache -- so a genuinely long-lived shared instance would go stale the
+    moment an external CLI engage()/disengage() landed after construction,
+    since nothing here ever refreshes it. Constructing fresh per call keeps
+    every check exactly as live as the 6 call sites' pre-existing behavior,
+    without introducing that staleness risk.
+
+    Callers keep resolving their own db_path exactly as before -- this
+    function does not touch the four divergent path-resolution schemes
+    docs/B0_BASELINE_REPORT.md section 1 found; that reconciliation remains
+    an open question for a later stage, not something to silently fold in
+    here.
+    """
+    return ParkingBrake(BrakeStorage(db_path, memory_store=memory_store)).is_blocked(scope)

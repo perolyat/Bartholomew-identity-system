@@ -758,14 +758,9 @@ class SkillRegistry:
             return False
 
         try:
-            from bartholomew.orchestrator.safety.parking_brake import (
-                BrakeStorage,
-                ParkingBrake,
-            )
+            from bartholomew.orchestrator.safety.parking_brake import check_scope_blocked
 
-            storage = BrakeStorage(self._db_path)
-            brake = ParkingBrake(storage)
-            return brake.is_blocked("skills")
+            return check_scope_blocked(self._db_path, "skills")
         except Exception:
             logger.exception("Parking brake check failed; failing closed")
             return True
