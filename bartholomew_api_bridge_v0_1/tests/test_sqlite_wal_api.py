@@ -100,3 +100,46 @@ def test_api_kernel_pragma_parity(tmp_path):
 
     api_conn.close()
     kernel_conn.close()
+
+
+def test_api_db_ctx_is_kernel_db_ctx(tmp_path):
+    """
+    Guard rail (Phase B stage B1): the API layer's db_ctx module must be the
+    same module as the kernel's, not a parallel copy that can silently
+    re-diverge. See docs/B0_PERSISTENCE_BASELINE.md Sec 4 for the divergence
+    this consolidation resolved.
+    """
+    from bartholomew.kernel import db_ctx as kernel_db_ctx
+
+    assert db_ctx.wal_db is kernel_db_ctx.wal_db
+    assert db_ctx.set_wal_pragmas is kernel_db_ctx.set_wal_pragmas
+    assert db_ctx.wal_checkpoint_truncate is kernel_db_ctx.wal_checkpoint_truncate
+
+
+def test_api_wal_db_no_longer_checkpoints_on_every_call(tmp_path, monkeypatch):
+    """
+    Regression test for the B1-resolved hot-path checkpoint problem: the
+    API layer's wal_db() previously called wal_checkpoint_truncate()
+    unconditionally on every exit (including on read-only liveness GET
+    routes). It must not do so anymore unless a checkpoint is explicitly
+    requested.
+    """
+    from bartholomew.kernel import db_ctx as kernel_db_ctx
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        kernel_db_ctx,
+        "wal_checkpoint",
+        lambda *a, **k: calls.append(k.get("mode", "")),
+    )
+
+    db_path = tmp_path / "test_no_checkpoint.db"
+    with db_ctx.wal_db(str(db_path)) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS t(x)")
+        conn.commit()
+    assert calls == [], f"wal_db() checkpointed without being asked: {calls}"
+
+    with db_ctx.wal_db(str(db_path), checkpoint="TRUNCATE") as conn:
+        conn.execute("INSERT INTO t VALUES (1)")
+        conn.commit()
+    assert calls == ["TRUNCATE"], f"explicit checkpoint request was not honoured: {calls}"

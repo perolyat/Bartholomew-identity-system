@@ -59,6 +59,10 @@ implemented"; a fresh database actually contains 37.)*
   mode already guarantees readers see committed writes regardless of checkpoint timing, so this
   is a disk-layout choice, not a correctness one. Explicit `TRUNCATE` is retained for controlled
   maintenance and shutdown (`MemoryStore.close()`, the API bridge's `atexit` hook).
+  **Applies uniformly since Phase B stage B1** (`docs/B1_SHARED_CONNECTION_POLICY.md`):
+  `bartholomew_api_bridge_v0_1/services/api/db_ctx.py` had independently re-diverged (its own
+  `wal_db()` unconditionally checkpointed on every call, including three read-only liveness GET
+  routes) until B1 made it re-export `bartholomew.kernel.db_ctx` directly.
 - **Shutdown checkpointing is conditional, not guaranteed.** If `SchedulerStore.close()`'s
   bounded drain (default 5s) does not complete, `KernelDaemon.stop()` deliberately skips the
   shutdown `TRUNCATE` rather than contend with a possibly-live worker thread; WAL cleanup is
