@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from bartholomew.kernel.blocking_executor import run_off_loop
+
 
 @dataclass(frozen=True)
 class BrakeState:
@@ -227,6 +229,4 @@ async def construct_parking_brake_off_loop(
     daemon instance), this falls back to a one-off asyncio.to_thread()
     (see run_off_loop()'s docstring), still off the event loop.
     """
-    from bartholomew.kernel.blocking_executor import run_off_loop
-
     return await run_off_loop(ParkingBrake, storage, executor=executor)
