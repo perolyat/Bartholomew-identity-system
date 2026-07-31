@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
+import traceback as traceback_module
 from datetime import datetime, time, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 
 import yaml
@@ -22,6 +25,48 @@ from .policy import load_policy
 from .skill_registry import SkillRegistry
 from .state_model import WorldState
 from .working_memory import WorkingMemoryManager
+
+
+class DaemonLifecycleState(Enum):
+    """KernelDaemon's own in-process lifecycle state (Phase B stage B5).
+
+    NOT_STARTED -> STARTING -> RUNNING -> STOPPING -> STOPPED
+                        \\-> FAILED
+
+    FAILED is terminal for a given instance -- start() refuses to run
+    again on an instance that has already reached FAILED (or RUNNING, or
+    any state past NOT_STARTED). A subsequent start attempt is expected
+    to happen as a fresh process with a fresh KernelDaemon instance, not
+    by mutating a failed instance back to NOT_STARTED; see
+    docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md.
+    """
+
+    NOT_STARTED = "not_started"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+class UnsafeStartupError(RuntimeError):
+    """Raised when start() finds evidence (a failed lightweight integrity
+    check) that continuing after an unclean prior shutdown would be
+    unsafe (Phase B stage B5). Distinct from other startup failures so
+    tests and operators can tell "refused to start, needs a human" apart
+    from an ordinary transient error."""
+
+
+_STARTUP_RESOURCE_ORDER = [
+    "mem",
+    "governance_store",
+    "scheduler_schema",
+    "experience_kernel",
+    "skills",
+    "narrator_subscription",
+    "producer_tasks",
+    "scheduler_task",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -175,67 +220,147 @@ class KernelDaemon:
         self._last_daily_reflection = None
         self._last_weekly_reflection = None
 
+        # Lifecycle state (Phase B stage B5) -- see DaemonLifecycleState.
+        self.lifecycle_state = DaemonLifecycleState.NOT_STARTED
+        self._runtime_id: str | None = None
+
     async def start(self) -> None:
-        await self.mem.init()
+        if self.lifecycle_state is not DaemonLifecycleState.NOT_STARTED:
+            raise RuntimeError(
+                f"KernelDaemon.start() called while in state "
+                f"{self.lifecycle_state.value!r}; a daemon instance can only be "
+                "started once. FAILED is terminal for this instance (Phase B "
+                "stage B5) -- construct a fresh KernelDaemon for a new attempt "
+                "rather than reusing this one.",
+            )
+        self.lifecycle_state = DaemonLifecycleState.STARTING
 
-        # The daemon's one shared Governance instance (Phase B stage B4).
-        # Constructed off the event loop -- GovernanceStore.__init__()
-        # itself does blocking schema/state I/O -- via blocking_executor,
-        # already constructed and not part of the protected region below
-        # (it owns no persistent resource of its own to unwind on a
-        # failed start; it only borrows blocking_executor for one-off
-        # calls). Wired into skill_registry immediately after, since that
-        # component was constructed in __init__, before this instance
-        # existed.
-        from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+        # Startup Incident Log bookkeeping (Phase B stage B5) -- populated
+        # as we go so a failure at any point can report exactly how far
+        # startup got, not just that it failed. See
+        # docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md.
+        resources_started: list[str] = []
+        integrity_checks_performed: list[str] = []
+        recovery_actions_attempted: list[str] = []
+        previous_shutdown_clean: bool | None = None
 
-        self.governance_store = await run_off_loop(
-            GovernanceStore,
-            self.mem.db_path,
-            executor=self.blocking_executor,
-        )
-        self.skill_registry.set_governance_store(self.governance_store)
-
-        # S5.0 (closes issue #24): ensure the scheduler's schema
-        # (scheduled_tasks, ticks, and the nudges/reflections integer-timestamp
-        # columns) exists *before* start() returns, as early as practical --
-        # immediately after MemoryStore init and before any side-effectful
-        # initialization (experience kernel, skills, narrator) or the scheduler
-        # task itself. Previously run_scheduler() created this schema
-        # asynchronously as a fire-and-forget task, so the API bridge could
-        # serve requests during a startup window where `ticks`/`scheduled_tasks`
-        # did not yet exist -- external readers (e.g. /api/liveness/ticks) hit
-        # "no such table" and 500'd. This runs on SchedulerStore's dedicated
-        # worker thread (off the event loop) and is awaited here so schema
-        # readiness is a synchronous precondition of a started daemon.
-        #
-        # Fail closed (A1): if the schema cannot be created, the daemon does not
-        # come up -- a "started" daemon with no scheduler tables is exactly the
-        # broken half-initialized state issue #24 is about. No outer
-        # asyncio.wait_for is added (A2): the underlying wal_db() call is
-        # already bounded, and cancelling the awaiting coroutine cannot stop
-        # the worker-thread operation, so an outer timeout would
-        # abandon-not-cancel.
-        #
-        # Protected region (Codex review on PR #25): once the first awaited
-        # ensure_schema() call has activated SchedulerStore (spawning its
-        # dedicated worker thread), EVERY abnormal exit from start() before
-        # successful scheduler-task creation must close the store -- stop()
-        # may never run after a failed start(), and an aborted ASGI startup
-        # is not guaranteed to invoke it either. That includes cancellation:
-        # asyncio.CancelledError inherits BaseException, so the cleanup guard
-        # catches BaseException, runs close() under asyncio.shield() (so the
-        # in-flight cancellation cannot interrupt the cleanup itself), and
-        # then ALWAYS re-raises the original exception or CancelledError --
-        # nothing is swallowed or translated. Cleanup cannot hang: it reuses
-        # SchedulerStore.close()'s existing bounded drain (default 5s), which
-        # never waits indefinitely. If cleanup itself fails, that failure is
-        # logged as secondary and must never replace the primary error.
+        # Protected region (Codex review on PR #25, extended in Phase B
+        # stage B5 to cover every resource activated during start(), not
+        # just scheduler_store): once ANY step below has activated a
+        # persistent resource, EVERY abnormal exit -- including
+        # CancelledError, which inherits BaseException -- must unwind it.
+        # stop() may never run after a failed start(), and an aborted ASGI
+        # startup is not guaranteed to invoke it either. Cleanup runs
+        # under asyncio.shield() so in-flight cancellation cannot interrupt
+        # it, reuses each resource's own bounded close() (never waits
+        # indefinitely), and a cleanup failure is logged as secondary,
+        # never replacing the primary error.
         try:
+            await self.mem.init()
+            resources_started.append("mem")
+
+            # The daemon's one shared Governance instance (Phase B stage
+            # B4). Constructed off the event loop -- GovernanceStore
+            # .__init__() itself does blocking schema/state I/O -- via
+            # blocking_executor. Wired into skill_registry immediately
+            # after, since that component was constructed in __init__,
+            # before this instance existed.
+            from bartholomew.orchestrator.safety.governance_store import (
+                GovernanceStore,
+                run_quick_integrity_check,
+            )
+
+            self.governance_store = await run_off_loop(
+                GovernanceStore,
+                self.mem.db_path,
+                executor=self.blocking_executor,
+            )
+            resources_started.append("governance_store")
+            self.skill_registry.set_governance_store(self.governance_store)
+
+            # Phase B stage B5: read whether the previous runtime (if any)
+            # against this db_path confirmed a clean shutdown, then open
+            # this runtime's own marker (fresh runtime_id, write fence
+            # open, clean=0 -- the honest default until stop() proves
+            # otherwise). Must read-then-open in that order: open_new_
+            # runtime() overwrites the marker open_new_runtime() itself
+            # would otherwise report.
+            previous_shutdown_clean = await run_off_loop(
+                self.governance_store.previous_shutdown_was_clean,
+                executor=self.blocking_executor,
+            )
+            self._runtime_id = await run_off_loop(
+                self.governance_store.open_new_runtime,
+                executor=self.blocking_executor,
+            )
+
+            if previous_shutdown_clean is False:
+                logger.warning(
+                    "KernelDaemon.start(): previous runtime (db=%s) did not "
+                    "confirm a clean shutdown -- running a lightweight "
+                    "integrity check before continuing (Phase B stage B5).",
+                    self.mem.db_path,
+                )
+                integrity_ok, integrity_result = await run_off_loop(
+                    run_quick_integrity_check,
+                    self.mem.db_path,
+                    executor=self.blocking_executor,
+                )
+                integrity_checks_performed.append(f"quick_check: {integrity_result}")
+                if not integrity_ok:
+                    # Evidence that continuing would be unsafe -- abort.
+                    # The outer except below records this as an incident
+                    # and unwinds; it does not attempt the WAL-repair step.
+                    raise UnsafeStartupError(
+                        f"Refusing to start: quick_check reported {integrity_result!r} "
+                        f"after an unclean prior shutdown (db={self.mem.db_path}). "
+                        "This requires operator attention, not automatic recovery.",
+                    )
+                # Obviously-recoverable repair: an unclean shutdown may have
+                # left the WAL file un-checkpointed (see B2's "WAL cleanup
+                # is deferred to next startup" decision) -- run it now that
+                # startup owns the file exclusively, before anything else
+                # touches it.
+                from .db_ctx import wal_checkpoint_truncate
+
+                await run_off_loop(
+                    wal_checkpoint_truncate,
+                    self.mem.db_path,
+                    executor=self.blocking_executor,
+                )
+                recovery_actions_attempted.append("wal_checkpoint_truncate")
+                logger.warning(
+                    "KernelDaemon.start(): integrity check passed (%s); "
+                    "ran deferred WAL checkpoint and continuing startup.",
+                    integrity_result,
+                )
+
+            # S5.0 (closes issue #24): ensure the scheduler's schema
+            # (scheduled_tasks, ticks, and the nudges/reflections integer-timestamp
+            # columns) exists *before* start() returns, as early as practical --
+            # immediately after MemoryStore init and before any side-effectful
+            # initialization (experience kernel, skills, narrator) or the scheduler
+            # task itself. Previously run_scheduler() created this schema
+            # asynchronously as a fire-and-forget task, so the API bridge could
+            # serve requests during a startup window where `ticks`/`scheduled_tasks`
+            # did not yet exist -- external readers (e.g. /api/liveness/ticks) hit
+            # "no such table" and 500'd. This runs on SchedulerStore's dedicated
+            # worker thread (off the event loop) and is awaited here so schema
+            # readiness is a synchronous precondition of a started daemon.
+            #
+            # Fail closed (A1): if the schema cannot be created, the daemon does not
+            # come up -- a "started" daemon with no scheduler tables is exactly the
+            # broken half-initialized state issue #24 is about. No outer
+            # asyncio.wait_for is added (A2): the underlying wal_db() call is
+            # already bounded, and cancelling the awaiting coroutine cannot stop
+            # the worker-thread operation, so an outer timeout would
+            # abandon-not-cancel.
             await self.scheduler_store.ensure_schema()
+            resources_started.append("scheduler_schema")
 
             # Stage 3: Initialize experience kernel state
             self._init_experience_kernel()
+            resources_started.append("experience_kernel")
 
             # Stage 4: Load skills. load_enabled_skills() loads whatever was
             # previously enabled (skill_registry_state), which is empty on a
@@ -247,9 +372,11 @@ class KernelDaemon:
             if loaded_count == 0 and not self.skill_registry.list_loaded():
                 for skill_id in self.skill_registry.list_available():
                     await self.skill_registry.load_skill(skill_id)
+            resources_started.append("skills")
 
             # Stage 3: Subscribe narrator to workspace events
             self.narrator.subscribe_to_workspace()
+            resources_started.append("narrator_subscription")
 
             # Stage 3: Emit startup event
             self.workspace.publish(
@@ -270,12 +397,23 @@ class KernelDaemon:
             self._tick_task = asyncio.create_task(self._system_tick())
             self._consumer_task = asyncio.create_task(self._system_consumer())
             self._dream_task = asyncio.create_task(self._dream_loop())
+            resources_started.append("producer_tasks")
 
             # Start scheduler (autonomy loop)
             from .scheduler.loop import run_scheduler
 
             self._scheduler_task = asyncio.create_task(run_scheduler(self))
+            resources_started.append("scheduler_task")
         except BaseException:  # includes CancelledError; re-raised below
+            self.lifecycle_state = DaemonLifecycleState.FAILED
+
+            # Unwind every producer task actually created before the
+            # failure (Phase B stage B5 -- previously only the two
+            # worker-thread resources below were unwound here).
+            for task in (self._tick_task, self._consumer_task, self._dream_task):
+                if task and not task.done():
+                    task.cancel()
+
             try:
                 await asyncio.shield(self.scheduler_store.close())
             except BaseException:  # secondary only; primary re-raised below
@@ -290,7 +428,81 @@ class KernelDaemon:
                     "Blocking executor cleanup failed during aborted startup; "
                     "propagating the original startup error as primary",
                 )
+
+            await self._record_startup_incident(
+                resources_started=resources_started,
+                previous_shutdown_clean=previous_shutdown_clean,
+                integrity_checks_performed=integrity_checks_performed,
+                recovery_actions_attempted=recovery_actions_attempted,
+                final_outcome="failed",
+            )
             raise
+        else:
+            self.lifecycle_state = DaemonLifecycleState.RUNNING
+            if previous_shutdown_clean is False:
+                # Startup succeeded, but B5's own trigger condition for the
+                # Startup Incident Log is "an unclean shutdown was detected
+                # OR startup failed" -- this branch is the former without
+                # the latter, so it gets its own record even though start()
+                # is about to return successfully.
+                await self._record_startup_incident(
+                    resources_started=resources_started,
+                    previous_shutdown_clean=previous_shutdown_clean,
+                    integrity_checks_performed=integrity_checks_performed,
+                    recovery_actions_attempted=recovery_actions_attempted,
+                    final_outcome="started_after_recovery",
+                )
+
+    async def _record_startup_incident(
+        self,
+        *,
+        resources_started: list[str],
+        previous_shutdown_clean: bool | None,
+        integrity_checks_performed: list[str],
+        recovery_actions_attempted: list[str],
+        final_outcome: str,
+    ) -> None:
+        """Best-effort Startup Incident Log write (Phase B stage B5) --
+        a failure here is logged as secondary and never masks or replaces
+        whatever start() itself is doing (raising, or returning
+        successfully).
+
+        Deliberately a direct (not off-loop) call: on the failure path
+        this runs after blocking_executor has already been closed as
+        part of unwind, so run_off_loop() would have nothing to submit
+        to. A single one-off diagnostic write on a rare path (startup
+        failure or unclean-shutdown recovery) is an accepted tradeoff,
+        the same precedent stop()'s own tail-of-shutdown mark_clean_
+        shutdown() call already sets.
+        """
+        exc_type = exc_message = tb = None
+        if final_outcome == "failed":
+            exc_value = sys.exc_info()[1]
+            if exc_value is not None:
+                exc_type = type(exc_value).__name__
+                exc_message = str(exc_value)
+                tb = traceback_module.format_exc()
+
+        resources_not_started = [r for r in _STARTUP_RESOURCE_ORDER if r not in resources_started]
+        try:
+            from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+            incident_store = self.governance_store or GovernanceStore(self.mem.db_path)
+            incident_store.record_startup_incident(
+                runtime_id=self._runtime_id,
+                lifecycle_state_reached=self.lifecycle_state.value,
+                exception_type=exc_type,
+                exception_message=exc_message,
+                traceback=tb,
+                resources_started=resources_started,
+                resources_not_started=resources_not_started,
+                previous_shutdown_clean=previous_shutdown_clean,
+                integrity_checks_performed=integrity_checks_performed,
+                recovery_actions_attempted=recovery_actions_attempted,
+                final_outcome=final_outcome,
+            )
+        except BaseException:
+            logger.exception("Failed to record startup incident (Phase B stage B5)")
 
     def _init_experience_kernel(self) -> None:
         """Initialize experience kernel from last snapshot or defaults."""
@@ -336,6 +548,40 @@ class KernelDaemon:
 
     async def stop(self) -> None:
         """Gracefully stop the kernel daemon."""
+        # Phase B stage B5 lifecycle guard: NOT_STARTED/FAILED have no
+        # running resources of this stop() sequence's own making to tear
+        # down (FAILED's own resources were already unwound by start()'s
+        # own except block; NOT_STARTED never activated anything).
+        # STOPPING/STOPPED make this idempotent rather than double-running
+        # teardown. Only a RUNNING instance has real work to do here.
+        if self.lifecycle_state in (
+            DaemonLifecycleState.NOT_STARTED,
+            DaemonLifecycleState.FAILED,
+            DaemonLifecycleState.STOPPING,
+            DaemonLifecycleState.STOPPED,
+        ):
+            logger.info(
+                "KernelDaemon.stop() called while in state %r; nothing to do.",
+                self.lifecycle_state.value,
+            )
+            return
+        self.lifecycle_state = DaemonLifecycleState.STOPPING
+
+        # Governance write freeze (Phase B stage B5), first: stop accepting
+        # new engage()/disengage() writes -- including Phase B stage B4's
+        # dual-check bridge mirror writes -- before anything else in
+        # shutdown runs, not just before the final checkpoint. blocking_
+        # executor is still open at this point, so this still goes
+        # off-loop like every other Governance write.
+        if self.governance_store is not None:
+            try:
+                await run_off_loop(
+                    self.governance_store.close_write_fence,
+                    executor=self.blocking_executor,
+                )
+            except Exception as e:
+                print(f"[Kernel] Failed to close Governance write fence: {e}")
+
         # Stage 3: Emit shutdown event
         self.workspace.publish(
             channel="system",
@@ -378,13 +624,21 @@ class KernelDaemon:
             if task and not task.done():
                 task.cancel()
 
-        # Wait for cancellation with timeout
+        # Wait for cancellation with timeout. Phase B stage B5 "clean-marker
+        # honesty": track whether every task was CONFIRMED terminal (not
+        # merely asked to cancel) -- a timeout here means we cannot claim
+        # confirmed termination for that task, which must be reflected in
+        # whether this shutdown is later marked clean, not silently ignored.
+        producer_tasks_terminal = True
         for task in tasks:
             if task:
                 try:
                     await asyncio.wait_for(task, timeout=5.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
+                except asyncio.CancelledError:
                     pass
+                except asyncio.TimeoutError:
+                    producer_tasks_terminal = False
+                    print(f"[Kernel] Task {task.get_name()} did not terminate within timeout")
 
         # Close the scheduler's dedicated DB worker thread and the shared
         # blocking-call worker thread (Phase B stage B2) before the memory
@@ -397,16 +651,40 @@ class KernelDaemon:
         # docstrings and DECISIONS.md.
         scheduler_drained = await self.scheduler_store.close()
         blocking_drained = await self.blocking_executor.close()
-        fully_drained = scheduler_drained and blocking_drained
+        fully_drained = producer_tasks_terminal and scheduler_drained and blocking_drained
         if not fully_drained:
             print(
-                "[Kernel] Scheduler store and/or blocking executor did not drain "
-                "cleanly on shutdown; deferring WAL cleanup to next startup",
+                "[Kernel] Producer tasks and/or scheduler store and/or blocking executor "
+                "did not confirm clean termination; deferring WAL cleanup to next startup",
             )
 
-        # Close memory store (checkpoint WAL, unless either worker above
-        # didn't drain -- see comment above)
+        # Close memory store (checkpoint WAL, unless anything above wasn't
+        # confirmed terminal -- see comment above)
         await self.mem.close(checkpoint=fully_drained)
+
+        # Phase B stage B5 clean marker: the LAST Governance write of a
+        # shutdown, and only if every resource this stage tracks was
+        # actually confirmed terminal above -- not merely requested to
+        # stop. blocking_executor is already closed by this point, so
+        # this is a direct (not off-loop) call, same precedent as
+        # mem.close()'s own tail-of-shutdown checkpoint call above. Does
+        # not cover externally admitted work (B7 hasn't introduced
+        # request admission yet) -- this marker reflects confirmed
+        # termination of the resources B1-B4 introduced, not the complete
+        # shutdown invariant docs/PHASE_B_OVERVIEW.md Sec 4 describes.
+        if self.governance_store is not None:
+            if fully_drained:
+                try:
+                    self.governance_store.mark_clean_shutdown()
+                except Exception as e:
+                    print(f"[Kernel] Failed to record clean shutdown marker: {e}")
+            else:
+                print(
+                    "[Kernel] Not marking this shutdown clean: at least one resource "
+                    "was not confirmed terminal (see above).",
+                )
+
+        self.lifecycle_state = DaemonLifecycleState.STOPPED
 
     def _is_quiet_hours(self, now: datetime) -> bool:
         """Check if current time is within quiet hours."""

@@ -490,3 +490,55 @@
   scope-specificity, `global`-scope behavior, and the staleness bug above — see
   `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` §4 for the complete record.
 - **Date:** 2026-07-31 (Phase B stage B4)
+
+## Decision: Phase B stage B5 keeps the write-fence/clean-marker and Startup Incident Log under Governance's authority
+- **Decision:** `KernelDaemon` gains explicit `DaemonLifecycleState` tracking (`NOT_STARTED ->
+  STARTING -> RUNNING -> STOPPING -> STOPPED`, with `STARTING -> FAILED` as the other branch).
+  `FAILED` is terminal for a given instance -- `start()` refuses to run again on an instance past
+  `NOT_STARTED`; a retry is expected to be a fresh process with a fresh instance, never a mutation
+  back to `NOT_STARTED`. The write-fence/clean-marker (`brake_runtime`) and an append-only Startup
+  Incident Log (`startup_incidents`) both live in `bartholomew/orchestrator/safety
+  /governance_store.py`, not a separate daemon-lifecycle module -- both are fundamentally a
+  Governance concern (a trust assertion about whether the previous runtime completed cleanly), and
+  Governance remains this project's single authority for runtime integrity state, not something
+  split across persistence systems. `start()`'s failure-unwind now covers every resource it
+  actually activates, not a fixed pair. Unclean-shutdown recovery is conservative but
+  non-blocking: detect, log prominently, run a lightweight `PRAGMA quick_check`, repair the
+  deferred WAL checkpoint if it passes, and continue -- aborting (a new `UnsafeStartupError`) only
+  when the check itself reports a real problem, never merely because the last shutdown wasn't
+  confirmed clean.
+- **Alternatives:** (a) A separate general daemon-lifecycle-marker module, independent of
+  Governance -- rejected per the explicit direction that runtime integrity state should not be
+  split across persistence systems. (b) Treat an unclean prior shutdown as itself sufficient
+  reason to refuse startup (fail closed on the marker alone) -- rejected: an ordinary power loss or
+  OS crash must not permanently prevent Bartholomew from starting; only actual evidence of
+  unsafety (a failed integrity check) should abort. (c) On a poisoned-instance violation (`start()`
+  called twice, or after `FAILED`), silently no-op and return the existing state -- rejected: that
+  would hide a real caller bug rather than surface it, and "keeping the process in `FAILED` makes
+  debugging easier" was the explicit direction. (d) Run the full, expensive `PRAGMA
+  integrity_check` rather than `quick_check` -- rejected as disproportionate to "lightweight
+  verification."
+- **Why:** Re-grounding this stage against the current `start()`/`stop()` (not assumed from B0,
+  which predates B2's `blocking_executor` and B4's `governance_store`) found two real,
+  currently-untested unwind gaps: `governance_store` construction activated `blocking_executor`'s
+  worker thread *before* the old protected region began, and producer tasks created before
+  `scheduler_task` were never cancelled if that last step failed. B4 also made this stage's
+  "Governance write freeze" concern concretely real for the first time -- its dual-check bridge
+  writes to `governance_store` on ordinary reads, where nothing wrote there before.
+- **Consequences:** `stop()` now closes the write fence *before* any other teardown step (freeze
+  before drain) and marks the shutdown clean only if producer tasks were *confirmed* terminal (a
+  `wait_for` timeout is no longer silently swallowed) *and* both worker-thread resources drained --
+  an honest marker, not an assumed one. Two real bugs surfaced by the new test suite before merge,
+  both fixed: the failure-path incident write originally tried to route through
+  `blocking_executor` via `run_off_loop()` after that executor was already closed as part of the
+  same failure's unwind (fixed by making incident recording a direct call, the same precedent
+  `mark_clean_shutdown()`'s own tail-of-shutdown call already set); and an early version of the
+  "next daemon sees previous clean shutdown" test checked the marker *after* the second daemon's
+  own `start()` had already overwritten it via its own `open_new_runtime()` call. Verified against
+  the full governance/runtime-contract/scheduler/lifecycle test set (261 tests) plus the complete
+  non-integration/non-slow suite, both clean, plus 32 new tests split across
+  `tests/test_governance_runtime_lifecycle.py` (fence/incident-log persistence in isolation) and
+  `tests/test_daemon_lifecycle_integrity.py` (lifecycle transitions, both regression cases, and the
+  full unclean-shutdown/integrity-check/recovery path) -- see
+  `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` §4 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B5)

@@ -2,8 +2,23 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-07-31 (B4 complete: `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` delivered
-> per an explicitly approved B4 plan. `KernelDaemon` now owns one shared `GovernanceStore`
+> **Last updated:** 2026-07-31 (B5 complete: `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` delivered per
+> an explicitly approved B5 plan. Adds `DaemonLifecycleState` tracking (`FAILED` terminal, never
+> silently reset), a write-fence/clean-marker (`brake_runtime`) and an append-only Startup Incident
+> Log (`startup_incidents`), both in `governance_store.py` since runtime-integrity state stays
+> under Governance's single authority. `start()`'s protected region now covers every resource it
+> activates, not just the two it happened to before (fixing two real unwind gaps found while
+> re-grounding this stage: `governance_store` construction activating `blocking_executor` outside
+> the old protected region, and producer tasks never being cancelled if `scheduler_task` creation
+> failed after them). An unclean prior shutdown triggers a lightweight `PRAGMA quick_check`,
+> repairs the deferred WAL checkpoint if it passes, and aborts startup with a new
+> `UnsafeStartupError` if it doesn't. `stop()` closes the write fence before any other teardown
+> step and only marks the shutdown clean if every tracked resource was *confirmed* terminal, not
+> merely asked to stop. Two real bugs in the incident-recording path were caught by the new tests
+> before merge and fixed. Approval of B5 does not authorise B6 or any later stage.)
+>
+> **Previously (2026-07-31, same day):** B4 complete: `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md`
+> delivered per an explicitly approved B4 plan. `KernelDaemon` now owns one shared `GovernanceStore`
 > instance, wired into every real live-daemon Parking Brake construction site
 > (`skill_registry.py`, `runtime_contract.py`'s chat/drive gates, `Orchestrator.handle_input()`'s
 > mainline path) — CLI construction sites untouched, per the overview's exit condition, B6's
@@ -14,7 +29,6 @@
 > against the running daemon through the migration window. Also fixed a newly-discovered gap B0/B2
 > missed: `Orchestrator.handle_input()`'s Parking Brake check ran synchronously on the event loop
 > on every chat message and redundantly duplicated `run_chat_through_runtime_contract`'s own gate.
-> Approval of B4 does not authorise B5 or any later stage.)
 >
 > **Previously (2026-07-31, same day):** B3 complete: `docs/B3_GOVERNANCE_PERSISTENCE.md` delivered
 > per an explicitly approved B3 plan. Adds a new, governance-owned schema
@@ -113,8 +127,8 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**B0, B1, B2, B3, and B4 are complete (2026-07-31); no other stage has been approved or started.**
-Each stage's plan was presented and explicitly approved before its implementation began, per this
+**B0, B1, B2, B3, B4, and B5 are complete (2026-07-31); no other stage has been approved or
+started.** Each stage's plan was presented and explicitly approved before its implementation began, per this
 document's own approval model. B0's exit deliverable is `docs/B0_PERSISTENCE_BASELINE.md`, a
 repository-grounded current-state report (no implementation, per B0's exit condition). B1's exit
 deliverable is `docs/B1_SHARED_CONNECTION_POLICY.md`: the API layer's independent, hand-copied
@@ -132,10 +146,16 @@ idempotent legacy-state migration, all tested in isolation. B4's exit deliverabl
 instance, wired into every real live-daemon construction site (CLI sites untouched, B6's
 responsibility), with a temporary fail-closed dual-check bridge
 (`bartholomew/orchestrator/safety/governance_bridge.py`) keeping the CLI kill switch effective
-against the running daemon until B6 migrates it off the legacy `system_flags` path. Approval of B4
-does **not** authorise B5 or any later stage. Each remaining stage requires its own compact,
-repository-grounded plan — produced only as that stage approaches — and its own explicit user
-approval before implementation begins.
+against the running daemon until B6 migrates it off the legacy `system_flags` path. B5's exit
+deliverable is `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md`: `DaemonLifecycleState` tracking (`FAILED`
+terminal, never silently reset), a write-fence/clean-marker and append-only Startup Incident Log
+(both in `governance_store.py`), a startup protected region now covering every resource it
+activates (fixing two real unwind gaps found while re-grounding this stage), and conservative
+non-blocking unclean-shutdown recovery (lightweight integrity check, deferred-WAL-checkpoint
+repair, abort only on actual evidence of unsafety). Approval of B5 does **not** authorise B6 or
+any later stage. Each remaining stage requires its own compact, repository-grounded plan —
+produced only as that stage approaches — and its own explicit user approval before implementation
+begins.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -161,7 +181,7 @@ See `RISKS.md`'s tech-debt watchlist.
 | **B2** — Event-loop isolation and database execution ✅ | Remove blocking sync SQLite calls from the event loop | B1 | Approved 2026-07-31 | Known blocking call sites resolved; worker termination confirmed — delivered as `docs/B2_EVENT_LOOP_ISOLATION.md` |
 | **B3** — Governance schema and Parking Brake persistence ✅ | One durable, auditable Governance representation | B2 | Approved 2026-07-31 | Schema + transition semantics implemented and tested in isolation — delivered as `docs/B3_GOVERNANCE_PERSISTENCE.md` |
 | **B4** — Shared Governance runtime integration ✅ | One shared Parking Brake instance at every real live-daemon call site | B3 | Approved 2026-07-31 | Every real live-daemon construction site (re-inventoried, not assumed) uses the shared instance; standalone CLI construction sites remain out of scope here and are B6's responsibility — delivered as `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` |
-| **B5** — Startup and shutdown integrity | Reliable failure handling; clean-shutdown evidence for B1–B4's own resources, as lifecycle-terminal-state conditions (no process lock or external-admission draining yet) | B1–B4 | Not approved | Startup/shutdown sequences verified against the concrete B1–B4 runtime; does not yet cover externally admitted work (B7) |
+| **B5** — Startup and shutdown integrity ✅ | Reliable failure handling; clean-shutdown evidence for B1–B4's own resources, as lifecycle-terminal-state conditions (no process lock or external-admission draining yet) | B1–B4 | Approved 2026-07-31 | Startup/shutdown sequences verified against the concrete B1–B4 runtime; does not yet cover externally admitted work (B7) — delivered as `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` |
 | **B6** — External Governance control and CLI safety | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | Not approved | Verified on both POSIX and Windows; B5's lifecycle tests rerun with the lock in place |
 | **B7** — External request admission and detached work | Shutdown cannot race externally admitted work | B4, B5 | Not approved | Every real ingress point is identity-bound-admission-gated; does not block B1–B4 |
 | **B8** — Remaining persistence consumers | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | Not approved | Each split sub-stage's consumer migrated and tested |

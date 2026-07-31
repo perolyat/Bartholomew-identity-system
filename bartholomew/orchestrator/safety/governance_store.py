@@ -1,5 +1,5 @@
 """
-Governance schema and Parking Brake persistence (Phase B stage B3).
+Governance schema and Parking Brake persistence (Phase B stages B3, B5).
 
 A governance-owned schema (parking_brake_state, governance_audit) for
 Parking Brake state -- narrow, separate from MemoryStore's own schema,
@@ -38,17 +38,33 @@ Design notes on the two non-negotiable invariants this module implements:
   one -- building union/monotonic-widening semantics for a caller that
   doesn't exist yet was explicitly deferred, to be revisited only if B4's
   live-daemon caller re-inventory finds a real concurrent caller.
+
+Phase B stage B5 adds the write-fence/clean-marker (brake_runtime) and
+Startup Incident Log (startup_incidents) schema the B3 planning pass
+deferred here -- kept in this module rather than a separate
+daemon-lifecycle module because both are fundamentally a Governance
+concern (a trust assertion about whether the previous runtime completed
+cleanly), and Governance is this project's single authority for runtime
+integrity state, not something split across persistence systems.
+KernelDaemon (daemon.py) orchestrates USING these methods -- deciding
+when to run an integrity check, what counts as "obviously recoverable",
+and what belongs in an incident record -- since only the daemon knows
+its own resource-startup sequence; GovernanceStore itself only owns the
+persistence and the fence enforcement. See
+docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md.
 """
 
 from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass
 
 from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 
 _STATE_ROW_ID = 1
+_RUNTIME_ROW_ID = 1
 
 
 class StaleGovernanceWriteError(RuntimeError):
@@ -60,6 +76,15 @@ class StaleGovernanceWriteError(RuntimeError):
     not blindly resubmit the same stale write."""
 
 
+class WriteFenceClosedError(RuntimeError):
+    """Raised when engage()/disengage() is attempted while brake_runtime's
+    write fence is closed (Phase B stage B5) -- shutdown has begun (or
+    completed) and no further Governance writes are accepted. Does not
+    apply to the fence-management operations themselves (open_new_runtime,
+    close_write_fence, mark_clean_shutdown), which are the mechanism that
+    controls the fence, not writes gated by it."""
+
+
 @dataclass(frozen=True)
 class GovernanceState:
     """Parking brake state snapshot, with the revision it was read at."""
@@ -67,6 +92,17 @@ class GovernanceState:
     engaged: bool
     scopes: frozenset[str]
     revision: int
+
+
+@dataclass(frozen=True)
+class RuntimeMarker:
+    """brake_runtime's persisted state: the current (or most recent)
+    runtime's identity and whether its shutdown was confirmed clean."""
+
+    runtime_id: str
+    started_at: int
+    clean: bool
+    write_fence_open: bool
 
 
 def ensure_schema(db_path: str) -> None:
@@ -103,6 +139,36 @@ def ensure_schema(db_path: str) -> None:
                 scopes TEXT NOT NULL,
                 reason TEXT,
                 revision INTEGER NOT NULL
+            )
+            """,
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS brake_runtime (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                runtime_id TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                clean INTEGER NOT NULL DEFAULT 0,
+                write_fence_open INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS startup_incidents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                runtime_id TEXT,
+                lifecycle_state_reached TEXT NOT NULL,
+                exception_type TEXT,
+                exception_message TEXT,
+                traceback TEXT,
+                resources_started TEXT NOT NULL,
+                resources_not_started TEXT NOT NULL,
+                previous_shutdown_clean INTEGER,
+                integrity_checks_performed TEXT NOT NULL,
+                recovery_actions_attempted TEXT NOT NULL,
+                final_outcome TEXT NOT NULL
             )
             """,
         )
@@ -255,12 +321,30 @@ class GovernanceStore:
         `UPDATE ... WHERE revision = ?`: if no row matches (someone else
         already advanced the revision), the write is rolled back and
         StaleGovernanceWriteError is raised instead of committing.
+
+        Refuses with WriteFenceClosedError (Phase B stage B5) if
+        brake_runtime's write fence is closed -- a missing brake_runtime
+        row (no KernelDaemon lifecycle has called open_new_runtime() on
+        this db_path) is treated as "fence open" (permissive default),
+        matching this class's existing pattern for other optional
+        machinery.
         """
         now = int(time.time())
         conn = connect(self.db_path)
         try:
             set_wal_pragmas(conn)
             conn.execute("BEGIN IMMEDIATE")
+
+            fence_row = conn.execute(
+                "SELECT write_fence_open FROM brake_runtime WHERE id = ?",
+                (_RUNTIME_ROW_ID,),
+            ).fetchone()
+            if fence_row is not None and not fence_row[0]:
+                raise WriteFenceClosedError(
+                    "Governance write refused: write fence is closed "
+                    "(shutdown in progress or already completed)",
+                )
+
             current_revision = conn.execute(
                 "SELECT revision FROM parking_brake_state WHERE id = ?",
                 (_STATE_ROW_ID,),
@@ -295,3 +379,172 @@ class GovernanceStore:
 
         self._cache = GovernanceState(engaged, frozenset(scopes), new_revision)
         return self._cache
+
+    # -- Runtime lifecycle / write-fence (Phase B stage B5) ------------------
+
+    def runtime_marker(self) -> RuntimeMarker | None:
+        """Read brake_runtime's current state, or None if no runtime has
+        ever called open_new_runtime() against this db_path."""
+        conn = connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT runtime_id, started_at, clean, write_fence_open "
+                "FROM brake_runtime WHERE id = ?",
+                (_RUNTIME_ROW_ID,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        runtime_id, started_at, clean, write_fence_open = row
+        return RuntimeMarker(runtime_id, started_at, bool(clean), bool(write_fence_open))
+
+    def previous_shutdown_was_clean(self) -> bool | None:
+        """True/False if a prior runtime recorded its own clean/unclean
+        state, None if this is the first runtime ever to open against
+        this db_path (nothing to distrust -- there's no prior shutdown to
+        have been unclean)."""
+        marker = self.runtime_marker()
+        return None if marker is None else marker.clean
+
+    def open_new_runtime(self) -> str:
+        """
+        Start a new runtime lifecycle: generates a fresh runtime_id,
+        (re)opens the write fence, and marks this runtime as not-yet-clean
+        -- the honest default until mark_clean_shutdown() proves otherwise.
+        Must be called before this runtime is considered "the" runtime
+        for write-fence purposes; does not itself check or report the
+        *previous* runtime's clean state -- call previous_shutdown_was_
+        clean() first if that's needed, since this call overwrites it.
+
+        Not gated by the write fence itself -- this is the mechanism that
+        controls the fence, not a write the fence gates.
+        """
+        runtime_id = uuid.uuid4().hex
+        now = int(time.time())
+        conn = connect(self.db_path)
+        try:
+            set_wal_pragmas(conn)
+            conn.execute(
+                "INSERT INTO brake_runtime (id, runtime_id, started_at, clean, write_fence_open) "
+                "VALUES (?, ?, ?, 0, 1) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "runtime_id = excluded.runtime_id, started_at = excluded.started_at, "
+                "clean = 0, write_fence_open = 1",
+                (_RUNTIME_ROW_ID, runtime_id, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return runtime_id
+
+    def close_write_fence(self) -> None:
+        """
+        Stop accepting further Governance writes (engage()/disengage(),
+        including Phase B stage B4's dual-check bridge mirror writes) --
+        the first step of shutdown's write-freeze-and-drain sequence.
+        Idempotent. Not gated by the fence itself, for the same reason
+        open_new_runtime() isn't.
+        """
+        conn = connect(self.db_path)
+        try:
+            set_wal_pragmas(conn)
+            conn.execute(
+                "UPDATE brake_runtime SET write_fence_open = 0 WHERE id = ?",
+                (_RUNTIME_ROW_ID,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def mark_clean_shutdown(self) -> None:
+        """
+        Record that this runtime's shutdown completed cleanly -- must
+        only be called after every resource this runtime owns has been
+        confirmed (not merely requested) to have terminated; the caller
+        (KernelDaemon.stop()) is responsible for that ordering. This is
+        deliberately the last Governance write of a clean shutdown, per
+        the "clean-marker honesty" invariant: the marker reflects
+        Python-verified termination, not an assumption.
+        """
+        conn = connect(self.db_path)
+        try:
+            set_wal_pragmas(conn)
+            conn.execute(
+                "UPDATE brake_runtime SET clean = 1 WHERE id = ?",
+                (_RUNTIME_ROW_ID,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record_startup_incident(
+        self,
+        *,
+        runtime_id: str | None,
+        lifecycle_state_reached: str,
+        exception_type: str | None = None,
+        exception_message: str | None = None,
+        traceback: str | None = None,
+        resources_started: list[str],
+        resources_not_started: list[str],
+        previous_shutdown_clean: bool | None,
+        integrity_checks_performed: list[str],
+        recovery_actions_attempted: list[str],
+        final_outcome: str,
+    ) -> None:
+        """
+        Append an immutable Startup Incident Log record (Phase B stage
+        B5) -- a separate operational audit trail from normal runtime
+        logging, written whenever an unclean shutdown is detected or
+        startup fails, intended for diagnostics, reliability trend
+        analysis, and eventual self-diagnosis use.
+        """
+        now = int(time.time())
+        conn = connect(self.db_path)
+        try:
+            set_wal_pragmas(conn)
+            conn.execute(
+                "INSERT INTO startup_incidents "
+                "(ts, runtime_id, lifecycle_state_reached, exception_type, "
+                "exception_message, traceback, resources_started, resources_not_started, "
+                "previous_shutdown_clean, integrity_checks_performed, "
+                "recovery_actions_attempted, final_outcome) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    now,
+                    runtime_id,
+                    lifecycle_state_reached,
+                    exception_type,
+                    exception_message,
+                    traceback,
+                    json.dumps(resources_started),
+                    json.dumps(resources_not_started),
+                    None if previous_shutdown_clean is None else int(previous_shutdown_clean),
+                    json.dumps(integrity_checks_performed),
+                    json.dumps(recovery_actions_attempted),
+                    final_outcome,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def run_quick_integrity_check(db_path: str) -> tuple[bool, str]:
+    """
+    Lightweight SQLite integrity check (Phase B stage B5) -- `PRAGMA
+    quick_check` rather than the more thorough (and much more expensive)
+    `PRAGMA integrity_check`, per this stage's "lightweight verification"
+    direction. Returns (ok, raw_result) -- ok is True only if the result
+    is exactly "ok"; any other result (a list of specific problems, one
+    per row in practice) is surfaced verbatim in `raw_result` for the
+    incident log, not swallowed.
+    """
+    conn = connect(db_path)
+    try:
+        row = conn.execute("PRAGMA quick_check").fetchone()
+    finally:
+        conn.close()
+    result = row[0] if row else "unknown"
+    return result == "ok", result
