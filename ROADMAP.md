@@ -66,10 +66,13 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**No stage has been approved or started.** Documentation-only restructuring (this pass) does not
-authorise B0 or any implementation. Each stage requires its own compact, repository-grounded plan —
-produced only as that stage approaches — and its own explicit user approval before implementation
-begins. Approval of one stage never authorises the next.
+**2026-07-31 (later same day):** the user explicitly authorised autonomous implementation of the
+entire B0–B9 sequence in this session, superseding the stage-by-stage plan/commit approval process
+described above and in `docs/PHASE_B_OVERVIEW.md` §9 for this workstream — each stage is now
+implemented and committed without a separate pre-implementation approval checkpoint, with the user
+reviewing (and correcting, if needed) the resulting commits rather than each plan in advance. **B0
+is complete** — see `docs/B0_EXECUTION_PLAN.md` and `docs/B0_BASELINE_REPORT.md`. B1–B9 remain not
+started as of this edit.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -86,11 +89,11 @@ given a longer timeout. The unresolved "why did a `TRUNCATE` checkpoint outlast 
 busy-timeout" question and its temporary DEBUG instrumentation are the likely same root cause.
 See `RISKS.md`'s tech-debt watchlist.
 
-**Stage structure (all stages 📋 NOT STARTED; none approved):**
+**Stage structure (B0 ✅ complete; B1–B9 📋 not started):**
 
 | Stage | Objective | Dependency | Approval gate | Exit condition |
 |---|---|---|---|---|
-| **B0** — Verified persistence baseline | Establish repository/runtime facts later stages need | none | Not approved | Repository-grounded current-state report; no implementation |
+| **B0** — Verified persistence baseline | Establish repository/runtime facts later stages need | none | ✅ Complete 2026-07-31 | `docs/B0_BASELINE_REPORT.md` — repository-grounded current-state report; no implementation. Notably revised the archived research's counts: 23 direct SQLite connection owners (not ~4), 9 Parking Brake construction sites (not 7), ~30 real API routes (not 5), and four divergent DB path/filename schemes across two different env-var names |
 | **B1** — Shared SQLite connection policy | One connection/pragma/close policy; inventory and assign every remaining consumer migration | B0 | Not approved | Shared policy implemented and tested; duplicate/hot-path checkpoint problem resolved; every remaining consumer migration inventoried and assigned to B2 or B8 |
 | **B2** — Event-loop isolation and database execution | Remove blocking sync SQLite calls from the event loop | B1 | Not approved | Known blocking call sites resolved; worker termination confirmed |
 | **B3** — Governance schema and Parking Brake persistence | One durable, auditable Governance representation | B2 | Not approved | Schema + transition semantics implemented and tested in isolation |
