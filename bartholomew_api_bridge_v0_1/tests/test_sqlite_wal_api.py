@@ -100,3 +100,57 @@ def test_api_kernel_pragma_parity(tmp_path):
 
     api_conn.close()
     kernel_conn.close()
+
+
+def test_api_db_ctx_is_kernel_db_ctx_not_a_second_implementation():
+    """
+    B1 (Phase B): the API bridge previously held its own independent copy of
+    every connection-policy function. Pin that it is now a re-export, not
+    just behaviorally similar -- a future accidental reintroduction of a
+    second implementation must fail this test, not silently drift again.
+    """
+    from bartholomew.kernel import db_ctx as kernel_db_ctx
+
+    for name in (
+        "connect",
+        "set_wal_pragmas",
+        "wal_checkpoint",
+        "wal_checkpoint_truncate",
+        "close_quietly",
+        "close_all_and_checkpoint",
+        "wal_db",
+    ):
+        assert getattr(db_ctx, name) is getattr(
+            kernel_db_ctx, name
+        ), f"db_ctx.{name} is a separate object from kernel db_ctx.{name} -- re-export broken"
+
+
+def test_api_wal_db_does_not_checkpoint_by_default(tmp_path, monkeypatch):
+    """
+    B1 (Phase B): the API bridge's wal_db() previously ran an unconditional
+    PRAGMA wal_checkpoint(TRUNCATE) on every exit -- a blocking hot-path
+    checkpoint on every liveness API read. It must now default to no
+    explicit checkpoint at all (relying on SQLite's automatic WAL
+    checkpoint), matching the kernel module's default.
+    """
+    from bartholomew.kernel import db_ctx as kernel_db_ctx
+
+    db_path = tmp_path / "no_checkpoint.db"
+    calls = []
+    monkeypatch.setattr(
+        kernel_db_ctx,
+        "wal_checkpoint",
+        lambda *a, **kw: calls.append((a, kw)) or None,
+    )
+
+    with db_ctx.wal_db(str(db_path), timeout=30.0) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS t(x)")
+        conn.commit()
+
+    assert calls == [], f"wal_db() with no checkpoint= argument still checkpointed: {calls}"
+
+    with db_ctx.wal_db(str(db_path), timeout=30.0, checkpoint="TRUNCATE") as conn:
+        conn.execute("INSERT INTO t VALUES (1)")
+        conn.commit()
+
+    assert len(calls) == 1, "wal_db(checkpoint='TRUNCATE') should still checkpoint when asked"

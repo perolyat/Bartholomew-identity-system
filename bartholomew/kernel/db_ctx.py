@@ -1,12 +1,14 @@
 """
-SQLite connection context managers and WAL cleanup utilities for kernel.
+SQLite connection context managers and WAL cleanup utilities.
 
 This module provides connection management and checkpoint helpers that ensure
 reliable WAL file cleanup on Windows. The key pattern is to checkpoint with a
 fresh connection after closing all active connections, followed by a brief
 delay to allow Windows to release file handles.
 
-This is a kernel-local copy to avoid coupling to the API layer.
+This is the single shared connection policy for the whole application
+(Phase B, stage B1). `bartholomew_api_bridge_v0_1/services/api/db_ctx.py`
+re-exports these functions rather than reimplementing them.
 """
 
 import gc
