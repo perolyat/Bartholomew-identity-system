@@ -2,13 +2,19 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-07-31 (documentation-only Phase B restructuring: the single, monolithic
-> "Phase B" workstream entry is replaced with the **B0–B9** staged structure — a concise overview
-> (`docs/PHASE_B_OVERVIEW.md`) plus ten separately gated stages. The prior large Phase B design
-> specification is preserved, non-authoritatively, at
+> **Last updated:** 2026-07-31 (B0 complete: `docs/B0_PERSISTENCE_BASELINE.md` delivered as the
+> stage's repository-grounded current-state report, per an explicitly approved B0 plan. B0's
+> re-verification against the current repository contradicted two of the archived document's
+> headline counts — 9 real Parking Brake construction sites, not 7; 37 live HTTP routes, not 5 — and
+> found a live discrepancy between the CLI's default `--db` path (`data/bartholomew.db`) and the
+> daemon/API default (`data/barth.db`). Approval of B0 does not authorise B1 or any later stage.)
+>
+> **Previously (2026-07-31, same day):** documentation-only Phase B restructuring: the single,
+> monolithic "Phase B" workstream entry is replaced with the **B0–B9** staged structure — a concise
+> overview (`docs/PHASE_B_OVERVIEW.md`) plus ten separately gated stages. The prior large Phase B
+> design specification is preserved, non-authoritatively, at
 > `docs/archive/phase-b-persistence-ownership-final.md`, indexed by stage in
-> `docs/PHASE_B_RISK_MAP.md`. No stage is approved or started; this is a planning-structure change
-> only. See `DECISIONS.md`'s 2026-07-31 entry for the full rationale.
+> `docs/PHASE_B_RISK_MAP.md`. See `DECISIONS.md`'s 2026-07-31 entry for the full rationale.
 >
 > **Previously (2026-07-28):** documentation reconciliation pass 2: Echo Integration Gates moved
 > to non-canonical `docs/incubator/ECHO_IDEAS.md`; approved sequencing corrected so Stage 1
@@ -66,10 +72,12 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**No stage has been approved or started.** Documentation-only restructuring (this pass) does not
-authorise B0 or any implementation. Each stage requires its own compact, repository-grounded plan —
-produced only as that stage approaches — and its own explicit user approval before implementation
-begins. Approval of one stage never authorises the next.
+**B0 is complete (2026-07-31); no other stage has been approved or started.** B0's plan was
+presented and explicitly approved before its diagnostic investigation began; its exit deliverable
+is `docs/B0_PERSISTENCE_BASELINE.md`, a repository-grounded current-state report (no
+implementation, per B0's exit condition). Approval of B0 does **not** authorise B1 or any later
+stage. Each remaining stage requires its own compact, repository-grounded plan — produced only as
+that stage approaches — and its own explicit user approval before implementation begins.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -90,7 +98,7 @@ See `RISKS.md`'s tech-debt watchlist.
 
 | Stage | Objective | Dependency | Approval gate | Exit condition |
 |---|---|---|---|---|
-| **B0** — Verified persistence baseline | Establish repository/runtime facts later stages need | none | Not approved | Repository-grounded current-state report; no implementation |
+| **B0** — Verified persistence baseline ✅ | Establish repository/runtime facts later stages need | none | Approved 2026-07-31 | Repository-grounded current-state report; no implementation — delivered as `docs/B0_PERSISTENCE_BASELINE.md` |
 | **B1** — Shared SQLite connection policy | One connection/pragma/close policy; inventory and assign every remaining consumer migration | B0 | Not approved | Shared policy implemented and tested; duplicate/hot-path checkpoint problem resolved; every remaining consumer migration inventoried and assigned to B2 or B8 |
 | **B2** — Event-loop isolation and database execution | Remove blocking sync SQLite calls from the event loop | B1 | Not approved | Known blocking call sites resolved; worker termination confirmed |
 | **B3** — Governance schema and Parking Brake persistence | One durable, auditable Governance representation | B2 | Not approved | Schema + transition semantics implemented and tested in isolation |
