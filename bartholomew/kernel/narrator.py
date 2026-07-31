@@ -578,10 +578,23 @@ class NarratorEngine:
         self._episode_counter = 0
 
         # For in-memory databases, keep a persistent connection
-        # since each connect(":memory:") creates a new database
+        # since each connect(":memory:") creates a new database.
+        # check_same_thread=False (Phase B, stage B2): persist_episode() is
+        # reached from GlobalWorkspace.publish()'s synchronous callback
+        # dispatch, which is itself called from both sync and async
+        # contexts -- unlike PersonaPackManager's narrower, two-call-site
+        # blocking (fixed this stage via asyncio.to_thread at each call
+        # site), fixing this one properly means GlobalWorkspace's dispatch
+        # itself needs an async-aware calling convention, which is a
+        # cross-cutting concern affecting every subscriber (not just the
+        # narrator) and is out of this stage's scope -- see
+        # docs/B2_IMPLEMENTATION.md's "deferred" section. This flag alone
+        # only makes the connection safe to eventually move onto a
+        # dedicated thread; it does not itself change where persist_episode()
+        # runs today.
         self._conn: sqlite3.Connection | None = None
         if self._db_path == ":memory:":
-            self._conn = sqlite3.connect(":memory:")
+            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
             self._conn.executescript(NARRATOR_SCHEMA)
         else:
             # Initialize database schema for file-based databases
@@ -593,7 +606,7 @@ class NarratorEngine:
 
     def _init_database(self) -> None:
         """Initialize database schema for episodic entries."""
-        with sqlite3.connect(self._db_path) as conn:
+        with sqlite3.connect(self._db_path, check_same_thread=False) as conn:
             conn.executescript(NARRATOR_SCHEMA)
             # Initialize FTS schema (silently skip if FTS5 not available)
             try:
@@ -605,7 +618,7 @@ class NarratorEngine:
         """Get a database connection."""
         if self._conn is not None:
             return self._conn
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, check_same_thread=False)
 
     def _close_if_not_persistent(self, conn: sqlite3.Connection) -> None:
         """Close connection if it's not the persistent one."""

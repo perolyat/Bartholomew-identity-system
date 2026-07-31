@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import policy_engine
+from .db_executor import DedicatedDbExecutor
 from .memory.privacy_guard import get_consent_handler
 from .redaction_engine import redact_pii
 from .reflection import ActionReflection, record_action_reflection
@@ -39,6 +40,98 @@ if TYPE_CHECKING:
     from .working_memory import WorkingMemoryManager
 
 logger = logging.getLogger(__name__)
+
+
+# -- Synchronous DB bodies, run on SkillRegistry's dedicated DB executor
+# thread (Phase B, stage B2) rather than directly on the event loop from
+# _audit_execution()/_persist_skill_state()/load_enabled_skills(). Plain
+# module-level functions so they have no reference to the SkillRegistry
+# instance -- only the db_path and values they need.
+
+
+def _audit_execution_sync(
+    db_path: str,
+    skill_id: str,
+    action: str,
+    params_json: str,
+    status: str,
+    message: str | None,
+    error: str | None,
+    timestamp: str,
+) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO skill_action_audit
+            (skill_id, action, params_json, status, result_message, result_error, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (skill_id, action, params_json, status, message, error, timestamp),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _persist_skill_state_sync(
+    db_path: str,
+    skill_id: str,
+    enabled: bool | None,
+    error: str | None,
+    now: str,
+) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM skill_registry_state WHERE skill_id = ?",
+            (skill_id,),
+        ).fetchone()
+
+        if row:
+            if enabled is not None:
+                conn.execute(
+                    """
+                    UPDATE skill_registry_state
+                    SET enabled = ?, last_loaded = ?
+                    WHERE skill_id = ?
+                    """,
+                    (1 if enabled else 0, now, skill_id),
+                )
+            if error:
+                conn.execute(
+                    """
+                    UPDATE skill_registry_state
+                    SET last_error = ?
+                    WHERE skill_id = ?
+                    """,
+                    (error, skill_id),
+                )
+        else:
+            conn.execute(
+                """
+                INSERT INTO skill_registry_state
+                (skill_id, enabled, last_loaded, last_error)
+                VALUES (?, ?, ?, ?)
+                """,
+                (skill_id, 1 if enabled else 0, now, error),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _load_enabled_skill_ids_sync(db_path: str) -> list[str]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT skill_id FROM skill_registry_state WHERE enabled = 1",
+        ).fetchall()
+        return [row["skill_id"] for row in rows]
+    finally:
+        conn.close()
 
 
 @dataclass
@@ -169,6 +262,13 @@ class SkillRegistry:
 
         # Event subscriptions for routing
         self._channel_subscriptions: dict[str, str] = {}
+
+        # Phase B, stage B2: _audit_execution(), _persist_skill_state(), and
+        # load_enabled_skills() used to call sqlite3.connect() synchronously,
+        # directly on the event loop from async def methods (see
+        # docs/B0_BASELINE_REPORT.md section 3). One dedicated worker thread
+        # for all three, matching SchedulerStore's proven pattern.
+        self._db_executor = DedicatedDbExecutor(f"skill-registry:{db_path or 'none'}")
 
         # Initialize database
         if self._db_path:
@@ -303,7 +403,7 @@ class SkillRegistry:
             )
 
             # Persist state
-            self._persist_skill_state(skill_id, enabled=True)
+            await self._persist_skill_state(skill_id, enabled=True)
 
             logger.info(
                 "Loaded skill: %s v%s",
@@ -314,7 +414,7 @@ class SkillRegistry:
 
         except Exception as e:
             logger.exception("Failed to load skill %s: %s", skill_id, e)
-            self._persist_skill_state(skill_id, error=str(e))
+            await self._persist_skill_state(skill_id, error=str(e))
             return False
 
     def _instantiate_skill(self, manifest: SkillManifest) -> SkillBase | None:
@@ -743,7 +843,7 @@ class SkillRegistry:
         provably describing the same CandidateAction Governance decided on.
         """
         skill_id = candidate_action.kind
-        self._audit_execution(skill_id, action, params, result)
+        await self._audit_execution(skill_id, action, params, result)
         await self._record_reflection(observation, skill_id, action, params, result)
         return result
 
@@ -774,7 +874,7 @@ class SkillRegistry:
         )
         await record_action_reflection(self._memory_store, reflection)
 
-    def _audit_execution(
+    async def _audit_execution(
         self,
         skill_id: str,
         action: str,
@@ -798,27 +898,17 @@ class SkillRegistry:
 
         now = datetime.utcnow().isoformat() + "Z"
         try:
-            conn = self._get_connection()
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO skill_action_audit
-                    (skill_id, action, params_json, status, result_message, result_error, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        skill_id,
-                        action,
-                        json.dumps(sanitized_params),
-                        result.status.value,
-                        result.message,
-                        result.error,
-                        now,
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            await self._db_executor.call(
+                _audit_execution_sync,
+                self._db_path,
+                skill_id,
+                action,
+                json.dumps(sanitized_params),
+                result.status.value,
+                result.message,
+                result.error,
+                now,
+            )
         except Exception:
             logger.exception("Failed to write skill action audit record")
 
@@ -932,7 +1022,7 @@ class SkillRegistry:
     # State Persistence
     # -------------------------------------------------------------------------
 
-    def _persist_skill_state(
+    async def _persist_skill_state(
         self,
         skill_id: str,
         enabled: bool | None = None,
@@ -943,45 +1033,14 @@ class SkillRegistry:
             return
 
         now = datetime.utcnow().isoformat() + "Z"
-        conn = self._get_connection()
-        try:
-            # Check if exists
-            row = conn.execute(
-                "SELECT * FROM skill_registry_state WHERE skill_id = ?",
-                (skill_id,),
-            ).fetchone()
-
-            if row:
-                if enabled is not None:
-                    conn.execute(
-                        """
-                        UPDATE skill_registry_state
-                        SET enabled = ?, last_loaded = ?
-                        WHERE skill_id = ?
-                        """,
-                        (1 if enabled else 0, now, skill_id),
-                    )
-                if error:
-                    conn.execute(
-                        """
-                        UPDATE skill_registry_state
-                        SET last_error = ?
-                        WHERE skill_id = ?
-                        """,
-                        (error, skill_id),
-                    )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO skill_registry_state
-                    (skill_id, enabled, last_loaded, last_error)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (skill_id, 1 if enabled else 0, now, error),
-                )
-            conn.commit()
-        finally:
-            conn.close()
+        await self._db_executor.call(
+            _persist_skill_state_sync,
+            self._db_path,
+            skill_id,
+            enabled,
+            error,
+            now,
+        )
 
     async def load_enabled_skills(self) -> int:
         """
@@ -993,17 +1052,10 @@ class SkillRegistry:
         if not self._db_path:
             return 0
 
-        conn = self._get_connection()
-        try:
-            rows = conn.execute(
-                "SELECT skill_id FROM skill_registry_state WHERE enabled = 1",
-            ).fetchall()
-        finally:
-            conn.close()
+        skill_ids = await self._db_executor.call(_load_enabled_skill_ids_sync, self._db_path)
 
         loaded = 0
-        for row in rows:
-            skill_id = row["skill_id"]
+        for skill_id in skill_ids:
             if skill_id in self._manifests:
                 if await self.load_skill(skill_id):
                     loaded += 1
@@ -1048,9 +1100,18 @@ class SkillRegistry:
     # -------------------------------------------------------------------------
 
     async def shutdown(self) -> None:
-        """Shutdown all loaded skills."""
+        """Shutdown all loaded skills, then drain this instance's dedicated
+        DB executor (Phase B, stage B2) so its worker thread's termination
+        is confirmed, not merely submitted-and-assumed, before this method
+        returns."""
         for skill_id in list(self._loaded.keys()):
             await self.unload_skill(skill_id)
+
+        drained = await self._db_executor.close()
+        if not drained:
+            logger.warning(
+                "SkillRegistry._db_executor did not drain cleanly on shutdown()",
+            )
 
         logger.info("Skill registry shutdown complete")
 

@@ -80,7 +80,7 @@ async def _boot(config: dict) -> KernelDaemon:
     """
     kd = KernelDaemon(**config)
     await kd.mem.init()
-    kd._init_experience_kernel()
+    await kd._init_experience_kernel()
     kd.narrator.subscribe_to_workspace()
     return kd
 

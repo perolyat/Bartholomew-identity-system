@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from bartholomew.kernel.db_executor import DedicatedDbExecutor
 from bartholomew.kernel.skill_base import (
     SkillBase,
     SkillContext,
@@ -184,10 +185,16 @@ class CalendarDraftSkill(SkillBase):
         """Initialize the calendar draft skill."""
         self._context = context
         self._db_path = context.db_path
+        # Phase B, stage B2: this skill's DB methods used to call
+        # sqlite3.connect() synchronously, directly on the event loop, from
+        # async def initialize()/_action_*() (see
+        # docs/B0_BASELINE_REPORT.md section 3). One dedicated worker thread,
+        # matching SchedulerStore's proven pattern.
+        self._db_executor = DedicatedDbExecutor(f"skill-calendar-draft:{self._db_path or 'none'}")
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._db_executor.call(self._init_database)
 
         # Create exports directory
         self._exports_dir = Path("./exports/calendar")
@@ -224,6 +231,9 @@ class CalendarDraftSkill(SkillBase):
     async def shutdown(self) -> None:
         """Shutdown the calendar draft skill."""
         self._unsubscribe_all()
+        drained = await self._db_executor.close()
+        if not drained:
+            logger.warning("CalendarDraftSkill._db_executor did not drain cleanly on shutdown()")
         logger.info("Calendar draft skill shutdown")
 
     async def execute(
@@ -290,7 +300,7 @@ class CalendarDraftSkill(SkillBase):
             reminder_minutes=params.get("reminder_minutes"),
         )
 
-        self._save_event(event)
+        await self._db_executor.call(self._save_event, event)
 
         # Emit event
         self._emit_event("calendar", "event_drafted", event.to_dict())
@@ -311,7 +321,8 @@ class CalendarDraftSkill(SkillBase):
         to_date = params.get("to_date")
         limit = params.get("limit", 50)
 
-        events = self._get_events(
+        events = await self._db_executor.call(
+            self._get_events,
             from_date=from_date,
             to_date=to_date,
             limit=limit,
@@ -332,7 +343,7 @@ class CalendarDraftSkill(SkillBase):
         if not event_id:
             return SkillResult.fail("event_id is required")
 
-        event = self._get_event(event_id)
+        event = await self._db_executor.call(self._get_event, event_id)
         if not event:
             return SkillResult.fail(f"Event not found: {event_id}")
 
@@ -348,7 +359,7 @@ class CalendarDraftSkill(SkillBase):
         if not event_id:
             return SkillResult.fail("event_id is required")
 
-        event = self._get_event(event_id)
+        event = await self._db_executor.call(self._get_event, event_id)
         if not event:
             return SkillResult.fail(f"Event not found: {event_id}")
 
@@ -372,7 +383,7 @@ class CalendarDraftSkill(SkillBase):
         if "reminder_minutes" in params:
             event.reminder_minutes = params["reminder_minutes"]
 
-        self._save_event(event)
+        await self._db_executor.call(self._save_event, event)
 
         # Emit event
         self._emit_event("calendar", "event_updated", event.to_dict())
@@ -393,11 +404,11 @@ class CalendarDraftSkill(SkillBase):
         if not event_id:
             return SkillResult.fail("event_id is required")
 
-        event = self._get_event(event_id)
+        event = await self._db_executor.call(self._get_event, event_id)
         if not event:
             return SkillResult.fail(f"Event not found: {event_id}")
 
-        self._delete_event(event_id)
+        await self._db_executor.call(self._delete_event, event_id)
 
         # Emit event
         self._emit_event("calendar", "event_deleted", {"event_id": event_id})
@@ -417,13 +428,14 @@ class CalendarDraftSkill(SkillBase):
 
         if event_id:
             # Export single event
-            event = self._get_event(event_id)
+            event = await self._db_executor.call(self._get_event, event_id)
             if not event:
                 return SkillResult.fail(f"Event not found: {event_id}")
             events = [event]
         else:
             # Export multiple events
-            events = self._get_events(
+            events = await self._db_executor.call(
+                self._get_events,
                 from_date=from_date,
                 to_date=to_date,
             )

@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from bartholomew.kernel.db_executor import DedicatedDbExecutor
 from bartholomew.kernel.skill_base import (
     SkillBase,
     SkillContext,
@@ -138,6 +139,12 @@ class NotifySkill(SkillBase):
         """Initialize the notify skill."""
         self._context = context
         self._db_path = context.db_path
+        # Phase B, stage B2: this skill's DB methods used to call
+        # sqlite3.connect() synchronously, directly on the event loop, from
+        # async def initialize()/_action_*()/_process_queue() (see
+        # docs/B0_BASELINE_REPORT.md section 3). One dedicated worker thread,
+        # matching SchedulerStore's proven pattern.
+        self._db_executor = DedicatedDbExecutor(f"skill-notify:{self._db_path or 'none'}")
 
         # Load quiet hours config
         self._quiet_hours_start = self.DEFAULT_QUIET_HOURS_START
@@ -145,7 +152,7 @@ class NotifySkill(SkillBase):
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._db_executor.call(self._init_database)
 
         # Subscribe to events
         if context.workspace:
@@ -178,6 +185,9 @@ class NotifySkill(SkillBase):
     async def shutdown(self) -> None:
         """Shutdown the notify skill."""
         self._unsubscribe_all()
+        drained = await self._db_executor.close()
+        if not drained:
+            logger.warning("NotifySkill._db_executor did not drain cleanly on shutdown()")
         logger.info("Notify skill shutdown")
 
     async def execute(
@@ -241,7 +251,7 @@ class NotifySkill(SkillBase):
         )
 
         # Save to database
-        self._save_notification(notification)
+        await self._db_executor.call(self._save_notification, notification)
 
         # Emit event
         self._emit_event("alerts", "notification_sent", notification.to_dict())
@@ -278,7 +288,7 @@ class NotifySkill(SkillBase):
         )
 
         # Save to database
-        self._save_notification(notification)
+        await self._db_executor.call(self._save_notification, notification)
 
         # Emit event
         self._emit_event("alerts", "notification_queued", notification.to_dict())
@@ -297,7 +307,7 @@ class NotifySkill(SkillBase):
             return perm_error
 
         limit = params.get("limit", 50)
-        notifications = self._get_pending_notifications(limit)
+        notifications = await self._db_executor.call(self._get_pending_notifications, limit)
 
         return SkillResult.ok(
             data=[n.to_dict() for n in notifications],
@@ -315,7 +325,7 @@ class NotifySkill(SkillBase):
         if not notification_id:
             return SkillResult.fail("notification_id is required")
 
-        notification = self._get_notification(notification_id)
+        notification = await self._db_executor.call(self._get_notification, notification_id)
         if not notification:
             return SkillResult.fail(f"Notification not found: {notification_id}")
 
@@ -323,7 +333,7 @@ class NotifySkill(SkillBase):
             return SkillResult.fail("Can only cancel pending notifications")
 
         notification.status = NotificationStatus.CANCELLED
-        self._save_notification(notification)
+        await self._db_executor.call(self._save_notification, notification)
 
         # Emit event
         self._emit_event(
@@ -403,7 +413,7 @@ class NotifySkill(SkillBase):
         is_quiet = self._is_quiet_hours()
         delivered = 0
 
-        notifications = self._get_pending_notifications(limit=100)
+        notifications = await self._db_executor.call(self._get_pending_notifications, limit=100)
 
         for notification in notifications:
             should_deliver = False
@@ -423,7 +433,7 @@ class NotifySkill(SkillBase):
             if should_deliver:
                 notification.status = NotificationStatus.SENT
                 notification.sent_at = now
-                self._save_notification(notification)
+                await self._db_executor.call(self._save_notification, notification)
                 self._deliver_notification(notification)
 
                 self._emit_event(

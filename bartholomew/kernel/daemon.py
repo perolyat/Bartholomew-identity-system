@@ -186,7 +186,7 @@ class KernelDaemon:
             await self.scheduler_store.ensure_schema()
 
             # Stage 3: Initialize experience kernel state
-            self._init_experience_kernel()
+            await self._init_experience_kernel()
 
             # Stage 4: Load skills. load_enabled_skills() loads whatever was
             # previously enabled (skill_registry_state), which is empty on a
@@ -236,7 +236,7 @@ class KernelDaemon:
                 )
             raise
 
-    def _init_experience_kernel(self) -> None:
+    async def _init_experience_kernel(self) -> None:
         """Initialize experience kernel from last snapshot or defaults."""
         db_path = self.mem.db_path
 
@@ -266,11 +266,17 @@ class KernelDaemon:
             else:
                 print("[Kernel] Starting with empty working memory")
 
-            # Activate default persona if none active
+            # Activate default persona if none active. switch_pack() writes
+            # to persona_switch_log synchronously; offloaded via
+            # asyncio.to_thread() (Phase B, stage B2) so this async method
+            # doesn't block the event loop on that write -- see
+            # persona_pack.py's check_same_thread=False note for why this
+            # is safe.
             if not self.persona_manager.get_active_pack_id():
                 packs = self.persona_manager.list_packs()
                 if packs:
-                    self.persona_manager.switch_pack(
+                    await asyncio.to_thread(
+                        self.persona_manager.switch_pack,
                         packs[0],
                         trigger="startup",
                     )

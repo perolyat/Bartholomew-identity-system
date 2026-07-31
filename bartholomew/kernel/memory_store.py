@@ -10,6 +10,7 @@ import numpy as np
 
 from bartholomew.kernel import encryption_engine as _encryption_module
 from bartholomew.kernel.chunking_engine import get_chunking_engine
+from bartholomew.kernel.db_executor import DedicatedDbExecutor
 from bartholomew.kernel.memory.privacy_guard import (
     is_sensitive,
     request_permission_to_store,
@@ -60,6 +61,61 @@ class StoreResult:
 _embedding_engine = None
 _vector_store = None
 _summary_fallback_warned = False  # Global flag to warn once
+
+
+def _store_chunks_sync(db_path: str, memory_id: int, chunks: list) -> int:
+    """Synchronous chunk-storage body, run on MemoryStore's dedicated DB
+    executor thread (Phase B, stage B2) rather than directly on the event
+    loop. A plain module-level function so it has no reference to the
+    MemoryStore instance -- only what it needs to do the write."""
+    import sqlite3
+
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        # Delete existing chunks for this memory (upsert semantics)
+        conn.execute(
+            "DELETE FROM memory_chunks WHERE memory_id = ?",
+            (memory_id,),
+        )
+
+        # Insert new chunks (triggers will update chunk_fts)
+        for chunk in chunks:
+            conn.execute(
+                "INSERT INTO memory_chunks "
+                "(memory_id, seq, token_start, token_end, text) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    memory_id,
+                    chunk.seq,
+                    chunk.token_start,
+                    chunk.token_end,
+                    chunk.text,
+                ),
+            )
+
+        conn.commit()
+        return len(chunks)
+    finally:
+        if conn:
+            conn.close()
+
+
+def _lookup_embedding_sources_sync(db_path: str, memory_id: int) -> list[str] | None:
+    """Synchronous existing-embedding-sources lookup, run on MemoryStore's
+    dedicated DB executor thread (Phase B, stage B2)."""
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        cursor = conn.execute(
+            "SELECT DISTINCT source FROM memory_embeddings WHERE memory_id=?",
+            (memory_id,),
+        )
+        rows = cursor.fetchall()
+        return [row[0] for row in rows] if rows else None
 
 
 def _get_embedding_components(db_path: str):
@@ -170,6 +226,12 @@ CREATE TABLE IF NOT EXISTS system_flags (
 class MemoryStore:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        # Phase B, stage B2: _handle_chunking() and reembed_memory() used to
+        # call sqlite3.connect() synchronously, directly on the event loop
+        # (see docs/B0_BASELINE_REPORT.md section 3). One dedicated worker
+        # thread for both, matching the pattern already proven by
+        # bartholomew.kernel.scheduler.store.SchedulerStore.
+        self._db_executor = DedicatedDbExecutor(f"memory-store:{db_path}")
 
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -554,44 +616,19 @@ class MemoryStore:
             # Single chunk = no benefit from chunking
             return
 
-        # Store chunks (synchronously to avoid Windows locking issues)
-        import sqlite3
-
-        conn = None
+        # Store chunks (synchronously to avoid Windows locking issues) -- off
+        # the event loop, on this instance's dedicated DB executor thread
+        # (Phase B, stage B2).
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("PRAGMA foreign_keys = ON")
-
-            # Delete existing chunks for this memory (upsert semantics)
-            conn.execute(
-                "DELETE FROM memory_chunks WHERE memory_id = ?",
-                (result.memory_id,),
+            stored = await self._db_executor.call(
+                _store_chunks_sync,
+                self.db_path,
+                result.memory_id,
+                chunks,
             )
-
-            # Insert new chunks (triggers will update chunk_fts)
-            for chunk in chunks:
-                conn.execute(
-                    "INSERT INTO memory_chunks "
-                    "(memory_id, seq, token_start, token_end, text) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        result.memory_id,
-                        chunk.seq,
-                        chunk.token_start,
-                        chunk.token_end,
-                        chunk.text,
-                    ),
-                )
-
-            conn.commit()
-            logger.info(
-                f"Stored {len(chunks)} chunks for memory {result.memory_id}",
-            )
+            logger.info(f"Stored {stored} chunks for memory {result.memory_id}")
         except Exception as e:
             logger.error(f"Failed to store chunks: {e}")
-        finally:
-            if conn:
-                conn.close()
 
     async def delete_memory(self, kind: str, key: str) -> bool:
         """
@@ -876,21 +913,16 @@ class MemoryStore:
         if not (embed_engine and vec_store):
             return 0
 
-        # Phase 2d+: If sources not specified, default to existing sources
+        # Phase 2d+: If sources not specified, default to existing sources.
+        # Off the event loop, on this instance's dedicated DB executor
+        # thread (Phase B, stage B2) -- if no existing embeddings, sources
+        # remains None and persist_embeddings_for will use rule defaults.
         if sources is None:
-            import sqlite3
-
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA foreign_keys = ON")
-                cursor = conn.execute(
-                    "SELECT DISTINCT source FROM memory_embeddings WHERE memory_id=?",
-                    (memory_id,),
-                )
-                rows = cursor.fetchall()
-                if rows:
-                    sources = [row[0] for row in rows]
-                # If no existing embeddings, sources remains None
-                # and persist_embeddings_for will use rule defaults
+            sources = await self._db_executor.call(
+                _lookup_embedding_sources_sync,
+                self.db_path,
+                memory_id,
+            )
 
         # Delete existing embeddings
         vec_store.delete_for_memory(memory_id)
@@ -899,21 +931,36 @@ class MemoryStore:
         return await self.persist_embeddings_for(memory_id, sources)
 
     async def close(self, checkpoint: bool = True) -> None:
-        """Clean up global resources, and checkpoint WAL files unless
-        checkpoint=False.
+        """Clean up global resources, drain this instance's dedicated DB
+        executor, and checkpoint WAL files unless checkpoint=False or the
+        executor didn't drain cleanly.
 
         checkpoint=False is for a caller that has determined it's unsafe
         to run right now -- e.g. KernelDaemon.stop() when its
         SchedulerStore didn't drain within its bound, meaning a
         background thread may still be writing to this same db_path; see
-        SchedulerStore.close()'s docstring.
+        SchedulerStore.close()'s docstring. The same reasoning applies to
+        this instance's own _db_executor (Phase B, stage B2): draining it
+        is always attempted regardless of the checkpoint argument (so its
+        worker thread is confirmed stopped, not merely assumed), but the
+        checkpoint itself is additionally skipped -- deferred to next
+        startup, not silently dropped -- if _db_executor did not drain
+        within its bound, since a still-running chunk/embedding write could
+        otherwise race the checkpoint on the same file.
         """
         # Clean up global embedding/vector store instances
         global _embedding_engine, _vector_store
         _embedding_engine = None
         _vector_store = None
 
-        if not checkpoint:
+        executor_drained = await self._db_executor.close()
+        if not executor_drained:
+            logger.warning(
+                "MemoryStore._db_executor did not drain cleanly on close(); "
+                "skipping WAL checkpoint and deferring cleanup to next startup",
+            )
+
+        if not checkpoint or not executor_drained:
             return
 
         # Checkpoint WAL files to ensure database is clean. Uses this

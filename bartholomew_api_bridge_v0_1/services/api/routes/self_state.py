@@ -6,6 +6,7 @@ Exposes the Experience Kernel, Narrator, and Persona Pack systems via REST API.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -395,7 +396,12 @@ async def switch_persona(body: PersonaSwitchRequest) -> dict[str, Any]:
     """Switch to a different persona pack."""
     kernel = _get_kernel()
 
-    success = kernel.persona_manager.switch_pack(
+    # switch_pack() writes to persona_switch_log synchronously; offloaded
+    # via asyncio.to_thread() (Phase B, stage B2) so this live request path
+    # doesn't block the event loop on that write -- see persona_pack.py's
+    # check_same_thread=False note for why this is safe.
+    success = await asyncio.to_thread(
+        kernel.persona_manager.switch_pack,
         pack_id=body.pack_id,
         trigger=body.trigger,
         context_tags=body.context_tags,

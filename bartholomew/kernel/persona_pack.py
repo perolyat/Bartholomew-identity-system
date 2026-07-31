@@ -357,10 +357,17 @@ class PersonaPackManager:
         # Switch callbacks
         self._on_switch_callbacks: list[Callable[[PersonaPack | None, PersonaPack], None]] = []
 
-        # For in-memory databases, keep a persistent connection
+        # For in-memory databases, keep a persistent connection.
+        # check_same_thread=False (Phase B, stage B2): switch_pack() is
+        # called synchronously from async callers on more than one call path
+        # (KernelDaemon's startup persona activation, the API bridge's
+        # POST /api/persona/switch route) that now offload it via
+        # asyncio.to_thread() -- SQLite's serialized threading mode (the
+        # default build) makes that safe as long as calls aren't genuinely
+        # concurrent, which this object's usage pattern never is.
         self._conn: sqlite3.Connection | None = None
         if self._db_path == ":memory:":
-            self._conn = sqlite3.connect(":memory:")
+            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
             self._conn.executescript(PERSONA_PACK_SCHEMA)
         else:
             self._init_database()
@@ -370,14 +377,14 @@ class PersonaPackManager:
 
     def _init_database(self) -> None:
         """Initialize database schema for switch logging."""
-        with sqlite3.connect(self._db_path) as conn:
+        with sqlite3.connect(self._db_path, check_same_thread=False) as conn:
             conn.executescript(PERSONA_PACK_SCHEMA)
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get a database connection."""
         if self._conn is not None:
             return self._conn
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, check_same_thread=False)
 
     def _close_if_not_persistent(self, conn: sqlite3.Connection) -> None:
         """Close connection if it's not the persistent one."""

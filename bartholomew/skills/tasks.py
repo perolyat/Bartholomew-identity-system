@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from bartholomew.kernel.db_executor import DedicatedDbExecutor
 from bartholomew.kernel.skill_base import (
     SkillBase,
     SkillContext,
@@ -135,10 +136,16 @@ class TasksSkill(SkillBase):
         """Initialize the tasks skill."""
         self._context = context
         self._db_path = context.db_path
+        # Phase B, stage B2: this skill's DB methods used to call
+        # sqlite3.connect() synchronously, directly on the event loop, from
+        # async def initialize()/_action_*() (see
+        # docs/B0_BASELINE_REPORT.md section 3). One dedicated worker thread,
+        # matching SchedulerStore's proven pattern.
+        self._db_executor = DedicatedDbExecutor(f"skill-tasks:{self._db_path or 'none'}")
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._db_executor.call(self._init_database)
 
         # Subscribe to events
         if context.workspace:
@@ -171,6 +178,9 @@ class TasksSkill(SkillBase):
     async def shutdown(self) -> None:
         """Shutdown the tasks skill."""
         self._unsubscribe_all()
+        drained = await self._db_executor.close()
+        if not drained:
+            logger.warning("TasksSkill._db_executor did not drain cleanly on shutdown()")
         logger.info("Tasks skill shutdown")
 
     async def execute(
@@ -221,7 +231,7 @@ class TasksSkill(SkillBase):
         )
 
         # Save to database
-        self._save_task(task)
+        await self._db_executor.call(self._save_task, task)
 
         # Emit event
         self._emit_event("tasks", "task_created", task.to_dict())
@@ -243,7 +253,8 @@ class TasksSkill(SkillBase):
         tags_filter = params.get("tags", [])
         limit = params.get("limit", 50)
 
-        tasks = self._get_tasks(
+        tasks = await self._db_executor.call(
+            self._get_tasks,
             status=status_filter,
             tags=tags_filter,
             limit=limit,
@@ -264,7 +275,7 @@ class TasksSkill(SkillBase):
         if not task_id:
             return SkillResult.fail("task_id is required")
 
-        task = self._get_task(task_id)
+        task = await self._db_executor.call(self._get_task, task_id)
         if not task:
             return SkillResult.fail(f"Task not found: {task_id}")
 
@@ -280,7 +291,7 @@ class TasksSkill(SkillBase):
         if not task_id:
             return SkillResult.fail("task_id is required")
 
-        task = self._get_task(task_id)
+        task = await self._db_executor.call(self._get_task, task_id)
         if not task:
             return SkillResult.fail(f"Task not found: {task_id}")
 
@@ -292,7 +303,7 @@ class TasksSkill(SkillBase):
 
         task.status = TaskStatus.COMPLETED
         task.completed_at = datetime.utcnow().isoformat() + "Z"
-        self._save_task(task)
+        await self._db_executor.call(self._save_task, task)
 
         # Emit event
         self._emit_event("tasks", "task_completed", task.to_dict())
@@ -313,11 +324,11 @@ class TasksSkill(SkillBase):
         if not task_id:
             return SkillResult.fail("task_id is required")
 
-        task = self._get_task(task_id)
+        task = await self._db_executor.call(self._get_task, task_id)
         if not task:
             return SkillResult.fail(f"Task not found: {task_id}")
 
-        self._delete_task(task_id)
+        await self._db_executor.call(self._delete_task, task_id)
 
         # Emit event
         self._emit_event("tasks", "task_deleted", {"task_id": task_id})
@@ -335,7 +346,7 @@ class TasksSkill(SkillBase):
         if not task_id:
             return SkillResult.fail("task_id is required")
 
-        task = self._get_task(task_id)
+        task = await self._db_executor.call(self._get_task, task_id)
         if not task:
             return SkillResult.fail(f"Task not found: {task_id}")
 
@@ -351,7 +362,7 @@ class TasksSkill(SkillBase):
         if "tags" in params:
             task.tags = params["tags"]
 
-        self._save_task(task)
+        await self._db_executor.call(self._save_task, task)
 
         # Emit event
         self._emit_event("tasks", "task_updated", task.to_dict())
@@ -496,7 +507,7 @@ class TasksSkill(SkillBase):
 
     async def _check_overdue_tasks(self) -> None:
         """Check for overdue tasks and emit events."""
-        tasks = self._get_tasks(status="overdue")
+        tasks = await self._db_executor.call(self._get_tasks, status="overdue")
 
         for task in tasks:
             self._emit_event(
