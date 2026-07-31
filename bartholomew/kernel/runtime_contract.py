@@ -226,23 +226,26 @@ async def run_chat_through_runtime_contract(
     # Stage 3: Executive -- propose a candidate action
     candidate_action = CandidateAction(kind="chat_response", interpretation=interpretation)
 
-    # Stage 4: Governance -- fail-closed ParkingBrake("skills") check, same
-    # gate skill-execution and the chat orchestrator's own handle_input()
-    # already use.
+    # Stage 4: Governance -- fail-closed Parking Brake "skills" check, same
+    # gate skill-execution uses. Reads through the daemon's shared
+    # GovernanceStore (Phase B stage B4), dual-checked against the legacy
+    # system_flags value until B6 (see governance_bridge.py). The chat
+    # orchestrator's own handle_input() no longer runs a redundant second
+    # check on this path -- see app.py's _respond() closure.
     governance_allowed = True
     governance_reason: str | None = None
     try:
-        from bartholomew.orchestrator.safety.parking_brake import (
-            BrakeStorage,
-            construct_parking_brake_off_loop,
+        from bartholomew.orchestrator.safety.governance_bridge import (
+            is_blocked_fail_closed_off_loop,
         )
 
-        storage = BrakeStorage(daemon.mem.db_path)
-        brake = await construct_parking_brake_off_loop(
-            storage,
+        blocked = await is_blocked_fail_closed_off_loop(
+            "skills",
+            daemon.mem.db_path,
+            governance_store=getattr(daemon, "governance_store", None),
             executor=getattr(daemon, "blocking_executor", None),
         )
-        if brake.is_blocked("skills"):
+        if blocked:
             governance_allowed = False
             governance_reason = "Blocked by parking brake (scope=skills)"
     except Exception:
@@ -389,25 +392,29 @@ async def run_drive_through_runtime_contract(
     # Stage 3: Executive -- propose a candidate action
     candidate_action = CandidateAction(kind=task_id, interpretation=interpretation)
 
-    # Stage 4: Governance -- ParkingBrake, unchanged from the pre-existing
-    # check (still raises on block; see docstring above).
+    # Stage 4: Governance -- Parking Brake, unchanged from the pre-existing
+    # check (still raises on block; see docstring above). Reads through
+    # the shared GovernanceStore when ctx has one (Phase B stage B4),
+    # dual-checked against the legacy system_flags value until B6 (see
+    # governance_bridge.py).
     try:
-        from bartholomew.orchestrator.safety.parking_brake import (
-            BrakeStorage,
-            construct_parking_brake_off_loop,
+        from bartholomew.orchestrator.safety.governance_bridge import (
+            is_blocked_fail_closed_off_loop,
         )
 
-        storage = BrakeStorage(ctx.mem.db_path)
         # ctx may be the minimal duck-typed context scheduler/loop.py's own
         # tests use (just .mem.db_path, optionally .identity_context) --
-        # getattr falls back to run_off_loop()'s own asyncio.to_thread()
-        # fallback rather than requiring every such ctx to grow a
-        # blocking_executor attribute.
-        brake = await construct_parking_brake_off_loop(
-            storage,
+        # getattr falls back to is_blocked_fail_closed_off_loop()'s own
+        # temporary-instance/asyncio.to_thread() fallbacks rather than
+        # requiring every such ctx to grow governance_store/
+        # blocking_executor attributes.
+        blocked = await is_blocked_fail_closed_off_loop(
+            "scheduler",
+            ctx.mem.db_path,
+            governance_store=getattr(ctx, "governance_store", None),
             executor=getattr(ctx, "blocking_executor", None),
         )
-        if brake.is_blocked("scheduler"):
+        if blocked:
             raise RuntimeError("ParkingBrake: scheduler blocked")
     except ImportError:
         # Parking brake module not available, continue normally

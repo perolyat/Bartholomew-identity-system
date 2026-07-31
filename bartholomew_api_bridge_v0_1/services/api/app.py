@@ -260,14 +260,26 @@ async def chat(body: ChatIn):
         from bartholomew.kernel.runtime_contract import run_chat_through_runtime_contract
 
         async def _respond(prompt: str) -> str:
-            return orch.handle_input(prompt)
+            # skip_governance_check=True: run_chat_through_runtime_contract
+            # (below) already ran its own Stage 4 Governance gate against
+            # the shared instance before ever calling this -- Phase B
+            # stage B4 removed handle_input()'s own redundant blocking
+            # Parking Brake read on this path (previously a second,
+            # synchronous SQLite read on every single chat message).
+            return orch.handle_input(prompt, skip_governance_check=True)
 
         result = await run_chat_through_runtime_contract(_kernel, body.message, _respond)
         if not result.governance_allowed:
             raise HTTPException(503, result.governance_reason or "Blocked by governance")
         raw = result.response
     else:
-        raw = orch.handle_input(body.message)
+        # No _kernel (startup/shutdown window): no shared instance exists to
+        # gate through, so handle_input()'s own check is the sole gate here
+        # (skip_governance_check defaults to False). Its synchronous
+        # Governance read would otherwise block the event loop directly in
+        # this async route -- run the whole call off it (Phase B stage B4;
+        # see docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md).
+        raw = await asyncio.to_thread(orch.handle_input, body.message)
 
     reply, tone, emotion = _parse_reply(raw)
     if not reply:

@@ -60,6 +60,18 @@ class KernelDaemon:
         )
         self.mem = MemoryStore(db_path, blocking_executor=self.blocking_executor)
 
+        # The daemon's one shared Governance instance (Phase B stage B4;
+        # see docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md). Unlike
+        # blocking_executor/scheduler_store above, GovernanceStore's own
+        # __init__ does blocking schema/state I/O (ensure_schema() + an
+        # initial load), so -- matching this class's existing pattern of
+        # deferring blocking work to start() rather than __init__ -- it
+        # is constructed there, off the event loop, not here. None until
+        # then; every real call site reachable only after a successful
+        # start() (guarded by callers checking _kernel is not None)
+        # already tolerates None via governance_bridge.py's fallback.
+        self.governance_store = None
+
         # Owned by this daemon instance for its entire lifetime -- closed
         # in stop(). Construction is cheap (no I/O, no thread spawned
         # until first use), so it's safe to always create one, even for
@@ -165,6 +177,24 @@ class KernelDaemon:
 
     async def start(self) -> None:
         await self.mem.init()
+
+        # The daemon's one shared Governance instance (Phase B stage B4).
+        # Constructed off the event loop -- GovernanceStore.__init__()
+        # itself does blocking schema/state I/O -- via blocking_executor,
+        # already constructed and not part of the protected region below
+        # (it owns no persistent resource of its own to unwind on a
+        # failed start; it only borrows blocking_executor for one-off
+        # calls). Wired into skill_registry immediately after, since that
+        # component was constructed in __init__, before this instance
+        # existed.
+        from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+        self.governance_store = await run_off_loop(
+            GovernanceStore,
+            self.mem.db_path,
+            executor=self.blocking_executor,
+        )
+        self.skill_registry.set_governance_store(self.governance_store)
 
         # S5.0 (closes issue #24): ensure the scheduler's schema
         # (scheduled_tasks, ticks, and the nudges/reflections integer-timestamp

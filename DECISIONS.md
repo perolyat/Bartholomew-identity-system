@@ -432,3 +432,61 @@
   is checked for survival across a full connection/instance drop-and-reopen — see
   `docs/B3_GOVERNANCE_PERSISTENCE.md` §3 for the complete record.
 - **Date:** 2026-07-31 (Phase B stage B3)
+
+## Decision: Phase B stage B4 bridges the live daemon and the legacy CLI with a temporary fail-closed dual-check
+- **Decision:** `KernelDaemon` now owns one shared `GovernanceStore` instance (B3's schema),
+  constructed off the event loop in `start()`, wired into every real live-daemon Parking Brake
+  construction site: `skill_registry.py`'s `_is_blocked_by_brake`, `runtime_contract.py`'s chat and
+  drive Governance gates, and `Orchestrator.handle_input()`'s mainline path (via a new
+  `skip_governance_check` parameter, set by `app.py`'s `_respond()` closure since
+  `run_chat_through_runtime_contract` already gates it). Standalone CLI construction sites
+  (`bartholomew/cli.py`) are untouched, per `docs/PHASE_B_OVERVIEW.md`'s explicit B4 exit
+  condition — B6's responsibility. Because the CLI keeps writing only the legacy `system_flags`
+  value until B6, a new, deliberately temporary module,
+  `bartholomew/orchestrator/safety/governance_bridge.py`, makes every live check consult *both*
+  sources, blocked if either says blocked — so the CLI kill switch keeps affecting the running
+  daemon through the B4-to-B6 migration window. Its own docstring, and
+  `tests/test_governance_bridge_dual_check.py`'s, both state plainly that both files must be
+  deleted in the same B6 change that migrates the CLI off `system_flags`.
+- **Alternatives:** (a) Accept the gap and document it — rejected: a real, avoidable operator-facing
+  safety regression (the emergency kill switch silently stops working against the live daemon)
+  for however long B6 takes is not an acceptable cost merely to keep B4's diff smaller. (b) Have B4
+  also switch the CLI to write through the new schema now — rejected as a genuine scope violation:
+  B6 owns CLI treatment specifically because of process-lock/race-safety design it hasn't done yet,
+  and a rushed partial CLI migration here risks introducing a worse race than the one being
+  guarded against. (c) Cache Governance state in the shared instance rather than refreshing on every
+  check — rejected: today's behavior (every check re-reads from disk) is what makes "CLI writes,
+  daemon picks it up on the very next check" work at all; a cache would have made the split-brain
+  window *worse*, not better, since even the new-schema side would go stale between refreshes.
+- **Why:** `docs/B0_PERSISTENCE_BASELINE.md`'s inventory, re-verified at this stage's plan start,
+  confirmed `bartholomew/cli.py`'s `brake on`/`brake off` are still the only real write path for
+  Parking Brake state; consolidating the daemon's reads onto B3's new schema without also
+  addressing that write-path gap would have silently broken CLI-driven emergency control the moment
+  this stage merged — the exact kind of "Independent emergency control" invariant
+  `CONSTITUTION.md`'s safety checklist exists to catch.
+- **Consequences:** Every live Governance check now does two reads (new schema + legacy
+  `system_flags`) instead of one until B6 lands — an accepted, temporary, and explicitly-documented
+  cost. A first version of the bridge (plain `store.is_blocked() or legacy_is_blocked()`, read-only)
+  turned out to be genuinely broken and was caught before merge by
+  `tests/test_end_to_end_tasks_and_audit.py::test_parking_brake_blocks_then_disengage_allows`:
+  `GovernanceStore.__init__()` imports the legacy value exactly once, and since nothing calls
+  `engage()`/`disengage()` on the shared instance directly, that one-time snapshot never re-synced —
+  a later legacy `disengage()` was invisible to the bridge, which would have kept reporting
+  "blocked" forever. Fixed by having every check mirror the current legacy value into the store via
+  a real, audited write whenever they disagree, but only when the store's own latest transition
+  isn't already a genuine (non-mirror, non-`"migrated"`) engagement — so a mirror can tighten or
+  match, never silently loosen, a real engagement the store holds independently. See
+  `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` §2 for the full mechanism and why each direction is
+  safe. Also fixed while re-inventorying construction sites for this stage: `Orchestrator
+  .handle_input()`'s own Parking Brake check was textually synchronous, so B0's/B2's "sync call
+  inside `async def`" search missed that it was reachable on the event loop on every chat message
+  via `app.py`'s `async def _respond(...)` closure, and was entirely redundant with
+  `run_chat_through_runtime_contract`'s own gate on that path; the `_kernel is None` fallback path
+  (the one case where `handle_input()`'s check genuinely is the sole gate) is now wrapped in
+  `asyncio.to_thread(...)` at its one call site rather than needing every internal blocking call
+  individually off-loaded. Verified against the full governance/runtime-contract/scheduler/
+  lifecycle test set (211 tests) plus the complete non-integration/non-slow suite, both clean, and
+  a temporary regression suite (8 tests) covering the bridge's four originally-required scenarios,
+  scope-specificity, `global`-scope behavior, and the staleness bug above — see
+  `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` §4 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B4)

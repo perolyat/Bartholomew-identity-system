@@ -127,6 +127,7 @@ class SkillRegistry:
         permission_checker: PermissionChecker | None = None,
         identity_context: IdentityContext | None = None,
         blocking_executor: Any | None = None,
+        governance_store: Any | None = None,
     ) -> None:
         """
         Initialize skill registry.
@@ -157,6 +158,15 @@ class SkillRegistry:
                 see run_off_loop()'s docstring. None (the default) is fully
                 supported, matching this class's existing optional-resource
                 pattern.
+            governance_store: Optional bartholomew.orchestrator.safety
+                .governance_store.GovernanceStore (Phase B stage B4). When
+                provided, _is_blocked_by_brake() checks it (dual-checked
+                against the legacy system_flags value too -- see
+                governance_bridge.py -- until B6 retires that path) instead
+                of constructing a fresh instance per call. None (the
+                default, or set later via set_governance_store() once
+                KernelDaemon.start() has constructed one) falls back to a
+                temporary instance per check.
         """
         self._skills_dir = Path(skills_dir)
         self._db_path = db_path
@@ -166,6 +176,7 @@ class SkillRegistry:
         self._memory_store = memory_store
         self._identity_context = identity_context
         self._blocking_executor = blocking_executor
+        self._governance_store = governance_store
 
         # Permission checker
         self._permission_checker = permission_checker or get_permission_checker(db_path=db_path)
@@ -655,35 +666,44 @@ class SkillRegistry:
                 SkillResult.fail(str(e)),
             )
 
+    def set_governance_store(self, governance_store: Any) -> None:
+        """Wire in the daemon's shared GovernanceStore once constructed
+        (Phase B stage B4) -- KernelDaemon.start() calls this after
+        constructing its own instance, since GovernanceStore's
+        construction does blocking I/O and must happen off the event
+        loop, later than this class's own __init__."""
+        self._governance_store = governance_store
+
     async def _is_blocked_by_brake(self) -> bool:
         """
-        Check the global ParkingBrake's "skills" scope.
+        Check the Parking Brake's "skills" scope.
 
         Fails closed (treats as blocked) if the check itself errors --
         never silently allow a skill action when the safety gate can't be
         read, matching this codebase's fail-closed governance principle.
-        Construction and check run off the event loop (Phase B stage B2;
-        see docs/B2_EVENT_LOOP_ISOLATION.md) -- ParkingBrake.__init__()
-        itself does the blocking SQLite read; is_blocked() only reads the
-        in-memory cache it populated, so both are submitted as one unit.
+        Runs off the event loop (Phase B stage B2; see
+        docs/B2_EVENT_LOOP_ISOLATION.md).
+
+        Dual-checked against both the new Governance schema and the
+        legacy system_flags value (Phase B stage B4's temporary bridge --
+        see governance_bridge.py) until B6 migrates bartholomew/cli.py's
+        `brake on`/`brake off` off the legacy path; blocked if either
+        source says blocked.
         """
         if not self._db_path:
             return False
 
         try:
-            from bartholomew.orchestrator.safety.parking_brake import (
-                BrakeStorage,
-                ParkingBrake,
+            from bartholomew.orchestrator.safety.governance_bridge import (
+                is_blocked_fail_closed_off_loop,
             )
 
-            from .blocking_executor import run_off_loop
-
-            storage = BrakeStorage(self._db_path)
-
-            def _construct_and_check() -> bool:
-                return ParkingBrake(storage).is_blocked("skills")
-
-            return await run_off_loop(_construct_and_check, executor=self._blocking_executor)
+            return await is_blocked_fail_closed_off_loop(
+                "skills",
+                self._db_path,
+                governance_store=self._governance_store,
+                executor=self._blocking_executor,
+            )
         except Exception:
             logger.exception("Parking brake check failed; failing closed")
             return True

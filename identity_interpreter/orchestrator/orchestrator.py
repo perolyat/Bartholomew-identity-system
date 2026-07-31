@@ -113,29 +113,48 @@ class Orchestrator:
 
         return wrapper
 
-    def handle_input(self, user_input: str) -> str:
+    def handle_input(self, user_input: str, *, skip_governance_check: bool = False) -> str:
         """
         Process user input through the orchestration pipeline.
 
         Args:
             user_input: Raw user input string
+            skip_governance_check: Phase B stage B4. Set by callers that
+                have already gated this call through a Governance check of
+                their own (e.g. app.py's /api/chat route, once
+                run_chat_through_runtime_contract has already run its own
+                Stage 4 gate before ever calling this via its respond_fn)
+                -- avoids a second, redundant blocking Parking Brake read
+                per request. Callers with no such prior gate (e.g. the
+                same route's `_kernel is None` startup/shutdown-window
+                fallback) must leave this False so handle_input() remains
+                the sole gate in that case.
 
         Returns:
             Formatted response string
         """
-        # Parking brake gate for skills scope
+        # Parking brake gate for skills scope. Dual-checked against both
+        # the new Governance schema and the legacy system_flags value
+        # (Phase B stage B4's temporary bridge -- see
+        # bartholomew.orchestrator.safety.governance_bridge) until B6
+        # migrates bartholomew/cli.py's `brake on`/`brake off` off the
+        # legacy path. Synchronous by design: this method has no access
+        # to the daemon's shared, off-loop-capable instances, and its own
+        # callers (app.py) are responsible for running it off the event
+        # loop where that matters -- see app.py's chat() route.
         brake_blocked = False
-        try:
-            from bartholomew.kernel.daemon import _default_db_path
-            from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        if not skip_governance_check:
+            try:
+                from bartholomew.kernel.daemon import _default_db_path
+                from bartholomew.orchestrator.safety.governance_bridge import (
+                    is_blocked_fail_closed,
+                )
 
-            storage = BrakeStorage(_default_db_path())
-            brake = ParkingBrake(storage)
-            brake_blocked = brake.is_blocked("skills")
-        except (ImportError, Exception):
-            # Parking brake module not available or schema not initialized
-            # Continue normally
-            pass
+                brake_blocked = is_blocked_fail_closed("skills", _default_db_path())
+            except (ImportError, Exception):
+                # Governance bridge not available or schema not initialized
+                # Continue normally
+                pass
 
         if brake_blocked:
             raise RuntimeError("ParkingBrake: skills blocked")
