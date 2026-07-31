@@ -2,9 +2,13 @@
 
 > Weekly check-ins and stage gate review rituals.
 >
-> **Last updated:** 2026-07-28 (snapshot refreshed against the documentation reconciliation pass 2
+> **Last updated:** 2026-07-31 (Phase B governance restructuring: the engineering-workstream Phase B
+> line and "Next Moves" below now reflect the B0–B9 staged structure rather than a single monolithic
+> design-then-implement step. See "Review History" for the full entry.)
+>
+> **Previously (2026-07-28):** snapshot refreshed against the documentation reconciliation pass 2
 > repository state — see the "Documentation" bullet list below and "Review History" for the full
-> set of changes.)
+> set of changes.
 >
 > **Previously (2026-07-27):** snapshot refreshed against the post-Phase-A repository state; the
 > previous snapshot dated 2026-07-21/22 had gone stale on four counts — Stage 4.5 status, CI
@@ -162,8 +166,16 @@ as evidence.
 **Engineering workstreams:**
 - **Phase A (truthful cross-platform verification):** ✅ **Complete and merged 2026-07-27**,
   merge commit `8b96319c4059d9dfada2579ca5f6da22b34e1f31` (PR #26).
-- **Phase B (persistence ownership stabilisation):** 📋 **Proposed, NOT approved for
-  implementation.** No design, branch or code exists.
+- **Phase B (persistence ownership stabilisation):** 📋 **Staged; NOT approved for
+  implementation. Updated 2026-07-31.** A large Phase B design specification exists and was
+  independently reviewed, but is preserved as non-authoritative research/risk material
+  (`docs/archive/phase-b-persistence-ownership-final.md`, indexed by stage in
+  `docs/PHASE_B_RISK_MAP.md`) rather than as an implementation authority. Phase B is now governed
+  by `docs/PHASE_B_OVERVIEW.md` plus ten separately gated stages (B0–B9) defined in `ROADMAP.md`.
+  The project owner approved this change in direction and authorised preparation of the
+  documentation changes; final diff and commit approval for those changes remained separately
+  gated. B0 is the next stage, but planning it requires separate explicit approval and has not
+  begun. No branch or implementation code exists.
 
 **CI Health** *(corrected — the previous snapshot's entry was wrong in both directions)*:
 - ✅ `ci.yml` — **new in Phase A**, auto-run on every pull request, every push to `main`, and
@@ -236,10 +248,11 @@ Stage 5/S5.1 — see `ROADMAP.md`'s "Near-term milestone plan" for the full rati
 live proactivity needs the user-facing governance surface only Stage 1 provides). Nothing is in
 flight. In sequence, each step requiring separate explicit approval to start:
 
-1. **Documentation reconciliation and the deployment-architecture decision** — this pass; the
+1. **Documentation reconciliation and the deployment-architecture decision** — done 2026-07-28; the
    deployment decision (hybrid local-first) is recorded in `DECISIONS.md`.
-2. **Design Phase B — persistence ownership stabilisation** against the approved architecture
-   (design only, not approved for implementation).
+2. **Plan Phase B one stage at a time**, beginning with B0 only after separate, explicit approval
+   to plan it — persistence ownership stabilisation, against the approved architecture. See
+   `docs/PHASE_B_OVERVIEW.md`, `ROADMAP.md`'s Phase B section, and `docs/PHASE_B_RISK_MAP.md`.
 3. **Stage 1 — minimal consumer web governance shell** (parking-brake access, consent/approval
    inbox, notification/mute controls, awaiting-response queue, host-device onboarding).
 4. **Stage 5 / S5.1** — initiative engine, under the locked safety-scaffolding-first sequence;
@@ -275,6 +288,28 @@ no longer merely "unreconciled" with no resolution in view.)*
 ---
 
 ## Review History (Recent)
+
+### 2026-07-31 - Phase B Governance Restructuring (documentation-only)
+- **Type:** Documentation-only restructuring. The project owner approved the change in direction
+  (a concise overview plus separately gated B0–B9 stages, replacing one monolithic approval unit)
+  and authorised preparation of these documentation changes; final diff and commit approval for
+  the changes themselves remained separately gated, per this project's existing commit-
+  authorization checklist.
+- **Outcome:** The detailed Phase B persistence-ownership design specification's closure review
+  identified substantial, valid concurrency, persistence, Governance, and lifecycle risks across
+  nine independently-verified blocking findings and a complete replacement-semantics inventory.
+  Continuing to pursue closure of the entire specification as one indivisible, implementation-level
+  approval unit reached diminishing returns — each review round found genuine issues without
+  shrinking the unit of approval or the distance to an actually-implementable first stage. The
+  project therefore adopted staged planning: a concise `docs/PHASE_B_OVERVIEW.md` plus ten
+  separately gated stages (B0–B9, defined in `ROADMAP.md`), with the prior findings preserved,
+  non-authoritatively, at `docs/archive/phase-b-persistence-ownership-final.md` and indexed by
+  stage in `docs/PHASE_B_RISK_MAP.md` for use when their owning stage is planned. No production
+  implementation occurred during the design-review process or during this restructuring — this
+  pass changed documentation only.
+- **Next:** Once this documentation is committed, the next action is to seek separate, explicit
+  approval to plan B0 (the first Phase B stage). B0 itself remains unapproved and has not begun;
+  its own plan and implementation each require separate, explicit approval in turn.
 
 ### 2026-07-28 - Documentation Reconciliation Pass 2 (audit + full noncanonical-doc cleanup)
 - **Type:** Documentation-only reconciliation, approved by the project owner following a full
