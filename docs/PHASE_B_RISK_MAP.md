@@ -63,7 +63,7 @@
 
 | Risk / invariant | Stage | Source § | Evidence status | Revalidate at | Candidate test / evidence |
 |---|---|---|---|---|---|
-| Multiple Parking Brake construction sites: real API/CLI/orchestrator/scheduler callers each independently construct a `ParkingBrake` instance rather than sharing one | B4 | §7.3, §8, §12 | repository-verified (7 real construction sites at archive time; e.g. `Orchestrator.handle_input()` constructs its own inline) | B4 plan start — re-inventory before consolidating | Construction-site consistency check analogous to archived Test 54 |
+| Multiple Parking Brake construction sites: real live-daemon callers (API, orchestrator, scheduler) each independently construct a `ParkingBrake` instance rather than sharing one; `bartholomew/cli.py`'s own three standalone construction sites (lines 261, 277, 291) are a separate, CLI-process case owned by B6, not B4 — a standalone CLI process cannot share the daemon's in-process singleton | B4 (live-daemon sites), B6 (CLI sites) | §7.3, §8, §12 | repository-verified (7 real construction sites at archive time, of which 3 are CLI-process sites; e.g. `Orchestrator.handle_input()` constructs its own inline) | B4 plan start — re-inventory live-daemon sites before consolidating; B6 plan start for the CLI sites | Construction-site consistency check analogous to archived Test 54, scoped to live-daemon sites only |
 | `run_sight_through_runtime_contract`/`run_voice_through_runtime_contract` are not wired to any external ingress currently, so not gated by request admission | B4, B7 | §14 item 12 | repository-verified | B4/B7 plan start | Re-check ingress wiring before assuming this still holds |
 
 ## B5 — Startup and shutdown integrity
@@ -71,7 +71,7 @@
 | Risk / invariant | Stage | Source § | Evidence status | Revalidate at | Candidate test / evidence |
 |---|---|---|---|---|---|
 | Startup unwind: a failed `start()` previously released the daemon lock and re-raised with no unwind of `MemoryStore`, either executor, any producer task, or `BrakeWatcher` | B5 | §8 (Blocker-Resolution Matrix finding 2) | prior-design finding | B5 plan start | Stage-aware reverse-order unwind test analogous to archived Tests 2, 2a–2d |
-| Shutdown producer/write draining: clean-shutdown evidence must include producer-task and admission termination, not only the write fence | B5 | §9 | proposed | B5 plan start | Ordered-shutdown test analogous to archived Test 1 |
+| Shutdown producer/write draining: clean-shutdown evidence must include producer-task termination, not only the write fence; full evidence additionally requires admission termination, which B5 does not yet cover since B7 has not introduced request admission | B5 (producer/write fence), B7 (admission) | §9 | proposed | B5 plan start (producer/fence); B7 plan start (admission's contribution to the same invariant) | Ordered-shutdown test analogous to archived Test 1 |
 | Clean-marker honesty: the clean-marker SQL `WHERE` clause alone only proves fence-closed/correct-runtime; it does not represent producer/admission/supervisor state, which must be verified separately in Python before the marker is written | B5 | §9 (Blocker-Resolution Matrix finding 1) | prior-design finding | B5 plan start | `internal_tasks_terminal` precondition test analogous to archived Test 1 |
 
 ## B6 — External Governance control and CLI safety

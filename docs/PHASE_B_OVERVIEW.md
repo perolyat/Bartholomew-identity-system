@@ -49,7 +49,10 @@ scheduler) are migrated onto the same policy.
   `governance_audit` have exactly one schema definition, one migration path.
 - **Verified shutdown, not assumed shutdown.** Clean-shutdown evidence must be based on confirmed
   termination of every relevant resource (executor threads, producer tasks, admitted work), not on
-  an operation merely being submitted.
+  an operation merely being submitted. This is the bar for Phase B as a whole once B7 lands;
+  intermediate stages (e.g. B5, before B7 introduces external request admission) verify confirmed
+  termination only of the resources they themselves have introduced, and must not claim to satisfy
+  this invariant in full until the stage that owns the remaining resource actually lands.
 - **No implicit authority expansion.** Approving this overview does not approve any stage's
   implementation; approving one stage does not approve the next.
 - **User approval gate unchanged.** Every stage's plan, every implementation diff, and every commit
@@ -110,15 +113,20 @@ tested in isolation, without yet being the runtime's shared instance.
 **Major deferrals:** shared-instance runtime integration (B4); CLI/process-lock integration (B6).
 
 ### B4 — Shared Governance runtime integration
-**Purpose:** ensure the running system uses one coherent Parking Brake instance and persistence
-path.
-**Scope:** actual construction sites; dependency injection; runtime-contract integration; real
-API, scheduler, and orchestrator callers; removal or adaptation of legacy direct-state paths;
-replacement-versus-union compatibility changes where actually required.
+**Purpose:** ensure the running daemon process uses one coherent Parking Brake instance and
+persistence path.
+**Scope:** actual live-daemon construction sites; dependency injection; runtime-contract
+integration; real API, scheduler, and orchestrator callers; removal or adaptation of legacy
+direct-state paths; replacement-versus-union compatibility changes where actually required.
 **Required inputs from earlier stages:** B3's schema and transition semantics.
-**Exit condition:** every real construction site (as inventoried against the repository at
-planning time, not assumed from prior research) uses the one shared instance.
-**Major deferrals:** startup/shutdown integrity (B5).
+**Exit condition:** every real live-daemon construction site (as inventoried against the
+repository at planning time, not assumed from prior research) uses the one shared instance.
+Standalone CLI construction sites (e.g. `bartholomew/cli.py`) are explicitly out of scope here — a
+separate CLI process cannot share the daemon's in-process singleton, and their treatment
+(replacement by CLI-specific functions, per the archived inventory) is B6's responsibility, not a
+gap left open by B4.
+**Major deferrals:** CLI construction-site treatment and process-lock integration (B6);
+startup/shutdown integrity (B5).
 
 ### B5 — Startup and shutdown integrity
 **Purpose:** reliable startup failure handling and clean-shutdown evidence, established entirely in
@@ -129,10 +137,14 @@ poisoned-instance behaviour — all defined and proved without assuming the proc
 in B6) already exists.
 **Required inputs from earlier stages:** the concrete runtime produced by B1–B4.
 **Exit condition:** startup and shutdown sequences verified against that concrete runtime, with
-tests proving confirmed (not assumed) termination, expressed as lifecycle-terminal-state
-conditions B6 can later bind process-lock behaviour to.
+tests proving confirmed (not assumed) termination of every resource B1–B4 introduced (executor
+threads, producer tasks, the Governance write fence), expressed as lifecycle-terminal-state
+conditions B6 can later bind process-lock behaviour to. This exit condition does not cover
+externally admitted work, since B7 has not yet introduced request admission — B5's clean marker
+reflects confirmed termination of the resources it owns, not the complete §4 shutdown invariant,
+which is only fully satisfied once B7 lands.
 **Major deferrals:** the process lock itself and external CLI racing against it (B6); external
-request admission (B7).
+request admission and its inclusion in clean-shutdown evidence (B7).
 
 ### B6 — External Governance control and CLI safety
 **Purpose:** prevent CLI and maintenance tools from racing the running daemon.
