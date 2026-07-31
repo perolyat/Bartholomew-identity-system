@@ -3,11 +3,14 @@
 > Milestones and stage gates with explicit exit criteria.
 >
 > **Last updated:** 2026-07-31 (B0 complete: `docs/B0_PERSISTENCE_BASELINE.md` delivered as the
-> stage's repository-grounded current-state report, per an explicitly approved B0 plan. B0's
-> re-verification against the current repository contradicted two of the archived document's
-> headline counts — 9 real Parking Brake construction sites, not 7; 37 live HTTP routes, not 5 — and
-> found a live discrepancy between the CLI's default `--db` path (`data/bartholomew.db`) and the
-> daemon/API default (`data/barth.db`). Approval of B0 does not authorise B1 or any later stage.)
+> stage's repository-grounded current-state report, per an explicitly approved B0 plan, then
+> corrected once against PR #33 review comments before merge. B0's re-verification against the
+> current repository contradicted two of the archived document's headline counts — 9 real Parking
+> Brake construction sites, not 7; 42 live HTTP routes, not 5 — and found a live discrepancy between
+> the CLI's default `--db` path (`data/bartholomew.db`) and the daemon/API default
+> (`data/barth.db`), plus a second, distinct DB-path override (`BARTHO_DB_PATH` +
+> `kernel.yaml`'s `memory.db_path`) alongside the primary `BARTH_DB_PATH`. Approval of B0 does not
+> authorise B1 or any later stage.)
 >
 > **Previously (2026-07-31, same day):** documentation-only Phase B restructuring: the single,
 > monolithic "Phase B" workstream entry is replaced with the **B0–B9** staged structure — a concise

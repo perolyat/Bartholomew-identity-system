@@ -30,9 +30,15 @@ Three distinct default-path constants exist, not one:
     (`_find_project_root()`, then `DB_PATH = os.getenv("BARTH_DB_PATH", DEFAULT_DB_PATH)`).
   - Because the live API-bridge process constructs the `KernelDaemon` with this same `DB_PATH`
     (§7), the daemon and the API layer resolve to the identical file in production.
-  - `config/kernel.yaml:5` also declares `memory.db_path: "data/barth.db"`, but no code path was
-    found that actually loads and consumes this YAML key at runtime (only docstring/comment
-    references in `retrieval.py:399,846`) — **unverified whether this key is live or vestigial**.
+  - `config/kernel.yaml:5` also declares `memory.db_path: "data/barth.db"`. **Correction (raised in
+    PR #33 review, verified):** this key *is* actively consumed — `bartholomew/kernel/retrieval.py`'s
+    `_resolve_db_path()` (`:394-425`) reads it as the third-priority fallback in its own resolution
+    order: (1) an explicit `db_path` argument, (2) the **`BARTHO_DB_PATH`** env var (`:406-408`,
+    distinct from `daemon.py`/`db.py`'s `BARTH_DB_PATH` — note the extra `O`), (3) `kernel.yaml`'s
+    `memory.db_path` (`:411-421`), (4) default `"data/barth.db"`. `get_retriever()` invokes this
+    resolver at `retrieval.py:883`, and `scripts/hybrid_search.py` reaches it whenever `--db` is
+    omitted. This is a fourth real path-resolution mechanism, with its own distinct env-var override
+    — §1's "one env var" claim below is corrected accordingly.
 - **`data/bartholomew.db`** — a **different** default, used only by `bartholomew/cli.py`'s Typer
   `--db` options: `cli.py:28, 133, 250, 271, 285`. This is a real discrepancy: running any
   `bartholomew brake ...` or `embeddings ...` CLI command without an explicit `--db` operates on a
@@ -47,8 +53,10 @@ Three distinct default-path constants exist, not one:
   parameter defaults to `None` and `app.py:91` passes nothing. Also used by standalone root
   scripts (`test_memory_functionality.py:119`, `cleanup_test_memory.py:38`, `test_cold_boot.py`).
 
-**Override:** one env var, `BARTH_DB_PATH`, read at `daemon.py:681` and `db.py:19`. It does not
-affect the CLI's per-command `--db` default.
+**Override:** two distinct, non-interchangeable env vars — `BARTH_DB_PATH` (`daemon.py:681`,
+`db.py:19`, governing the live daemon/API path) and `BARTHO_DB_PATH` (`retrieval.py:406-408`,
+governing `get_retriever()`'s/`hybrid_search.py`'s path resolution only). Neither affects the CLI's
+separate `--db` per-command default.
 
 ## 2. SQLite connection owners
 
@@ -104,10 +112,20 @@ other module imports it.
   `run_sight_through_runtime_contract` (`:578`, `:631`), `run_voice_through_runtime_contract`
   (`:684`, `:718`) — and inside `skill_registry.py`'s `async def execute_action` (`:498`) via the
   plain-`def` helper `_is_blocked_by_brake` (`:649-671`, `ParkingBrake(storage)` at `:667`).
-- `fts_client.py` is fully synchronous with no thread-offload wrapper anywhere in the file; its
-  callers were not individually traced in this pass, so reachability from the live event loop is
-  **not separately confirmed here** beyond the module-level fact that it offers no offload of its
-  own.
+- `fts_client.py` is fully synchronous with no thread-offload wrapper anywhere in the file.
+  **Correction (raised in PR #33 review, verified): reachability from the live event loop is
+  confirmed, not merely module-level.** `MemoryStore.init()` (`async def`, `memory_store.py:174`)
+  directly and synchronously calls `FTSClient.init_schema()` (`memory_store.py:209`) and
+  conditionally `init_chunk_schema()` (`:215`), each opening a plain `sqlite3.connect` beginning at
+  `fts_client.py:328` — with no `asyncio.to_thread`/offload. `MemoryStore.init()` is itself the very
+  first `await` in `KernelDaemon.start()` (`daemon.py:148`), so this synchronous FTS schema I/O runs
+  directly on the event loop during every daemon startup.
+- Also newly confirmed by the same review pass: `SkillRegistry.load_enabled_skills()` (`async def`,
+  `skill_registry.py:986`) synchronously calls `self._get_connection()` at `:998` (a plain `sqlite3`
+  connection, no offload) — and `KernelDaemon.start()` `await`s this directly as its step 4
+  (`daemon.py:197`, see §8). Both of these startup-path callers belong in the same event-loop-
+  blocking category as `_handle_chunking`/`reembed_memory`/`persona_pack.py`/`narrator.py`/
+  `parking_brake.py` above, not in a separate "unconfirmed" bucket.
 
 ## 4. WAL/checkpoint behaviour
 
@@ -178,20 +196,24 @@ document, not a fact about a smaller current repository).
   `POST /api/reflection/run` (`:370`).
 - `routes/liveness.py` (mounted at `/api/liveness`, `:18`) — 4 routes: `GET /self` (`:33`),
   `GET /ticks` (`:43`), `GET /nudges` (`:101`), `GET /reflections` (`:144`).
-- `routes/self_state.py` (mounted at `/api`, `:16`) — 21 routes, including state-mutating ones not
-  named in the archived document: `PUT /self/affect` (`:92`), `PUT /self/attention` (`:117`),
+- `routes/self_state.py` (mounted at `/api`, `:16`) — **26 routes** (corrected — an earlier pass of
+  this report undercounted at 21; re-verified by counting every `@router.get/post/put/delete`
+  decorator directly, `grep -c` confirms 26), including 9 state-mutating routes not named in the
+  archived document: `PUT /self/affect` (`:92`), `PUT /self/attention` (`:117`),
   `DELETE /self/attention` (`:135`), `POST /self/drives/{drive_id}/activate` (`:166`),
   `POST /self/drives/{drive_id}/satisfy` (`:182`), `POST /self/goals` (`:215`),
   `DELETE /self/goals/{goal}` (`:227`), `POST /persona/switch` (`:393`),
-  `DELETE /working_memory` (`:466`), plus 12 GET routes.
+  `DELETE /working_memory` (`:466`), plus **17** GET routes (`:69,84,109,146,156,207,244,255,308,
+  318,345,362,375,414,426,441,455`).
 - `routes/metrics.py` — 1 route: `GET /metrics` (`:348`, mounted at `/internal/metrics` if
   `METRICS_INTERNAL_ONLY` is truthy — `app.py:66-67`).
 
-**Total: 37 live HTTP routes**, not 5. The archived document's "5 real routes" figure
-(`app.py:249,183,318,331,370`, all confirmed exact) is accurate as a **scoped** claim about the
-`ParkingBrake`-gated routes in `app.py` specifically — every one of `self_state.py`'s 21 routes was
-read and none construct a `ParkingBrake` or call `is_blocked()`. Read as a general "real external
-ingress" claim, "5" materially undercounts the live surface.
+**Total: 42 live HTTP routes** (11 + 4 + 26 + 1), not 5 and not this report's earlier corrected
+figure of 37. The archived document's "5 real routes" figure (`app.py:249,183,318,331,370`, all
+confirmed exact) is accurate as a **scoped** claim about the `ParkingBrake`-gated routes in `app.py`
+specifically — every one of `self_state.py`'s 26 routes was read and none construct a `ParkingBrake`
+or call `is_blocked()`. Read as a general "real external ingress" claim, "5" materially undercounts
+the live surface — by 37 routes (42 total minus the 5 governance-gated ones the archive counted).
 
 **CLI commands touching persistence/governance** (`bartholomew/cli.py`, 6 commands total):
 `embeddings stats` (`:26-27`), `embeddings rebuild-vss` (`:131-132`, direct `sqlite3.connect` at
@@ -277,25 +299,31 @@ branches found are all test-only: `conftest.py:77-85` (repo root) and `tests/con
 
 ## 10. Items flagged as unconfirmed, not asserted
 
-- Whether `config/kernel.yaml`'s `memory.db_path` key (§1) is read by any live code path, versus
-  being vestigial documentation — only comment references were found, no active load call.
 - Whether `run_sight_through_runtime_contract`/`run_voice_through_runtime_contract` (§5, sites 8-9)
   are reachable from any currently-live entry point via the `sight`/`voice_io` adapters — the
   adapters reference these functions, but their own live wiring was not traced in this pass.
-- Full caller graph of `fts_client.py` (§3) — confirmed fully synchronous with no offload of its
-  own, but not every call site was traced back to confirm event-loop reachability.
 - `fs_helpers.windows_release_handles` (§9) was referenced but not opened directly.
+- `config/kernel.yaml`'s `memory.db_path` key and `fts_client.py`'s startup/`SkillRegistry`
+  reachability, both listed here in an earlier pass of this report as unconfirmed, were corrected
+  in §1 and §3 respectively following PR #33 review — both are now confirmed, not open items.
 
 ## 11. Summary — archived-document claims re-verified against current repository
 
 | Archived claim | Verdict |
 |---|---|
 | "7 real Parking Brake construction sites, 3 CLI-only at `cli.py:261,277,291`" | Line numbers **confirmed exact**. Total **contradicted**: current repository has **9** (§5). |
-| "5 real external API/CLI ingress routes" | **Confirmed as scoped** to `app.py`'s `ParkingBrake`-gated routes (exact lines match). **Incomplete** as a general ingress claim — 37 live routes exist (§6), most ungoverned. |
+| "5 real external API/CLI ingress routes" | **Confirmed as scoped** to `app.py`'s `ParkingBrake`-gated routes (exact lines match). **Incomplete** as a general ingress claim — 42 live routes exist (§6), most ungoverned. |
 | `MemoryStore` holds one persistent `aiosqlite` connection | **Contradicted** — no persistent-connection attribute exists; 13 one-off `aiosqlite.connect()` sites (§2). |
 | `DedicatedDbExecutor`, two lanes (general, governance) | **Not present** in current repository. The real analogue is `SchedulerStore`, one single-worker lane (§2). Proposed design only. |
 | Write-fence / clean-shutdown-marker / `brake_runtime` mechanism | **Not present** in current `KernelDaemon.start()`/`stop()` (§8), confirmed by full read of both methods. |
 | `CI.md`'s "9 checks... `lint-test` on 3.10 and 3.11" | **Contradicted** by current `ci.yml` — 4 jobs, no `lint-test` (§9). |
+
+**Corrections made to this report after initial publication (PR #33 review):** the `data/barth.db`
+default has a second, distinct override mechanism (`BARTHO_DB_PATH` + `kernel.yaml`'s
+`memory.db_path`, both live, not vestigial — §1); `self_state.py` has 26 routes not 21, making the
+live-route total 42 not 37 (§6); `fts_client.py`'s startup schema-init and
+`SkillRegistry.load_enabled_skills()` are confirmed event-loop-blocking, not merely
+module-level-synchronous (§3). No other finding in this report was disputed.
 
 No fix, redesign, or recommendation is proposed for any finding above — per B0's scope, that is
 deferred to B1 and later stages, each requiring its own separately approved plan.
