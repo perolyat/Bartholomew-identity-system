@@ -2,9 +2,14 @@
 
 > Operational and engineering checklists. If it’s not checked, it’s not real.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: added a "Product & safety
+> **Last updated:** 2026-07-31 (Phase B governance restructuring: added a "Staged workstream
+> approval" checklist — overview approval does not authorise a stage; stage N approval does not
+> authorise stage N+1; a stage must not silently expand into the next. Existing general checklists
+> did not unambiguously cover this relationship.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: added a "Product & safety
 > invariants" checklist covering the six invariants added to `CONSTITUTION.md` this pass, plus
-> consistency with the deployment-architecture decision.)
+> consistency with the deployment-architecture decision.
 >
 > **Previously (2026-07-27):** the PR checklist's "`pytest -q` passes" item was misleading — that
 > command deselects 3 tests — and the checklist predated the `ci.yml` gates entirely.
@@ -66,6 +71,25 @@ section for the full rationale behind each item.
 - **Deployment-architecture consistency:** the change is consistent with the hybrid local-first
   architecture (`DECISIONS.md`) — sensitive memory/governance/emergency-shutdown stay local-
   authoritative; any remote/cross-device exposure has a reviewed threat model.
+
+## Staged workstream approval (e.g. Phase B B0–B9) (added 2026-07-31)
+
+Applies to any workstream, like Phase B, that is deliberately split into a concise overview plus
+multiple separately gated stages (see `ROADMAP.md`'s Phase B section and `docs/PHASE_B_OVERVIEW.md`
+for the current example). None of this is duplicated by the Non-negotiables, PR, Release, or
+Commit-authorization checklists above, which govern a single change or gate, not the relationship
+between an overview and its stages, or between one stage and the next.
+
+- **PASS/BLOCKED:** Approving the workstream's overview document does not, by itself, authorise
+  implementation of any stage.
+- **PASS/BLOCKED:** Approving stage N's plan or implementation does not authorise stage N+1 — each
+  stage requires its own explicit plan approval before implementation begins.
+- **PASS/BLOCKED:** A stage's implementation does not silently expand into a later stage's scope;
+  any such expansion is instead raised as a proposed change to the overview/`ROADMAP.md` stage
+  structure, not implemented unannounced.
+- **PASS/BLOCKED:** Implementation still requires diff review, and committing still requires
+  explicit user approval, per the Commit authorization checklist below — staging does not relax
+  either requirement.
 
 ## Release checklist (Stage gate)
 

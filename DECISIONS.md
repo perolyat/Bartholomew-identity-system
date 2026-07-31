@@ -2,10 +2,14 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: three new decisions added —
+> **Last updated:** 2026-07-31 (documentation-only Phase B restructuring: one new decision added —
+> Phase B is governed by a concise overview plus separately gated stages B0–B9, not one monolithic
+> specification. See "Decision: Phase B governed by a concise overview plus separately gated
+> stages, not one monolithic specification" below.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: three new decisions added —
 > the hybrid local-first deployment architecture, the Echo roadmap's demotion to a non-canonical
-> incubator document, and the reflection-ownership target architecture. See the entries at the
-> foot of this document.)
+> incubator document, and the reflection-ownership target architecture.
 >
 > **Previously (2026-07-27):** no decisions added or reversed; two existing entries amended where
 > the repository had moved past what they described — the canonical-doc set's membership, and the
@@ -241,6 +245,56 @@
   new decision recorded here. Any future proposal derived from `docs/incubator/ECHO_IDEAS.md`
   must be evaluated and approved individually, the same as any other new subsystem proposal.
 - **Date:** 2026-07-28 (documentation reconciliation pass 2)
+
+## Decision: Phase B governed by a concise overview plus separately gated stages, not one monolithic specification
+- **Decision:** Phase B (persistence ownership stabilisation) is **not being restarted.** The
+  monolithic approach of bringing one large, indivisible Phase B design specification to
+  implementation-level approval as a single unit is **discontinued.** Phase B is now governed by:
+  (1) a concise, authoritative overview (`docs/PHASE_B_OVERVIEW.md`) defining purpose, outcome,
+  invariants, stage summaries, dependencies, and completion criteria; (2) ten separately planned,
+  reviewed, approved, and committed stages, **B0–B9** — with implementation performed where
+  applicable, since B0 is a diagnostic/current-state stage that exits with a report rather than
+  production code — whose gates and status live in `ROADMAP.md`; and (3) the existing large
+  specification, retained as non-authoritative research
+  and risk material at `docs/archive/phase-b-persistence-ownership-final.md`, indexed by stage in
+  `docs/PHASE_B_RISK_MAP.md`. Every mechanism described in that archived material must be
+  independently revalidated against the actual repository state during the stage that owns it —
+  nothing in it is implementation-authoritative merely because it appeared there. Overview
+  approval does not authorise implementation of any stage. Each stage requires its own plan and its
+  own explicit user approval; approving one stage does not authorise the next. Every implementation
+  diff and every commit remains separately gated, per this document's own "User Approval Gate"
+  decision and `CHECKLISTS.md`'s commit-authorization checklist. **No B0, Slice 0, or other Phase B
+  implementation work is authorised by this decision** — it is a documentation-only restructuring
+  of how Phase B will be planned and approved going forward.
+- **Alternatives:** (a) Continue attempting to bring the entire large specification to one
+  implementation-level approval, resolving every remaining cross-cutting concern before any code is
+  written — the approach this decision discontinues. (b) Discard the large specification's research
+  entirely and restart Phase B design from nothing — rejected: the concurrency, lifecycle, and
+  Governance risk analysis it contains is substantively valid and would be needlessly re-derived.
+  (c) Keep the large specification as the sole implementation authority and simply implement it
+  stage-by-stage without a separate overview or risk index — rejected: this would leave a single
+  ~3,600-line document as the de facto implementation authority for every stage, reintroducing the
+  same one-document-carries-everything problem this decision exists to correct.
+- **Why:** The large specification accumulated many independently complex concerns — SQLite
+  connection ownership, WAL/checkpoint behaviour, event-loop blocking, dedicated executors,
+  `MemoryStore` concurrency, Parking Brake persistence, Governance auditing, runtime construction
+  and injection, API request admission, detached tasks, startup, failed-start unwind, shutdown,
+  clean-shutdown evidence, process locking, CLI behaviour, rollback, `VectorStore`, FTS, liveness
+  and metrics, and cross-platform testing — into one approval unit. Trying to fully resolve and
+  approve every interaction between all of these before implementing any smaller foundation produced
+  diminishing returns: each closure-review round found genuine, valid issues, but the unit of
+  approval never got smaller, so the distance to an actually-implementable, approved first slice did
+  not shrink round over round. Reducing the size of each planning and approval boundary — one stage
+  at a time, planned only as it is approached, against the repository state that exists then — is
+  the correction, while explicitly preserving rather than discarding the research already done.
+- **Consequences:** No stage's implementation may proceed on the basis of "the archived specification
+  already covers this" alone — each stage's own plan must independently confirm its relevant
+  mechanisms against the repository at planning time. `ROADMAP.md`'s Phase B section is the
+  canonical source for stage gates, status, and approval boundaries going forward, not the archived
+  specification. Future contributors must not read the archived specification as pre-approved design
+  for any stage; `docs/PHASE_B_RISK_MAP.md` exists precisely so a stage's planner is not required to
+  reread the entire archived document to find what's relevant to that stage.
+- **Date:** 2026-07-31
 
 ## Decision: Reflection ownership — target architecture
 - **Decision:** `ReflectionGenerator` (`identity_interpreter.adapters.reflection_generator`,

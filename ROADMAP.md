@@ -2,20 +2,22 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: Echo Integration Gates moved
+> **Last updated:** 2026-07-31 (documentation-only Phase B restructuring: the single, monolithic
+> "Phase B" workstream entry is replaced with the **B0–B9** staged structure — a concise overview
+> (`docs/PHASE_B_OVERVIEW.md`) plus ten separately gated stages. The prior large Phase B design
+> specification is preserved, non-authoritatively, at
+> `docs/archive/phase-b-persistence-ownership-final.md`, indexed by stage in
+> `docs/PHASE_B_RISK_MAP.md`. No stage is approved or started; this is a planning-structure change
+> only. See `DECISIONS.md`'s 2026-07-31 entry for the full rationale.
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: Echo Integration Gates moved
 > to non-canonical `docs/incubator/ECHO_IDEAS.md`; approved sequencing corrected so Stage 1
 > precedes Stage 5/S5.1; Stage 1 scoped as a minimal consumer web governance shell with host-device
 > onboarding; Stage 6 auth criterion corrected to require a threat model rather than assuming
 > simple token auth is sufficient; jurisdiction-aware capture, adaptive notifications, and data
 > portability added to Stage 6; the Stage 3/Stage 5 reflection-ownership entries corrected to
 > distinguish current concatenation from the approved target architecture; the Stage 0 water-logging
-> exit criterion annotated as historical, not current product direction. See `DECISIONS.md`'s
-> "Deployment architecture: hybrid local-first" entry and `COGNITIVE_RUNTIME.md`'s reflection-
-> ownership section for the underlying decisions.
->
-> **Previously (2026-07-27):** Phase A recorded as merged; Phase B recorded as proposed-not-approved;
-> S5.1 explicitly marked not started; the Stage 0.5 "nothing catches undeclared imports" process gap
-> closed. The "Last updated" line had read 2026-01-19 while stage sections were edited through July.
+> exit criterion annotated as historical, not current product direction.
 
 ## Engineering workstreams (cross-cutting; not stage gates)
 
@@ -50,10 +52,24 @@ and 3.11; Critical integration + lifecycle on 3.10 and 3.11; Windows 3.11; `lint
 **Deliberately not done (deferred, recorded not fixed):** persistence restructuring; the
 intermittent concurrent-process WAL failure; findings F9–F11. See `RISKS.md`.
 
-### Phase B — Persistence ownership stabilisation 📋 (Proposed; NOT approved for implementation)
+### Phase B — Persistence ownership stabilisation 📋 (Staged; NOT approved for implementation)
 
-**Status as of 2026-07-27:** no design, no branch, no code. This is the *proposed* next
-engineering workstream and requires explicit approval before any implementation begins.
+**Status as of 2026-07-31 (documentation-only restructuring):** a large, indivisible Phase B
+design specification was produced and independently reviewed, but attempting to bring the entire
+specification to implementation-level approval as one unit reached diminishing returns (too many
+independently complex concerns — SQLite ownership, event-loop blocking, executors, Governance,
+admission, startup/shutdown, CLI, rollback, and more — in one approval unit). Phase B is **not**
+restarted: that research is preserved, non-authoritatively, at
+`docs/archive/phase-b-persistence-ownership-final.md`, indexed by stage in
+`docs/PHASE_B_RISK_MAP.md`. Phase B is now governed by a concise overview
+(`docs/PHASE_B_OVERVIEW.md`) plus ten separately gated stages, **B0–B9**, defined below. This
+table is the canonical source for Phase B stage gates, status, dependencies, and approval
+boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
+
+**No stage has been approved or started.** Documentation-only restructuring (this pass) does not
+authorise B0 or any implementation. Each stage requires its own compact, repository-grounded plan —
+produced only as that stage approaches — and its own explicit user approval before implementation
+begins. Approval of one stage never authorises the next.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -69,6 +85,26 @@ isolation immediately afterwards; it was deliberately **not** retried, quarantin
 given a longer timeout. The unresolved "why did a `TRUNCATE` checkpoint outlast its own
 busy-timeout" question and its temporary DEBUG instrumentation are the likely same root cause.
 See `RISKS.md`'s tech-debt watchlist.
+
+**Stage structure (all stages 📋 NOT STARTED; none approved):**
+
+| Stage | Objective | Dependency | Approval gate | Exit condition |
+|---|---|---|---|---|
+| **B0** — Verified persistence baseline | Establish repository/runtime facts later stages need | none | Not approved | Repository-grounded current-state report; no implementation |
+| **B1** — Shared SQLite connection policy | One connection/pragma/close policy; inventory and assign every remaining consumer migration | B0 | Not approved | Shared policy implemented and tested; duplicate/hot-path checkpoint problem resolved; every remaining consumer migration inventoried and assigned to B2 or B8 |
+| **B2** — Event-loop isolation and database execution | Remove blocking sync SQLite calls from the event loop | B1 | Not approved | Known blocking call sites resolved; worker termination confirmed |
+| **B3** — Governance schema and Parking Brake persistence | One durable, auditable Governance representation | B2 | Not approved | Schema + transition semantics implemented and tested in isolation |
+| **B4** — Shared Governance runtime integration | One shared Parking Brake instance at every real call site | B3 | Not approved | Every real construction site (re-inventoried, not assumed) uses the shared instance |
+| **B5** — Startup and shutdown integrity | Reliable failure handling; clean-shutdown evidence, as lifecycle-terminal-state conditions (no process lock yet) | B1–B4 | Not approved | Startup/shutdown sequences verified against the concrete B1–B4 runtime |
+| **B6** — External Governance control and CLI safety | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | Not approved | Verified on both POSIX and Windows; B5's lifecycle tests rerun with the lock in place |
+| **B7** — External request admission and detached work | Shutdown cannot race externally admitted work | B4, B5 | Not approved | Every real ingress point is identity-bound-admission-gated; does not block B1–B4 |
+| **B8** — Remaining persistence consumers | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | Not approved | Each split sub-stage's consumer migrated and tested |
+| **B9** — Recovery, rollback, and adversarial validation | Validate the integrated result; formalise recovery | B0–B8 | Not approved | Adversarial scenarios pass; rollback limitations documented honestly |
+
+See `docs/PHASE_B_OVERVIEW.md` for each stage's purpose, scope, and deferrals in more detail, and
+`docs/PHASE_B_RISK_MAP.md` for the index of prior research findings relevant to each stage.
+Detailed, execution-level planning for any stage is produced only when that specific stage is
+approved to be planned — not in advance for later stages.
 
 ---
 
@@ -519,9 +555,13 @@ Every individual idea in that document requires independent evaluation against `
 
 1. **Documentation reconciliation and the deployment-architecture decision** (this pass). See
    `DECISIONS.md`'s "Deployment architecture: hybrid local-first" entry.
-2. **Design Phase B** — persistence-ownership stabilisation — against the approved hybrid
-   local-first architecture. Design only; no implementation.
-3. **Implement Phase B**, only after separate, explicit approval of the design from step 2.
+2. **Plan Phase B one stage at a time**, beginning with B0 only after separate, explicit approval
+   to plan it — persistence-ownership stabilisation, against the approved hybrid local-first
+   architecture. See the Phase B workstream section above, `docs/PHASE_B_OVERVIEW.md`, and
+   `docs/PHASE_B_RISK_MAP.md`. No stage's plan approval authorises any other stage's plan or
+   implementation.
+3. **Implement each Phase B stage**, only after separate, explicit approval of that stage's own
+   plan.
 4. **Build a minimal Stage 1 consumer web governance shell**, only after separate, explicit
    approval. At minimum this shell must eventually provide: parking-brake access; system status;
    a consent and approval inbox; notification settings; mute and quiet-hours controls; an
