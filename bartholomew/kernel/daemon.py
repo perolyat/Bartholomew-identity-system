@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 from dateutil import tz
 
+from . import lifecycle_marker
 from .event_bus import EventBus
 from .experience_kernel import ExperienceKernel
 from .global_workspace import EventType, GlobalWorkspace
@@ -128,6 +129,16 @@ class KernelDaemon:
         self._dream_task = None
         self._scheduler_task = None
 
+        # Phase B, stage B5: set True only by start()'s failed-start unwind
+        # (never cleared) once cleanup has run -- a poisoned instance's
+        # sub-resources (executors, etc.) may already be closed, so start()
+        # refuses to re-run initialization against them; construct a new
+        # KernelDaemon instead. self._lifecycle_instance_id identifies this
+        # run for the clean-shutdown marker (lifecycle_marker.py).
+        self._poisoned = False
+        self._lifecycle_instance_id: str | None = None
+        self._lifecycle_started_at: int | None = None
+
         # Quiet hours config
         quiet_cfg = self.cfg.get("quiet_hours", {})
         self.quiet_start = quiet_cfg.get("start", "21:30")
@@ -145,7 +156,45 @@ class KernelDaemon:
         self._last_weekly_reflection = None
 
     async def start(self) -> None:
+        if self._poisoned:
+            raise RuntimeError(
+                "KernelDaemon.start() called on a poisoned instance -- a previous start() "
+                "failed and this instance's sub-resources may already be closed; construct "
+                "a new KernelDaemon instead of reusing this one",
+            )
+
         await self.mem.init()
+
+        # Phase B, stage B5: conservative unclean-start detection. Read
+        # whatever marker the *previous* run left (absent on a fresh
+        # database, or one from before this stage). If it exists and never
+        # reached "clean_shutdown", the previous run didn't call stop() to
+        # completion -- crash, kill -9, or an exception this method's own
+        # protected region below didn't cover. Logged only: no automatic
+        # remediation, no blocked startup -- see lifecycle_marker.py's
+        # module docstring for why.
+        previous_marker = await self.mem._db_executor.call(
+            lifecycle_marker.read_marker,
+            self.mem.db_path,
+        )
+        if previous_marker is not None and previous_marker.state != "clean_shutdown":
+            logger.warning(
+                "Unclean start detected: previous daemon instance %s did not reach a "
+                "confirmed clean shutdown (last known state=%r, started_at=%s)",
+                previous_marker.instance_id,
+                previous_marker.state,
+                previous_marker.started_at,
+            )
+
+        self._lifecycle_instance_id = lifecycle_marker.new_instance_id()
+        self._lifecycle_started_at = int(datetime.now(timezone.utc).timestamp())
+        await self.mem._db_executor.call(
+            lifecycle_marker.write_marker,
+            self.mem.db_path,
+            instance_id=self._lifecycle_instance_id,
+            state="running",
+            started_at=self._lifecycle_started_at,
+        )
 
         # S5.0 (closes issue #24): ensure the scheduler's schema
         # (scheduled_tasks, ticks, and the nudges/reflections integer-timestamp
@@ -227,14 +276,48 @@ class KernelDaemon:
 
             self._scheduler_task = asyncio.create_task(run_scheduler(self))
         except BaseException:  # includes CancelledError; re-raised below
+            self._poisoned = True
             try:
-                await asyncio.shield(self.scheduler_store.close())
+                await asyncio.shield(self._unwind_after_failed_start())
             except BaseException:  # secondary only; primary re-raised below
                 logger.exception(
-                    "Scheduler store cleanup failed during aborted startup; "
-                    "propagating the original startup error as primary",
+                    "Cleanup failed during aborted startup; propagating the original "
+                    "startup error as primary",
                 )
             raise
+
+    async def _unwind_after_failed_start(self) -> None:
+        """
+        Drain every resource start() may have already activated before the
+        failure, so nothing leaks a running background thread past this
+        method's return (Phase B, stage B5). stop() may never run after a
+        failed start(), and an aborted ASGI startup is not guaranteed to
+        invoke it either -- this is the only cleanup a failed start() gets.
+
+        Order mirrors stop()'s own (skills, then scheduler, then memory
+        store) for predictability, though unlike stop() there is no
+        checkpoint here: mem.close(checkpoint=False) only drains its
+        dedicated DB executor, since checkpointing a possibly
+        half-initialized database on a failed start is not warranted.
+
+        Every step is independently try/excepted so one resource's cleanup
+        failure cannot prevent the others' from running; each failure is
+        logged, not silently swallowed.
+        """
+        try:
+            await self.skill_registry.shutdown()
+        except Exception:
+            logger.exception("skill_registry cleanup failed during aborted startup")
+
+        try:
+            await self.scheduler_store.close()
+        except Exception:
+            logger.exception("scheduler_store cleanup failed during aborted startup")
+
+        try:
+            await self.mem.close(checkpoint=False)
+        except Exception:
+            logger.exception("mem cleanup failed during aborted startup")
 
     async def _init_experience_kernel(self) -> None:
         """Initialize experience kernel from last snapshot or defaults."""
@@ -353,6 +436,28 @@ class KernelDaemon:
         # Close memory store (checkpoint WAL, unless the scheduler store
         # above didn't drain -- see comment above)
         await self.mem.close(checkpoint=scheduler_drained)
+
+        # Phase B, stage B5: record a confirmed clean shutdown. Last step,
+        # after mem.close() has already drained and closed mem's own
+        # dedicated DB executor -- so this uses a direct connection rather
+        # than routing through it, consistent with several of this
+        # method's other steps above (e.g. experience.persist_snapshot())
+        # that already call synchronous code directly rather than through
+        # an executor. If this instance's start() never actually reached
+        # the point of writing an initial marker (e.g. stop() called on a
+        # never-started or already-poisoned instance), _lifecycle_instance_id
+        # is None and there is nothing meaningful to mark -- skipped.
+        if self._lifecycle_instance_id is not None:
+            try:
+                lifecycle_marker.write_marker(
+                    self.mem.db_path,
+                    instance_id=self._lifecycle_instance_id,
+                    state="clean_shutdown",
+                    started_at=self._lifecycle_started_at or 0,
+                    stopped_at=int(datetime.now(timezone.utc).timestamp()),
+                )
+            except Exception:
+                logger.exception("Failed to write clean-shutdown lifecycle marker")
 
     def _is_quiet_hours(self, now: datetime) -> bool:
         """Check if current time is within quiet hours."""
