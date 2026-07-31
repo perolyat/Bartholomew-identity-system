@@ -31,8 +31,8 @@ from datetime import datetime, timezone
 import pytest
 
 from bartholomew.kernel.daemon import KernelDaemon
+from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
 from bartholomew.kernel.runtime_contract import run_chat_through_runtime_contract
-from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
 from identity_interpreter.identity_context import IdentityContext
 
 
@@ -126,14 +126,14 @@ class TestScenarioReplay:
         assert f"Active persona: {other_pack}" in result3.interpretation.prompt
 
         # --- Governance: parking brake blocks, then recovers -----------------
-        brake = ParkingBrake(BrakeStorage(daemon.mem.db_path))
+        brake = GovernanceBrakeStore(daemon.mem.db_path)
         brake.engage("skills")
 
         blocked_result = await run_chat_through_runtime_contract(daemon, "are you there?", _respond)
         assert blocked_result.governance_allowed is False
         assert blocked_result.response is None
 
-        brake.disengage()
+        brake.disengage(confirm=True)
         recovered_result = await run_chat_through_runtime_contract(daemon, "still there?", _respond)
         assert recovered_result.governance_allowed is True
 

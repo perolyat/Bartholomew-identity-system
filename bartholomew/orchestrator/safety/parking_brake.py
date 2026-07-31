@@ -11,6 +11,8 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
+from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
+
 
 @dataclass(frozen=True)
 class BrakeState:
@@ -203,24 +205,40 @@ class ParkingBrake:
         )
 
 
-def check_scope_blocked(db_path: str, scope: str, memory_store=None) -> bool:
+def check_scope_blocked(db_path: str, scope: str) -> bool:
     """
     One coherent path for the fail-closed "is this scope blocked?" read
     every live-daemon Governance gate needs (Phase B, stage B4). Replaces
-    each of the 6 real call sites' own inline
-    `storage = BrakeStorage(db_path); brake = ParkingBrake(storage);
-    brake.is_blocked(scope)` with a single shared implementation, so there
-    is one place, not six independently-written copies, that could drift
-    (e.g. one gaining a memory_store= argument the others don't).
+    each of the 6 real call sites' own inline construction with a single
+    shared implementation, so there is one place, not six independently-
+    written copies, that could drift.
 
-    Deliberately still constructs a fresh ParkingBrake on every call rather
-    than holding one long-lived shared instance: ParkingBrake.__init__()
-    loads current state from storage, and is_blocked() reads that load's
-    cache -- so a genuinely long-lived shared instance would go stale the
-    moment an external CLI engage()/disengage() landed after construction,
-    since nothing here ever refreshes it. Constructing fresh per call keeps
-    every check exactly as live as the 6 call sites' pre-existing behavior,
-    without introducing that staleness risk.
+    Phase B, stage B6: now backed by GovernanceBrakeStore (the schema
+    docs/B3_IMPLEMENTATION.md introduced) instead of the legacy
+    ParkingBrake/BrakeStorage/system_flags path -- landing together with
+    bartholomew/cli.py's brake on/off/status moving to the same store, per
+    the safety decision recorded in docs/B4_IMPLEMENTATION.md section 1:
+    daemon reads and CLI writes must never target two different schemas at
+    once. The `memory_store=` parameter this function previously accepted
+    is gone -- no caller ever passed it (verified by grep), and
+    GovernanceBrakeStore's audit trail is its own atomic
+    governance_audit table, not MemoryStore-routed.
+
+    Deliberately still constructs a fresh GovernanceBrakeStore on every
+    call rather than holding one long-lived shared instance, for the same
+    staleness reason the B4 docstring (preserved in git history) gave for
+    the legacy ParkingBrake: a shared instance would need active cache
+    invalidation to stay live against an external CLI engage()/disengage(),
+    and GovernanceBrakeStore.current_state() already does a fresh read on
+    every call, so there is no benefit to holding one open, only staleness
+    risk to introduce. GovernanceBrakeStore.__init__() also runs
+    ensure_schema() on every call (idempotent, cheap -- CREATE TABLE IF NOT
+    EXISTS plus one migration-guard SELECT) rather than assuming some
+    other code path already ran it first: this function's other caller,
+    identity_interpreter/orchestrator/orchestrator.py's handle_input(), can
+    run with no KernelDaemon ever having started in-process at all (the
+    `_kernel is None` fallback path in app.py), so nothing here can safely
+    assume the schema already exists.
 
     Callers keep resolving their own db_path exactly as before -- this
     function does not touch the four divergent path-resolution schemes
@@ -228,4 +246,4 @@ def check_scope_blocked(db_path: str, scope: str, memory_store=None) -> bool:
     an open question for a later stage, not something to silently fold in
     here.
     """
-    return ParkingBrake(BrakeStorage(db_path, memory_store=memory_store)).is_blocked(scope)
+    return GovernanceBrakeStore(db_path).current_state().is_blocked(scope)

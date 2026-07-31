@@ -59,15 +59,15 @@ def test_chat_references_persisted_experience_kernel_state(client):
 
 
 def test_chat_returns_503_when_parking_brake_engaged(client):
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
 
-    brake = ParkingBrake(BrakeStorage(app_module._kernel.mem.db_path))
+    brake = GovernanceBrakeStore(app_module._kernel.mem.db_path)
     brake.engage("skills")
     try:
         response = client.post("/api/chat", json={"message": "are you there?"})
         assert response.status_code == 503
     finally:
-        brake.disengage()
+        brake.disengage(confirm=True)
 
     # Confirm normal service resumes after disengage.
     response = client.post("/api/chat", json={"message": "back online?"})

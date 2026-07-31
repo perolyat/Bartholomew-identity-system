@@ -160,10 +160,15 @@ async def test_unclean_previous_run_is_detected_and_logged(fresh_config, caplog)
     first_instance_id = first._lifecycle_instance_id
     # Deliberately no `await first.stop()` -- simulates a crash. Directly
     # drain its executors so the test itself doesn't leak threads, without
-    # going through stop() (which would write the clean marker).
+    # going through stop() (which would write the clean marker). Also
+    # release its process lock (Phase B, stage B6): on a real crash the OS
+    # reclaims the lock when the process exits -- releasing it here is
+    # what accurately simulates that within one test process, not a gap
+    # this test is papering over.
     await first.mem._db_executor.close()
     await first.skill_registry._db_executor.close()
     await first.scheduler_store.close()
+    first.process_lock.release()
 
     marker_before = lifecycle_marker.read_marker(fresh_config["db_path"])
     assert marker_before is not None

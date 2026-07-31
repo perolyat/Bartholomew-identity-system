@@ -36,6 +36,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from bartholomew.kernel import runtime_contract as rc
+from bartholomew.kernel.governance.brake_store import GovernanceBrakeState, GovernanceBrakeStore
 from bartholomew.kernel.memory.privacy_guard import set_consent_handler
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.reflection import REFLECTION_KIND
@@ -45,7 +46,6 @@ from bartholomew.kernel.runtime_contract import (
     run_sight_through_runtime_contract,
     run_voice_through_runtime_contract,
 )
-from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
 from identity_interpreter.identity_context import IdentityContext
 
 ALLOW_CONTEXT = IdentityContext(tool_use_default_allowed=True, tool_use_allowlist=[])
@@ -297,7 +297,7 @@ class TestGovernanceGenuinelyGatesExecution:
         scope,
     ):
         set_consent_handler(_approving_handler())  # consent would allow
-        brake = ParkingBrake(BrakeStorage(db_path))
+        brake = GovernanceBrakeStore(db_path)
         brake.engage(scope)
         try:
             spy = Spy([], "capability")
@@ -305,7 +305,7 @@ class TestGovernanceGenuinelyGatesExecution:
             assert result.outcome == "parking_brake_denied"
             assert spy.calls == 0
         finally:
-            brake.disengage()
+            brake.disengage(confirm=True)
 
     async def test_approved_executes_exactly_once(
         self,
@@ -448,12 +448,12 @@ class TestExactlyOneReflectionPerAttempt:
         scope,
     ):
         set_consent_handler(_approving_handler())
-        brake = ParkingBrake(BrakeStorage(db_path))
+        brake = GovernanceBrakeStore(db_path)
         brake.engage(scope)
         try:
             await seam(db_path=db_path, identity_context=ALLOW_CONTEXT, **{cap_kw: Spy([], "c")})
         finally:
-            brake.disengage()
+            brake.disengage(confirm=True)
 
         rows = _reflection_rows(db_path)
         assert len(rows) == 1
@@ -717,13 +717,13 @@ class TestMutationNonVacuity:
         while engaged -- the capability runs, proving the brake really gated
         it."""
         set_consent_handler(_approving_handler())
-        brake = ParkingBrake(BrakeStorage(db_path))
+        brake = GovernanceBrakeStore(db_path)
         brake.engage(scope)
-        monkeypatch.setattr(ParkingBrake, "is_blocked", lambda self, s: False)
+        monkeypatch.setattr(GovernanceBrakeState, "is_blocked", lambda self, s: False)
         try:
             spy = Spy([], "capability")
             result = await seam(db_path=db_path, identity_context=ALLOW_CONTEXT, **{cap_kw: spy})
             assert result.started is True
             assert spy.calls == 1
         finally:
-            brake.disengage()
+            brake.disengage(confirm=True)

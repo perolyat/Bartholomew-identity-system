@@ -140,14 +140,14 @@ class TestEndToEndTasksAndAudit:
 
     async def test_parking_brake_blocks_then_disengage_allows(self, temp_db):
         """Engaging the ParkingBrake's "skills" scope blocks execution; disengaging restores it."""
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
 
         registry = SkillRegistry(db_path=temp_db)
         planner = Planner(policy={}, drives={"drives": []}, mem=None, skill_registry=registry)
 
         assert await registry.load_skill("tasks") is True
 
-        brake = ParkingBrake(BrakeStorage(temp_db))
+        brake = GovernanceBrakeStore(temp_db)
         brake.engage("skills")
 
         blocked_result = await planner.handle_skill_request(
@@ -169,7 +169,7 @@ class TestEndToEndTasksAndAudit:
             row[0] == "tasks" and row[1] == "create" and row[2] == "error" for row in audit_rows
         )
 
-        brake.disengage()
+        brake.disengage(confirm=True)
 
         allowed_result = await planner.handle_skill_request(
             "tasks",

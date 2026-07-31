@@ -239,6 +239,47 @@ def embeddings_rebuild_vss(
         raise typer.Exit(1) from e
 
 
+def _resolve_brake_db_path(db: str | None) -> str:
+    """
+    Resolve the brake commands' effective database path. Phase B, stage B6:
+    previously defaulted to "data/bartholomew.db" -- a different filename
+    than the live daemon's own default ("data/barth.db", via
+    _default_db_path()/BARTH_DB_PATH; see docs/B0_BASELINE_REPORT.md
+    section 1). That divergence meant a bare `bartholomew brake on` could
+    silently engage a brake the running daemon never reads, making the
+    emergency stop a no-op against a live process -- exactly the class of
+    problem this stage exists to close. Now resolves the same way the
+    daemon does unless --db is passed explicitly.
+    """
+    if db is not None:
+        return db
+    from bartholomew.kernel.daemon import _default_db_path
+
+    return _default_db_path()
+
+
+def _report_live_daemon(db_path: str) -> None:
+    """Informational only -- see docs/B6_IMPLEMENTATION.md's explanation of
+    why brake on/off are not fenced by the process lock: engage()/
+    disengage() must keep working as an emergency stop against a live
+    daemon, and GovernanceBrakeStore's transitions are already safe under
+    concurrent access (atomic, revision-tracked)."""
+    from bartholomew.kernel.process_lock import ProcessLock
+
+    lock = ProcessLock(f"{db_path}.lock")
+    if lock.is_held_by_other():
+        pid = lock.owner_pid()
+        console.print(
+            f"[cyan]A live daemon appears to be running{f' (pid {pid})' if pid else ''} "
+            f"against this database -- it will observe this change on its next check.[/cyan]",
+        )
+    else:
+        console.print(
+            "[dim]No live daemon detected against this database -- this sets the "
+            "persisted state a daemon will read when one next starts.[/dim]",
+        )
+
+
 @brake_app.command("on")
 def brake_on(
     scope: list[str] = typer.Option(
@@ -247,58 +288,80 @@ def brake_on(
         help="Scopes to block (global, skills, sight, voice, scheduler)",
     ),
     db: str = typer.Option(
-        default="data/bartholomew.db",
-        help="Path to database file",
+        default=None,
+        help="Path to database file (defaults to the same resolution the live daemon uses)",
     ),
 ):
-    """Engage parking brake (block specified scopes)"""
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    """
+    Engage parking brake (block specified scopes).
 
-    # Default to global if no scopes specified
+    Phase B, stage B6: this now UNIONS the given scopes into whatever is
+    already engaged, rather than replacing them -- running `brake on
+    --scope skills` after `brake on --scope global` keeps "global" blocked
+    too, instead of silently narrowing to only "skills". See
+    docs/B3_IMPLEMENTATION.md for why the previous replace-based behavior
+    was a real fail-closed-governance defect.
+    """
+    from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
+
+    db_path = _resolve_brake_db_path(db)
     scopes = scope if scope else ["global"]
 
-    storage = BrakeStorage(db)
-    brake = ParkingBrake(storage)
-    brake.engage(*scopes)
+    store = GovernanceBrakeStore(db_path)
+    state = store.engage(*scopes, actor="cli")
 
+    console.print(f"\nDatabase: {db_path}")
     console.print(
-        f"\n[yellow]⚠ Parking brake ENGAGED[/yellow] - Scopes: {', '.join(sorted(scopes))}\n",
+        f"[yellow]⚠ Parking brake ENGAGED[/yellow] - Scopes: {', '.join(sorted(state.scopes))}\n",
     )
+    _report_live_daemon(db_path)
 
 
 @brake_app.command("off")
 def brake_off(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(
+        default=None,
+        help="Path to database file (defaults to the same resolution the live daemon uses)",
+    ),
 ):
-    """Disengage parking brake (allow all components)"""
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    """Disengage parking brake (allow all components). Running this command
+    is itself the explicit confirmation GovernanceBrakeStore.disengage()
+    requires."""
+    from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
 
-    storage = BrakeStorage(db)
-    brake = ParkingBrake(storage)
-    brake.disengage()
+    db_path = _resolve_brake_db_path(db)
+    store = GovernanceBrakeStore(db_path)
+    store.disengage(confirm=True, actor="cli")
 
-    console.print("\n[green]✓ Parking brake DISENGAGED[/green] - All components allowed\n")
+    console.print(f"\nDatabase: {db_path}")
+    console.print("[green]✓ Parking brake DISENGAGED[/green] - All components allowed\n")
+    _report_live_daemon(db_path)
 
 
 @brake_app.command("status")
 def brake_status(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(
+        default=None,
+        help="Path to database file (defaults to the same resolution the live daemon uses)",
+    ),
 ):
     """Show parking brake status"""
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
 
-    storage = BrakeStorage(db)
-    brake = ParkingBrake(storage)
-    state = brake.state()
+    db_path = _resolve_brake_db_path(db)
+    store = GovernanceBrakeStore(db_path)
+    state = store.current_state()
 
     console.print("\n[bold]Parking Brake Status[/bold]")
-    console.print(f"Database: {db}\n")
+    console.print(f"Database: {db_path}\n")
 
     if state.engaged:
         console.print("[yellow]Status: ENGAGED (blocking)[/yellow]")
         console.print(f"Scopes: {', '.join(sorted(state.scopes))}\n")
     else:
         console.print("[green]Status: DISENGAGED (allowing all)[/green]\n")
+
+    _report_live_daemon(db_path)
 
 
 def main():

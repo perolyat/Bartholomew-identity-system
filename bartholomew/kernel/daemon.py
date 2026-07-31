@@ -43,6 +43,15 @@ class KernelDaemon:
         self.bus = EventBus()
         self.mem = MemoryStore(db_path)
 
+        # Phase B, stage B6: advisory cross-process lock, acquired at the
+        # start of start() and released at the end of stop() (or by
+        # _unwind_after_failed_start() on a failed start). Construction
+        # does no I/O -- see ProcessLock's own docstring -- so, like
+        # scheduler_store below, safe to always create.
+        from .process_lock import ProcessLock
+
+        self.process_lock = ProcessLock(f"{db_path}.lock")
+
         # Owned by this daemon instance for its entire lifetime -- closed
         # in stop(). Construction is cheap (no I/O, no thread spawned
         # until first use), so it's safe to always create one, even for
@@ -161,6 +170,24 @@ class KernelDaemon:
                 "KernelDaemon.start() called on a poisoned instance -- a previous start() "
                 "failed and this instance's sub-resources may already be closed; construct "
                 "a new KernelDaemon instead of reusing this one",
+            )
+
+        # Phase B, stage B6: fail closed if another process already holds
+        # this database's process lock -- two KernelDaemon instances
+        # racing each other's in-process assumptions (two scheduler loops,
+        # two sets of background tasks) is exactly the failure mode this
+        # lock exists to prevent. Checked before anything else is touched,
+        # so a caller retrying start() later (e.g. once the other process
+        # has exited) is retrying against a genuinely untouched instance --
+        # this is not treated as a poisoning failure, unlike an exception
+        # raised from the try block below.
+        if not self.process_lock.try_acquire():
+            owner_pid = self.process_lock.owner_pid()
+            raise RuntimeError(
+                f"KernelDaemon.start() refused: another process "
+                f"{f'(pid {owner_pid}) ' if owner_pid else ''}already holds the process "
+                f"lock for {self.mem.db_path!r}. Only one daemon may run against a given "
+                f"database at a time.",
             )
 
         await self.mem.init()
@@ -319,6 +346,13 @@ class KernelDaemon:
         except Exception:
             logger.exception("mem cleanup failed during aborted startup")
 
+        # Phase B, stage B6: release the process lock last, only once every
+        # other resource above has had its cleanup attempted -- a caller
+        # retrying start() (on a *new* KernelDaemon instance; this one is
+        # now poisoned) should only be able to acquire it once nothing from
+        # this failed attempt could still be running.
+        self.process_lock.release()
+
     async def _init_experience_kernel(self) -> None:
         """Initialize experience kernel from last snapshot or defaults."""
         db_path = self.mem.db_path
@@ -458,6 +492,13 @@ class KernelDaemon:
                 )
             except Exception:
                 logger.exception("Failed to write clean-shutdown lifecycle marker")
+
+        # Phase B, stage B6: release the process lock last of all -- bound
+        # to this method's own lifecycle-terminal-state conditions (B5),
+        # meaning a caller observing the lock as free has a genuine
+        # guarantee every resource above has already been torn down, not
+        # merely that stop() was called.
+        self.process_lock.release()
 
     def _is_quiet_hours(self, now: datetime) -> bool:
         """Check if current time is within quiet hours."""
