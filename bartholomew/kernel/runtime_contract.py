@@ -228,14 +228,15 @@ async def run_chat_through_runtime_contract(
 
     # Stage 4: Governance -- fail-closed Parking Brake "skills" check, same
     # gate skill-execution uses. Reads through the daemon's shared
-    # GovernanceStore (Phase B stage B4), dual-checked against the legacy
-    # system_flags value until B6 (see governance_bridge.py). The chat
-    # orchestrator's own handle_input() no longer runs a redundant second
-    # check on this path -- see app.py's _respond() closure.
+    # GovernanceStore (Phase B stage B4); the B4-B6 dual-check bridge
+    # against the legacy system_flags value was retired in B6, once
+    # bartholomew/cli.py's `brake on`/`brake off` moved onto GovernanceStore.
+    # The chat orchestrator's own handle_input() no longer runs a redundant
+    # second check on this path -- see app.py's _respond() closure.
     governance_allowed = True
     governance_reason: str | None = None
     try:
-        from bartholomew.orchestrator.safety.governance_bridge import (
+        from bartholomew.orchestrator.safety.governance_store import (
             is_blocked_fail_closed_off_loop,
         )
 
@@ -394,11 +395,11 @@ async def run_drive_through_runtime_contract(
 
     # Stage 4: Governance -- Parking Brake, unchanged from the pre-existing
     # check (still raises on block; see docstring above). Reads through
-    # the shared GovernanceStore when ctx has one (Phase B stage B4),
-    # dual-checked against the legacy system_flags value until B6 (see
-    # governance_bridge.py).
+    # the shared GovernanceStore when ctx has one (Phase B stage B4); the
+    # B4-B6 dual-check bridge against the legacy system_flags value was
+    # retired in B6.
     try:
-        from bartholomew.orchestrator.safety.governance_bridge import (
+        from bartholomew.orchestrator.safety.governance_store import (
             is_blocked_fail_closed_off_loop,
         )
 

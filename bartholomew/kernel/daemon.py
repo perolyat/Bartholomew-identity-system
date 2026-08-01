@@ -58,6 +58,7 @@ class UnsafeStartupError(RuntimeError):
 
 
 _STARTUP_RESOURCE_ORDER = [
+    "process_lock",
     "mem",
     "governance_store",
     "scheduler_schema",
@@ -98,12 +99,23 @@ class KernelDaemon:
         # I/O, no thread spawned until first use), so it's safe to always
         # create, even for a KernelDaemon that's never start()ed.
         from .blocking_executor import SingleWorkerExecutor
+        from .process_lock import ProcessLock
 
         self.blocking_executor = SingleWorkerExecutor(
             thread_name_prefix="kernel-blocking",
             label=db_path,
         )
         self.mem = MemoryStore(db_path, blocking_executor=self.blocking_executor)
+
+        # Cross-process exclusivity guard (Phase B stage B6; see
+        # docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md) -- acquired first in
+        # start(), released last in stop(). Prevents two daemon processes
+        # from starting against the same db_path, and is the anchor CLI
+        # maintenance operations (bartholomew/cli.py's `embeddings
+        # rebuild-vss`) check against before touching the file. Cheap to
+        # construct (no I/O until acquire()), matching this class's
+        # existing pattern for blocking_executor above.
+        self._process_lock = ProcessLock(db_path)
 
         # The daemon's one shared Governance instance (Phase B stage B4;
         # see docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md). Unlike
@@ -114,7 +126,9 @@ class KernelDaemon:
         # is constructed there, off the event loop, not here. None until
         # then; every real call site reachable only after a successful
         # start() (guarded by callers checking _kernel is not None)
-        # already tolerates None via governance_bridge.py's fallback.
+        # already tolerates None via governance_store.is_blocked_fail_
+        # closed{,_off_loop}()'s own fallback (construct a temporary
+        # instance) -- see docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md.
         self.governance_store = None
 
         # Owned by this daemon instance for its entire lifetime -- closed
@@ -256,6 +270,19 @@ class KernelDaemon:
         # indefinitely), and a cleanup failure is logged as secondary,
         # never replacing the primary error.
         try:
+            # Phase B stage B6: acquire the cross-process lock before
+            # touching anything else -- if another daemon process (or a
+            # CLI maintenance command) already holds it, fail fast with a
+            # clear message rather than proceeding to open the database
+            # underneath it. Non-blocking (fails immediately, not a
+            # blocking wait), and off the event loop like every other
+            # blocking call in this method.
+            await run_off_loop(
+                self._process_lock.acquire,
+                executor=self.blocking_executor,
+            )
+            resources_started.append("process_lock")
+
             await self.mem.init()
             resources_started.append("mem")
 
@@ -419,6 +446,19 @@ class KernelDaemon:
             except BaseException:  # secondary only; primary re-raised below
                 logger.exception(
                     "Scheduler store cleanup failed during aborted startup; "
+                    "propagating the original startup error as primary",
+                )
+            try:
+                # Release the process lock (Phase B stage B6) before the
+                # executor that submits it closes -- a no-op if it was
+                # never successfully acquired (ProcessLock.release()'s
+                # own guard).
+                await asyncio.shield(
+                    run_off_loop(self._process_lock.release, executor=self.blocking_executor),
+                )
+            except BaseException:  # secondary only; primary re-raised below
+                logger.exception(
+                    "Process lock release failed during aborted startup; "
                     "propagating the original startup error as primary",
                 )
             try:
@@ -683,6 +723,13 @@ class KernelDaemon:
                     "[Kernel] Not marking this shutdown clean: at least one resource "
                     "was not confirmed terminal (see above).",
                 )
+
+        # Release the process lock (Phase B stage B6) last -- only once
+        # everything above has had its chance to run against a still-locked
+        # database. Direct (not off-loop) call: blocking_executor is
+        # already closed by this point, same precedent as mark_clean_
+        # shutdown() and mem.close()'s tail-of-shutdown calls above.
+        self._process_lock.release()
 
         self.lifecycle_state = DaemonLifecycleState.STOPPED
 

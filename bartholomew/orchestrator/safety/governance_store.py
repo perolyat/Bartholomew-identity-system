@@ -52,6 +52,20 @@ and what belongs in an incident record -- since only the daemon knows
 its own resource-startup sequence; GovernanceStore itself only owns the
 persistence and the fence enforcement. See
 docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md.
+
+Phase B stage B6 retires bartholomew/cli.py's last legacy Governance
+write path (`brake on`/`brake off` now call engage()/disengage() on this
+module's GovernanceStore directly instead of the old system_flags-backed
+ParkingBrake/BrakeStorage), which also retires
+bartholomew.orchestrator.safety.governance_bridge -- B4's temporary
+dual-check bridge that existed only because the CLI's legacy write path
+could otherwise silently diverge from this store. With nothing left
+writing the legacy value, a plain read of this store is sufficient
+again. `is_blocked_fail_closed()`/`is_blocked_fail_closed_off_loop()`
+below are deliberately named and shaped as drop-in replacements for the
+bridge's identically-named functions, so B6's call-site changes are a
+one-line import swap, not a rewrite. See
+docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md.
 """
 
 from __future__ import annotations
@@ -61,6 +75,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from bartholomew.kernel.blocking_executor import SingleWorkerExecutor, run_off_loop
 from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 
 _STATE_ROW_ID = 1
@@ -548,3 +563,44 @@ def run_quick_integrity_check(db_path: str) -> tuple[bool, str]:
         conn.close()
     result = row[0] if row else "unknown"
     return result == "ok", result
+
+
+def is_blocked_fail_closed(
+    scope: str,
+    db_path: str,
+    *,
+    governance_store: GovernanceStore | None = None,
+) -> bool:
+    """
+    Fail-closed Governance read (Phase B stage B6): a plain refresh() +
+    is_blocked() against this store, with no dual-check against the
+    legacy system_flags value -- see this module's docstring for why
+    that's now sufficient. Kept as a module-level function (mirroring
+    the retired governance_bridge.is_blocked_fail_closed()'s name and
+    signature) so callers with no live GovernanceStore instance handy
+    (e.g. a synchronous, non-daemon caller) can pass just a db_path.
+    """
+    store = governance_store or GovernanceStore(db_path)
+    store.refresh()
+    return store.is_blocked(scope)
+
+
+async def is_blocked_fail_closed_off_loop(
+    scope: str,
+    db_path: str,
+    *,
+    governance_store: GovernanceStore | None = None,
+    executor: SingleWorkerExecutor | None = None,
+) -> bool:
+    """
+    Off-event-loop wrapper (Phase B stage B2 pattern) around
+    is_blocked_fail_closed() -- see run_off_loop()'s docstring for the
+    executor/fallback behavior.
+    """
+    return await run_off_loop(
+        is_blocked_fail_closed,
+        scope,
+        db_path,
+        governance_store=governance_store,
+        executor=executor,
+    )

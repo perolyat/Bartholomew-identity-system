@@ -160,13 +160,11 @@ class SkillRegistry:
                 pattern.
             governance_store: Optional bartholomew.orchestrator.safety
                 .governance_store.GovernanceStore (Phase B stage B4). When
-                provided, _is_blocked_by_brake() checks it (dual-checked
-                against the legacy system_flags value too -- see
-                governance_bridge.py -- until B6 retires that path) instead
-                of constructing a fresh instance per call. None (the
-                default, or set later via set_governance_store() once
-                KernelDaemon.start() has constructed one) falls back to a
-                temporary instance per check.
+                provided, _is_blocked_by_brake() checks it directly
+                instead of constructing a fresh instance per call. None
+                (the default, or set later via set_governance_store()
+                once KernelDaemon.start() has constructed one) falls back
+                to a temporary instance per check.
         """
         self._skills_dir = Path(skills_dir)
         self._db_path = db_path
@@ -684,17 +682,16 @@ class SkillRegistry:
         Runs off the event loop (Phase B stage B2; see
         docs/B2_EVENT_LOOP_ISOLATION.md).
 
-        Dual-checked against both the new Governance schema and the
-        legacy system_flags value (Phase B stage B4's temporary bridge --
-        see governance_bridge.py) until B6 migrates bartholomew/cli.py's
-        `brake on`/`brake off` off the legacy path; blocked if either
-        source says blocked.
+        Reads through the daemon's shared GovernanceStore (Phase B stage
+        B4). Phase B stage B6 retired the B4 dual-check bridge against
+        the legacy system_flags value, now that bartholomew/cli.py's
+        `brake on`/`brake off` write only to GovernanceStore.
         """
         if not self._db_path:
             return False
 
         try:
-            from bartholomew.orchestrator.safety.governance_bridge import (
+            from bartholomew.orchestrator.safety.governance_store import (
                 is_blocked_fail_closed_off_loop,
             )
 

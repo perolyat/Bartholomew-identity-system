@@ -343,7 +343,7 @@ async def test_failed_integrity_check_aborts_startup_as_unsafe(config_files, mon
     assert json.loads(recovery) == []  # repair never attempted -- check failed first
     assert outcome == "failed"
     # Confirms exactly how far startup got before aborting.
-    assert set(json.loads(started)) == {"mem", "governance_store"}
+    assert set(json.loads(started)) == {"process_lock", "mem", "governance_store"}
     assert "scheduler_schema" in json.loads(not_started)
 
 
@@ -375,7 +375,65 @@ async def test_failed_startup_records_incident_with_accurate_progress(config_fil
     assert lifecycle_state == "failed"
     assert exc_type == "RuntimeError"
     assert prev_clean is None  # first-ever run, nothing to have an opinion about
-    assert set(json.loads(started)) == {"mem", "governance_store"}
+    assert set(json.loads(started)) == {"process_lock", "mem", "governance_store"}
     assert "scheduler_schema" in json.loads(not_started)
     assert "skills" in json.loads(not_started)
     assert outcome == "failed"
+
+
+# -- Process lock (Phase B stage B6) -----------------------------------------
+
+
+async def test_second_daemon_cannot_start_while_first_is_running(config_files):
+    """The process lock (Phase B stage B6) is the daemon's own
+    single-instance guard: a second KernelDaemon against the same
+    db_path must fail fast, not silently race the first."""
+    from bartholomew.kernel.process_lock import ProcessLockHeldError
+
+    daemon1 = _make_daemon(config_files)
+    await daemon1.start()
+    try:
+        daemon2 = _make_daemon(config_files)
+        with pytest.raises(ProcessLockHeldError):
+            await daemon2.start()
+        assert daemon2.lifecycle_state is DaemonLifecycleState.FAILED
+    finally:
+        await daemon1.stop()
+
+
+async def test_process_lock_released_after_clean_stop_allows_next_start(config_files):
+    daemon1 = _make_daemon(config_files)
+    await daemon1.start()
+    await daemon1.stop()
+
+    daemon2 = _make_daemon(config_files)
+    await daemon2.start()  # must not raise -- lock was released by stop()
+    try:
+        assert daemon2.lifecycle_state is DaemonLifecycleState.RUNNING
+    finally:
+        await daemon2.stop()
+
+
+async def test_process_lock_released_after_failed_start_allows_next_start(
+    config_files,
+    monkeypatch,
+):
+    from bartholomew.kernel.scheduler import persistence
+
+    monkeypatch.setattr(
+        persistence,
+        "ensure_schema",
+        lambda db_path: (_ for _ in ()).throw(RuntimeError("schema init boom")),
+    )
+    daemon1 = _make_daemon(config_files)
+    with pytest.raises(RuntimeError, match="schema init boom"):
+        await daemon1.start()
+    assert daemon1._process_lock.held is False
+
+    monkeypatch.undo()
+    daemon2 = _make_daemon(config_files)
+    await daemon2.start()  # must not raise -- daemon1's failed start released the lock
+    try:
+        assert daemon2.lifecycle_state is DaemonLifecycleState.RUNNING
+    finally:
+        await daemon2.stop()

@@ -2,7 +2,24 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-07-31 (B5 complete: `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` delivered per
+> **Last updated:** 2026-07-31 (B6 complete: `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` delivered
+> per an explicitly approved B6 plan. `bartholomew/cli.py`'s `brake on`/`brake off`/`brake status`
+> now write through `GovernanceStore` directly, retiring the last legacy `ParkingBrake`/
+> `BrakeStorage` write path and, with it, B4's temporary dual-check bridge
+> (`governance_bridge.py`, deleted along with its 8-test file, per B4's own docs' instruction).
+> Adds `bartholomew/kernel/process_lock.py`: a cross-platform (`fcntl.flock`/`msvcrt.locking`)
+> advisory lock `KernelDaemon` acquires first in `start()` and releases last in `stop()` — both the
+> daemon's own single-instance guard and the anchor for B5's lifecycle-terminal-state conditions.
+> `embeddings rebuild-vss` (the one CLI operation genuinely assuming exclusive file access) takes
+> the same lock; `brake on/off/status` deliberately do not, since they're designed to control a
+> *running* daemon and are already protected by GovernanceStore's write fence and revision
+> guarding. CLI-issued Governance writes are now audit-tagged (`"CLI: ..."`), and
+> `WriteFenceClosedError`/`StaleGovernanceWriteError` surface as actionable CLI messages instead of
+> raw tracebacks. Three pre-existing tests that exercised the now-deleted bridge indirectly (via a
+> standalone legacy `ParkingBrake`) were updated to engage `GovernanceStore` directly. Approval of
+> B6 does not authorise B7 or any later stage.)
+>
+> **Previously (2026-07-31, same day):** B5 complete: `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` delivered per
 > an explicitly approved B5 plan. Adds `DaemonLifecycleState` tracking (`FAILED` terminal, never
 > silently reset), a write-fence/clean-marker (`brake_runtime`) and an append-only Startup Incident
 > Log (`startup_incidents`), both in `governance_store.py` since runtime-integrity state stays
@@ -127,7 +144,7 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**B0, B1, B2, B3, B4, and B5 are complete (2026-07-31); no other stage has been approved or
+**B0, B1, B2, B3, B4, B5, and B6 are complete (2026-07-31); no other stage has been approved or
 started.** Each stage's plan was presented and explicitly approved before its implementation began, per this
 document's own approval model. B0's exit deliverable is `docs/B0_PERSISTENCE_BASELINE.md`, a
 repository-grounded current-state report (no implementation, per B0's exit condition). B1's exit
@@ -152,10 +169,18 @@ terminal, never silently reset), a write-fence/clean-marker and append-only Star
 (both in `governance_store.py`), a startup protected region now covering every resource it
 activates (fixing two real unwind gaps found while re-grounding this stage), and conservative
 non-blocking unclean-shutdown recovery (lightweight integrity check, deferred-WAL-checkpoint
-repair, abort only on actual evidence of unsafety). Approval of B5 does **not** authorise B6 or
-any later stage. Each remaining stage requires its own compact, repository-grounded plan —
-produced only as that stage approaches — and its own explicit user approval before implementation
-begins.
+repair, abort only on actual evidence of unsafety). B6's exit deliverable is
+`docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md`: `bartholomew/cli.py`'s `brake on`/`brake off`/
+`brake status` now write through `GovernanceStore` directly (audit-tagged `"CLI: ..."`), retiring
+the legacy `ParkingBrake`/`BrakeStorage` write path and, with it, B4's temporary dual-check bridge
+(`governance_bridge.py`, deleted per B4's own docs' instruction); a new cross-platform
+`ProcessLock` (`bartholomew/kernel/process_lock.py`) is acquired first in `KernelDaemon.start()`
+and released last in `stop()`, and by `embeddings rebuild-vss` — the one CLI operation genuinely
+assuming exclusive file access, deliberately not `brake on/off/status`, which are protected by
+GovernanceStore's own write fence and revision guarding instead. Approval of B6 does **not**
+authorise B7 or any later stage. Each remaining stage requires its own compact,
+repository-grounded plan — produced only as that stage approaches — and its own explicit user
+approval before implementation begins.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -182,7 +207,7 @@ See `RISKS.md`'s tech-debt watchlist.
 | **B3** — Governance schema and Parking Brake persistence ✅ | One durable, auditable Governance representation | B2 | Approved 2026-07-31 | Schema + transition semantics implemented and tested in isolation — delivered as `docs/B3_GOVERNANCE_PERSISTENCE.md` |
 | **B4** — Shared Governance runtime integration ✅ | One shared Parking Brake instance at every real live-daemon call site | B3 | Approved 2026-07-31 | Every real live-daemon construction site (re-inventoried, not assumed) uses the shared instance; standalone CLI construction sites remain out of scope here and are B6's responsibility — delivered as `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` |
 | **B5** — Startup and shutdown integrity ✅ | Reliable failure handling; clean-shutdown evidence for B1–B4's own resources, as lifecycle-terminal-state conditions (no process lock or external-admission draining yet) | B1–B4 | Approved 2026-07-31 | Startup/shutdown sequences verified against the concrete B1–B4 runtime; does not yet cover externally admitted work (B7) — delivered as `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` |
-| **B6** — External Governance control and CLI safety | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | Not approved | Verified on both POSIX and Windows; B5's lifecycle tests rerun with the lock in place |
+| **B6** — External Governance control and CLI safety ✅ | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | Approved 2026-07-31 | Verified on both POSIX and Windows; B5's lifecycle tests rerun with the lock in place — delivered as `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` |
 | **B7** — External request admission and detached work | Shutdown cannot race externally admitted work | B4, B5 | Not approved | Every real ingress point is identity-bound-admission-gated; does not block B1–B4 |
 | **B8** — Remaining persistence consumers | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | Not approved | Each split sub-stage's consumer migrated and tested |
 | **B9** — Recovery, rollback, and adversarial validation | Validate the integrated result; formalise recovery | B0–B8 | Not approved | Adversarial scenarios pass; rollback limitations documented honestly |

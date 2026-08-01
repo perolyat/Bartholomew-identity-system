@@ -59,15 +59,17 @@ def test_chat_references_persisted_experience_kernel_state(client):
 
 
 def test_chat_returns_503_when_parking_brake_engaged(client):
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
-
-    brake = ParkingBrake(BrakeStorage(app_module._kernel.mem.db_path))
-    brake.engage("skills")
+    # Phase B stage B6: the runtime's Governance check reads through
+    # GovernanceStore directly (the B4-B6 dual-check bridge against the
+    # legacy ParkingBrake/system_flags path was retired) -- engage the
+    # daemon's actual shared instance, not a standalone legacy brake.
+    store = app_module._kernel.governance_store
+    store.engage("skills")
     try:
         response = client.post("/api/chat", json={"message": "are you there?"})
         assert response.status_code == 503
     finally:
-        brake.disengage()
+        store.disengage()
 
     # Confirm normal service resumes after disengage.
     response = client.post("/api/chat", json={"message": "back online?"})

@@ -32,7 +32,6 @@ import pytest
 
 from bartholomew.kernel.daemon import KernelDaemon
 from bartholomew.kernel.runtime_contract import run_chat_through_runtime_contract
-from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
 from identity_interpreter.identity_context import IdentityContext
 
 
@@ -126,7 +125,15 @@ class TestScenarioReplay:
         assert f"Active persona: {other_pack}" in result3.interpretation.prompt
 
         # --- Governance: parking brake blocks, then recovers -----------------
-        brake = ParkingBrake(BrakeStorage(daemon.mem.db_path))
+        # Phase B stage B6: engage a GovernanceStore against the daemon's own
+        # db_path directly -- the legacy ParkingBrake/BrakeStorage path this
+        # test used to exercise is no longer wired into the runtime's check.
+        # _boot() (above) deliberately stops short of daemon.start(), so
+        # daemon.governance_store itself is still None here; the runtime's
+        # own check falls back to a temporary instance the same way.
+        from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+        brake = GovernanceStore(daemon.mem.db_path)
         brake.engage("skills")
 
         blocked_result = await run_chat_through_runtime_contract(daemon, "are you there?", _respond)

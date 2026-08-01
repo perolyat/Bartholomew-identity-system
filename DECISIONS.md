@@ -542,3 +542,52 @@
   full unclean-shutdown/integrity-check/recovery path) -- see
   `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` §4 for the complete record.
 - **Date:** 2026-07-31 (Phase B stage B5)
+
+## Decision: Phase B stage B6 retires the CLI's legacy Governance write path instead of extending the dual-check bridge, and scopes the process lock to genuine offline-conflict operations only
+- **Decision:** `bartholomew/cli.py`'s `brake on`/`brake off`/`brake status` -- the three
+  standalone `ParkingBrake`/`BrakeStorage` construction sites B4 explicitly left untouched -- now
+  construct a `GovernanceStore(db)` and call `engage()`/`disengage()`/`state()` directly, tagging
+  every write's audit reason with a `"CLI: ..."` prefix. This retires the CLI's last legacy
+  `system_flags` write path, which in turn retires B4's temporary dual-check bridge
+  (`governance_bridge.py` and its 8-test file, deleted per B4's own docs' explicit instruction) --
+  the four call sites that depended on it (`skill_registry.py`, `runtime_contract.py`'s chat and
+  scheduler gates, `identity_interpreter/orchestrator/orchestrator.py`) now call plain
+  drop-in-shaped `is_blocked_fail_closed()`/`is_blocked_fail_closed_off_loop()` functions added to
+  `governance_store.py` itself. A new cross-platform `ProcessLock`
+  (`bartholomew/kernel/process_lock.py`; POSIX `fcntl.flock`, Windows `msvcrt.locking` over a fixed
+  1-byte region) is acquired first in `KernelDaemon.start()` and released last in `stop()` -- both
+  the daemon's own single-instance guard and the concrete anchor for B5's lifecycle-terminal-state
+  conditions -- and additionally by `bartholomew/cli.py`'s `embeddings rebuild-vss`. `brake
+  on`/`brake off`/`brake status` deliberately do **not** take this lock.
+- **Alternatives:** (a) Extend the dual-check bridge indefinitely instead of migrating the CLI off
+  the legacy path -- rejected: B4's own docs already named this bridge temporary, and keeping two
+  parallel Governance write paths alive permanently is exactly the ownership fragmentation Phase B
+  exists to close. (b) Have `brake on/off/status` also acquire the process lock, on the theory that
+  any CLI-vs-daemon interaction should be lock-gated uniformly -- rejected: `docs/
+  PHASE_B_RISK_MAP.md`'s B6 rows explicitly call for "write fencing only where repository evidence
+  shows it is necessary," and these commands are the intended mechanism for controlling a *running*
+  daemon (the entire point of a remote kill switch); GovernanceStore's own write fence and
+  revision-guarded `disengage()` already protect them, and lock-gating them too would make the kill
+  switch unusable against a live daemon, defeating its purpose. (c) Consolidate
+  `runtime_contract.py`'s sight/voice Governance gates onto `GovernanceStore` in the same pass,
+  since they're still on the legacy `ParkingBrake` path -- rejected: B4 already confirmed these
+  paths unreachable (no live caller) and explicitly deferred them; B6's scope is CLI safety, not
+  reopening an already-decided deferral.
+- **Why:** Re-grounding this stage against the current repository (not assumed from B0/B4's own
+  research) confirmed exactly three legacy CLI construction sites, exactly four bridge-dependent
+  call sites, and exactly one CLI command (`rebuild-vss`) that actually assumes exclusive database
+  access with no revision guarding of its own -- `brake on/off/status` are not a real conflict
+  path, so treating them as one would be scope creep beyond what the evidence supports.
+- **Consequences:** Retiring `governance_bridge.py` broke three pre-existing tests
+  (`tests/test_api_chat_runtime_contract.py`, `tests/test_end_to_end_tasks_and_audit.py`,
+  `tests/test_scenario_replay.py`) that constructed a standalone legacy `ParkingBrake` to simulate
+  an operator engaging the brake, relying on the bridge to make that visible to the runtime's
+  check -- each now engages `GovernanceStore` directly instead, the same shape `cli.py`'s own
+  migration took. `tests/test_daemon_lifecycle_integrity.py`'s two exact-`resources_started`-set
+  assertions needed `"process_lock"` added, since it's now the first resource `start()` activates.
+  Verified against the full governance/runtime-contract/scheduler/lifecycle/CLI test set (76 tests
+  across the four affected/new files) plus the complete non-integration/non-slow suite, both clean,
+  plus 23 new tests split across `tests/test_process_lock.py` (the lock primitive in isolation) and
+  `tests/test_cli_governance_and_lock.py` (CLI commands against real `GovernanceStore`/`ProcessLock`
+  instances) -- see `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §3-4 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B6)

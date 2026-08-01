@@ -133,26 +133,26 @@ class Orchestrator:
         Returns:
             Formatted response string
         """
-        # Parking brake gate for skills scope. Dual-checked against both
-        # the new Governance schema and the legacy system_flags value
-        # (Phase B stage B4's temporary bridge -- see
-        # bartholomew.orchestrator.safety.governance_bridge) until B6
-        # migrates bartholomew/cli.py's `brake on`/`brake off` off the
-        # legacy path. Synchronous by design: this method has no access
-        # to the daemon's shared, off-loop-capable instances, and its own
-        # callers (app.py) are responsible for running it off the event
-        # loop where that matters -- see app.py's chat() route.
+        # Parking brake gate for skills scope. Reads through GovernanceStore
+        # (Phase B stage B4); the B4-B6 dual-check bridge against the legacy
+        # system_flags value (bartholomew.orchestrator.safety.
+        # governance_bridge) was retired in B6, once bartholomew/cli.py's
+        # `brake on`/`brake off` moved onto GovernanceStore. Synchronous by
+        # design: this method has no access to the daemon's shared,
+        # off-loop-capable instances, and its own callers (app.py) are
+        # responsible for running it off the event loop where that matters
+        # -- see app.py's chat() route.
         brake_blocked = False
         if not skip_governance_check:
             try:
                 from bartholomew.kernel.daemon import _default_db_path
-                from bartholomew.orchestrator.safety.governance_bridge import (
+                from bartholomew.orchestrator.safety.governance_store import (
                     is_blocked_fail_closed,
                 )
 
                 brake_blocked = is_blocked_fail_closed("skills", _default_db_path())
             except (ImportError, Exception):
-                # Governance bridge not available or schema not initialized
+                # Governance store not available or schema not initialized
                 # Continue normally
                 pass
 

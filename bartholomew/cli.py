@@ -136,11 +136,28 @@ def embeddings_rebuild_vss(
     import os
     import sqlite3
 
+    from bartholomew.kernel.process_lock import ProcessLock, ProcessLockHeldError
+
     console.print(f"\n[bold]Rebuilding VSS for {db}[/bold]\n")
 
     if not os.path.exists(db):
         console.print(f"[red]Database not found: {db}[/red]\n")
         raise typer.Exit(1)
+
+    # Phase B stage B6: unlike brake on/off/status (which are designed to
+    # control a *running* daemon and are protected by GovernanceStore's own
+    # write fence + revision guarding instead), this operation rewrites
+    # memory_embeddings_vss and its triggers wholesale with no revision
+    # guarding of its own -- it assumes exclusive access to the database
+    # file, so it takes the process lock and refuses outright if the daemon
+    # (or another maintenance command) already holds it, rather than risking
+    # a conflicting concurrent write.
+    lock = ProcessLock(db)
+    try:
+        lock.acquire()
+    except ProcessLockHeldError as e:
+        console.print(f"[red]{e}[/red]\n")
+        raise typer.Exit(1) from e
 
     try:
         with sqlite3.connect(db) as conn:
@@ -237,6 +254,11 @@ def embeddings_rebuild_vss(
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]\n")
         raise typer.Exit(1) from e
+    finally:
+        lock.release()
+
+
+_CLI_BRAKE_REASON_PREFIX = "CLI"
 
 
 @brake_app.command("on")
@@ -252,14 +274,23 @@ def brake_on(
     ),
 ):
     """Engage parking brake (block specified scopes)"""
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    from bartholomew.orchestrator.safety.governance_store import (
+        GovernanceStore,
+        WriteFenceClosedError,
+    )
 
     # Default to global if no scopes specified
     scopes = scope if scope else ["global"]
 
-    storage = BrakeStorage(db)
-    brake = ParkingBrake(storage)
-    brake.engage(*scopes)
+    store = GovernanceStore(db)
+    try:
+        store.engage(
+            *scopes,
+            reason=f"{_CLI_BRAKE_REASON_PREFIX}: brake on --scope {','.join(sorted(scopes))}",
+        )
+    except WriteFenceClosedError as e:
+        console.print(f"\n[red]✗ Could not engage: {e}[/red]\n")
+        raise typer.Exit(1) from e
 
     console.print(
         f"\n[yellow]⚠ Parking brake ENGAGED[/yellow] - Scopes: {', '.join(sorted(scopes))}\n",
@@ -271,11 +302,24 @@ def brake_off(
     db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
 ):
     """Disengage parking brake (allow all components)"""
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    from bartholomew.orchestrator.safety.governance_store import (
+        GovernanceStore,
+        StaleGovernanceWriteError,
+        WriteFenceClosedError,
+    )
 
-    storage = BrakeStorage(db)
-    brake = ParkingBrake(storage)
-    brake.disengage()
+    store = GovernanceStore(db)
+    try:
+        store.disengage(reason=f"{_CLI_BRAKE_REASON_PREFIX}: brake off")
+    except WriteFenceClosedError as e:
+        console.print(f"\n[red]✗ Could not disengage: {e}[/red]\n")
+        raise typer.Exit(1) from e
+    except StaleGovernanceWriteError as e:
+        console.print(
+            f"\n[red]✗ Could not disengage: {e}[/red]\n"
+            "[yellow]State changed since it was last read -- rerun `brake status` and retry.[/yellow]\n",
+        )
+        raise typer.Exit(1) from e
 
     console.print("\n[green]✓ Parking brake DISENGAGED[/green] - All components allowed\n")
 
@@ -285,11 +329,10 @@ def brake_status(
     db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
 ):
     """Show parking brake status"""
-    from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
 
-    storage = BrakeStorage(db)
-    brake = ParkingBrake(storage)
-    state = brake.state()
+    store = GovernanceStore(db)
+    state = store.state()
 
     console.print("\n[bold]Parking Brake Status[/bold]")
     console.print(f"Database: {db}\n")
