@@ -118,7 +118,7 @@ def test_brake_off_surfaces_stale_write_with_actionable_message(db_path, monkeyp
         StaleGovernanceWriteError,
     )
 
-    def raising_disengage(self, *, reason=None, expected_revision=None):
+    def raising_disengage(self, *, reason=None, expected_revision=None, actor=None):
         raise StaleGovernanceWriteError("state changed since it was last read")
 
     monkeypatch.setattr(GovernanceStoreClass, "disengage", raising_disengage)

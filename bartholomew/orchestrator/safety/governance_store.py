@@ -121,6 +121,20 @@ class RuntimeMarker:
     write_fence_open: bool
 
 
+def _ensure_actor_column(conn) -> None:
+    """
+    Additive migration (Stage 1, S1.1): older governance_audit tables were
+    created before the `actor` column existed. CREATE TABLE IF NOT EXISTS
+    above is a no-op against an existing table, so this backfills the
+    column on databases that predate it. Safe to call every time
+    ensure_schema() runs -- checking PRAGMA table_info() first makes it
+    idempotent against a database that already has the column.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(governance_audit)").fetchall()}
+    if "actor" not in cols:
+        conn.execute("ALTER TABLE governance_audit ADD COLUMN actor TEXT")
+
+
 def ensure_schema(db_path: str) -> None:
     """
     Create parking_brake_state and governance_audit if missing, and
@@ -154,10 +168,12 @@ def ensure_schema(db_path: str) -> None:
                 action TEXT NOT NULL,
                 scopes TEXT NOT NULL,
                 reason TEXT,
-                revision INTEGER NOT NULL
+                revision INTEGER NOT NULL,
+                actor TEXT
             )
             """,
         )
+        _ensure_actor_column(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS brake_runtime (
@@ -239,9 +255,16 @@ def _import_legacy_state_if_needed(conn) -> None:
     )
     if action is not None:
         conn.execute(
-            "INSERT INTO governance_audit (ts, action, scopes, reason, revision) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (now, action, json.dumps(scopes), "imported from legacy system_flags row", revision),
+            "INSERT INTO governance_audit (ts, action, scopes, reason, revision, actor) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                now,
+                action,
+                json.dumps(scopes),
+                "imported from legacy system_flags row",
+                revision,
+                "migration",
+            ),
         )
     conn.commit()
 
@@ -282,21 +305,38 @@ class GovernanceStore:
         st = self._cache
         return st.engaged and ("global" in st.scopes or scope in st.scopes)
 
-    def engage(self, *scopes: str, reason: str | None = None) -> GovernanceState:
+    def engage(
+        self,
+        *scopes: str,
+        reason: str | None = None,
+        actor: str | None = None,
+    ) -> GovernanceState:
         """
         Engage (tighten). Always applies -- monotonic tightening is never
         refused, regardless of this instance's cached revision. Replace
         semantics: the given scopes replace the persisted set (see this
         module's docstring for the accepted limitation this carries).
+
+        `actor` identifies who/what requested the transition (e.g. "cli",
+        "user", a future authenticated identity) for the audit trail --
+        purely descriptive, not verified or authorized here (see the
+        `governance` API route module for the current, no-auth caveat).
         """
         scopes_set = set(scopes) if scopes else {"global"}
-        return self._write(engaged=True, scopes=scopes_set, action="engaged", reason=reason)
+        return self._write(
+            engaged=True,
+            scopes=scopes_set,
+            action="engaged",
+            reason=reason,
+            actor=actor,
+        )
 
     def disengage(
         self,
         *,
         reason: str | None = None,
         expected_revision: int | None = None,
+        actor: str | None = None,
     ) -> GovernanceState:
         """
         Disengage (loosen). Refused with StaleGovernanceWriteError if
@@ -308,6 +348,8 @@ class GovernanceStore:
         expected_revision=<the value read from a fresh refresh()>,
         making that an explicit, visible choice rather than an accident
         of stale caching.
+
+        `actor`: see engage()'s docstring.
         """
         if expected_revision is None:
             expected_revision = self._cache.revision
@@ -317,6 +359,7 @@ class GovernanceStore:
             action="disengaged",
             reason=reason,
             expected_revision=expected_revision,
+            actor=actor,
         )
 
     def _write(
@@ -327,6 +370,7 @@ class GovernanceStore:
         action: str,
         reason: str | None,
         expected_revision: int | None = None,
+        actor: str | None = None,
     ) -> GovernanceState:
         """
         Writes the new state and its audit record in one transaction --
@@ -382,9 +426,9 @@ class GovernanceStore:
                 (int(engaged), json.dumps(sorted_scopes), new_revision, now, _STATE_ROW_ID),
             )
             conn.execute(
-                "INSERT INTO governance_audit (ts, action, scopes, reason, revision) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (now, action, json.dumps(sorted_scopes), reason, new_revision),
+                "INSERT INTO governance_audit (ts, action, scopes, reason, revision, actor) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (now, action, json.dumps(sorted_scopes), reason, new_revision, actor),
             )
             conn.commit()
         except BaseException:

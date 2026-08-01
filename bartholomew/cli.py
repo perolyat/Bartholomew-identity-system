@@ -287,6 +287,7 @@ def brake_on(
         store.engage(
             *scopes,
             reason=f"{_CLI_BRAKE_REASON_PREFIX}: brake on --scope {','.join(sorted(scopes))}",
+            actor="cli",
         )
     except WriteFenceClosedError as e:
         console.print(f"\n[red]✗ Could not engage: {e}[/red]\n")
@@ -310,7 +311,7 @@ def brake_off(
 
     store = GovernanceStore(db)
     try:
-        store.disengage(reason=f"{_CLI_BRAKE_REASON_PREFIX}: brake off")
+        store.disengage(reason=f"{_CLI_BRAKE_REASON_PREFIX}: brake off", actor="cli")
     except WriteFenceClosedError as e:
         console.print(f"\n[red]✗ Could not disengage: {e}[/red]\n")
         raise typer.Exit(1) from e

@@ -115,6 +115,27 @@
     </details>
   </div>
 
+  <!-- Stage 1 (S1.1): Parking Brake -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🅿️ Parking Brake</h3>
+      <span id="brake-status" class="badge">brake: checking…</span>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <label><input type="checkbox" class="brake-scope" value="global"/> global</label>
+      <label><input type="checkbox" class="brake-scope" value="skills"/> skills</label>
+      <label><input type="checkbox" class="brake-scope" value="sight"/> sight</label>
+      <label><input type="checkbox" class="brake-scope" value="voice"/> voice</label>
+      <label><input type="checkbox" class="brake-scope" value="scheduler"/> scheduler</label>
+    </div>
+    <div class="row">
+      <button class="dismiss" onclick="engageBrake()">⛔ Engage</button>
+      <button class="ack" onclick="disengageBrake()">✓ Disengage</button>
+      <button onclick="refreshBrake()">Refresh</button>
+    </div>
+    <div id="brake-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
+  </div>
+
   <!-- Stage 3: Self-State Panel -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
@@ -310,6 +331,70 @@
         document.getElementById("health").textContent = "health failed: " + e;
         document.getElementById("kernel-status").textContent = "kernel: error";
         document.getElementById("kernel-status").className = "badge kernel-offline";
+      }
+    }
+
+    // === Stage 1 (S1.1): Parking Brake ===
+    let brakeRevision = 0;
+
+    async function refreshBrake(){
+      try{
+        const r = await fetch(API + "/api/governance/brake");
+        const j = await r.json();
+        brakeRevision = j.revision;
+
+        const el = document.getElementById("brake-status");
+        if(j.engaged){
+          el.textContent = `brake: ENGAGED (${j.scopes.length ? j.scopes.join(', ') : 'global'})`;
+          el.className = "badge kernel-offline";
+        } else {
+          el.textContent = "brake: disengaged";
+          el.className = "badge kernel-online";
+        }
+        document.getElementById("brake-detail").textContent = `revision: ${j.revision}`;
+      }catch(e){
+        document.getElementById("brake-status").textContent = "brake: error";
+        document.getElementById("brake-status").className = "badge kernel-offline";
+      }
+    }
+
+    function selectedBrakeScopes(){
+      return Array.from(document.querySelectorAll(".brake-scope:checked")).map(el => el.value);
+    }
+
+    async function engageBrake(){
+      const scopes = selectedBrakeScopes();
+      try{
+        await fetch(API + "/api/governance/brake/engage", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ scopes, reason: "engaged via minimal UI", actor: "user" })
+        });
+        await refreshBrake();
+      }catch(e){
+        alert("Failed to engage brake: " + e);
+      }
+    }
+
+    async function disengageBrake(){
+      try{
+        const r = await fetch(API + "/api/governance/brake/disengage", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            reason: "disengaged via minimal UI",
+            actor: "user",
+            expected_revision: brakeRevision
+          })
+        });
+        if(r.status === 409){
+          alert("Brake state changed since it was last read here — refreshing; please retry.");
+          await refreshBrake();
+          return;
+        }
+        await refreshBrake();
+      }catch(e){
+        alert("Failed to disengage brake: " + e);
       }
     }
 
@@ -714,6 +799,7 @@
 
     // === Initial Load ===
     refreshHealth();
+    refreshBrake();
     refreshSelfState();
     refreshPersona();
     refreshEpisodes();
@@ -724,6 +810,7 @@
     // === Auto-refresh ===
     setInterval(refreshSelfState, 30000);  // Self-state every 30s
     setInterval(refreshEpisodes, 60000);   // Episodes every 60s
+    setInterval(refreshBrake, 15000);      // Parking brake every 15s (safety-relevant)
   </script>
 </body>
 </html>
