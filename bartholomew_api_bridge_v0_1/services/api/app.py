@@ -7,8 +7,9 @@ import time as _time
 from datetime import datetime
 
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # Load timezone from kernel config (single source of truth)
 with open("config/kernel.yaml", encoding="utf-8") as f:
@@ -26,6 +27,8 @@ except Exception:
     TZ = tz.gettz(_tz_name)
 
 from prometheus_client import PlatformCollector, ProcessCollector
+
+from bartholomew.kernel.admission_gate import AdmissionFrozenError, AdmissionGate
 
 from . import db_ctx
 from .db import DB_PATH
@@ -94,10 +97,70 @@ orch = Orchestrator()
 _kernel = None
 _kernel_task = None
 
+# Phase B, stage B7: every real external ingress point (docs/B0_BASELINE_REPORT.md
+# section 6's ~30 routes) is admission-gated so shutdown() below can freeze
+# new admissions and deterministically drain in-flight ones before tearing
+# down _kernel -- an in-flight request mid-call into run_chat_through_
+# runtime_contract() (or any other Governance-gated path) must not be
+# silently abandoned by a race with _kernel.stop().
+#
+# Exempt: routes that never touch _kernel's in-process objects (verified
+# by grep, not assumed -- app.py's, self_state.py's, and metrics.py's
+# handlers were each checked for `_kernel.` references):
+#   - /healthz: documented as "for load balancers and monitoring"; pure
+#     computed response, no kernel/DB access at all.
+#   - /metrics (and its /internal/metrics mount): reads only the
+#     Prometheus registry (routes/metrics.py), never _kernel.
+#   - /api/liveness/*: reads app.state and independent WAL-safe SQL
+#     against DB_PATH directly (routes/liveness.py), never _kernel --
+#     WAL mode already makes those reads safe regardless of _kernel.stop()'s
+#     progress (bartholomew/kernel/db_ctx.py's own docstring), so admission
+#     gating protects nothing here.
+# All three are monitoring/diagnostic surfaces, not governed work -- gating
+# them would risk an orchestrator misreading a draining-but-healthy process
+# as hung and escalating to a harder kill, defeating the point of a
+# graceful drain. Every other route (chat, self-state, nudges, reflection,
+# kernel/command, persona, episodes, working_memory) does reach into
+# _kernel's live objects (confirmed the same way) and stays gated.
+admission_gate = AdmissionGate(name="api")
+_ADMISSION_EXEMPT_PATHS = {"/healthz", "/metrics", "/internal/metrics"}
+_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness/",)
+
+
+def _admission_exempt(path: str) -> bool:
+    return path in _ADMISSION_EXEMPT_PATHS or path.startswith(_ADMISSION_EXEMPT_PREFIXES)
+
+
+@app.middleware("http")
+async def _admission_gate_middleware(request: Request, call_next):
+    if _admission_exempt(request.url.path):
+        return await call_next(request)
+
+    try:
+        token = await admission_gate.admit(f"{request.method} {request.url.path}")
+    except AdmissionFrozenError:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Server is shutting down; not accepting new requests"},
+        )
+
+    try:
+        return await call_next(request)
+    finally:
+        await token.release()
+
 
 @app.on_event("startup")
 async def startup():
-    global _kernel, _kernel_task
+    global _kernel, _kernel_task, admission_gate
+
+    # Phase B, stage B7: a fresh, unfrozen gate every startup -- shutdown()
+    # freezes the module-level instance, and this app can be started and
+    # stopped more than once within one process (every TestClient-based
+    # test does exactly this via its context manager), so reusing a gate
+    # that a prior shutdown() already froze would permanently 503 every
+    # request for the rest of the process's life.
+    admission_gate = AdmissionGate(name="api")
 
     # Initialize state for liveness + metrics
     app.state.start_monotonic = _time.monotonic()
@@ -138,6 +201,17 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    # Phase B, stage B7: freeze new admissions first (so nothing new can
+    # start racing the teardown below), then bound-wait for whatever's
+    # already in flight -- before touching _kernel at all. A timed-out
+    # drain is logged by AdmissionGate.drain() itself and shutdown proceeds
+    # anyway (abandoned, not force-cancelled -- this module has no
+    # mechanism to kill a request handler's own task; that's the ASGI
+    # server's concern), matching the same confirmed-or-logged-and-proceed
+    # posture _kernel.stop() already uses for its own executors.
+    await admission_gate.freeze()
+    await admission_gate.drain(timeout=30.0)
+
     if _kernel:
         await _kernel.stop()
 
