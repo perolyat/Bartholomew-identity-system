@@ -333,3 +333,416 @@
   decision; this is a documentation-only architectural decision recording the target, not the
   implementation of it.
 - **Date:** 2026-07-28 (documentation reconciliation pass 2)
+
+## Decision: Phase B stage B2 generalizes `SchedulerStore`'s pattern into a storage-agnostic shared executor
+- **Decision:** `bartholomew/kernel/blocking_executor.py`'s `SingleWorkerExecutor` (one dedicated
+  worker thread, a submission gate limiting it to one in-flight operation, and a `close()` that
+  bound-waits for confirmed termination rather than assuming it) is the one, reusable mechanism for
+  offloading blocking, non-async-safe work off the event loop — not a second SQLite-specific
+  executor. `scheduler/store.py`'s `SchedulerStore`, the original instance of this pattern, was
+  refactored to delegate to it (a thin `persistence.py`-specific facade) rather than left as an
+  independent duplicate. `KernelDaemon` owns one shared instance (`self.blocking_executor`), closed
+  before `MemoryStore`'s final checkpoint alongside `scheduler_store`, folded into the same
+  drain-confirmation gate. All 5 event-loop-blocking caller groups
+  `docs/B1_SHARED_CONNECTION_POLICY.md` §2 assigned to B2 (FTS startup schema init,
+  `SkillRegistry.load_enabled_skills()`, `ParkingBrake` construction across 4
+  `runtime_contract.py` functions plus skill execution, persona/narrator calls, memory
+  chunking/re-embedding) were migrated onto it via a small `run_off_loop(fn, *args, executor=None,
+  **kwargs)` helper that falls back to a one-off `asyncio.to_thread()` for call sites with no
+  owning daemon instance (`run_sight_through_runtime_contract`/`run_voice_through_runtime_contract`,
+  neither of which take a daemon/ctx parameter).
+- **Alternatives:** (a) Leave `SchedulerStore` as-is and build a second, independent
+  SQLite-specific `DedicatedDbExecutor` per the archived design's original two-lane proposal —
+  rejected: `docs/B0_PERSISTENCE_BASELINE.md` §2 found no such class exists, and building a second
+  bespoke mechanism would repeat exactly the kind of duplicate-implementation problem B1 had just
+  finished resolving for `db_ctx.py`. (b) One dedicated `SingleWorkerExecutor` per subsystem
+  (persona, narrator, parking brake, memory chunking) rather than one shared instance — rejected
+  as unnecessary added complexity for this pass: SQLite's own file-level locking already serializes
+  writes regardless of how many Python threads submit them, and none of B1's 5 assigned groups
+  have a documented cross-group ordering requirement (unlike the scheduler's own tick-loop
+  ordering, which is why `SchedulerStore` correctly keeps its own separate lane rather than sharing
+  this one). (c) Scatter bare `asyncio.to_thread()` calls at every one of the 9 call sites instead
+  of building a reusable primitive — rejected for the same reason `DECISIONS.md`'s prior
+  "Scheduler persistence moved off the event loop" entry already rejected it: no enforced
+  backpressure/sequential-submission invariant, reusing the shared default executor unconditionally
+  even where a dedicated lane is cheap and available. `run_off_loop()`'s fallback to
+  `asyncio.to_thread()` for the two daemon-less sight/voice call sites is a narrow, deliberate
+  exception to this, not a reversal of it.
+- **Why:** `docs/B0_PERSISTENCE_BASELINE.md` §3 (as corrected during PR #33 review) confirmed FTS
+  startup schema init and `SkillRegistry.load_enabled_skills()` run synchronously during
+  `KernelDaemon.start()`'s first and fourth steps respectively, directly on the event loop; §3 also
+  confirmed `ParkingBrake.__init__()` itself performs the blocking SQLite read (`is_blocked()`
+  afterward only reads the in-memory cache that construction populated), and that construction is
+  reachable, unwrapped, from 4 `runtime_contract.py` functions plus skill execution. Every one of
+  these sits on a live, frequently-exercised path (daemon startup, every chat message, every
+  scheduler drive, every skill action) sharing the same event loop as HTTP request handling.
+- **Consequences:** `MemoryStore.__init__()` and `SkillRegistry.__init__()` both gained an optional
+  `blocking_executor` constructor argument (default `None`, fully backward compatible — existing
+  callers/tests that don't pass one get `run_off_loop()`'s `asyncio.to_thread()` fallback, not a
+  new required dependency). `skill_registry.py`'s `_is_blocked_by_brake()` is now `async def`
+  (single call site, `execute_action()`, updated to `await` it). A new shared helper,
+  `bartholomew.orchestrator.safety.parking_brake.construct_parking_brake_off_loop()`, is the one
+  place all 5 `ParkingBrake` construction-and-check call sites route through — a future change to
+  how that construction is offloaded only needs to change one function. Verified against the full
+  governance/runtime-contract test set including `test_chat_returns_503_when_parking_brake_engaged`
+  (the fail-closed path this change touches most directly), plus the full non-integration/non-slow
+  suite — see `docs/B2_EVENT_LOOP_ISOLATION.md` §4 for the complete verification record, including
+  the one pre-existing, already-documented flaky test this pass re-confirmed but did not touch
+  (`tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes`).
+- **Date:** 2026-07-31 (Phase B stage B2)
+
+## Decision: Phase B stage B3 builds a new governance schema/store alongside, not in place of, `ParkingBrake`
+- **Decision:** `bartholomew/orchestrator/safety/governance_store.py` introduces a governance-owned
+  schema (`parking_brake_state`, `governance_audit` — narrow, separate from `MemoryStore`'s schema)
+  and a `GovernanceStore` class, tested in isolation, built as a new module alongside the current
+  `ParkingBrake`/`BrakeStorage` rather than modifying them in place. `engage()` keeps simple replace
+  semantics (not union), version-guarded only on the loosening side: `disengage()` defaults its
+  `expected_revision` check to the calling instance's own last-loaded revision, raising
+  `StaleGovernanceWriteError` instead of silently regressing a more-recent, more-restrictive state;
+  `engage()` (tightening) is never refused regardless of staleness. State and its audit record are
+  written in one transaction, closing the gap where `BrakeStorage.append_memory()`'s audit trail was
+  silently dead code in production (no real construction site ever passes a `memory_store`). The
+  archived design's third table, `brake_runtime`, is deferred entirely to B5, where it's actually
+  consumed (it is the write-fence/clean-shutdown-marker mechanism, not part of B3's own scope).
+- **Alternatives:** (a) Modify `parking_brake.py`'s existing `BrakeStorage`/`ParkingBrake` in place
+  — rejected: B3's isolated tests could then accidentally exercise or destabilize the still-live,
+  wired-in code path before B4 has done the runtime-integration work that's supposed to gate that
+  transition. (b) Union/monotonic-widening `engage()` semantics, per the archived design's original
+  proposal — rejected for this stage: `docs/B0_PERSISTENCE_BASELINE.md`/B3's own re-grounding found
+  exactly one real production caller of `engage()` today (`bartholomew/cli.py`'s `brake on`), so
+  building concurrency-safe union semantics now is complexity for a caller that doesn't exist yet;
+  revisit only if B4's live-daemon re-inventory finds a genuine concurrent caller. (c) Guard `engage()`
+  with the same revision check as `disengage()` — rejected: the non-negotiable invariant is that
+  tightening is never refused, only loosening requires confirmation: guarding `engage()` too would
+  let a stale reader block a legitimate emergency tightening. (d) Build `brake_runtime` now for
+  schema-ownership completeness even though nothing consumes it yet — rejected as the same kind of
+  disconnected, untested proposal B0/B1 have been correcting elsewhere in this phase.
+- **Why:** `docs/B0_PERSISTENCE_BASELINE.md`'s re-verification (independently repeated at B3 plan
+  start) found governance state currently lives inside `MemoryStore`'s own `system_flags` table —
+  a real schema-ownership violation of this phase's "one authoritative schema per governance table"
+  invariant — with no version guard of any kind and a completely non-functional audit mechanism.
+- **Consequences:** `ParkingBrake`/`BrakeStorage` are functionally unchanged by this stage; the
+  live runtime still reads/writes `system_flags` exactly as before. Wiring `GovernanceStore` in as
+  the runtime's shared instance, migrating the 9 real construction sites `docs/B0_PERSISTENCE
+  _BASELINE.md` §5 found, and revisiting the replace-vs-union question against real live-daemon
+  callers, are all B4's work, not resolved here. Verified with 19 isolated tests, including two
+  genuine crash-consistency tests: a real SQLite `BEFORE INSERT` trigger injects a failure between
+  the state `UPDATE` and the audit `INSERT` (Python's `sqlite3.Connection` is a C type and can't be
+  monkeypatched, so a DB-level fault injection was used instead of a mock), and a successful write
+  is checked for survival across a full connection/instance drop-and-reopen — see
+  `docs/B3_GOVERNANCE_PERSISTENCE.md` §3 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B3)
+
+## Decision: Phase B stage B4 bridges the live daemon and the legacy CLI with a temporary fail-closed dual-check
+- **Decision:** `KernelDaemon` now owns one shared `GovernanceStore` instance (B3's schema),
+  constructed off the event loop in `start()`, wired into every real live-daemon Parking Brake
+  construction site: `skill_registry.py`'s `_is_blocked_by_brake`, `runtime_contract.py`'s chat and
+  drive Governance gates, and `Orchestrator.handle_input()`'s mainline path (via a new
+  `skip_governance_check` parameter, set by `app.py`'s `_respond()` closure since
+  `run_chat_through_runtime_contract` already gates it). Standalone CLI construction sites
+  (`bartholomew/cli.py`) are untouched, per `docs/PHASE_B_OVERVIEW.md`'s explicit B4 exit
+  condition — B6's responsibility. Because the CLI keeps writing only the legacy `system_flags`
+  value until B6, a new, deliberately temporary module,
+  `bartholomew/orchestrator/safety/governance_bridge.py`, makes every live check consult *both*
+  sources, blocked if either says blocked — so the CLI kill switch keeps affecting the running
+  daemon through the B4-to-B6 migration window. Its own docstring, and
+  `tests/test_governance_bridge_dual_check.py`'s, both state plainly that both files must be
+  deleted in the same B6 change that migrates the CLI off `system_flags`.
+- **Alternatives:** (a) Accept the gap and document it — rejected: a real, avoidable operator-facing
+  safety regression (the emergency kill switch silently stops working against the live daemon)
+  for however long B6 takes is not an acceptable cost merely to keep B4's diff smaller. (b) Have B4
+  also switch the CLI to write through the new schema now — rejected as a genuine scope violation:
+  B6 owns CLI treatment specifically because of process-lock/race-safety design it hasn't done yet,
+  and a rushed partial CLI migration here risks introducing a worse race than the one being
+  guarded against. (c) Cache Governance state in the shared instance rather than refreshing on every
+  check — rejected: today's behavior (every check re-reads from disk) is what makes "CLI writes,
+  daemon picks it up on the very next check" work at all; a cache would have made the split-brain
+  window *worse*, not better, since even the new-schema side would go stale between refreshes.
+- **Why:** `docs/B0_PERSISTENCE_BASELINE.md`'s inventory, re-verified at this stage's plan start,
+  confirmed `bartholomew/cli.py`'s `brake on`/`brake off` are still the only real write path for
+  Parking Brake state; consolidating the daemon's reads onto B3's new schema without also
+  addressing that write-path gap would have silently broken CLI-driven emergency control the moment
+  this stage merged — the exact kind of "Independent emergency control" invariant
+  `CONSTITUTION.md`'s safety checklist exists to catch.
+- **Consequences:** Every live Governance check now does two reads (new schema + legacy
+  `system_flags`) instead of one until B6 lands — an accepted, temporary, and explicitly-documented
+  cost. A first version of the bridge (plain `store.is_blocked() or legacy_is_blocked()`, read-only)
+  turned out to be genuinely broken and was caught before merge by
+  `tests/test_end_to_end_tasks_and_audit.py::test_parking_brake_blocks_then_disengage_allows`:
+  `GovernanceStore.__init__()` imports the legacy value exactly once, and since nothing calls
+  `engage()`/`disengage()` on the shared instance directly, that one-time snapshot never re-synced —
+  a later legacy `disengage()` was invisible to the bridge, which would have kept reporting
+  "blocked" forever. Fixed by having every check mirror the current legacy value into the store via
+  a real, audited write whenever they disagree, but only when the store's own latest transition
+  isn't already a genuine (non-mirror, non-`"migrated"`) engagement — so a mirror can tighten or
+  match, never silently loosen, a real engagement the store holds independently. See
+  `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` §2 for the full mechanism and why each direction is
+  safe. Also fixed while re-inventorying construction sites for this stage: `Orchestrator
+  .handle_input()`'s own Parking Brake check was textually synchronous, so B0's/B2's "sync call
+  inside `async def`" search missed that it was reachable on the event loop on every chat message
+  via `app.py`'s `async def _respond(...)` closure, and was entirely redundant with
+  `run_chat_through_runtime_contract`'s own gate on that path; the `_kernel is None` fallback path
+  (the one case where `handle_input()`'s check genuinely is the sole gate) is now wrapped in
+  `asyncio.to_thread(...)` at its one call site rather than needing every internal blocking call
+  individually off-loaded. Verified against the full governance/runtime-contract/scheduler/
+  lifecycle test set (211 tests) plus the complete non-integration/non-slow suite, both clean, and
+  a temporary regression suite (8 tests) covering the bridge's four originally-required scenarios,
+  scope-specificity, `global`-scope behavior, and the staleness bug above — see
+  `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` §4 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B4)
+
+## Decision: Phase B stage B5 keeps the write-fence/clean-marker and Startup Incident Log under Governance's authority
+- **Decision:** `KernelDaemon` gains explicit `DaemonLifecycleState` tracking (`NOT_STARTED ->
+  STARTING -> RUNNING -> STOPPING -> STOPPED`, with `STARTING -> FAILED` as the other branch).
+  `FAILED` is terminal for a given instance -- `start()` refuses to run again on an instance past
+  `NOT_STARTED`; a retry is expected to be a fresh process with a fresh instance, never a mutation
+  back to `NOT_STARTED`. The write-fence/clean-marker (`brake_runtime`) and an append-only Startup
+  Incident Log (`startup_incidents`) both live in `bartholomew/orchestrator/safety
+  /governance_store.py`, not a separate daemon-lifecycle module -- both are fundamentally a
+  Governance concern (a trust assertion about whether the previous runtime completed cleanly), and
+  Governance remains this project's single authority for runtime integrity state, not something
+  split across persistence systems. `start()`'s failure-unwind now covers every resource it
+  actually activates, not a fixed pair. Unclean-shutdown recovery is conservative but
+  non-blocking: detect, log prominently, run a lightweight `PRAGMA quick_check`, repair the
+  deferred WAL checkpoint if it passes, and continue -- aborting (a new `UnsafeStartupError`) only
+  when the check itself reports a real problem, never merely because the last shutdown wasn't
+  confirmed clean.
+- **Alternatives:** (a) A separate general daemon-lifecycle-marker module, independent of
+  Governance -- rejected per the explicit direction that runtime integrity state should not be
+  split across persistence systems. (b) Treat an unclean prior shutdown as itself sufficient
+  reason to refuse startup (fail closed on the marker alone) -- rejected: an ordinary power loss or
+  OS crash must not permanently prevent Bartholomew from starting; only actual evidence of
+  unsafety (a failed integrity check) should abort. (c) On a poisoned-instance violation (`start()`
+  called twice, or after `FAILED`), silently no-op and return the existing state -- rejected: that
+  would hide a real caller bug rather than surface it, and "keeping the process in `FAILED` makes
+  debugging easier" was the explicit direction. (d) Run the full, expensive `PRAGMA
+  integrity_check` rather than `quick_check` -- rejected as disproportionate to "lightweight
+  verification."
+- **Why:** Re-grounding this stage against the current `start()`/`stop()` (not assumed from B0,
+  which predates B2's `blocking_executor` and B4's `governance_store`) found two real,
+  currently-untested unwind gaps: `governance_store` construction activated `blocking_executor`'s
+  worker thread *before* the old protected region began, and producer tasks created before
+  `scheduler_task` were never cancelled if that last step failed. B4 also made this stage's
+  "Governance write freeze" concern concretely real for the first time -- its dual-check bridge
+  writes to `governance_store` on ordinary reads, where nothing wrote there before.
+- **Consequences:** `stop()` now closes the write fence *before* any other teardown step (freeze
+  before drain) and marks the shutdown clean only if producer tasks were *confirmed* terminal (a
+  `wait_for` timeout is no longer silently swallowed) *and* both worker-thread resources drained --
+  an honest marker, not an assumed one. Two real bugs surfaced by the new test suite before merge,
+  both fixed: the failure-path incident write originally tried to route through
+  `blocking_executor` via `run_off_loop()` after that executor was already closed as part of the
+  same failure's unwind (fixed by making incident recording a direct call, the same precedent
+  `mark_clean_shutdown()`'s own tail-of-shutdown call already set); and an early version of the
+  "next daemon sees previous clean shutdown" test checked the marker *after* the second daemon's
+  own `start()` had already overwritten it via its own `open_new_runtime()` call. Verified against
+  the full governance/runtime-contract/scheduler/lifecycle test set (261 tests) plus the complete
+  non-integration/non-slow suite, both clean, plus 32 new tests split across
+  `tests/test_governance_runtime_lifecycle.py` (fence/incident-log persistence in isolation) and
+  `tests/test_daemon_lifecycle_integrity.py` (lifecycle transitions, both regression cases, and the
+  full unclean-shutdown/integrity-check/recovery path) -- see
+  `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` §4 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B5)
+
+## Decision: Phase B stage B6 retires the CLI's legacy Governance write path instead of extending the dual-check bridge, and scopes the process lock to genuine offline-conflict operations only
+- **Decision:** `bartholomew/cli.py`'s `brake on`/`brake off`/`brake status` -- the three
+  standalone `ParkingBrake`/`BrakeStorage` construction sites B4 explicitly left untouched -- now
+  construct a `GovernanceStore(db)` and call `engage()`/`disengage()`/`state()` directly, tagging
+  every write's audit reason with a `"CLI: ..."` prefix. This retires the CLI's last legacy
+  `system_flags` write path, which in turn retires B4's temporary dual-check bridge
+  (`governance_bridge.py` and its 8-test file, deleted per B4's own docs' explicit instruction) --
+  the four call sites that depended on it (`skill_registry.py`, `runtime_contract.py`'s chat and
+  scheduler gates, `identity_interpreter/orchestrator/orchestrator.py`) now call plain
+  drop-in-shaped `is_blocked_fail_closed()`/`is_blocked_fail_closed_off_loop()` functions added to
+  `governance_store.py` itself. A new cross-platform `ProcessLock`
+  (`bartholomew/kernel/process_lock.py`; POSIX `fcntl.flock`, Windows `msvcrt.locking` over a fixed
+  1-byte region) is acquired first in `KernelDaemon.start()` and released last in `stop()` -- both
+  the daemon's own single-instance guard and the concrete anchor for B5's lifecycle-terminal-state
+  conditions -- and additionally by `bartholomew/cli.py`'s `embeddings rebuild-vss`. `brake
+  on`/`brake off`/`brake status` deliberately do **not** take this lock.
+- **Alternatives:** (a) Extend the dual-check bridge indefinitely instead of migrating the CLI off
+  the legacy path -- rejected: B4's own docs already named this bridge temporary, and keeping two
+  parallel Governance write paths alive permanently is exactly the ownership fragmentation Phase B
+  exists to close. (b) Have `brake on/off/status` also acquire the process lock, on the theory that
+  any CLI-vs-daemon interaction should be lock-gated uniformly -- rejected: `docs/
+  PHASE_B_RISK_MAP.md`'s B6 rows explicitly call for "write fencing only where repository evidence
+  shows it is necessary," and these commands are the intended mechanism for controlling a *running*
+  daemon (the entire point of a remote kill switch); GovernanceStore's own write fence and
+  revision-guarded `disengage()` already protect them, and lock-gating them too would make the kill
+  switch unusable against a live daemon, defeating its purpose. (c) Consolidate
+  `runtime_contract.py`'s sight/voice Governance gates onto `GovernanceStore` in the same pass,
+  since they're still on the legacy `ParkingBrake` path -- rejected: B4 already confirmed these
+  paths unreachable (no live caller) and explicitly deferred them; B6's scope is CLI safety, not
+  reopening an already-decided deferral.
+- **Why:** Re-grounding this stage against the current repository (not assumed from B0/B4's own
+  research) confirmed exactly three legacy CLI construction sites, exactly four bridge-dependent
+  call sites, and exactly one CLI command (`rebuild-vss`) that actually assumes exclusive database
+  access with no revision guarding of its own -- `brake on/off/status` are not a real conflict
+  path, so treating them as one would be scope creep beyond what the evidence supports.
+- **Consequences:** Retiring `governance_bridge.py` broke three pre-existing tests
+  (`tests/test_api_chat_runtime_contract.py`, `tests/test_end_to_end_tasks_and_audit.py`,
+  `tests/test_scenario_replay.py`) that constructed a standalone legacy `ParkingBrake` to simulate
+  an operator engaging the brake, relying on the bridge to make that visible to the runtime's
+  check -- each now engages `GovernanceStore` directly instead, the same shape `cli.py`'s own
+  migration took. `tests/test_daemon_lifecycle_integrity.py`'s two exact-`resources_started`-set
+  assertions needed `"process_lock"` added, since it's now the first resource `start()` activates.
+  Verified against the full governance/runtime-contract/scheduler/lifecycle/CLI test set (76 tests
+  across the four affected/new files) plus the complete non-integration/non-slow suite, both clean,
+  plus 23 new tests split across `tests/test_process_lock.py` (the lock primitive in isolation) and
+  `tests/test_cli_governance_and_lock.py` (CLI commands against real `GovernanceStore`/`ProcessLock`
+  instances) -- see `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §3-4 for the complete record.
+- **Date:** 2026-07-31 (Phase B stage B6)
+
+## Decision: Phase B stage B7 gates external admission with one HTTP middleware chokepoint, not a per-route migration, and does not build detached-task admission propagation
+- **Decision:** A new identity-bound `RequestAdmission` primitive
+  (`bartholomew/kernel/request_admission.py`) -- `try_admit() -> token | None`,
+  `release(token)` (a no-op for a foreign/duplicate/unknown token, not a bare counter decrement),
+  `close()`, `drain(timeout) -> bool` -- is owned by `KernelDaemon`, constructed alongside
+  `process_lock`/`blocking_executor` in `__init__`. `stop()`'s very first action after entering
+  `STOPPING` is now `admission.close()` followed by `await admission.drain(...)`, ahead of even the
+  Governance write-fence close -- in-flight external requests finish against resources that are
+  still fully intact, not ones being torn down underneath them. A single new
+  `@app.middleware("http")` in `bartholomew_api_bridge_v0_1/services/api/app.py` is the one
+  chokepoint that admits or refuses every HTTP request, checking `_kernel.lifecycle_state is
+  RUNNING` (not just `_kernel is not None`) with an explicit exemption list for health/liveness/
+  metrics/docs endpoints. No detached-task/child-work admission propagation was built.
+- **Alternatives:** (a) A `Depends()`-based per-route migration across the ~35 kernel-touching
+  routes, the shape the archived design and B6's own CLI migration both used elsewhere -- rejected
+  here specifically: unlike B6's three CLI commands, ~35 routes is enough surface that a per-route
+  opt-in could silently miss a future route that forgets to add the dependency, where a single
+  ASGI-layer middleware structurally cannot be bypassed by a new route. (b) Build the archived
+  design's full `AdmissionToken`/`_AdmissionScope`/`spawn_detached_governed_task` propagation
+  machinery for child/detached work -- rejected: a direct repository search found no
+  `asyncio.create_task()` (or equivalent) call anywhere that spawns work outliving its own
+  request/response cycle; building propagation machinery for a pattern that doesn't exist in this
+  codebase would be speculative, not evidence-grounded. (c) Trust `_kernel is not None` alone as
+  the admission gate, matching the pre-existing per-route checks -- rejected: confirmed by direct
+  read that `app.py`'s `startup()` assigns the `_kernel` global before `await _kernel.start()`
+  completes, and `shutdown()` never resets it to `None` after `stop()` -- a bare presence check
+  admits requests through the entire `STARTING` window and the entire `STOPPING`/`STOPPED` window
+  alike.
+- **Why:** Re-grounding this stage against the current repository (not the archived design, not
+  B0's own route count) found the real gap was narrower and different in shape than assumed: no
+  detached work to propagate tokens through, but a real, previously-unguarded lifecycle-state race
+  at both ends of the daemon's life, on a governed surface large enough that per-route discipline
+  is the wrong reliability bet.
+- **Consequences:** Every governed route now pays one `try_admit()`/`release()` pair per request,
+  invisible in normal operation (a few microseconds of `set` membership work) but present in
+  request latency measurements. `stop()`'s shutdown sequence gained a new drain phase (default 10s
+  timeout) ahead of the existing write-fence/producer-task/executor teardown; a stuck or lost
+  admission that never releases now correctly prevents the shutdown from being marked clean, the
+  same "confirmed, not assumed" honesty B5 already required of every other tracked resource. No
+  pre-existing test needed modification -- unlike B6's bridge deletion, this stage added a new gate
+  rather than retiring an old path, and every pre-existing test already ran with the kernel
+  `RUNNING`. Verified against 30 new tests split across `tests/test_request_admission.py` (the
+  primitive in isolation, including the identity-bound-release regression),
+  `tests/test_daemon_admission_drain.py` (the close-then-drain sequence in `stop()`, including a
+  provable "stop() waited" test and a timeout-doesn't-mark-clean regression), and
+  `tests/test_api_admission_gate.py` (the live middleware against a real `TestClient` + running
+  daemon) -- plus the complete non-integration/non-slow suite, both clean -- see
+  `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` §3-4 for the complete record.
+- **Date:** 2026-08-01 (Phase B stage B7)
+
+## Decision: Phase B stage B8's first split sub-stage fixes callers, not the four classes those callers touch
+- **Decision:** `ExperienceKernel`, `WorkingMemoryManager`, `PersonaPackManager`, and
+  `VectorStore` are confirmed (by direct read) to have zero `async def` methods among them --
+  every one of their methods is plain, synchronous, and does real `sqlite3` I/O where relevant.
+  Rather than adding async wrappers or an async API surface to any of these four classes, this
+  sub-stage fixes the actual gap: four call sites (`daemon.py`'s `start()`/`stop()`,
+  `memory_store.py`'s three embedding-pipeline methods, `skill_registry.py`'s `load_skill()`/
+  `_finish()`) that called these classes' methods directly from `async def` context instead of
+  through `bartholomew.kernel.blocking_executor.run_off_loop()`, the same off-loop pattern B2
+  already established. No new mechanism, no new class, no signature change to any of the four
+  target classes.
+- **Alternatives:** (a) Convert `ExperienceKernel`/`WorkingMemoryManager`/`PersonaPackManager`/
+  `VectorStore` to `async def` methods (using `aiosqlite` internally, matching `MemoryStore`'s own
+  pattern) -- rejected: a much larger, riskier rewrite of four classes with many callers each
+  (including synchronous, non-daemon callers like `bartholomew/cli.py`) to fix what is, on
+  inspection, entirely a caller-discipline problem, not a class-design problem; B2 already proved
+  the wrap-the-caller pattern works cleanly for exactly this shape of gap. (b) Also fix
+  `SkillRegistry.__init__()`'s own constructor-time blocking I/O (`_init_database()`, reachable
+  from the event loop since `KernelDaemon.__init__()` runs inside `app.py`'s `async def startup()`
+  before `start()` is awaited) -- rejected for this sub-stage specifically: unlike the four target
+  call sites (already-isolated calls that just needed wrapping), fixing this would mean
+  restructuring *when* `SkillRegistry` itself is constructed relative to the rest of
+  `KernelDaemon.__init__()`'s wiring, a construction-site reorganization closer to B4's scope than
+  "wrap an already-isolated call" -- named as an honest, deferred limitation instead of silently
+  left out. (c) Also migrate `hybrid_retriever.py`'s FTS/vector search calls -- rejected: confirmed
+  by direct search that nothing outside `retrieval.py`/`hybrid_retriever.py`/`types.py` itself
+  calls `get_retriever()` or `.retrieve()` anywhere in the live codebase; there is no event loop to
+  block today.
+- **Why:** Re-auditing the repository specifically for B8's "remaining persistence consumers"
+  scope (not re-reading B0's original inventory, which predates B2/B4's own migrations and was
+  route-focused rather than internal-call-site-focused) found that the API layer's own
+  `narrator.py`/`persona_pack.py` calls were *already* correctly wrapped -- the real gaps were all
+  internal, non-HTTP call sites B0's route-focused audit never covered, plus a genuinely
+  inconsistent partial migration within `reembed_memory()` and `load_enabled_skills()` themselves
+  (one call in each method already correctly off-loop, a sibling call in the same method not).
+- **Consequences:** `daemon.py`'s `_init_experience_kernel()` is now `async def`, awaited from
+  `start()` -- two call sites needed a one-line `await` added
+  (`daemon.py` itself, `tests/test_scenario_replay.py`'s `_boot()` helper); one pre-existing
+  monkeypatch-based test needed no change, since Python evaluates a call expression (and any
+  exception it raises) before the `await` keyword is ever reached. `memory_store.py`'s embedding
+  pipeline and `skill_registry.py`'s audit/state persistence now route through the caller's own
+  `blocking_executor`/`_blocking_executor`, consistent with every other daemon-owned blocking call.
+  Verified against 6 new tests in `tests/test_b8_event_loop_isolation.py` that spy on thread
+  identity to prove the calls actually moved off the event-loop thread (not merely that behavior
+  was preserved, which the existing test suites already covered and continue to cover) -- plus the
+  complete non-integration/non-slow suite, both clean -- see
+  `docs/B8_SUB1_STARTUP_SHUTDOWN_VECTORSTORE_SKILLS_OFF_LOOP.md` §3-4 for the complete record. B8
+  as a whole remains open; this decision covers only its first split sub-stage.
+- **Date:** 2026-08-01 (Phase B stage B8, sub-stage 1)
+
+## Decision: Phase B stage B8's second split sub-stage validates rather than changes MemoryStore's concurrency model
+- **Decision:** A stress test (`tests/test_memory_store_concurrency_stress.py`) fires many
+  concurrent `upsert_memory()`/`reembed_memory()` calls against one `MemoryStore` sharing one
+  `SingleWorkerExecutor`, closing `docs/PHASE_B_RISK_MAP.md`'s remaining named B8 candidate. No
+  code changes to `MemoryStore`, `VectorStore`, or `SingleWorkerExecutor` were made.
+- **Why:** All three tests passed against the current implementation on first run. Given that
+  result, changing the concurrency model to fix a problem that doesn't reproduce would be
+  unjustified churn; the correct action is to add the coverage as a permanent regression test and
+  record the outcome honestly, which is what this sub-stage does.
+- **Consequences:** `SingleWorkerExecutor`'s strict-sequential-submission guarantee is now proven,
+  not just documented, under concurrent `MemoryStore` usage -- including through sub-stage 1's
+  newly-added `VectorStore` off-loop calls, where a race could in principle have cross-filed one
+  memory's embedding under another's `memory_id`. With this, every B8 risk-map candidate is fixed,
+  tested-and-confirmed-sound, or confirmed not applicable (sub-stage 1); B8 as a whole is complete.
+  See `docs/B8_SUB2_MEMORYSTORE_CONCURRENCY_STRESS.md` for the complete record.
+- **Date:** 2026-08-01 (Phase B stage B8, sub-stage 2)
+
+## Decision: Phase B stage B9 validates with real adversarial conditions, not monkeypatched simulations, and reports the archived rollback mechanism as never built rather than partially formalising it
+- **Decision:** B9's tests deliberately avoid monkeypatching the specific function under test where
+  a real adversarial condition can be produced instead: real bytes are overwritten in a real SQLite
+  file rather than mocking `run_quick_integrity_check`'s return value; two `daemon.start()` calls
+  race via `asyncio.gather` rather than being called sequentially; `ProcessLock`/`GovernanceStore`
+  contention is exercised via real OS threads (20-way) rather than sequential calls asserting on
+  order. Separately: a direct repository search for the archived design's
+  `rollback_clear_maintenance()` found no such mechanism (or any maintenance-mode/rollback marker
+  of any kind) anywhere in the current codebase. Rather than building a new rollback mechanism
+  under B9's banner (which is a validation stage, not a feature stage) or writing tests against a
+  mechanism that doesn't exist, this is documented as an honest, direct finding: no rollback
+  capability exists to formalise.
+- **Alternatives:** (a) Monkeypatch every B9 scenario the same way B5's existing suite does (e.g.
+  `run_quick_integrity_check` returning a canned failure) -- rejected: B9's entire purpose is
+  validating the *integrated, real* system, and a monkeypatched integrity-check failure cannot
+  catch a bug in the integrity-check function itself, which is exactly what the real-corruption
+  test found. (b) Build a new maintenance-mode/rollback mechanism now, using the archived design as
+  a starting point, so B9 has something concrete to "formalise" -- rejected: that would be new
+  feature work smuggled into a validation stage, not a decision this stage's own approval scope
+  covers, and risks inventing a mechanism nobody has actually needed for the ~9 stages of Phase B
+  completed so far.
+- **Why:** A stage whose stated purpose is "adversarial validation against the integrated system"
+  should actually attack the integrated system, not a mocked stand-in for it -- the real-corruption
+  test proving this in practice (finding a bug the monkeypatched equivalent test, still passing
+  unchanged, did not and could not find) is the strongest evidence for this choice available.
+- **Consequences:** `governance_store.run_quick_integrity_check()` now catches
+  `sqlite3.DatabaseError` from `PRAGMA quick_check` itself, restoring the intended
+  `UnsafeStartupError` path for severe corruption instead of an undiagnosed raw exception; startup
+  safety was never actually compromised (the exception still correctly aborted startup either way),
+  only the diagnostic quality B5's Startup Incident Log exists to provide. `ROADMAP.md`'s Phase B
+  section is now marked complete (B0-B9 all done) rather than carrying forward an unresolved
+  "rollback procedures" promise the codebase was never going to fulfil without new feature work.
+  Verified against 7 new tests across `tests/test_b9_adversarial_startup_shutdown.py` and
+  `tests/test_b9_concurrent_cli_daemon.py`, plus the complete non-integration/non-slow suite, both
+  clean -- see `docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md` for the complete record. This
+  is Phase B's final stage; approval of B9 authorises no further Phase B work.
+- **Date:** 2026-08-01 (Phase B stage B9)

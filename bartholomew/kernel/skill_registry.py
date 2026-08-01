@@ -126,6 +126,8 @@ class SkillRegistry:
         memory_store: MemoryStore | None = None,
         permission_checker: PermissionChecker | None = None,
         identity_context: IdentityContext | None = None,
+        blocking_executor: Any | None = None,
+        governance_store: Any | None = None,
     ) -> None:
         """
         Initialize skill registry.
@@ -149,6 +151,20 @@ class SkillRegistry:
                 class's existing pattern for other optional resources (see
                 _is_blocked_by_brake()) -- so callers that don't wire an
                 Identity Context see no behavior change.
+            blocking_executor: Optional bartholomew.kernel.blocking_executor
+                .SingleWorkerExecutor. When provided, _is_blocked_by_brake()
+                and load_enabled_skills() submit their blocking SQLite work
+                to it instead of a one-off asyncio.to_thread() fallback --
+                see run_off_loop()'s docstring. None (the default) is fully
+                supported, matching this class's existing optional-resource
+                pattern.
+            governance_store: Optional bartholomew.orchestrator.safety
+                .governance_store.GovernanceStore (Phase B stage B4). When
+                provided, _is_blocked_by_brake() checks it directly
+                instead of constructing a fresh instance per call. None
+                (the default, or set later via set_governance_store()
+                once KernelDaemon.start() has constructed one) falls back
+                to a temporary instance per check.
         """
         self._skills_dir = Path(skills_dir)
         self._db_path = db_path
@@ -157,6 +173,8 @@ class SkillRegistry:
         self._working_memory = working_memory
         self._memory_store = memory_store
         self._identity_context = identity_context
+        self._blocking_executor = blocking_executor
+        self._governance_store = governance_store
 
         # Permission checker
         self._permission_checker = permission_checker or get_permission_checker(db_path=db_path)
@@ -302,8 +320,17 @@ class SkillRegistry:
                 subscription_ids=subscription_ids,
             )
 
-            # Persist state
-            self._persist_skill_state(skill_id, enabled=True)
+            # Persist state (Phase B stage B8: off the event loop --
+            # _persist_skill_state() does real synchronous sqlite3 I/O,
+            # confirmed by direct read; previously called directly here).
+            from .blocking_executor import run_off_loop
+
+            await run_off_loop(
+                self._persist_skill_state,
+                skill_id,
+                enabled=True,
+                executor=self._blocking_executor,
+            )
 
             logger.info(
                 "Loaded skill: %s v%s",
@@ -314,7 +341,14 @@ class SkillRegistry:
 
         except Exception as e:
             logger.exception("Failed to load skill %s: %s", skill_id, e)
-            self._persist_skill_state(skill_id, error=str(e))
+            from .blocking_executor import run_off_loop
+
+            await run_off_loop(
+                self._persist_skill_state,
+                skill_id,
+                error=str(e),
+                executor=self._blocking_executor,
+            )
             return False
 
     def _instantiate_skill(self, manifest: SkillManifest) -> SkillBase | None:
@@ -583,7 +617,7 @@ class SkillRegistry:
 
         # Stage 4: Governance -- parking brake: fail-closed operational
         # kill-switch, scope="skills".
-        if self._is_blocked_by_brake():
+        if await self._is_blocked_by_brake():
             return await self._finish(
                 observation,
                 candidate_action,
@@ -646,26 +680,43 @@ class SkillRegistry:
                 SkillResult.fail(str(e)),
             )
 
-    def _is_blocked_by_brake(self) -> bool:
+    def set_governance_store(self, governance_store: Any) -> None:
+        """Wire in the daemon's shared GovernanceStore once constructed
+        (Phase B stage B4) -- KernelDaemon.start() calls this after
+        constructing its own instance, since GovernanceStore's
+        construction does blocking I/O and must happen off the event
+        loop, later than this class's own __init__."""
+        self._governance_store = governance_store
+
+    async def _is_blocked_by_brake(self) -> bool:
         """
-        Check the global ParkingBrake's "skills" scope.
+        Check the Parking Brake's "skills" scope.
 
         Fails closed (treats as blocked) if the check itself errors --
         never silently allow a skill action when the safety gate can't be
         read, matching this codebase's fail-closed governance principle.
+        Runs off the event loop (Phase B stage B2; see
+        docs/B2_EVENT_LOOP_ISOLATION.md).
+
+        Reads through the daemon's shared GovernanceStore (Phase B stage
+        B4). Phase B stage B6 retired the B4 dual-check bridge against
+        the legacy system_flags value, now that bartholomew/cli.py's
+        `brake on`/`brake off` write only to GovernanceStore.
         """
         if not self._db_path:
             return False
 
         try:
-            from bartholomew.orchestrator.safety.parking_brake import (
-                BrakeStorage,
-                ParkingBrake,
+            from bartholomew.orchestrator.safety.governance_store import (
+                is_blocked_fail_closed_off_loop,
             )
 
-            storage = BrakeStorage(self._db_path)
-            brake = ParkingBrake(storage)
-            return brake.is_blocked("skills")
+            return await is_blocked_fail_closed_off_loop(
+                "skills",
+                self._db_path,
+                governance_store=self._governance_store,
+                executor=self._blocking_executor,
+            )
         except Exception:
             logger.exception("Parking brake check failed; failing closed")
             return True
@@ -743,7 +794,19 @@ class SkillRegistry:
         provably describing the same CandidateAction Governance decided on.
         """
         skill_id = candidate_action.kind
-        self._audit_execution(skill_id, action, params, result)
+        # Phase B stage B8: off the event loop -- _audit_execution() does
+        # real synchronous sqlite3 I/O (confirmed by direct read),
+        # previously called directly here on every single skill action.
+        from .blocking_executor import run_off_loop
+
+        await run_off_loop(
+            self._audit_execution,
+            skill_id,
+            action,
+            params,
+            result,
+            executor=self._blocking_executor,
+        )
         await self._record_reflection(observation, skill_id, action, params, result)
         return result
 
@@ -993,17 +1056,22 @@ class SkillRegistry:
         if not self._db_path:
             return 0
 
-        conn = self._get_connection()
-        try:
-            rows = conn.execute(
-                "SELECT skill_id FROM skill_registry_state WHERE enabled = 1",
-            ).fetchall()
-        finally:
-            conn.close()
+        from .blocking_executor import run_off_loop
+
+        def _read_enabled_skill_ids() -> list[str]:
+            conn = self._get_connection()
+            try:
+                rows = conn.execute(
+                    "SELECT skill_id FROM skill_registry_state WHERE enabled = 1",
+                ).fetchall()
+            finally:
+                conn.close()
+            return [row["skill_id"] for row in rows]
+
+        skill_ids = await run_off_loop(_read_enabled_skill_ids, executor=self._blocking_executor)
 
         loaded = 0
-        for row in rows:
-            skill_id = row["skill_id"]
+        for skill_id in skill_ids:
             if skill_id in self._manifests:
                 if await self.load_skill(skill_id):
                     loaded += 1

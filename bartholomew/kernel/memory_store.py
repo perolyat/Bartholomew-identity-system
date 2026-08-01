@@ -168,8 +168,16 @@ CREATE TABLE IF NOT EXISTS system_flags (
 
 
 class MemoryStore:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, blocking_executor: Any | None = None) -> None:
         self.db_path = db_path
+        # Optional bartholomew.kernel.blocking_executor.SingleWorkerExecutor
+        # (Phase B stage B2; see docs/B2_EVENT_LOOP_ISOLATION.md). When
+        # None (the default), the two synchronous, blocking call sites
+        # this powers (FTS schema init below, and _handle_chunking()/
+        # reembed_memory()) fall back to a one-off asyncio.to_thread() --
+        # see run_off_loop()'s docstring. Fully optional, matching this
+        # codebase's existing pattern for other injected resources.
+        self._blocking_executor = blocking_executor
 
     async def init(self) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -201,18 +209,30 @@ class MemoryStore:
 
             await db.commit()
 
-        # Phase 2e: Initialize FTS5 tables and triggers
+        # Phase 2e: Initialize FTS5 tables and triggers. Runs off the event
+        # loop (Phase B stage B2) since FTSClient is fully synchronous and
+        # this is awaited directly from KernelDaemon.start()'s first step.
         try:
+            from bartholomew.kernel.blocking_executor import run_off_loop
             from bartholomew.kernel.fts_client import FTSClient
 
             fts = FTSClient(self.db_path)
-            fts.init_schema()
-            logger.info("FTS5 schema initialized")
 
-            # Phase 2f: Initialize chunk FTS schema if chunking is enabled
-            chunking_engine = get_chunking_engine()
-            if chunking_engine.enabled:
-                fts.init_chunk_schema()
+            def _init_fts_schema() -> bool:
+                fts.init_schema()
+                # Phase 2f: Initialize chunk FTS schema if chunking is enabled
+                chunking_engine = get_chunking_engine()
+                if chunking_engine.enabled:
+                    fts.init_chunk_schema()
+                    return True
+                return False
+
+            chunk_schema_initialized = await run_off_loop(
+                _init_fts_schema,
+                executor=self._blocking_executor,
+            )
+            logger.info("FTS5 schema initialized")
+            if chunk_schema_initialized:
                 logger.info("Chunk FTS5 schema initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize FTS5 schema: {e}")
@@ -412,8 +432,17 @@ class MemoryStore:
         if not result.memory_id:
             return
 
-        # Get embedding components (this may create VectorStore schema)
-        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        # Get embedding components (this may create VectorStore schema --
+        # real synchronous sqlite3 I/O; VectorStore has no async methods at
+        # all, confirmed by direct read, so this and every other VectorStore
+        # call below is routed off the event loop, Phase B stage B8).
+        from .blocking_executor import run_off_loop
+
+        embed_engine, vec_store = await run_off_loop(
+            _get_embedding_components,
+            self.db_path,
+            executor=self._blocking_executor,
+        )
         if not embed_engine or not vec_store:
             return
 
@@ -497,10 +526,16 @@ class MemoryStore:
                 )
                 await db.commit()
 
-            # Persist embeddings (using synchronous VectorStore)
+            # Persist embeddings (Phase B stage B8: off the event loop --
+            # see the run_off_loop import note above this method's own
+            # VectorStore construction).
             cfg = embed_engine.config
-            for src, vec in zip(sources, vecs, strict=False):
-                vec_store.upsert(result.memory_id, vec, src, cfg.provider, cfg.model)
+
+            def _upsert_all() -> None:
+                for src, vec in zip(sources, vecs, strict=False):
+                    vec_store.upsert(result.memory_id, vec, src, cfg.provider, cfg.model)
+
+            await run_off_loop(_upsert_all, executor=self._blocking_executor)
             logger.debug(f"Stored {len(vecs)} embedding(s) for memory {result.memory_id}")
         except Exception as e:
             logger.error(f"Failed to generate/persist embeddings: {e}")
@@ -554,44 +589,51 @@ class MemoryStore:
             # Single chunk = no benefit from chunking
             return
 
-        # Store chunks (synchronously to avoid Windows locking issues)
+        # Store chunks (synchronously, to avoid Windows locking issues --
+        # off the event loop since Phase B stage B2; see
+        # docs/B2_EVENT_LOOP_ISOLATION.md).
         import sqlite3
 
-        conn = None
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("PRAGMA foreign_keys = ON")
+        from .blocking_executor import run_off_loop
 
-            # Delete existing chunks for this memory (upsert semantics)
-            conn.execute(
-                "DELETE FROM memory_chunks WHERE memory_id = ?",
-                (result.memory_id,),
-            )
+        def _store_chunks() -> None:
+            conn = None
+            try:
+                conn = sqlite3.connect(self.db_path)
+                conn.execute("PRAGMA foreign_keys = ON")
 
-            # Insert new chunks (triggers will update chunk_fts)
-            for chunk in chunks:
+                # Delete existing chunks for this memory (upsert semantics)
                 conn.execute(
-                    "INSERT INTO memory_chunks "
-                    "(memory_id, seq, token_start, token_end, text) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        result.memory_id,
-                        chunk.seq,
-                        chunk.token_start,
-                        chunk.token_end,
-                        chunk.text,
-                    ),
+                    "DELETE FROM memory_chunks WHERE memory_id = ?",
+                    (result.memory_id,),
                 )
 
-            conn.commit()
-            logger.info(
-                f"Stored {len(chunks)} chunks for memory {result.memory_id}",
-            )
-        except Exception as e:
-            logger.error(f"Failed to store chunks: {e}")
-        finally:
-            if conn:
-                conn.close()
+                # Insert new chunks (triggers will update chunk_fts)
+                for chunk in chunks:
+                    conn.execute(
+                        "INSERT INTO memory_chunks "
+                        "(memory_id, seq, token_start, token_end, text) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            result.memory_id,
+                            chunk.seq,
+                            chunk.token_start,
+                            chunk.token_end,
+                            chunk.text,
+                        ),
+                    )
+
+                conn.commit()
+                logger.info(
+                    f"Stored {len(chunks)} chunks for memory {result.memory_id}",
+                )
+            except Exception as e:
+                logger.error(f"Failed to store chunks: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+        await run_off_loop(_store_chunks, executor=self._blocking_executor)
 
     async def delete_memory(self, kind: str, key: str) -> bool:
         """
@@ -764,7 +806,15 @@ class MemoryStore:
         Returns:
             Number of embeddings created
         """
-        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        # Phase B stage B8: off the event loop -- see _handle_embeddings()'s
+        # own identical VectorStore-construction call for the full rationale.
+        from .blocking_executor import run_off_loop
+
+        embed_engine, vec_store = await run_off_loop(
+            _get_embedding_components,
+            self.db_path,
+            executor=self._blocking_executor,
+        )
         if not (embed_engine and vec_store):
             return 0
 
@@ -848,8 +898,13 @@ class MemoryStore:
                 )
                 await db.commit()
 
-            for src, vec in zip(sources_to_store, vecs, strict=False):
-                vec_store.upsert(memory_id, vec, src, cfg.provider, cfg.model)
+            # Phase B stage B8: off the event loop (see this method's own
+            # VectorStore-construction call above).
+            def _upsert_all() -> None:
+                for src, vec in zip(sources_to_store, vecs, strict=False):
+                    vec_store.upsert(memory_id, vec, src, cfg.provider, cfg.model)
+
+            await run_off_loop(_upsert_all, executor=self._blocking_executor)
 
             logger.info(f"Persisted {len(vecs)} embedding(s) for memory {memory_id}")
             return len(vecs)
@@ -872,28 +927,48 @@ class MemoryStore:
         Returns:
             Number of embeddings created
         """
-        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        # Phase B stage B8: off the event loop -- see _handle_embeddings()'s
+        # own identical VectorStore-construction call for the full rationale.
+        from .blocking_executor import run_off_loop
+
+        embed_engine, vec_store = await run_off_loop(
+            _get_embedding_components,
+            self.db_path,
+            executor=self._blocking_executor,
+        )
         if not (embed_engine and vec_store):
             return 0
 
-        # Phase 2d+: If sources not specified, default to existing sources
+        # Phase 2d+: If sources not specified, default to existing sources.
+        # Runs off the event loop since Phase B stage B2; see
+        # docs/B2_EVENT_LOOP_ISOLATION.md.
         if sources is None:
             import sqlite3
 
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA foreign_keys = ON")
-                cursor = conn.execute(
-                    "SELECT DISTINCT source FROM memory_embeddings WHERE memory_id=?",
-                    (memory_id,),
-                )
-                rows = cursor.fetchall()
-                if rows:
-                    sources = [row[0] for row in rows]
-                # If no existing embeddings, sources remains None
-                # and persist_embeddings_for will use rule defaults
+            def _existing_sources() -> list[str] | None:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute("PRAGMA foreign_keys = ON")
+                    cursor = conn.execute(
+                        "SELECT DISTINCT source FROM memory_embeddings WHERE memory_id=?",
+                        (memory_id,),
+                    )
+                    rows = cursor.fetchall()
+                    if rows:
+                        return [row[0] for row in rows]
+                    # If no existing embeddings, remain None and
+                    # persist_embeddings_for will use rule defaults.
+                    return None
 
-        # Delete existing embeddings
-        vec_store.delete_for_memory(memory_id)
+            sources = await run_off_loop(_existing_sources, executor=self._blocking_executor)
+
+        # Delete existing embeddings (Phase B stage B8: off the event loop,
+        # same rationale as this method's own VectorStore-construction call
+        # above).
+        await run_off_loop(
+            vec_store.delete_for_memory,
+            memory_id,
+            executor=self._blocking_executor,
+        )
 
         # Re-create embeddings
         return await self.persist_embeddings_for(memory_id, sources)

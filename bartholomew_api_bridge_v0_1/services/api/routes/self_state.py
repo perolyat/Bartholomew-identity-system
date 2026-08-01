@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from bartholomew.kernel.blocking_executor import run_off_loop
 from bartholomew.kernel.narrator import EpisodeType, NarrativeTone
 
 router = APIRouter(prefix="/api", tags=["self-state"])
@@ -245,7 +246,11 @@ async def complete_goal(goal: str) -> dict[str, Any]:
 async def get_recent_episodes(limit: int = 20) -> dict[str, Any]:
     """Get recent episodic entries."""
     kernel = _get_kernel()
-    episodes = kernel.narrator.get_recent_episodes(limit=limit)
+    episodes = await run_off_loop(
+        kernel.narrator.get_recent_episodes,
+        limit=limit,
+        executor=kernel.blocking_executor,
+    )
     return {
         "episodes": [ep.to_dict() for ep in episodes],
         "count": len(episodes),
@@ -292,11 +297,13 @@ async def search_episodes(
             valid = ", ".join(t.value for t in NarrativeTone)
             raise HTTPException(400, f"Unknown tone '{tone}'. Valid: {valid}") from None
 
-    episodes = kernel.narrator.search_episodes(
+    episodes = await run_off_loop(
+        kernel.narrator.search_episodes,
         query=q,
         limit=limit,
         episode_type=parsed_type,
         tone=parsed_tone,
+        executor=kernel.blocking_executor,
     )
     return {
         "episodes": [ep.to_dict() for ep in episodes],
@@ -309,7 +316,11 @@ async def search_episodes(
 async def get_episode(episode_id: str) -> dict[str, Any]:
     """Get a specific episode by ID."""
     kernel = _get_kernel()
-    episode = kernel.narrator.get_episode(episode_id)
+    episode = await run_off_loop(
+        kernel.narrator.get_episode,
+        episode_id,
+        executor=kernel.blocking_executor,
+    )
     if not episode:
         raise HTTPException(404, f"Episode {episode_id} not found")
     return {"episode": episode.to_dict()}
@@ -334,7 +345,12 @@ async def get_episodes_by_type(
         valid = ", ".join(t.value for t in EpisodeType)
         raise HTTPException(400, f"Unknown episode_type '{episode_type}'. Valid: {valid}") from None
 
-    episodes = kernel.narrator.get_episodes_by_type(parsed_type, limit=limit)
+    episodes = await run_off_loop(
+        kernel.narrator.get_episodes_by_type,
+        parsed_type,
+        limit=limit,
+        executor=kernel.blocking_executor,
+    )
     return {
         "episodes": [ep.to_dict() for ep in episodes],
         "count": len(episodes),
@@ -346,7 +362,12 @@ async def get_episodes_by_type(
 async def get_episodes_by_tag(tag: str, limit: int = 20) -> dict[str, Any]:
     """Get episodes filtered by tag."""
     kernel = _get_kernel()
-    episodes = kernel.narrator.get_episodes_by_tag(tag, limit=limit)
+    episodes = await run_off_loop(
+        kernel.narrator.get_episodes_by_tag,
+        tag,
+        limit=limit,
+        executor=kernel.blocking_executor,
+    )
     return {
         "episodes": [ep.to_dict() for ep in episodes],
         "count": len(episodes),
@@ -395,10 +416,12 @@ async def switch_persona(body: PersonaSwitchRequest) -> dict[str, Any]:
     """Switch to a different persona pack."""
     kernel = _get_kernel()
 
-    success = kernel.persona_manager.switch_pack(
+    success = await run_off_loop(
+        kernel.persona_manager.switch_pack,
         pack_id=body.pack_id,
         trigger=body.trigger,
         context_tags=body.context_tags,
+        executor=kernel.blocking_executor,
     )
 
     if not success:

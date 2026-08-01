@@ -139,15 +139,18 @@ class TestEndToEndTasksAndAudit:
         assert ("calendar_draft", "create", "permission_denied") in audit_rows
 
     async def test_parking_brake_blocks_then_disengage_allows(self, temp_db):
-        """Engaging the ParkingBrake's "skills" scope blocks execution; disengaging restores it."""
-        from bartholomew.orchestrator.safety.parking_brake import BrakeStorage, ParkingBrake
+        """Engaging Governance's "skills" scope blocks execution; disengaging
+        restores it. Phase B stage B6: reads through GovernanceStore
+        directly -- the legacy ParkingBrake/BrakeStorage path this test
+        used to exercise is no longer wired into the runtime's check."""
+        from bartholomew.orchestrator.safety.governance_store import GovernanceStore
 
         registry = SkillRegistry(db_path=temp_db)
         planner = Planner(policy={}, drives={"drives": []}, mem=None, skill_registry=registry)
 
         assert await registry.load_skill("tasks") is True
 
-        brake = ParkingBrake(BrakeStorage(temp_db))
+        brake = GovernanceStore(temp_db)
         brake.engage("skills")
 
         blocked_result = await planner.handle_skill_request(
