@@ -25,6 +25,20 @@ _DB_PATH = str(_db_dir / "test.db")
 os.environ["BARTH_DB_PATH"] = _DB_PATH
 
 from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: E402
+from bartholomew_api_bridge_v0_1.services.api import db as db_module  # noqa: E402
+
+
+def _live_db_path() -> str:
+    """The actual db path the live, process-wide kernel singleton uses --
+    NOT necessarily this module's own _DB_PATH. db.py's DB_PATH constant is
+    fixed at whichever test module first imports
+    bartholomew_api_bridge_v0_1.services.api.app in the whole pytest
+    session's collection order (see test_self_state_api.py's docstring for
+    the same process-wide-singleton hazard); under the full suite that is
+    not always this file. Reading db_module.DB_PATH instead of a
+    self-computed path is what makes this correct regardless of collection
+    order."""
+    return db_module.DB_PATH
 
 
 @pytest.fixture(scope="module")
@@ -107,13 +121,29 @@ def test_disengage_rejects_stale_expected_revision(client):
     assert response.status_code == 409
 
 
+def test_get_brake_status_reflects_concurrent_external_write(client):
+    """A second GovernanceStore instance (e.g. the CLI's `brake on`) writes
+    to the same database while the API daemon is running; GET
+    /api/governance/brake must reflect that write, not the daemon
+    singleton's last-cached snapshot (Codex review, PR #34)."""
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    external = GovernanceStore(_live_db_path())
+    external.engage("skills", reason="external write (simulates CLI)", actor="cli")
+
+    response = client.get("/api/governance/brake")
+    body = response.json()
+    assert body["engaged"] is True
+    assert body["scopes"] == ["skills"]
+
+
 def test_engage_and_disengage_record_actor_in_audit_trail(client):
     client.post(
         "/api/governance/brake/engage",
         json={"scopes": ["skills"], "reason": "actor check", "actor": "test-actor"},
     )
 
-    conn = sqlite3.connect(_DB_PATH)
+    conn = sqlite3.connect(_live_db_path())
     try:
         row = conn.execute(
             "SELECT action, actor FROM governance_audit WHERE reason = 'actor check'",
@@ -129,7 +159,7 @@ def test_engage_default_actor_is_user(client):
         json={"scopes": ["skills"], "reason": "default actor check"},
     )
 
-    conn = sqlite3.connect(_DB_PATH)
+    conn = sqlite3.connect(_live_db_path())
     try:
         actor = conn.execute(
             "SELECT actor FROM governance_audit WHERE reason = 'default actor check'",

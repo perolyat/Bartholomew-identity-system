@@ -337,9 +337,25 @@
     // === Stage 1 (S1.1): Parking Brake ===
     let brakeRevision = 0;
 
+    async function _brakeErrorDetail(r){
+      // fetch() only rejects on network failure, not on HTTP error status
+      // (e.g. the admission middleware's 503) -- callers must check r.ok
+      // themselves before trusting the body, or a safety-relevant control
+      // can silently render an error response as if it were real state.
+      try{
+        const j = await r.json();
+        return j.detail || `HTTP ${r.status}`;
+      }catch(e){
+        return `HTTP ${r.status}`;
+      }
+    }
+
     async function refreshBrake(){
       try{
         const r = await fetch(API + "/api/governance/brake");
+        if(!r.ok){
+          throw new Error(await _brakeErrorDetail(r));
+        }
         const j = await r.json();
         brakeRevision = j.revision;
 
@@ -353,8 +369,12 @@
         }
         document.getElementById("brake-detail").textContent = `revision: ${j.revision}`;
       }catch(e){
-        document.getElementById("brake-status").textContent = "brake: error";
+        // Must NOT fall through to the "disengaged" (green) rendering above --
+        // an unreachable/erroring status is exactly the case a safety
+        // control must not silently present as "all clear".
+        document.getElementById("brake-status").textContent = "brake: UNKNOWN (status unreachable)";
         document.getElementById("brake-status").className = "badge kernel-offline";
+        document.getElementById("brake-detail").textContent = String(e);
       }
     }
 
@@ -365,11 +385,15 @@
     async function engageBrake(){
       const scopes = selectedBrakeScopes();
       try{
-        await fetch(API + "/api/governance/brake/engage", {
+        const r = await fetch(API + "/api/governance/brake/engage", {
           method: "POST",
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({ scopes, reason: "engaged via minimal UI", actor: "user" })
         });
+        if(!r.ok){
+          alert("Failed to engage brake: " + await _brakeErrorDetail(r));
+          return;
+        }
         await refreshBrake();
       }catch(e){
         alert("Failed to engage brake: " + e);
@@ -390,6 +414,10 @@
         if(r.status === 409){
           alert("Brake state changed since it was last read here — refreshing; please retry.");
           await refreshBrake();
+          return;
+        }
+        if(!r.ok){
+          alert("Failed to disengage brake: " + await _brakeErrorDetail(r));
           return;
         }
         await refreshBrake();

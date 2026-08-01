@@ -73,9 +73,24 @@ def _validate_scopes(scopes: list[str]) -> None:
 
 @router.get("/brake")
 async def get_brake_status() -> dict:
-    """Current Parking Brake state (in-memory cache read, no I/O)."""
+    """
+    Current Parking Brake state.
+
+    Refreshes off-loop before responding rather than returning the daemon
+    singleton's cached snapshot: the CLI (`bartholomew brake on/off`) or
+    another GovernanceStore instance can write to the same database while
+    this daemon is running (Phase B stage B6), and without a refresh here
+    this route would keep reporting stale engaged/scopes/revision until an
+    unrelated governed operation happened to refresh the shared instance --
+    including masking a real external engage as "disengaged" and feeding a
+    stale revision into a subsequent disengage() call.
+    """
     kernel = _get_kernel()
-    return _state_dict(kernel.governance_store.state())
+    state = await run_off_loop(
+        kernel.governance_store.refresh,
+        executor=kernel.blocking_executor,
+    )
+    return _state_dict(state)
 
 
 @router.post("/brake/engage")
