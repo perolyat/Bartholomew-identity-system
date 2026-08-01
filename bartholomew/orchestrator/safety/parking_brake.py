@@ -7,10 +7,10 @@ Fail-closed: when engaged, gated components refuse to start/execute.
 
 import asyncio
 import json
-import sqlite3
 import time
 from dataclasses import dataclass
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel.governance.brake_store import GovernanceBrakeStore
 
 
@@ -51,7 +51,8 @@ class BrakeStorage:
         Returns:
             JSON string value or None if not found
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with db_ctx.connect(self.db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             cursor = conn.execute("SELECT value FROM system_flags WHERE key = ?", (key,))
             row = cursor.fetchone()
             return row[0] if row else None
@@ -65,7 +66,8 @@ class BrakeStorage:
             value: JSON string value
             updated_at: Unix timestamp (epoch seconds)
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with db_ctx.connect(self.db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.execute(
                 "INSERT INTO system_flags(key, value, updated_at) "
                 "VALUES (?, ?, ?) "

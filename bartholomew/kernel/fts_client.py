@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-from bartholomew.kernel.db_ctx import set_wal_pragmas
+from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 
 logger = logging.getLogger(__name__)
 
@@ -325,7 +325,7 @@ class FTSClient:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             # Ensure this Python/SQLite build supports FTS5
             self._probe_fts5(conn)
@@ -365,7 +365,7 @@ class FTSClient:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
 
             orphaned_map_entries = (
@@ -421,7 +421,7 @@ class FTSClient:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
 
             # memory_fts_map is this class's own record of which rowids are
@@ -475,7 +475,7 @@ class FTSClient:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             # Delete from FTS index
             conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (memory_id,))
@@ -578,7 +578,7 @@ class FTSClient:
         conn = None
         results = []
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
 
@@ -681,7 +681,7 @@ class FTSClient:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             cursor = conn.execute(
                 sql,
@@ -709,7 +709,7 @@ class FTSClient:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
 
             # Drop and recreate memory_fts itself rather than trying to
@@ -766,7 +766,7 @@ class FTSClient:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             conn.execute("INSERT INTO memory_fts(memory_fts) VALUES ('optimize')")
             conn.commit()
@@ -822,7 +822,7 @@ class FTSClient:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             # FTS5 probe already done in init_schema
             for trigger in _CHUNK_FTS_TRIGGERS:
@@ -851,7 +851,7 @@ class FTSClient:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
 
             # Only issue the FTS5 'delete' command for chunks already
@@ -905,7 +905,7 @@ class FTSClient:
         conn = None
         count = 0
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
 
             # Get chunk IDs for this memory
@@ -1008,7 +1008,7 @@ class FTSClient:
         conn = None
         results = []
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
 
@@ -1052,7 +1052,7 @@ class FTSClient:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
 
             # Drop and recreate chunk_fts itself rather than DELETE its

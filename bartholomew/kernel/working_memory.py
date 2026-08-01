@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from bartholomew.kernel import db_ctx
+
 if TYPE_CHECKING:
     from bartholomew.kernel.experience_kernel import ExperienceKernel
     from bartholomew.kernel.global_workspace import GlobalWorkspace
@@ -710,7 +712,8 @@ class WorkingMemoryManager:
 
     def _ensure_db_schema(self, db_path: str) -> None:
         """Ensure the working_memory_snapshots table exists."""
-        conn = sqlite3.connect(db_path)
+        conn = db_ctx.connect(db_path)
+        db_ctx.set_wal_pragmas(conn)
         try:
             conn.execute(self.WM_SCHEMA)
             conn.commit()
@@ -735,7 +738,8 @@ class WorkingMemoryManager:
         snap = self.snapshot()
         items_json = json.dumps(snap["items"])
 
-        conn = sqlite3.connect(db_path)
+        conn = db_ctx.connect(db_path)
+        db_ctx.set_wal_pragmas(conn)
         try:
             conn.execute(
                 """
@@ -776,7 +780,8 @@ class WorkingMemoryManager:
         """
         self._ensure_db_schema(db_path)
 
-        conn = sqlite3.connect(db_path)
+        conn = db_ctx.connect(db_path)
+        db_ctx.set_wal_pragmas(conn)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
@@ -827,7 +832,8 @@ class WorkingMemoryManager:
         """
         self._ensure_db_schema(db_path)
 
-        conn = sqlite3.connect(db_path)
+        conn = db_ctx.connect(db_path)
+        db_ctx.set_wal_pragmas(conn)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(

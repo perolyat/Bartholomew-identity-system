@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel.redaction_engine import redact_pii
 
 if TYPE_CHECKING:
@@ -384,7 +385,8 @@ class ExperienceKernel:
 
     def _init_database(self) -> None:
         """Initialize database schema for snapshot persistence."""
-        with sqlite3.connect(self._db_path) as conn:
+        with db_ctx.connect(self._db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.executescript(EXPERIENCE_KERNEL_SCHEMA)
 
     # =========================================================================
@@ -735,7 +737,8 @@ class ExperienceKernel:
         snapshot = self.self_snapshot()
         snapshot.metadata["persist_reason"] = reason
 
-        with sqlite3.connect(self._db_path) as conn:
+        with db_ctx.connect(self._db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.execute(
                 """
                 INSERT INTO experience_snapshots
@@ -772,7 +775,8 @@ class ExperienceKernel:
         Returns:
             The most recent SelfSnapshot, or None if no snapshots exist
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with db_ctx.connect(self._db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
@@ -824,7 +828,8 @@ class ExperienceKernel:
         Returns:
             List of snapshots, most recent first
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with db_ctx.connect(self._db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """

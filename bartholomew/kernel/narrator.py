@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel.redaction_engine import redact_pii
 
 if TYPE_CHECKING:
@@ -594,7 +595,8 @@ class NarratorEngine:
         # runs today.
         self._conn: sqlite3.Connection | None = None
         if self._db_path == ":memory:":
-            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+            self._conn = db_ctx.connect(":memory:")
+            db_ctx.set_wal_pragmas(self._conn)
             self._conn.executescript(NARRATOR_SCHEMA)
         else:
             # Initialize database schema for file-based databases
@@ -606,7 +608,8 @@ class NarratorEngine:
 
     def _init_database(self) -> None:
         """Initialize database schema for episodic entries."""
-        with sqlite3.connect(self._db_path, check_same_thread=False) as conn:
+        with db_ctx.connect(self._db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.executescript(NARRATOR_SCHEMA)
             # Initialize FTS schema (silently skip if FTS5 not available)
             try:
@@ -618,7 +621,9 @@ class NarratorEngine:
         """Get a database connection."""
         if self._conn is not None:
             return self._conn
-        return sqlite3.connect(self._db_path, check_same_thread=False)
+        conn = db_ctx.connect(self._db_path)
+        db_ctx.set_wal_pragmas(conn)
+        return conn
 
     def _close_if_not_persistent(self, conn: sqlite3.Connection) -> None:
         """Close connection if it's not the persistent one."""

@@ -30,6 +30,7 @@ import logging
 import sqlite3
 import sys
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel.encryption_engine import _encryption_engine
 
 # Import Bartholomew components
@@ -253,7 +254,8 @@ def backfill_fts(
 
         # Connect to database for reading
         logger.info(f"Opening database: {db_path}")
-        read_conn = sqlite3.connect(db_path)
+        read_conn = db_ctx.connect(db_path)
+        db_ctx.set_wal_pragmas(read_conn)
         read_conn.row_factory = sqlite3.Row
 
         # Count total memories
@@ -270,7 +272,10 @@ def backfill_fts(
         progress = ProgressBar(stats.total)
 
         # Open separate connection for FTS writes (transaction batching)
-        write_conn = sqlite3.connect(db_path) if not dry_run else None
+        write_conn = None
+        if not dry_run:
+            write_conn = db_ctx.connect(db_path)
+            db_ctx.set_wal_pragmas(write_conn)
 
         # Fetch all memories
         cursor = read_conn.execute(

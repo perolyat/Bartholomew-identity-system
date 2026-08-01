@@ -41,6 +41,7 @@ from typing import Any
 import keyring
 from cryptography.fernet import Fernet
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel.memory.privacy_guard import (
     is_sensitive,
     request_permission_to_store,
@@ -199,11 +200,11 @@ class MemoryManager:
 
     def _init_database(self):
         """Initialize SQLite database with schema versioning"""
-        with sqlite3.connect(self.db_path) as conn:
-            # Enable safety and performance features
-            conn.execute("PRAGMA foreign_keys = ON;")
-            conn.execute("PRAGMA journal_mode = WAL;")
-            conn.execute("PRAGMA synchronous = NORMAL;")
+        with db_ctx.connect(self.db_path) as conn:
+            # Shared connection policy (Phase B, stage B8): WAL mode,
+            # synchronous=NORMAL, foreign_keys=ON, plus busy_timeout=5000,
+            # which this call site didn't set before.
+            db_ctx.set_wal_pragmas(conn)
 
             # Check schema version
             version = conn.execute("PRAGMA user_version").fetchone()[0] or 0
@@ -428,7 +429,8 @@ class MemoryManager:
                 content = memory.content
 
             # Store in database
-            with sqlite3.connect(self.db_path) as conn:
+            with db_ctx.connect(self.db_path) as conn:
+                db_ctx.set_wal_pragmas(conn)
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO memories
@@ -505,7 +507,8 @@ class MemoryManager:
             params.append(limit)
 
             # Execute query
-            with sqlite3.connect(self.db_path) as conn:
+            with db_ctx.connect(self.db_path) as conn:
+                db_ctx.set_wal_pragmas(conn)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(query, params)
                 rows = cursor.fetchall()
@@ -581,7 +584,8 @@ class MemoryManager:
         """Remove expired memories"""
         try:
             now = utc_now_iso()
-            with sqlite3.connect(self.db_path) as conn:
+            with db_ctx.connect(self.db_path) as conn:
+                db_ctx.set_wal_pragmas(conn)
                 cursor = conn.execute(
                     "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",
                     (now,),
@@ -611,7 +615,8 @@ class MemoryManager:
     def erase_all_memories(self) -> bool:
         """Erase all memories (user control)"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with db_ctx.connect(self.db_path) as conn:
+                db_ctx.set_wal_pragmas(conn)
                 conn.execute("DELETE FROM memories")
             self.logger.info("All memories erased by user request")
             return True
@@ -660,7 +665,8 @@ class MemoryManager:
         """
         try:
             now = utc_now_iso()
-            with sqlite3.connect(self.db_path) as conn:
+            with db_ctx.connect(self.db_path) as conn:
+                db_ctx.set_wal_pragmas(conn)
                 cursor = conn.execute(
                     "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?",
                     (now,),
@@ -682,7 +688,8 @@ class MemoryManager:
 
         # Check database connectivity
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with db_ctx.connect(self.db_path) as conn:
+                db_ctx.set_wal_pragmas(conn)
                 conn.execute("SELECT 1")
         except Exception as e:
             status["db"] = False

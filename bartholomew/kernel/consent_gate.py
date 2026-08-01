@@ -9,6 +9,7 @@ import logging
 import sqlite3
 from typing import Any
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,8 @@ class ConsentGate:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = db_ctx.connect(self.db_path)
+            db_ctx.set_wal_pragmas(conn)
             cursor = conn.execute("SELECT memory_id FROM memory_consent")
             rows = cursor.fetchall()
             return {row[0] for row in rows}
@@ -83,7 +85,8 @@ class ConsentGate:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = db_ctx.connect(self.db_path)
+            db_ctx.set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(query, memory_ids)
             rows = cursor.fetchall()

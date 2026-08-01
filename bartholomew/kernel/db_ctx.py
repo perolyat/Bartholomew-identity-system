@@ -13,6 +13,7 @@ re-exports these functions rather than reimplementing them.
 
 import gc
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -63,7 +64,7 @@ def set_wal_pragmas(conn: sqlite3.Connection) -> None:
 
 
 def connect(
-    db_path_or_uri: str,
+    db_path_or_uri: str | os.PathLike[str],
     *,
     uri: bool = False,
     timeout: float = 30.0,
@@ -97,7 +98,7 @@ def connect(
 
 
 def wal_checkpoint(
-    db_path_or_uri: str,
+    db_path_or_uri: str | os.PathLike[str],
     *,
     uri: bool = False,
     timeout: float = 30.0,
@@ -179,7 +180,7 @@ def wal_checkpoint(
 
 
 def wal_checkpoint_truncate(
-    db_path_or_uri: str,
+    db_path_or_uri: str | os.PathLike[str],
     *,
     uri: bool = False,
     timeout: float = 30.0,
@@ -229,7 +230,7 @@ def close_quietly(conn: sqlite3.Connection | None) -> None:
 
 def close_all_and_checkpoint(
     conns: Iterable[sqlite3.Connection],
-    db_path_or_uri: str,
+    db_path_or_uri: str | os.PathLike[str],
     *,
     uri: bool = False,
 ) -> None:
@@ -255,7 +256,7 @@ def close_all_and_checkpoint(
 
 @contextmanager
 def wal_db(
-    db_path_or_uri: str,
+    db_path_or_uri: str | os.PathLike[str],
     *,
     uri: bool = False,
     timeout: float = 30.0,

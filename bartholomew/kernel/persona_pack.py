@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from bartholomew.kernel import db_ctx
+
 if TYPE_CHECKING:
     from bartholomew.kernel.experience_kernel import ExperienceKernel
     from bartholomew.kernel.global_workspace import GlobalWorkspace
@@ -367,7 +369,8 @@ class PersonaPackManager:
         # concurrent, which this object's usage pattern never is.
         self._conn: sqlite3.Connection | None = None
         if self._db_path == ":memory:":
-            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+            self._conn = db_ctx.connect(":memory:")
+            db_ctx.set_wal_pragmas(self._conn)
             self._conn.executescript(PERSONA_PACK_SCHEMA)
         else:
             self._init_database()
@@ -377,14 +380,17 @@ class PersonaPackManager:
 
     def _init_database(self) -> None:
         """Initialize database schema for switch logging."""
-        with sqlite3.connect(self._db_path, check_same_thread=False) as conn:
+        with db_ctx.connect(self._db_path) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.executescript(PERSONA_PACK_SCHEMA)
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get a database connection."""
         if self._conn is not None:
             return self._conn
-        return sqlite3.connect(self._db_path, check_same_thread=False)
+        conn = db_ctx.connect(self._db_path)
+        db_ctx.set_wal_pragmas(conn)
+        return conn
 
     def _close_if_not_persistent(self, conn: sqlite3.Connection) -> None:
         """Close connection if it's not the persistent one."""

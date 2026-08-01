@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from bartholomew.kernel.db_ctx import set_wal_pragmas
+from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 from bartholomew.kernel.embedding_engine import EmbeddingEngine, get_embedding_engine
 from bartholomew.kernel.fts_client import FTSClient
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
@@ -651,7 +651,7 @@ class HybridRetriever:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(query, memory_ids)

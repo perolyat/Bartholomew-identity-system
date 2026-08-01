@@ -15,6 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel.embedding_engine import EmbeddingEngine, get_embedding_engine
 from bartholomew.kernel.fts_client import fts5_available
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
@@ -47,7 +48,8 @@ def _check_fts5_once(db_path: str) -> bool:
 
     # Probe FTS5 availability
     try:
-        conn = sqlite3.connect(db_path)
+        conn = db_ctx.connect(db_path)
+        db_ctx.set_wal_pragmas(conn)
         available = fts5_available(conn)
         conn.close()
     except Exception:
@@ -261,9 +263,8 @@ class Retriever:
         try:
             # Assume store has a sync method to get by ID
             # For async stores, we'd need to handle differently
-            import sqlite3
-
-            with sqlite3.connect(self.memory_store.db_path) as conn:
+            with db_ctx.connect(self.memory_store.db_path) as conn:
+                db_ctx.set_wal_pragmas(conn)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
                     "SELECT id, kind, key, value, summary, ts FROM memories WHERE id=?",
@@ -647,7 +648,8 @@ class FTSOnlyRetriever:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = db_ctx.connect(self.db_path)
+            db_ctx.set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(query, memory_ids)
             rows = cursor.fetchall()

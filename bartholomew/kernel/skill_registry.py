@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import policy_engine
+from . import db_ctx, policy_engine
 from .db_executor import DedicatedDbExecutor
 from .memory.privacy_guard import get_consent_handler
 from .redaction_engine import redact_pii
@@ -59,7 +59,8 @@ def _audit_execution_sync(
     error: str | None,
     timestamp: str,
 ) -> None:
-    conn = sqlite3.connect(db_path)
+    conn = db_ctx.connect(db_path)
+    db_ctx.set_wal_pragmas(conn)
     try:
         conn.execute(
             """
@@ -81,7 +82,8 @@ def _persist_skill_state_sync(
     error: str | None,
     now: str,
 ) -> None:
-    conn = sqlite3.connect(db_path)
+    conn = db_ctx.connect(db_path)
+    db_ctx.set_wal_pragmas(conn)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(
@@ -123,7 +125,8 @@ def _persist_skill_state_sync(
 
 
 def _load_enabled_skill_ids_sync(db_path: str) -> list[str]:
-    conn = sqlite3.connect(db_path)
+    conn = db_ctx.connect(db_path)
+    db_ctx.set_wal_pragmas(conn)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -283,7 +286,8 @@ class SkillRegistry:
             return
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        conn = db_ctx.connect(self._db_path)
+        db_ctx.set_wal_pragmas(conn)
         try:
             conn.executescript(self.SCHEMA)
             conn.commit()
@@ -294,7 +298,8 @@ class SkillRegistry:
         """Get database connection."""
         if not self._db_path:
             raise RuntimeError("No database configured")
-        conn = sqlite3.connect(self._db_path)
+        conn = db_ctx.connect(self._db_path)
+        db_ctx.set_wal_pragmas(conn)
         conn.row_factory = sqlite3.Row
         return conn
 

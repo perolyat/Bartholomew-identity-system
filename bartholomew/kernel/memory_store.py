@@ -8,6 +8,7 @@ from typing import Any
 import aiosqlite
 import numpy as np
 
+from bartholomew.kernel import db_ctx
 from bartholomew.kernel import encryption_engine as _encryption_module
 from bartholomew.kernel.chunking_engine import get_chunking_engine
 from bartholomew.kernel.db_executor import DedicatedDbExecutor
@@ -68,12 +69,10 @@ def _store_chunks_sync(db_path: str, memory_id: int, chunks: list) -> int:
     executor thread (Phase B, stage B2) rather than directly on the event
     loop. A plain module-level function so it has no reference to the
     MemoryStore instance -- only what it needs to do the write."""
-    import sqlite3
-
     conn = None
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA foreign_keys = ON")
+        conn = db_ctx.connect(db_path)
+        db_ctx.set_wal_pragmas(conn)
 
         # Delete existing chunks for this memory (upsert semantics)
         conn.execute(
@@ -106,10 +105,8 @@ def _store_chunks_sync(db_path: str, memory_id: int, chunks: list) -> int:
 def _lookup_embedding_sources_sync(db_path: str, memory_id: int) -> list[str] | None:
     """Synchronous existing-embedding-sources lookup, run on MemoryStore's
     dedicated DB executor thread (Phase B, stage B2)."""
-    import sqlite3
-
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
+    with db_ctx.connect(db_path) as conn:
+        db_ctx.set_wal_pragmas(conn)
         cursor = conn.execute(
             "SELECT DISTINCT source FROM memory_embeddings WHERE memory_id=?",
             (memory_id,),

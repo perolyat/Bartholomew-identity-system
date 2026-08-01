@@ -33,10 +33,11 @@ def cleanup():
         print(f"  - {mem.id}: {mem.content[:50]}...")
 
     # Delete test memories
-    import sqlite3
+    from bartholomew.kernel import db_ctx
 
     db_path = Path("./data/memory.db")
-    with sqlite3.connect(db_path) as conn:
+    with db_ctx.connect(db_path) as conn:
+        db_ctx.set_wal_pragmas(conn)
         for mem in test_memories:
             conn.execute("DELETE FROM memories WHERE id = ?", (mem.id,))
 

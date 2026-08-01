@@ -11,7 +11,7 @@ import sqlite3
 
 import numpy as np
 
-from bartholomew.kernel.db_ctx import set_wal_pragmas
+from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class VectorStore:
         parent_dir = os.path.dirname(self.db_path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with connect(self.db_path) as conn:
             set_wal_pragmas(conn)
             conn.executescript(VECTOR_SCHEMA)
             conn.commit()
@@ -87,7 +87,7 @@ class VectorStore:
         Phase 2d+: Disable VSS if configured dim != 384 (VSS hardcoded)
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with connect(self.db_path) as conn:
                 set_wal_pragmas(conn)
                 # Try to load vss extension
                 conn.enable_load_extension(True)
@@ -236,7 +236,7 @@ class VectorStore:
         vec_blob = vec.tobytes()
         dim = len(vec)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with connect(self.db_path) as conn:
             set_wal_pragmas(conn)
             # Check if embedding already exists for this memory/source
             cursor = conn.execute(
@@ -272,7 +272,7 @@ class VectorStore:
         Args:
             memory_id: Memory ID to delete embeddings for
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with connect(self.db_path) as conn:
             set_wal_pragmas(conn)
             conn.execute("DELETE FROM memory_embeddings WHERE memory_id=?", (memory_id,))
             conn.commit()
@@ -391,7 +391,7 @@ class VectorStore:
         Loads all vectors, computes dot products, returns top-k.
         Efficient enough for small to medium datasets (<10k vectors).
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with connect(self.db_path) as conn:
             set_wal_pragmas(conn)
             # Build query with optional filters
             query = "SELECT memory_id, vec, dim, provider, model FROM memory_embeddings WHERE 1=1"
@@ -456,7 +456,7 @@ class VectorStore:
         Returns:
             Number of embedding rows
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with connect(self.db_path) as conn:
             set_wal_pragmas(conn)
             cursor = conn.execute("SELECT COUNT(*) FROM memory_embeddings")
             row = cursor.fetchone()

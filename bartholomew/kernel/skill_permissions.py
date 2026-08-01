@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from bartholomew.kernel import db_ctx
+
 logger = logging.getLogger(__name__)
 
 
@@ -183,7 +185,8 @@ class PermissionChecker:
             return
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        conn = db_ctx.connect(self._db_path)
+        db_ctx.set_wal_pragmas(conn)
         try:
             conn.executescript(self.SCHEMA)
             conn.commit()
@@ -194,7 +197,8 @@ class PermissionChecker:
         """Get database connection."""
         if not self._db_path:
             raise RuntimeError("No database configured")
-        conn = sqlite3.connect(self._db_path)
+        conn = db_ctx.connect(self._db_path)
+        db_ctx.set_wal_pragmas(conn)
         conn.row_factory = sqlite3.Row
         return conn
 

@@ -339,7 +339,10 @@ class KernelDaemon:
         try:
             await self.scheduler_store.close()
         except Exception:
-            logger.exception("scheduler_store cleanup failed during aborted startup")
+            # Wording preserved from this codepath's original, pre-Phase-B
+            # message (S5.0/issue #24) -- tests/test_scheduler_startup_
+            # readiness.py asserts on it verbatim.
+            logger.exception("Scheduler store cleanup failed during aborted startup")
 
         try:
             await self.mem.close(checkpoint=False)

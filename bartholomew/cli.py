@@ -31,6 +31,7 @@ def embeddings_stats(
     import os
     import sqlite3
 
+    from bartholomew.kernel import db_ctx
     from bartholomew.kernel.embedding_engine import get_embedding_engine
     from bartholomew.kernel.vector_store import VectorStore
 
@@ -79,7 +80,8 @@ def embeddings_stats(
         return
 
     try:
-        with sqlite3.connect(db) as conn:
+        with db_ctx.connect(db) as conn:
+            db_ctx.set_wal_pragmas(conn)
             conn.row_factory = sqlite3.Row
 
             # Total count
@@ -134,7 +136,8 @@ def embeddings_rebuild_vss(
 ):
     """Rebuild SQLite VSS virtual table and triggers"""
     import os
-    import sqlite3
+
+    from bartholomew.kernel import db_ctx
 
     console.print(f"\n[bold]Rebuilding VSS for {db}[/bold]\n")
 
@@ -143,8 +146,8 @@ def embeddings_rebuild_vss(
         raise typer.Exit(1)
 
     try:
-        with sqlite3.connect(db) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
+        with db_ctx.connect(db) as conn:
+            db_ctx.set_wal_pragmas(conn)
 
             # Check if VSS extension available
             try:
