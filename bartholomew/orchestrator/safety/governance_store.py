@@ -71,6 +71,7 @@ docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md.
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -555,10 +556,22 @@ def run_quick_integrity_check(db_path: str) -> tuple[bool, str]:
     is exactly "ok"; any other result (a list of specific problems, one
     per row in practice) is surfaced verbatim in `raw_result` for the
     incident log, not swallowed.
+
+    Phase B stage B9 (real, adversarial-test-caught bug, not
+    hypothetical): sufficiently severe corruption makes `PRAGMA
+    quick_check` itself raise `sqlite3.DatabaseError` ("database disk
+    image is malformed") instead of returning a descriptive row -- a
+    real corrupted file, not a monkeypatched failure, triggered this.
+    Caught here and folded into the same (False, ...) contract every
+    caller already handles, so the daemon still raises the intended,
+    diagnosable `UnsafeStartupError` instead of an unrelated raw
+    `DatabaseError` leaking out of what's meant to be a safety check.
     """
     conn = connect(db_path)
     try:
         row = conn.execute("PRAGMA quick_check").fetchone()
+    except sqlite3.DatabaseError as e:
+        return False, f"quick_check raised {type(e).__name__}: {e}"
     finally:
         conn.close()
     result = row[0] if row else "unknown"

@@ -708,3 +708,41 @@
   tested-and-confirmed-sound, or confirmed not applicable (sub-stage 1); B8 as a whole is complete.
   See `docs/B8_SUB2_MEMORYSTORE_CONCURRENCY_STRESS.md` for the complete record.
 - **Date:** 2026-08-01 (Phase B stage B8, sub-stage 2)
+
+## Decision: Phase B stage B9 validates with real adversarial conditions, not monkeypatched simulations, and reports the archived rollback mechanism as never built rather than partially formalising it
+- **Decision:** B9's tests deliberately avoid monkeypatching the specific function under test where
+  a real adversarial condition can be produced instead: real bytes are overwritten in a real SQLite
+  file rather than mocking `run_quick_integrity_check`'s return value; two `daemon.start()` calls
+  race via `asyncio.gather` rather than being called sequentially; `ProcessLock`/`GovernanceStore`
+  contention is exercised via real OS threads (20-way) rather than sequential calls asserting on
+  order. Separately: a direct repository search for the archived design's
+  `rollback_clear_maintenance()` found no such mechanism (or any maintenance-mode/rollback marker
+  of any kind) anywhere in the current codebase. Rather than building a new rollback mechanism
+  under B9's banner (which is a validation stage, not a feature stage) or writing tests against a
+  mechanism that doesn't exist, this is documented as an honest, direct finding: no rollback
+  capability exists to formalise.
+- **Alternatives:** (a) Monkeypatch every B9 scenario the same way B5's existing suite does (e.g.
+  `run_quick_integrity_check` returning a canned failure) -- rejected: B9's entire purpose is
+  validating the *integrated, real* system, and a monkeypatched integrity-check failure cannot
+  catch a bug in the integrity-check function itself, which is exactly what the real-corruption
+  test found. (b) Build a new maintenance-mode/rollback mechanism now, using the archived design as
+  a starting point, so B9 has something concrete to "formalise" -- rejected: that would be new
+  feature work smuggled into a validation stage, not a decision this stage's own approval scope
+  covers, and risks inventing a mechanism nobody has actually needed for the ~9 stages of Phase B
+  completed so far.
+- **Why:** A stage whose stated purpose is "adversarial validation against the integrated system"
+  should actually attack the integrated system, not a mocked stand-in for it -- the real-corruption
+  test proving this in practice (finding a bug the monkeypatched equivalent test, still passing
+  unchanged, did not and could not find) is the strongest evidence for this choice available.
+- **Consequences:** `governance_store.run_quick_integrity_check()` now catches
+  `sqlite3.DatabaseError` from `PRAGMA quick_check` itself, restoring the intended
+  `UnsafeStartupError` path for severe corruption instead of an undiagnosed raw exception; startup
+  safety was never actually compromised (the exception still correctly aborted startup either way),
+  only the diagnostic quality B5's Startup Incident Log exists to provide. `ROADMAP.md`'s Phase B
+  section is now marked complete (B0-B9 all done) rather than carrying forward an unresolved
+  "rollback procedures" promise the codebase was never going to fulfil without new feature work.
+  Verified against 7 new tests across `tests/test_b9_adversarial_startup_shutdown.py` and
+  `tests/test_b9_concurrent_cli_daemon.py`, plus the complete non-integration/non-slow suite, both
+  clean -- see `docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md` for the complete record. This
+  is Phase B's final stage; approval of B9 authorises no further Phase B work.
+- **Date:** 2026-08-01 (Phase B stage B9)

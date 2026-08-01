@@ -2,7 +2,25 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-01 (B8 sub-stage 2 complete:
+> **Last updated:** 2026-08-01 (B9 complete —  Phase B's final stage:
+> `docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md` delivered. Real (not monkeypatched)
+> adversarial tests against the integrated B0–B8 result: genuine SQLite file corruption (real bytes
+> overwritten in a real database, not a mocked failure) caught a real bug — `PRAGMA quick_check`
+> raises `sqlite3.DatabaseError` on sufficiently severe corruption instead of returning a
+> descriptive row, which `run_quick_integrity_check()` didn't handle, degrading B5's Startup
+> Incident Log diagnostics for exactly the case it exists to explain (startup still correctly
+> aborted either way — fixed to restore the intended, diagnosable `UnsafeStartupError`). Genuinely
+> concurrent `daemon.start()` calls (via `asyncio.gather`, not sequential) prove `ProcessLock`'s
+> exclusion property under real interleaved contention; real OS threads (not sequential calls)
+> racing `ProcessLock` and `GovernanceStore` prove 20-way concurrent contention resolves correctly
+> with no lost writes and no double-grants. A direct repository search confirmed the archived
+> design's `rollback_clear_maintenance()` rollback/maintenance mechanism was never built anywhere in
+> the current codebase — documented honestly as "no such mechanism exists," not glossed over.
+> Windows-specific behaviour needed no new B9-specific verification, since the existing Windows CI
+> leg already continuously re-validates every Phase B stage's additions on every commit. With B9
+> complete, Phase B's full B0–B9 stage sequence is done.)
+>
+> **Previously (2026-08-01):** B8 sub-stage 2 complete:
 > `docs/B8_SUB2_MEMORYSTORE_CONCURRENCY_STRESS.md` delivered, closing the last named B8 risk-map
 > candidate sub-stage 1 didn't cover: "MemoryStore concurrency and its own serialization cost under
 > the new executor model." A new stress test (`tests/test_memory_store_concurrency_stress.py`, 3
@@ -184,7 +202,7 @@ and 3.11; Critical integration + lifecycle on 3.10 and 3.11; Windows 3.11; `lint
 **Deliberately not done (deferred, recorded not fixed):** persistence restructuring; the
 intermittent concurrent-process WAL failure; findings F9–F11. See `RISKS.md`.
 
-### Phase B — Persistence ownership stabilisation 📋 (Staged; NOT approved for implementation)
+### Phase B — Persistence ownership stabilisation ✅ (Complete, 2026-08-01)
 
 **Status as of 2026-07-31 (documentation-only restructuring):** a large, indivisible Phase B
 design specification was produced and independently reviewed, but attempting to bring the entire
@@ -198,9 +216,7 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**B0, B1, B2, B3, B4, B5, B6, and B7 are complete; both of B8's split sub-stages are complete
-(2026-08-01) and every named B8 risk-map candidate is now fixed, tested, or confirmed not
-applicable — no other stage has been approved or started.** Each
+**All of B0 through B9 are complete (2026-08-01) — Phase B is done.** Each
 stage's plan was presented and explicitly approved before its implementation began, per this
 document's own approval model. B0's exit deliverable is `docs/B0_PERSISTENCE_BASELINE.md`, a
 repository-grounded current-state report (no implementation, per B0's exit condition). B1's exit
@@ -261,9 +277,16 @@ model") -- all three tests passed on first run, no bug found, legitimate new reg
 With both sub-stages complete, every named B8 risk-map candidate is now fixed, tested-and-confirmed
 -sound, or confirmed not applicable; the one remaining named-but-deferred item
 (`SkillRegistry.__init__()`'s constructor-time blocking I/O) sits outside B8's own "migrate
-remaining consumers" scope. Each remaining piece of work requires its own compact,
-repository-grounded plan — produced only as it's approached — and its own explicit user approval
-before implementation begins.
+remaining consumers" scope. B9's exit deliverable is
+`docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md`: real (not monkeypatched) adversarial
+tests against the integrated B0–B8 result — genuine SQLite file corruption caught a real bug
+(`run_quick_integrity_check()` didn't handle `PRAGMA quick_check` itself raising
+`sqlite3.DatabaseError` on severe corruption, degrading B5's Startup Incident Log diagnostics —
+fixed), genuinely concurrent `daemon.start()` calls and real-OS-thread `ProcessLock`/
+`GovernanceStore` contention (20-way) both prove their exclusion/serialization guarantees under
+real concurrency, not sequential mock calls. A direct search confirmed the archived design's
+`rollback_clear_maintenance()` mechanism was never built in this repository — documented as an
+honest non-finding, not glossed over. Phase B's B0–B9 stage sequence is complete.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -280,7 +303,7 @@ given a longer timeout. The unresolved "why did a `TRUNCATE` checkpoint outlast 
 busy-timeout" question and its temporary DEBUG instrumentation are the likely same root cause.
 See `RISKS.md`'s tech-debt watchlist.
 
-**Stage structure (all stages 📋 NOT STARTED; none approved):**
+**Stage structure (all stages B0–B9 complete):**
 
 | Stage | Objective | Dependency | Approval gate | Exit condition |
 |---|---|---|---|---|
@@ -293,7 +316,7 @@ See `RISKS.md`'s tech-debt watchlist.
 | **B6** — External Governance control and CLI safety ✅ | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | Approved 2026-07-31 | Verified on both POSIX and Windows; B5's lifecycle tests rerun with the lock in place — delivered as `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` |
 | **B7** — External request admission and detached work ✅ | Shutdown cannot race externally admitted work | B4, B5 | Approved 2026-08-01 | Every real ingress point is identity-bound-admission-gated; does not block B1–B4 — delivered as `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` |
 | **B8** — Remaining persistence consumers ✅ | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | Both sub-stages approved 2026-08-01 | Every named risk-map candidate fixed, tested, or confirmed not applicable — delivered as `docs/B8_SUB1_STARTUP_SHUTDOWN_VECTORSTORE_SKILLS_OFF_LOOP.md` and `docs/B8_SUB2_MEMORYSTORE_CONCURRENCY_STRESS.md` |
-| **B9** — Recovery, rollback, and adversarial validation | Validate the integrated result; formalise recovery | B0–B8 | Not approved | Adversarial scenarios pass; rollback limitations documented honestly |
+| **B9** — Recovery, rollback, and adversarial validation ✅ | Validate the integrated result; formalise recovery | B0–B8 | Approved 2026-08-01 | Adversarial scenarios pass; rollback limitations documented honestly — delivered as `docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md` |
 
 See `docs/PHASE_B_OVERVIEW.md` for each stage's purpose, scope, and deferrals in more detail, and
 `docs/PHASE_B_RISK_MAP.md` for the index of prior research findings relevant to each stage.
