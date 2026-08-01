@@ -691,3 +691,20 @@
   `docs/B8_SUB1_STARTUP_SHUTDOWN_VECTORSTORE_SKILLS_OFF_LOOP.md` §3-4 for the complete record. B8
   as a whole remains open; this decision covers only its first split sub-stage.
 - **Date:** 2026-08-01 (Phase B stage B8, sub-stage 1)
+
+## Decision: Phase B stage B8's second split sub-stage validates rather than changes MemoryStore's concurrency model
+- **Decision:** A stress test (`tests/test_memory_store_concurrency_stress.py`) fires many
+  concurrent `upsert_memory()`/`reembed_memory()` calls against one `MemoryStore` sharing one
+  `SingleWorkerExecutor`, closing `docs/PHASE_B_RISK_MAP.md`'s remaining named B8 candidate. No
+  code changes to `MemoryStore`, `VectorStore`, or `SingleWorkerExecutor` were made.
+- **Why:** All three tests passed against the current implementation on first run. Given that
+  result, changing the concurrency model to fix a problem that doesn't reproduce would be
+  unjustified churn; the correct action is to add the coverage as a permanent regression test and
+  record the outcome honestly, which is what this sub-stage does.
+- **Consequences:** `SingleWorkerExecutor`'s strict-sequential-submission guarantee is now proven,
+  not just documented, under concurrent `MemoryStore` usage -- including through sub-stage 1's
+  newly-added `VectorStore` off-loop calls, where a race could in principle have cross-filed one
+  memory's embedding under another's `memory_id`. With this, every B8 risk-map candidate is fixed,
+  tested-and-confirmed-sound, or confirmed not applicable (sub-stage 1); B8 as a whole is complete.
+  See `docs/B8_SUB2_MEMORYSTORE_CONCURRENCY_STRESS.md` for the complete record.
+- **Date:** 2026-08-01 (Phase B stage B8, sub-stage 2)
