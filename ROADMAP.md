@@ -52,7 +52,7 @@ and 3.11; Critical integration + lifecycle on 3.10 and 3.11; Windows 3.11; `lint
 **Deliberately not done (deferred, recorded not fixed):** persistence restructuring; the
 intermittent concurrent-process WAL failure; findings F9–F11. See `RISKS.md`.
 
-### Phase B — Persistence ownership stabilisation 📋 (Staged; NOT approved for implementation)
+### Phase B — Persistence ownership stabilisation ✅ (Complete, all 10 stages B0–B9)
 
 **Status as of 2026-07-31 (documentation-only restructuring):** a large, indivisible Phase B
 design specification was produced and independently reviewed, but attempting to bring the entire
@@ -70,9 +70,13 @@ boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 entire B0–B9 sequence in this session, superseding the stage-by-stage plan/commit approval process
 described above and in `docs/PHASE_B_OVERVIEW.md` §9 for this workstream — each stage is now
 implemented and committed without a separate pre-implementation approval checkpoint, with the user
-reviewing (and correcting, if needed) the resulting commits rather than each plan in advance. **B0
-is complete** — see `docs/B0_EXECUTION_PLAN.md` and `docs/B0_BASELINE_REPORT.md`. B1–B9 remain not
-started as of this edit.
+reviewing (and correcting, if needed) the resulting commits rather than each plan in advance.
+**All ten stages, B0–B9, are now complete** — see each stage's own `docs/B<N>_IMPLEMENTATION.md`
+(B0's is `docs/B0_EXECUTION_PLAN.md` + `docs/B0_BASELINE_REPORT.md`, since that stage produced a
+report rather than an implementation) and `docs/B9_IMPLEMENTATION.md`'s final cross-stage invariant
+validation table for an honest summary of what is and isn't fully held. Two known, deliberately-
+deferred gaps remain open past this phase — `narrator.py`'s event-loop exposure and `MemoryStore`'s
+`aiosqlite` pragma gap — recorded in `docs/B9_RECOVERY_AND_ROLLBACK.md` §3, not silently dropped.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -89,7 +93,7 @@ given a longer timeout. The unresolved "why did a `TRUNCATE` checkpoint outlast 
 busy-timeout" question and its temporary DEBUG instrumentation are the likely same root cause.
 See `RISKS.md`'s tech-debt watchlist.
 
-**Stage structure (B0 ✅ complete; B1–B9 📋 not started):**
+**Stage structure (all ten stages, B0–B9, ✅ complete):**
 
 | Stage | Objective | Dependency | Approval gate | Exit condition |
 |---|---|---|---|---|
@@ -102,7 +106,7 @@ See `RISKS.md`'s tech-debt watchlist.
 | **B6** — External Governance control and CLI safety | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | ✅ Complete 2026-07-31 | `docs/B6_IMPLEMENTATION.md` — fixed a precondition gap first (CLI's brake commands defaulted to a different db filename than the daemon, which would have made this whole stage meaningless); performed the B3→live schema swap deferred from B4 (`check_scope_blocked()` and CLI's `brake on/off/status` both move to `GovernanceBrakeStore` together); added `bartholomew/kernel/process_lock.py` (fcntl/msvcrt, crash-safe by construction) wired into daemon start/stop/failed-start-unwind; brake on/off deliberately NOT write-fenced (reasoning recorded); Windows branch written but only POSIX exercised directly here, CI's `windows` job is the real cross-platform proof; B5's lifecycle tests rerun green with the lock in place |
 | **B7** — External request admission and detached work | Shutdown cannot race externally admitted work | B4, B5 | ✅ Complete 2026-07-31/08-01 | `docs/B7_IMPLEMENTATION.md` — new `bartholomew/kernel/admission_gate.py` (`AdmissionGate`/`AdmissionToken`, identity-bound, idempotent release) wired into the API as middleware; `shutdown()` freezes then bound-drains before stopping `_kernel`. Ingress re-inventoried by grep: routes touching `_kernel` (chat, self-state, nudges, reflection, kernel/command) are gated; pure monitoring surfaces (`/healthz`, `/metrics`, `/api/liveness/*`) are exempt, verified to never touch `_kernel`. No detached/child work exists in the current API layer to track beyond what's already covered — recorded, not invented |
 | **B8** — Remaining persistence consumers | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | ✅ Complete 2026-08-01 | `docs/B8_IMPLEMENTATION.md` — 21 files migrated onto `db_ctx`'s shared connection policy (FTS/vector/hybrid consolidated onto the shared wrapper; retrieval/consent/working-memory/experience-kernel/skill-permissions/memory-store-sync/skill-registry/skills/persona/narrator had their pragma gap closed; CLI+scripts for consistency). Corrected a real B1 inventory gap mid-stage (7 files assigned only to B2, never carried to B8). Found and fixed a genuine B5 regression (log-message wording two pre-existing tests asserted on verbatim) that an earlier full-suite run had missed. `db_ctx.py`'s path typing widened to `str \| PathLike` to fix a real mypy regression, not just paper over it |
-| **B9** — Recovery, rollback, and adversarial validation | Validate the integrated result; formalise recovery | B0–B8 | Not approved | Adversarial scenarios pass; rollback limitations documented honestly |
+| **B9** — Recovery, rollback, and adversarial validation | Validate the integrated result; formalise recovery | B0–B8 | ✅ Complete 2026-08-01 | `docs/B9_IMPLEMENTATION.md` + `docs/B9_RECOVERY_AND_ROLLBACK.md` — a real cross-process concurrency bug found and fixed in B3's `GovernanceBrakeStore` (lost-update race under true concurrent writers; B3's own "one commit = atomic" claim was an overclaim, never tested under real concurrency until now). Partial-migration, interrupted-operation, and concurrent-CLI scenarios exercised. Final invariant validation table against the overview's §4 non-negotiables: 4 of 6 fully held with cited evidence, 2 consciously superseded by this session's recorded authorization (not silently violated) |
 
 See `docs/PHASE_B_OVERVIEW.md` for each stage's purpose, scope, and deferrals in more detail, and
 `docs/PHASE_B_RISK_MAP.md` for the index of prior research findings relevant to each stage.

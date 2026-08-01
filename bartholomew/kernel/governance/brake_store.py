@@ -210,6 +210,27 @@ class GovernanceBrakeStore:
         respect to the state write, unlike the legacy
         BrakeStorage.append_memory()'s unawaited asyncio.create_task.
 
+        Concurrency (Phase B, stage B9 -- found by a real cross-process
+        adversarial test, tests/test_b9_adversarial_validation.py::
+        test_concurrent_cli_engage_from_two_real_processes_loses_no_scope):
+        `BEGIN IMMEDIATE` is issued before the read, not left to sqlite3's
+        default deferred-transaction behavior. Deferred transactions only
+        acquire the write lock at the first actual write statement (the
+        UPDATE below), not at the SELECT -- so two concurrent callers could
+        both read the same pre-transition state, each independently compute
+        a transition from it, and the second writer's UPDATE would silently
+        clobber the first's, losing whichever scope only the first writer
+        added. This was true even before this stage: it was originally
+        claimed (incorrectly) that one connection/one commit alone made
+        this atomic -- true for surviving a crash mid-write, not true for
+        serializing concurrent writers. BEGIN IMMEDIATE acquires SQLite's
+        RESERVED lock immediately, so a second concurrent caller's own
+        BEGIN IMMEDIATE blocks (bounded by set_wal_pragmas()'s
+        busy_timeout=5000) until the first caller's transaction commits,
+        then reads the post-transition state -- turning the read-modify-
+        write into a true compare-and-swap under real concurrency, not
+        just within one process.
+
         Ordering safety: if expected_revision is given and doesn't match
         the persisted revision, raises StaleBrakeTransitionError without
         writing anything -- this is the direct fix for the risk map's
@@ -225,6 +246,7 @@ class GovernanceBrakeStore:
         caller.
         """
         with db_ctx.wal_db(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT engaged, scopes_json, revision, last_loosen_revision, updated_at "
                 "FROM parking_brake_state WHERE id = 1",
