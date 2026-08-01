@@ -2,7 +2,27 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-01 (B7 complete: `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` delivered per
+> **Last updated:** 2026-08-01 (B8 sub-stage 1 complete:
+> `docs/B8_SUB1_STARTUP_SHUTDOWN_VECTORSTORE_SKILLS_OFF_LOOP.md` delivered per B8's own explicit
+> "split further as appropriate" direction — B8 as a whole remains open, not approved-complete.
+> `ExperienceKernel`/`WorkingMemoryManager`/`PersonaPackManager`/`VectorStore` all have zero
+> `async def` methods (confirmed by direct read) — their blocking-ness was entirely a function of
+> whether callers routed them off the event loop, the same B2 pattern already established
+> elsewhere. Found and fixed four real gaps where that discipline wasn't applied: `daemon.py`'s
+> `start()`/`stop()` called `ExperienceKernel`/`WorkingMemoryManager`/`PersonaPackManager` methods
+> directly (once per lifecycle, not per-request); `memory_store.py`'s embedding pipeline
+> (`_handle_embeddings`/`persist_embeddings_for`/`reembed_memory`) called `VectorStore` directly
+> on a genuine per-write hot path when `BARTHO_EMBED_ENABLED=1`; `skill_registry.py`'s
+> `_persist_skill_state()`/`_audit_execution()` did the same on every skill load and every skill
+> action. Each is now routed through `run_off_loop()`, proven by 6 new tests that spy on thread
+> identity to confirm the calls actually moved off the event-loop thread, not just that behavior
+> was preserved. Also confirmed several B8 candidates from the risk map do *not* apply to the
+> current repository: `liveness.py`/`metrics.py`'s plain `def` handlers are already
+> threadpool-dispatched by FastAPI/Starlette itself, and `hybrid_retriever.py`'s search pipeline is
+> unreachable from any live path today (CLI/script-only). Approval of this sub-stage does not
+> authorise the rest of B8, B9, or any other stage.)
+>
+> **Previously (2026-08-01):** B7 complete: `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` delivered per
 > an explicitly approved (autonomous-continuation) B7 plan. Closes the shutdown gap B5 explicitly
 > could not cover: new `bartholomew/kernel/request_admission.py`'s `RequestAdmission` is an
 > identity-bound admit/release/drain primitive (fixing a real named risk-map finding — a prior
@@ -163,8 +183,9 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**B0, B1, B2, B3, B4, B5, B6, and B7 are complete (2026-08-01); no other stage has been approved or
-started.** Each stage's plan was presented and explicitly approved before its implementation began, per this
+**B0, B1, B2, B3, B4, B5, B6, and B7 are complete; B8's first split sub-stage is complete
+(2026-08-01) but B8 as a whole remains open — no other stage has been approved or started.** Each
+stage's plan was presented and explicitly approved before its implementation began, per this
 document's own approval model. B0's exit deliverable is `docs/B0_PERSISTENCE_BASELINE.md`, a
 repository-grounded current-state report (no implementation, per B0's exit condition). B1's exit
 deliverable is `docs/B1_SHARED_CONNECTION_POLICY.md`: the API layer's independent, hand-copied
@@ -206,8 +227,19 @@ external requests finish against still-intact resources; a single HTTP middlewar
 check missed) while exempting health/liveness/metrics/docs endpoints. A repository re-check found
 no detached/child task spawning exists anywhere in the codebase, narrowing this stage's real scope
 from the archived design's token-propagation machinery. Approval of B7 does **not** authorise B8
-or B9. Each remaining stage requires its own compact, repository-grounded plan — produced only as
-that stage approaches — and its own explicit user approval before implementation begins.
+or B9. B8's first split sub-stage (per B8's own "split further as appropriate" scope note) is
+`docs/B8_SUB1_STARTUP_SHUTDOWN_VECTORSTORE_SKILLS_OFF_LOOP.md`: `ExperienceKernel`/
+`WorkingMemoryManager`/`PersonaPackManager`/`VectorStore` have zero `async def` methods between
+them (confirmed by direct read), so their blocking-ness was entirely a function of caller
+discipline; four real gaps where `daemon.py` (`start()`/`stop()`), `memory_store.py`'s embedding
+pipeline, and `skill_registry.py`'s audit/state persistence called them directly instead of
+through `run_off_loop()` are now closed, each proven off-loop by a dedicated thread-identity test.
+Several other B8 candidates were checked and confirmed not to apply to the current repository
+(liveness/metrics routes are already threadpool-dispatched by FastAPI itself; the
+`hybrid_retriever.py` search pipeline is unreachable from any live path today). B8 as a whole
+remains open — MemoryStore concurrency/stress testing and any further split sub-stages are not yet
+scoped. Each remaining piece of work requires its own compact, repository-grounded plan — produced
+only as it's approached — and its own explicit user approval before implementation begins.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -236,7 +268,7 @@ See `RISKS.md`'s tech-debt watchlist.
 | **B5** — Startup and shutdown integrity ✅ | Reliable failure handling; clean-shutdown evidence for B1–B4's own resources, as lifecycle-terminal-state conditions (no process lock or external-admission draining yet) | B1–B4 | Approved 2026-07-31 | Startup/shutdown sequences verified against the concrete B1–B4 runtime; does not yet cover externally admitted work (B7) — delivered as `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` |
 | **B6** — External Governance control and CLI safety ✅ | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | Approved 2026-07-31 | Verified on both POSIX and Windows; B5's lifecycle tests rerun with the lock in place — delivered as `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` |
 | **B7** — External request admission and detached work ✅ | Shutdown cannot race externally admitted work | B4, B5 | Approved 2026-08-01 | Every real ingress point is identity-bound-admission-gated; does not block B1–B4 — delivered as `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` |
-| **B8** — Remaining persistence consumers | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | Not approved | Each split sub-stage's consumer migrated and tested |
+| **B8** — Remaining persistence consumers 🔶 (sub-stage 1 of N complete) | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | Sub-stage 1 approved 2026-08-01; B8 overall not approved-complete | Each split sub-stage's consumer migrated and tested — sub-stage 1 (daemon startup/shutdown, VectorStore embedding pipeline, skill audit/state persistence) delivered as `docs/B8_SUB1_STARTUP_SHUTDOWN_VECTORSTORE_SKILLS_OFF_LOOP.md` |
 | **B9** — Recovery, rollback, and adversarial validation | Validate the integrated result; formalise recovery | B0–B8 | Not approved | Adversarial scenarios pass; rollback limitations documented honestly |
 
 See `docs/PHASE_B_OVERVIEW.md` for each stage's purpose, scope, and deferrals in more detail, and

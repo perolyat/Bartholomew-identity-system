@@ -432,8 +432,17 @@ class MemoryStore:
         if not result.memory_id:
             return
 
-        # Get embedding components (this may create VectorStore schema)
-        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        # Get embedding components (this may create VectorStore schema --
+        # real synchronous sqlite3 I/O; VectorStore has no async methods at
+        # all, confirmed by direct read, so this and every other VectorStore
+        # call below is routed off the event loop, Phase B stage B8).
+        from .blocking_executor import run_off_loop
+
+        embed_engine, vec_store = await run_off_loop(
+            _get_embedding_components,
+            self.db_path,
+            executor=self._blocking_executor,
+        )
         if not embed_engine or not vec_store:
             return
 
@@ -517,10 +526,16 @@ class MemoryStore:
                 )
                 await db.commit()
 
-            # Persist embeddings (using synchronous VectorStore)
+            # Persist embeddings (Phase B stage B8: off the event loop --
+            # see the run_off_loop import note above this method's own
+            # VectorStore construction).
             cfg = embed_engine.config
-            for src, vec in zip(sources, vecs, strict=False):
-                vec_store.upsert(result.memory_id, vec, src, cfg.provider, cfg.model)
+
+            def _upsert_all() -> None:
+                for src, vec in zip(sources, vecs, strict=False):
+                    vec_store.upsert(result.memory_id, vec, src, cfg.provider, cfg.model)
+
+            await run_off_loop(_upsert_all, executor=self._blocking_executor)
             logger.debug(f"Stored {len(vecs)} embedding(s) for memory {result.memory_id}")
         except Exception as e:
             logger.error(f"Failed to generate/persist embeddings: {e}")
@@ -791,7 +806,15 @@ class MemoryStore:
         Returns:
             Number of embeddings created
         """
-        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        # Phase B stage B8: off the event loop -- see _handle_embeddings()'s
+        # own identical VectorStore-construction call for the full rationale.
+        from .blocking_executor import run_off_loop
+
+        embed_engine, vec_store = await run_off_loop(
+            _get_embedding_components,
+            self.db_path,
+            executor=self._blocking_executor,
+        )
         if not (embed_engine and vec_store):
             return 0
 
@@ -875,8 +898,13 @@ class MemoryStore:
                 )
                 await db.commit()
 
-            for src, vec in zip(sources_to_store, vecs, strict=False):
-                vec_store.upsert(memory_id, vec, src, cfg.provider, cfg.model)
+            # Phase B stage B8: off the event loop (see this method's own
+            # VectorStore-construction call above).
+            def _upsert_all() -> None:
+                for src, vec in zip(sources_to_store, vecs, strict=False):
+                    vec_store.upsert(memory_id, vec, src, cfg.provider, cfg.model)
+
+            await run_off_loop(_upsert_all, executor=self._blocking_executor)
 
             logger.info(f"Persisted {len(vecs)} embedding(s) for memory {memory_id}")
             return len(vecs)
@@ -899,7 +927,15 @@ class MemoryStore:
         Returns:
             Number of embeddings created
         """
-        embed_engine, vec_store = _get_embedding_components(self.db_path)
+        # Phase B stage B8: off the event loop -- see _handle_embeddings()'s
+        # own identical VectorStore-construction call for the full rationale.
+        from .blocking_executor import run_off_loop
+
+        embed_engine, vec_store = await run_off_loop(
+            _get_embedding_components,
+            self.db_path,
+            executor=self._blocking_executor,
+        )
         if not (embed_engine and vec_store):
             return 0
 
@@ -908,8 +944,6 @@ class MemoryStore:
         # docs/B2_EVENT_LOOP_ISOLATION.md.
         if sources is None:
             import sqlite3
-
-            from .blocking_executor import run_off_loop
 
             def _existing_sources() -> list[str] | None:
                 with sqlite3.connect(self.db_path) as conn:
@@ -927,8 +961,14 @@ class MemoryStore:
 
             sources = await run_off_loop(_existing_sources, executor=self._blocking_executor)
 
-        # Delete existing embeddings
-        vec_store.delete_for_memory(memory_id)
+        # Delete existing embeddings (Phase B stage B8: off the event loop,
+        # same rationale as this method's own VectorStore-construction call
+        # above).
+        await run_off_loop(
+            vec_store.delete_for_memory,
+            memory_id,
+            executor=self._blocking_executor,
+        )
 
         # Re-create embeddings
         return await self.persist_embeddings_for(memory_id, sources)

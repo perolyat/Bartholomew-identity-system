@@ -403,7 +403,7 @@ class KernelDaemon:
             resources_started.append("scheduler_schema")
 
             # Stage 3: Initialize experience kernel state
-            self._init_experience_kernel()
+            await self._init_experience_kernel()
             resources_started.append("experience_kernel")
 
             # Stage 4: Load skills. load_enabled_skills() loads whatever was
@@ -561,13 +561,30 @@ class KernelDaemon:
         except BaseException:
             logger.exception("Failed to record startup incident (Phase B stage B5)")
 
-    def _init_experience_kernel(self) -> None:
-        """Initialize experience kernel from last snapshot or defaults."""
+    async def _init_experience_kernel(self) -> None:
+        """Initialize experience kernel from last snapshot or defaults.
+
+        Phase B stage B8: load_last_snapshot()/switch_pack() do real,
+        synchronous SQLite I/O (confirmed by direct read of
+        experience_kernel.py/working_memory.py/persona_pack.py -- none of
+        their methods are `async def`, so nothing about them was ever
+        off-loop by construction); this method previously called them
+        directly from start()'s async context, blocking the event loop
+        for the duration of each disk read/write. Now routed through
+        run_off_loop(), the same B2 pattern every other daemon-owned
+        blocking call already uses. restore_from_snapshot()/
+        get_active_pack_id()/list_packs() are pure in-memory operations
+        (confirmed by direct read) and are deliberately left as direct
+        calls -- wrapping them would only add overhead for no benefit.
+        """
         db_path = self.mem.db_path
 
         try:
             # Try to load last experience snapshot
-            snapshot = self.experience.load_last_snapshot()
+            snapshot = await run_off_loop(
+                self.experience.load_last_snapshot,
+                executor=self.blocking_executor,
+            )
             if snapshot:
                 # Real, previously-live bug (found 2026-07-21 while writing a
                 # scenario-replay test): load_last_snapshot() only loads and
@@ -585,7 +602,11 @@ class KernelDaemon:
                 print("[Kernel] Starting with fresh experience state")
 
             # Try to load last working memory snapshot
-            wm_loaded = self.working_memory.load_last_snapshot(db_path)
+            wm_loaded = await run_off_loop(
+                self.working_memory.load_last_snapshot,
+                db_path,
+                executor=self.blocking_executor,
+            )
             if wm_loaded:
                 print("[Kernel] Restored working memory from last snapshot")
             else:
@@ -595,9 +616,11 @@ class KernelDaemon:
             if not self.persona_manager.get_active_pack_id():
                 packs = self.persona_manager.list_packs()
                 if packs:
-                    self.persona_manager.switch_pack(
+                    await run_off_loop(
+                        self.persona_manager.switch_pack,
                         packs[0],
                         trigger="startup",
+                        executor=self.blocking_executor,
                     )
                     print(f"[Kernel] Activated persona: {packs[0]}")
         except Exception as e:
@@ -669,16 +692,25 @@ class KernelDaemon:
         )
         await asyncio.sleep(0)
 
-        # Stage 3: Persist experience snapshot
+        # Stage 3: Persist experience snapshot. Phase B stage B8: routed
+        # off the event loop -- persist_snapshot() does real synchronous
+        # SQLite I/O (confirmed by direct read), previously called
+        # directly from this async method. blocking_executor is still
+        # open at this point in stop()'s sequence.
         try:
-            self.experience.persist_snapshot()
+            await run_off_loop(self.experience.persist_snapshot, executor=self.blocking_executor)
             print("[Kernel] Experience state persisted")
         except Exception as e:
             print(f"[Kernel] Failed to persist experience state: {e}")
 
-        # Stage 3: Persist working memory snapshot
+        # Stage 3: Persist working memory snapshot (Phase B stage B8; see
+        # comment above -- same real blocking-I/O gap).
         try:
-            self.working_memory.persist_snapshot(self.mem.db_path)
+            await run_off_loop(
+                self.working_memory.persist_snapshot,
+                self.mem.db_path,
+                executor=self.blocking_executor,
+            )
             print("[Kernel] Working memory state persisted")
         except Exception as e:
             print(f"[Kernel] Failed to persist working memory: {e}")

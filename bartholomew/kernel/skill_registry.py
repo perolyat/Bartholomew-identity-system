@@ -320,8 +320,17 @@ class SkillRegistry:
                 subscription_ids=subscription_ids,
             )
 
-            # Persist state
-            self._persist_skill_state(skill_id, enabled=True)
+            # Persist state (Phase B stage B8: off the event loop --
+            # _persist_skill_state() does real synchronous sqlite3 I/O,
+            # confirmed by direct read; previously called directly here).
+            from .blocking_executor import run_off_loop
+
+            await run_off_loop(
+                self._persist_skill_state,
+                skill_id,
+                enabled=True,
+                executor=self._blocking_executor,
+            )
 
             logger.info(
                 "Loaded skill: %s v%s",
@@ -332,7 +341,14 @@ class SkillRegistry:
 
         except Exception as e:
             logger.exception("Failed to load skill %s: %s", skill_id, e)
-            self._persist_skill_state(skill_id, error=str(e))
+            from .blocking_executor import run_off_loop
+
+            await run_off_loop(
+                self._persist_skill_state,
+                skill_id,
+                error=str(e),
+                executor=self._blocking_executor,
+            )
             return False
 
     def _instantiate_skill(self, manifest: SkillManifest) -> SkillBase | None:
@@ -778,7 +794,19 @@ class SkillRegistry:
         provably describing the same CandidateAction Governance decided on.
         """
         skill_id = candidate_action.kind
-        self._audit_execution(skill_id, action, params, result)
+        # Phase B stage B8: off the event loop -- _audit_execution() does
+        # real synchronous sqlite3 I/O (confirmed by direct read),
+        # previously called directly here on every single skill action.
+        from .blocking_executor import run_off_loop
+
+        await run_off_loop(
+            self._audit_execution,
+            skill_id,
+            action,
+            params,
+            result,
+            executor=self._blocking_executor,
+        )
         await self._record_reflection(observation, skill_id, action, params, result)
         return result
 

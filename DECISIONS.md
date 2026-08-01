@@ -641,3 +641,53 @@
   daemon) -- plus the complete non-integration/non-slow suite, both clean -- see
   `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` §3-4 for the complete record.
 - **Date:** 2026-08-01 (Phase B stage B7)
+
+## Decision: Phase B stage B8's first split sub-stage fixes callers, not the four classes those callers touch
+- **Decision:** `ExperienceKernel`, `WorkingMemoryManager`, `PersonaPackManager`, and
+  `VectorStore` are confirmed (by direct read) to have zero `async def` methods among them --
+  every one of their methods is plain, synchronous, and does real `sqlite3` I/O where relevant.
+  Rather than adding async wrappers or an async API surface to any of these four classes, this
+  sub-stage fixes the actual gap: four call sites (`daemon.py`'s `start()`/`stop()`,
+  `memory_store.py`'s three embedding-pipeline methods, `skill_registry.py`'s `load_skill()`/
+  `_finish()`) that called these classes' methods directly from `async def` context instead of
+  through `bartholomew.kernel.blocking_executor.run_off_loop()`, the same off-loop pattern B2
+  already established. No new mechanism, no new class, no signature change to any of the four
+  target classes.
+- **Alternatives:** (a) Convert `ExperienceKernel`/`WorkingMemoryManager`/`PersonaPackManager`/
+  `VectorStore` to `async def` methods (using `aiosqlite` internally, matching `MemoryStore`'s own
+  pattern) -- rejected: a much larger, riskier rewrite of four classes with many callers each
+  (including synchronous, non-daemon callers like `bartholomew/cli.py`) to fix what is, on
+  inspection, entirely a caller-discipline problem, not a class-design problem; B2 already proved
+  the wrap-the-caller pattern works cleanly for exactly this shape of gap. (b) Also fix
+  `SkillRegistry.__init__()`'s own constructor-time blocking I/O (`_init_database()`, reachable
+  from the event loop since `KernelDaemon.__init__()` runs inside `app.py`'s `async def startup()`
+  before `start()` is awaited) -- rejected for this sub-stage specifically: unlike the four target
+  call sites (already-isolated calls that just needed wrapping), fixing this would mean
+  restructuring *when* `SkillRegistry` itself is constructed relative to the rest of
+  `KernelDaemon.__init__()`'s wiring, a construction-site reorganization closer to B4's scope than
+  "wrap an already-isolated call" -- named as an honest, deferred limitation instead of silently
+  left out. (c) Also migrate `hybrid_retriever.py`'s FTS/vector search calls -- rejected: confirmed
+  by direct search that nothing outside `retrieval.py`/`hybrid_retriever.py`/`types.py` itself
+  calls `get_retriever()` or `.retrieve()` anywhere in the live codebase; there is no event loop to
+  block today.
+- **Why:** Re-auditing the repository specifically for B8's "remaining persistence consumers"
+  scope (not re-reading B0's original inventory, which predates B2/B4's own migrations and was
+  route-focused rather than internal-call-site-focused) found that the API layer's own
+  `narrator.py`/`persona_pack.py` calls were *already* correctly wrapped -- the real gaps were all
+  internal, non-HTTP call sites B0's route-focused audit never covered, plus a genuinely
+  inconsistent partial migration within `reembed_memory()` and `load_enabled_skills()` themselves
+  (one call in each method already correctly off-loop, a sibling call in the same method not).
+- **Consequences:** `daemon.py`'s `_init_experience_kernel()` is now `async def`, awaited from
+  `start()` -- two call sites needed a one-line `await` added
+  (`daemon.py` itself, `tests/test_scenario_replay.py`'s `_boot()` helper); one pre-existing
+  monkeypatch-based test needed no change, since Python evaluates a call expression (and any
+  exception it raises) before the `await` keyword is ever reached. `memory_store.py`'s embedding
+  pipeline and `skill_registry.py`'s audit/state persistence now route through the caller's own
+  `blocking_executor`/`_blocking_executor`, consistent with every other daemon-owned blocking call.
+  Verified against 6 new tests in `tests/test_b8_event_loop_isolation.py` that spy on thread
+  identity to prove the calls actually moved off the event-loop thread (not merely that behavior
+  was preserved, which the existing test suites already covered and continue to cover) -- plus the
+  complete non-integration/non-slow suite, both clean -- see
+  `docs/B8_SUB1_STARTUP_SHUTDOWN_VECTORSTORE_SKILLS_OFF_LOOP.md` §3-4 for the complete record. B8
+  as a whole remains open; this decision covers only its first split sub-stage.
+- **Date:** 2026-08-01 (Phase B stage B8, sub-stage 1)
