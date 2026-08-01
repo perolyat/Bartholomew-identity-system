@@ -411,20 +411,20 @@ carried forward rather than fixed here:
 
 ---
 
-### Stage 1 — Console/UI integration 🚧 (Started 2026-08-01: sub-stage S1.1 complete)
+### Stage 1 — Console/UI integration 🚧 (Started 2026-08-01: sub-stages S1.1, S1.5 complete)
 
 **Status:** Stage 1 is a console/UI product slice, now staged as sub-stages **S1.0–S1.6** —
 mirroring Phase B's B0–B9 staging, since this slice's combined exit criteria are comparably broad.
 See `docs/STAGE_1_OVERVIEW.md` for each sub-stage's purpose, scope, and deferrals; this section of
 `ROADMAP.md` remains the canonical source for Stage 1's overall exit criteria and approval
-boundaries — `docs/STAGE_1_OVERVIEW.md` is subordinate to it. **S1.1 (Parking Brake API + UI) is
-implemented (2026-08-01);** S1.2–S1.6 (consent/approval inbox, notification/mute/quiet-hours
-settings, the `awaiting_response` queue, audit/provenance view, host-device onboarding guidance)
-remain scoped-only and each require their own separate approval before implementation, per
-`docs/STAGE_1_OVERVIEW.md`'s non-negotiable invariants. **Scope updated 2026-07-28** (planning
-only): Stage 1 is sequenced *before* Stage 5/S5.1 (see "Near-term milestone plan" above) because
-Stage 5's live proactive behaviour needs a real, user-facing governance surface that only Stage 1
-can provide.
+boundaries — `docs/STAGE_1_OVERVIEW.md` is subordinate to it. **S1.1 (Parking Brake API + UI) and
+S1.5 (governance audit/provenance view) are implemented (2026-08-01);** S1.2–S1.4 and S1.6
+(consent/approval inbox, notification/mute/quiet-hours settings, the `awaiting_response` queue,
+host-device onboarding guidance) remain scoped-only and each require their own separate approval
+before implementation, per `docs/STAGE_1_OVERVIEW.md`'s non-negotiable invariants. **Scope updated
+2026-07-28** (planning only): Stage 1 is sequenced *before* Stage 5/S5.1 (see "Near-term milestone
+plan" above) because Stage 5's live proactive behaviour needs a real, user-facing governance
+surface that only Stage 1 can provide.
 
 **Goal:** A minimal consumer web governance shell on top of the API bridge, consistent with the
 hybrid local-first deployment architecture (`DECISIONS.md`) — browser-based, reaching the trusted

@@ -305,6 +305,34 @@ class GovernanceStore:
         st = self._cache
         return st.engaged and ("global" in st.scopes or scope in st.scopes)
 
+    def list_audit(self, limit: int = 50) -> list[dict]:
+        """
+        Most recent governance_audit entries, newest first (Stage 1, S1.5).
+        Read-only; does not touch or require self._cache. `scopes` is
+        decoded from its persisted JSON string into a list for each row.
+        """
+        conn = connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, ts, action, scopes, reason, revision, actor "
+                "FROM governance_audit ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "id": row[0],
+                "ts": row[1],
+                "action": row[2],
+                "scopes": json.loads(row[3]),
+                "reason": row[4],
+                "revision": row[5],
+                "actor": row[6],
+            }
+            for row in rows
+        ]
+
     def engage(
         self,
         *scopes: str,

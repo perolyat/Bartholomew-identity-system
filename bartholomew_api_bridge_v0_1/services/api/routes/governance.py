@@ -1,5 +1,6 @@
 """
 Stage 1, S1.1: Parking Brake control surface.
+Stage 1, S1.5: Governance audit / provenance view (GET /audit).
 
 Exposes bartholomew.orchestrator.safety.governance_store.GovernanceStore --
 the live, tested, fail-closed Parking Brake persistence already wired as
@@ -144,3 +145,22 @@ async def disengage_brake(body: BrakeDisengageRequest) -> dict:
         raise HTTPException(503, str(e)) from e
 
     return _state_dict(state)
+
+
+@router.get("/audit")
+async def get_audit_log(limit: int = 50) -> dict:
+    """
+    Recent governance_audit entries, newest first (Stage 1, S1.5) --
+    read-only provenance view over the same audit trail engage()/
+    disengage() already write atomically with each state change.
+    """
+    if limit < 1 or limit > 100:
+        raise HTTPException(400, "limit must be between 1 and 100")
+
+    kernel = _get_kernel()
+    entries = await run_off_loop(
+        kernel.governance_store.list_audit,
+        limit=limit,
+        executor=kernel.blocking_executor,
+    )
+    return {"entries": entries, "count": len(entries)}

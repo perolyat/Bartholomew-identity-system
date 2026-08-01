@@ -136,6 +136,15 @@
     <div id="brake-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
   </div>
 
+  <!-- Stage 1 (S1.5): Governance Audit -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">📜 Governance Audit</h3>
+      <button onclick="refreshAudit()">Refresh</button>
+    </div>
+    <div id="audit-list"></div>
+  </div>
+
   <!-- Stage 3: Self-State Panel -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
@@ -395,6 +404,7 @@
           return;
         }
         await refreshBrake();
+        await refreshAudit();
       }catch(e){
         alert("Failed to engage brake: " + e);
       }
@@ -421,8 +431,45 @@
           return;
         }
         await refreshBrake();
+        await refreshAudit();
       }catch(e){
         alert("Failed to disengage brake: " + e);
+      }
+    }
+
+    // === Stage 1 (S1.5): Governance Audit ===
+    async function refreshAudit(){
+      const el = document.getElementById("audit-list");
+      try{
+        const r = await fetch(API + "/api/governance/audit?limit=50");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">Failed to load audit log: HTTP ${r.status}</div>`;
+          return;
+        }
+        const j = await r.json();
+        const entries = j.entries || [];
+
+        if(entries.length === 0){
+          el.innerHTML = '<div class="empty-state">No governance actions recorded yet.</div>';
+          return;
+        }
+
+        el.innerHTML = entries.map(e => {
+          const when = new Date(e.ts * 1000).toLocaleString();
+          const scopes = e.scopes && e.scopes.length ? e.scopes.join(', ') : '—';
+          return `
+            <div class="nudge-item">
+              <div class="row" style="justify-content:space-between">
+                <span class="nudge-kind">${escapeHtml(e.action)}</span>
+                <span class="nudge-ts">${escapeHtml(when)}</span>
+              </div>
+              <div class="nudge-msg">scopes: ${escapeHtml(scopes)} · actor: ${escapeHtml(e.actor || 'unknown')}</div>
+              ${e.reason ? `<div class="nudge-ts">${escapeHtml(e.reason)}</div>` : ''}
+            </div>
+          `;
+        }).join('');
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Failed to load audit log: ${escapeHtml(e.message)}</div>`;
       }
     }
 
@@ -828,6 +875,7 @@
     // === Initial Load ===
     refreshHealth();
     refreshBrake();
+    refreshAudit();
     refreshSelfState();
     refreshPersona();
     refreshEpisodes();
@@ -839,6 +887,7 @@
     setInterval(refreshSelfState, 30000);  // Self-state every 30s
     setInterval(refreshEpisodes, 60000);   // Episodes every 60s
     setInterval(refreshBrake, 15000);      // Parking brake every 15s (safety-relevant)
+    setInterval(refreshAudit, 30000);      // Governance audit every 30s
   </script>
 </body>
 </html>

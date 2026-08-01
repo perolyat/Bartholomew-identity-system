@@ -282,6 +282,50 @@ def test_actor_column_is_backfilled_on_pre_existing_governance_audit_table(db_pa
     assert rows[1] == ("post-migration", "user")
 
 
+# -- Audit log read (Stage 1, S1.5) ------------------------------------------
+
+
+def test_list_audit_returns_entries_newest_first(db_path):
+    store = GovernanceStore(db_path)
+    store.engage("skills", reason="first", actor="user")
+    store.disengage(reason="second", actor="user")
+    store.engage("voice", reason="third", actor="cli")
+
+    entries = store.list_audit()
+
+    assert [e["reason"] for e in entries] == ["third", "second", "first"]
+    assert [e["action"] for e in entries] == ["engaged", "disengaged", "engaged"]
+
+
+def test_list_audit_decodes_scopes_and_includes_actor(db_path):
+    store = GovernanceStore(db_path)
+    store.engage("skills", "voice", reason="lockdown", actor="user")
+
+    entry = store.list_audit()[0]
+
+    assert entry["scopes"] == ["skills", "voice"]
+    assert entry["actor"] == "user"
+    assert entry["revision"] == 1
+    assert isinstance(entry["ts"], int)
+
+
+def test_list_audit_respects_limit(db_path):
+    store = GovernanceStore(db_path)
+    for i in range(5):
+        store.engage("skills", reason=f"entry {i}")
+
+    entries = store.list_audit(limit=2)
+
+    assert len(entries) == 2
+    assert entries[0]["reason"] == "entry 4"
+    assert entries[1]["reason"] == "entry 3"
+
+
+def test_list_audit_empty_for_fresh_store(db_path):
+    store = GovernanceStore(db_path)
+    assert store.list_audit() == []
+
+
 # -- Legacy migration -------------------------------------------------------
 
 

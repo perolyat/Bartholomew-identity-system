@@ -592,8 +592,8 @@ approval before work begins — this list records sequencing, not authorisation)
    notification/mute controls, awaiting-response queue, audit/provenance visibility, host-device
    onboarding — see `ROADMAP.md`'s Stage 1 section). **In progress as of 2026-08-01:** Phase B
    merged (PR #33); Stage 1 is now staged as sub-stages S1.0–S1.6 (`docs/STAGE_1_OVERVIEW.md`),
-   with **S1.1 (Parking Brake API + UI) implemented** — S1.2–S1.6 remain scoped-only, each
-   requiring its own separate approval.
+   with **S1.1 (Parking Brake API + UI) and S1.5 (governance audit/provenance view) implemented**
+   — S1.2–S1.4 and S1.6 remain scoped-only, each requiring its own separate approval.
 4. **Stage 5 / S5.1 remains paused**, now sequenced *after* Stage 1 rather than before it, pending
    its own explicit approval. The locked internal sequence (safety scaffolding before live
    proactivity) is recorded under P3 above and in `ROADMAP.md`. Live proactive *reflection*

@@ -4,10 +4,11 @@
 > and stage structure*, mirroring `docs/PHASE_B_OVERVIEW.md`'s shape and role. It is subordinate to
 > and linked from `ROADMAP.md`, which remains the canonical source for Stage 1's exit criteria and
 > approval boundaries. This overview does not itself authorise implementation of any sub-stage
-> beyond S1.1 (already implemented, see below) — each of S1.2–S1.6 needs its own separate approval
-> before implementation begins.
+> beyond S1.1 and S1.5 (already implemented, see below) — each of S1.2–S1.4 and S1.6 needs its own
+> separate approval before implementation begins.
 >
-> **Last updated:** 2026-08-01 (initial version; S1.1 Parking Brake API + UI implemented).
+> **Last updated:** 2026-08-01 (S1.5 Governance audit/provenance view implemented, following S1.1
+> Parking Brake API + UI).
 
 ## 1. Purpose
 
@@ -39,7 +40,7 @@ decisions). This document applies that same discipline to Stage 1.
   Interpretation → Executive → Governance → Capability → Execution → Reflection → Memory like any
   other action), not a UI-only add.
 - An audit/provenance view — the data exists in `governance_audit` (see S1.1) but nothing reads it
-  back out yet.
+  back out yet — **now closed by S1.5, below.**
 - Host-device onboarding guidance content.
 
 ## 3. Sub-stages S1.0–S1.6
@@ -104,10 +105,33 @@ not exist in code — opened/reminded/escalated/resolved, traversing Governance 
 action. The largest, most novel remaining sub-stage; needs its own design pass, not just CRUD.
 **Deferred until its own separate approval.**
 
-### S1.5 — Audit / provenance view (scoped only, not implemented)
+### S1.5 — Audit / provenance view ✅ (Implemented 2026-08-01)
 **Purpose:** read `governance_audit` (now including `actor`, per S1.1) back out through an API +
-UI view, plus any other action-provenance sources S1.2/S1.4 introduce.
-**Deferred until its own separate approval.**
+UI view.
+**Scope implemented:**
+- `GovernanceStore.list_audit(limit: int = 50) -> list[dict]`
+  (`bartholomew/orchestrator/safety/governance_store.py`) — a read-only method returning the most
+  recent `governance_audit` rows newest-first, decoding the persisted `scopes` JSON string into a
+  list per entry.
+- `GET /api/governance/audit` (`routes/governance.py`, `limit` query param, validated 1–100,
+  mirroring `routes/liveness.py`'s existing bounds-check convention) → `await
+  run_off_loop(kernel.governance_store.list_audit, ...)`, returning `{"entries": [...], "count":
+  N}` — the same list-endpoint shape as this API's other list routes (e.g. `/api/episodes/recent`).
+- A "📜 Governance Audit" card in `ui/minimal/index.html`, placed directly after the Parking Brake
+  card, reusing the existing `.nudge-item`/`.nudge-kind`/`.nudge-msg`/`.nudge-ts` CSS (no new
+  styles needed). `refreshAudit()` follows S1.1's `r.ok`-checking convention (explicit error state,
+  never silently renders a failed fetch as empty). Runs on initial load, its own 30s interval, and
+  immediately after a successful engage/disengage so new entries appear without a manual refresh.
+- Tests: `list_audit()` unit tests (ordering, `scopes` decoding, `limit`, empty-store case) in
+  `tests/test_governance_store.py`; HTTP-level tests (`/api/governance/audit` reflects
+  engage/disengage, `count` matches `len(entries)`, `limit` respected, out-of-bounds `limit` → 400)
+  in `tests/test_governance_api.py`.
+**Explicitly out of scope (per this stage's own plan review):** `startup_incidents` (a different
+concern — runtime integrity diagnostics, not action audit) and any future S1.2/S1.4 provenance
+sources — those remain deferred to their own sub-stages, unchanged by this one.
+**Exit condition met:** engage/disengage produce audit entries visible via `GET
+/api/governance/audit` and the minimal UI without a manual refresh, verified with a real browser
+(Playwright + the pre-installed headless Chromium).
 
 ### S1.6 — Host-device onboarding guidance (scoped only, not implemented)
 **Purpose:** onboarding content presenting the realistic trade-offs of each supported deployment

@@ -167,3 +167,60 @@ def test_engage_default_actor_is_user(client):
     finally:
         conn.close()
     assert actor == "user"
+
+
+# -- Audit log endpoint (Stage 1, S1.5) --------------------------------------
+
+
+def test_audit_log_reflects_engage_and_disengage(client):
+    client.post(
+        "/api/governance/brake/engage",
+        json={"scopes": ["skills"], "reason": "audit-log-check engage", "actor": "user"},
+    )
+    client.post(
+        "/api/governance/brake/disengage",
+        json={"reason": "audit-log-check disengage", "actor": "user"},
+    )
+
+    response = client.get("/api/governance/audit")
+
+    assert response.status_code == 200
+    body = response.json()
+    reasons = [e["reason"] for e in body["entries"]]
+    assert "audit-log-check disengage" in reasons
+    assert "audit-log-check engage" in reasons
+    # Newest first.
+    assert reasons.index("audit-log-check disengage") < reasons.index("audit-log-check engage")
+
+    disengage_entry = next(e for e in body["entries"] if e["reason"] == "audit-log-check disengage")
+    assert disengage_entry["action"] == "disengaged"
+    assert disengage_entry["actor"] == "user"
+    assert disengage_entry["scopes"] == []
+
+    engage_entry = next(e for e in body["entries"] if e["reason"] == "audit-log-check engage")
+    assert engage_entry["action"] == "engaged"
+    assert engage_entry["scopes"] == ["skills"]
+
+
+def test_audit_log_count_matches_entries_length(client):
+    response = client.get("/api/governance/audit")
+    body = response.json()
+    assert body["count"] == len(body["entries"])
+
+
+def test_audit_log_respects_limit(client):
+    for i in range(3):
+        client.post(
+            "/api/governance/brake/engage",
+            json={"scopes": ["skills"], "reason": f"limit-check {i}"},
+        )
+
+    response = client.get("/api/governance/audit", params={"limit": 2})
+
+    assert response.status_code == 200
+    assert len(response.json()["entries"]) == 2
+
+
+def test_audit_log_rejects_out_of_bounds_limit(client):
+    assert client.get("/api/governance/audit", params={"limit": 0}).status_code == 400
+    assert client.get("/api/governance/audit", params={"limit": 101}).status_code == 400
