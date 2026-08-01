@@ -69,6 +69,12 @@ _STARTUP_RESOURCE_ORDER = [
     "scheduler_task",
 ]
 
+# Phase B stage B7: how long stop() waits for already-admitted external
+# requests to finish naturally before giving up on a confirmed-clean
+# admission drain. Same order of magnitude as the per-producer-task wait
+# stop() already uses below.
+_ADMISSION_DRAIN_TIMEOUT_S = 10.0
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,6 +106,7 @@ class KernelDaemon:
         # create, even for a KernelDaemon that's never start()ed.
         from .blocking_executor import SingleWorkerExecutor
         from .process_lock import ProcessLock
+        from .request_admission import RequestAdmission
 
         self.blocking_executor = SingleWorkerExecutor(
             thread_name_prefix="kernel-blocking",
@@ -116,6 +123,16 @@ class KernelDaemon:
         # construct (no I/O until acquire()), matching this class's
         # existing pattern for blocking_executor above.
         self._process_lock = ProcessLock(db_path)
+
+        # External request admission (Phase B stage B7; see
+        # docs/B7_EXTERNAL_REQUEST_ADMISSION.md) -- app.py's HTTP
+        # middleware admits one token per real external request reaching
+        # governed daemon state and releases it when that request
+        # finishes; stop() closes admission and drains outstanding
+        # tokens before tearing down the resources those requests still
+        # need. Cheap to construct, matching this class's existing
+        # pattern for the other daemon-owned primitives above.
+        self.admission = RequestAdmission()
 
         # The daemon's one shared Governance instance (Phase B stage B4;
         # see docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md). Unlike
@@ -607,6 +624,24 @@ class KernelDaemon:
             return
         self.lifecycle_state = DaemonLifecycleState.STOPPING
 
+        # External request admission freeze-and-drain (Phase B stage B7),
+        # first of all: stop admitting new externally-admitted work the
+        # instant STOPPING begins, then wait for whatever's already
+        # in-flight to finish naturally -- while every resource it needs
+        # (governance_store, mem, blocking_executor) is still fully
+        # intact, not torn down underneath it. admission_drained feeds
+        # fully_drained below, the same "confirmed, not assumed" honesty
+        # the write-fence/clean-marker (Phase B stage B5) already
+        # requires of every other tracked resource.
+        self.admission.close()
+        admission_drained = await self.admission.drain(_ADMISSION_DRAIN_TIMEOUT_S)
+        if not admission_drained:
+            print(
+                f"[Kernel] {self.admission.admitted_count} external request(s) still "
+                "in flight after the admission drain timeout; deferring WAL cleanup "
+                "to next startup",
+            )
+
         # Governance write freeze (Phase B stage B5), first: stop accepting
         # new engage()/disengage() writes -- including Phase B stage B4's
         # dual-check bridge mirror writes -- before anything else in
@@ -691,11 +726,14 @@ class KernelDaemon:
         # docstrings and DECISIONS.md.
         scheduler_drained = await self.scheduler_store.close()
         blocking_drained = await self.blocking_executor.close()
-        fully_drained = producer_tasks_terminal and scheduler_drained and blocking_drained
+        fully_drained = (
+            admission_drained and producer_tasks_terminal and scheduler_drained and blocking_drained
+        )
         if not fully_drained:
             print(
-                "[Kernel] Producer tasks and/or scheduler store and/or blocking executor "
-                "did not confirm clean termination; deferring WAL cleanup to next startup",
+                "[Kernel] External admission and/or producer tasks and/or scheduler store "
+                "and/or blocking executor did not confirm clean termination; deferring WAL "
+                "cleanup to next startup",
             )
 
         # Close memory store (checkpoint WAL, unless anything above wasn't

@@ -591,3 +591,53 @@
   `tests/test_cli_governance_and_lock.py` (CLI commands against real `GovernanceStore`/`ProcessLock`
   instances) -- see `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §3-4 for the complete record.
 - **Date:** 2026-07-31 (Phase B stage B6)
+
+## Decision: Phase B stage B7 gates external admission with one HTTP middleware chokepoint, not a per-route migration, and does not build detached-task admission propagation
+- **Decision:** A new identity-bound `RequestAdmission` primitive
+  (`bartholomew/kernel/request_admission.py`) -- `try_admit() -> token | None`,
+  `release(token)` (a no-op for a foreign/duplicate/unknown token, not a bare counter decrement),
+  `close()`, `drain(timeout) -> bool` -- is owned by `KernelDaemon`, constructed alongside
+  `process_lock`/`blocking_executor` in `__init__`. `stop()`'s very first action after entering
+  `STOPPING` is now `admission.close()` followed by `await admission.drain(...)`, ahead of even the
+  Governance write-fence close -- in-flight external requests finish against resources that are
+  still fully intact, not ones being torn down underneath them. A single new
+  `@app.middleware("http")` in `bartholomew_api_bridge_v0_1/services/api/app.py` is the one
+  chokepoint that admits or refuses every HTTP request, checking `_kernel.lifecycle_state is
+  RUNNING` (not just `_kernel is not None`) with an explicit exemption list for health/liveness/
+  metrics/docs endpoints. No detached-task/child-work admission propagation was built.
+- **Alternatives:** (a) A `Depends()`-based per-route migration across the ~35 kernel-touching
+  routes, the shape the archived design and B6's own CLI migration both used elsewhere -- rejected
+  here specifically: unlike B6's three CLI commands, ~35 routes is enough surface that a per-route
+  opt-in could silently miss a future route that forgets to add the dependency, where a single
+  ASGI-layer middleware structurally cannot be bypassed by a new route. (b) Build the archived
+  design's full `AdmissionToken`/`_AdmissionScope`/`spawn_detached_governed_task` propagation
+  machinery for child/detached work -- rejected: a direct repository search found no
+  `asyncio.create_task()` (or equivalent) call anywhere that spawns work outliving its own
+  request/response cycle; building propagation machinery for a pattern that doesn't exist in this
+  codebase would be speculative, not evidence-grounded. (c) Trust `_kernel is not None` alone as
+  the admission gate, matching the pre-existing per-route checks -- rejected: confirmed by direct
+  read that `app.py`'s `startup()` assigns the `_kernel` global before `await _kernel.start()`
+  completes, and `shutdown()` never resets it to `None` after `stop()` -- a bare presence check
+  admits requests through the entire `STARTING` window and the entire `STOPPING`/`STOPPED` window
+  alike.
+- **Why:** Re-grounding this stage against the current repository (not the archived design, not
+  B0's own route count) found the real gap was narrower and different in shape than assumed: no
+  detached work to propagate tokens through, but a real, previously-unguarded lifecycle-state race
+  at both ends of the daemon's life, on a governed surface large enough that per-route discipline
+  is the wrong reliability bet.
+- **Consequences:** Every governed route now pays one `try_admit()`/`release()` pair per request,
+  invisible in normal operation (a few microseconds of `set` membership work) but present in
+  request latency measurements. `stop()`'s shutdown sequence gained a new drain phase (default 10s
+  timeout) ahead of the existing write-fence/producer-task/executor teardown; a stuck or lost
+  admission that never releases now correctly prevents the shutdown from being marked clean, the
+  same "confirmed, not assumed" honesty B5 already required of every other tracked resource. No
+  pre-existing test needed modification -- unlike B6's bridge deletion, this stage added a new gate
+  rather than retiring an old path, and every pre-existing test already ran with the kernel
+  `RUNNING`. Verified against 30 new tests split across `tests/test_request_admission.py` (the
+  primitive in isolation, including the identity-bound-release regression),
+  `tests/test_daemon_admission_drain.py` (the close-then-drain sequence in `stop()`, including a
+  provable "stop() waited" test and a timeout-doesn't-mark-clean regression), and
+  `tests/test_api_admission_gate.py` (the live middleware against a real `TestClient` + running
+  daemon) -- plus the complete non-integration/non-slow suite, both clean -- see
+  `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` §3-4 for the complete record.
+- **Date:** 2026-08-01 (Phase B stage B7)

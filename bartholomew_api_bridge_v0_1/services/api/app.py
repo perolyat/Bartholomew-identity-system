@@ -7,8 +7,9 @@ import time as _time
 from datetime import datetime
 
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 # Load timezone from kernel config (single source of truth)
 with open("config/kernel.yaml", encoding="utf-8") as f:
@@ -68,6 +69,67 @@ app.include_router(metrics.router, prefix="/internal" if metrics_internal_only e
 
 # Register atexit handler for WAL cleanup on shutdown
 atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
+
+# Paths exempt from external request admission (Phase B stage B7; see
+# docs/B7_EXTERNAL_REQUEST_ADMISSION.md) -- health/liveness/metrics/docs
+# endpoints must keep answering during startup/shutdown windows (the
+# k8s-liveness-probe convention this repository's own liveness routes are
+# written for), and don't touch _kernel's governed state at all. Everything
+# else that isn't one of these is real external ingress into governed
+# daemon state, and is gated below.
+_ADMISSION_EXEMPT_PATHS = frozenset(
+    {"/healthz", "/api/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"},
+)
+_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness",)
+
+
+def _admission_exempt(path: str) -> bool:
+    if path in _ADMISSION_EXEMPT_PATHS:
+        return True
+    if path.startswith(_ADMISSION_EXEMPT_PREFIXES):
+        return True
+    return path.endswith("/metrics")
+
+
+@app.middleware("http")
+async def admission_middleware(request: Request, call_next):
+    """
+    Single chokepoint for Phase B stage B7's external request admission --
+    gates every real HTTP ingress point at once (re-verified against the
+    current router registrations, not touching all ~35 individual route
+    handlers) rather than requiring every current and future route to
+    remember to opt in.
+
+    Refuses (503) before the route handler ever runs if there is no
+    _kernel yet, or the daemon isn't in DaemonLifecycleState.RUNNING
+    (covers the STARTING window too, not just "_kernel is None" -- app.py's
+    startup() assigns the _kernel global before awaiting start(), so a
+    bare None-check alone would let a request through mid-startup) or
+    admission is closed (stop() has begun). Admits exactly one token per
+    request that passes, and releases it in `finally` -- guaranteed release
+    even on an unhandled exception or a client disconnect -- so
+    KernelDaemon.stop() can drain() to a confirmed-empty state rather than
+    assuming in-flight work has finished.
+    """
+    if _admission_exempt(request.url.path):
+        return await call_next(request)
+
+    from bartholomew.kernel.daemon import DaemonLifecycleState
+
+    if _kernel is None or _kernel.lifecycle_state is not DaemonLifecycleState.RUNNING:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Kernel not available (starting, stopping, or not initialized)"},
+        )
+
+    token = _kernel.admission.try_admit()
+    if token is None:
+        return JSONResponse(status_code=503, content={"detail": "Kernel is shutting down"})
+    try:
+        return await call_next(request)
+    finally:
+        _kernel.admission.release(token)
+
 
 # CORS (safe default; UI likely same origin but this helps with previews)
 # Allow override via ALLOWED_ORIGINS env var (comma-separated)

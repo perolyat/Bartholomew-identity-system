@@ -2,7 +2,26 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-07-31 (B6 complete: `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` delivered
+> **Last updated:** 2026-08-01 (B7 complete: `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` delivered per
+> an explicitly approved (autonomous-continuation) B7 plan. Closes the shutdown gap B5 explicitly
+> could not cover: new `bartholomew/kernel/request_admission.py`'s `RequestAdmission` is an
+> identity-bound admit/release/drain primitive (fixing a real named risk-map finding — a prior
+> design's `release()` took no identity argument, so any caller could release any in-flight
+> admission). `KernelDaemon` owns one instance; `stop()` closes it and awaits `drain()` first of
+> all — before the Governance write-fence close, before anything else — so in-flight external
+> requests finish against still-intact resources instead of ones being torn down underneath them,
+> with the drain outcome now feeding the clean-shutdown marker alongside the existing tracked
+> resources. `bartholomew_api_bridge_v0_1/services/api/app.py` gains a single HTTP middleware
+> chokepoint (`admission_middleware`) rather than a ~35-route migration: every request is admitted
+> or refused (503) at one point, checking `lifecycle_state is RUNNING` (not just `_kernel is not
+> None`, which does not catch the `STARTING` window — `_kernel` is assigned before `start()` is
+> awaited to completion) with health/liveness/metrics/docs endpoints explicitly exempt so they stay
+> responsive through startup/shutdown, matching liveness-probe convention. A repository re-check
+> found no detached/child task spawning exists anywhere in the current codebase, substantially
+> narrowing this stage's real scope versus the archived design's token-propagation machinery for
+> work that doesn't exist here. Approval of B7 does not authorise B8 or B9.)
+>
+> **Previously (2026-07-31):** B6 complete: `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` delivered
 > per an explicitly approved B6 plan. `bartholomew/cli.py`'s `brake on`/`brake off`/`brake status`
 > now write through `GovernanceStore` directly, retiring the last legacy `ParkingBrake`/
 > `BrakeStorage` write path and, with it, B4's temporary dual-check bridge
@@ -144,7 +163,7 @@ restarted: that research is preserved, non-authoritatively, at
 table is the canonical source for Phase B stage gates, status, dependencies, and approval
 boundaries — `docs/PHASE_B_OVERVIEW.md` is subordinate to it.
 
-**B0, B1, B2, B3, B4, B5, and B6 are complete (2026-07-31); no other stage has been approved or
+**B0, B1, B2, B3, B4, B5, B6, and B7 are complete (2026-08-01); no other stage has been approved or
 started.** Each stage's plan was presented and explicitly approved before its implementation began, per this
 document's own approval model. B0's exit deliverable is `docs/B0_PERSISTENCE_BASELINE.md`, a
 repository-grounded current-state report (no implementation, per B0's exit condition). B1's exit
@@ -177,10 +196,18 @@ the legacy `ParkingBrake`/`BrakeStorage` write path and, with it, B4's temporary
 `ProcessLock` (`bartholomew/kernel/process_lock.py`) is acquired first in `KernelDaemon.start()`
 and released last in `stop()`, and by `embeddings rebuild-vss` — the one CLI operation genuinely
 assuming exclusive file access, deliberately not `brake on/off/status`, which are protected by
-GovernanceStore's own write fence and revision guarding instead. Approval of B6 does **not**
-authorise B7 or any later stage. Each remaining stage requires its own compact,
-repository-grounded plan — produced only as that stage approaches — and its own explicit user
-approval before implementation begins.
+GovernanceStore's own write fence and revision guarding instead. B7's exit deliverable is
+`docs/B7_EXTERNAL_REQUEST_ADMISSION.md`: a new identity-bound `RequestAdmission` primitive
+(`bartholomew/kernel/request_admission.py`), owned by `KernelDaemon`, that `stop()` closes and
+drains first of all — before the Governance write fence, before anything else — so in-flight
+external requests finish against still-intact resources; a single HTTP middleware chokepoint in
+`bartholomew_api_bridge_v0_1/services/api/app.py` gates every real ingress point at once (checking
+`lifecycle_state is RUNNING`, closing a real `STARTING`-window gap a bare `_kernel is not None`
+check missed) while exempting health/liveness/metrics/docs endpoints. A repository re-check found
+no detached/child task spawning exists anywhere in the codebase, narrowing this stage's real scope
+from the archived design's token-propagation machinery. Approval of B7 does **not** authorise B8
+or B9. Each remaining stage requires its own compact, repository-grounded plan — produced only as
+that stage approaches — and its own explicit user approval before implementation begins.
 
 **Problem statement (characterised by Phase A, not fixed by it):** one SQLite file has no single
 owner. `bartholomew/kernel/memory_store.py` uses `aiosqlite`;
@@ -208,7 +235,7 @@ See `RISKS.md`'s tech-debt watchlist.
 | **B4** — Shared Governance runtime integration ✅ | One shared Parking Brake instance at every real live-daemon call site | B3 | Approved 2026-07-31 | Every real live-daemon construction site (re-inventoried, not assumed) uses the shared instance; standalone CLI construction sites remain out of scope here and are B6's responsibility — delivered as `docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md` |
 | **B5** — Startup and shutdown integrity ✅ | Reliable failure handling; clean-shutdown evidence for B1–B4's own resources, as lifecycle-terminal-state conditions (no process lock or external-admission draining yet) | B1–B4 | Approved 2026-07-31 | Startup/shutdown sequences verified against the concrete B1–B4 runtime; does not yet cover externally admitted work (B7) — delivered as `docs/B5_STARTUP_SHUTDOWN_INTEGRITY.md` |
 | **B6** — External Governance control and CLI safety ✅ | CLI/maintenance tools cannot race the daemon; introduces the process lock, bound to B5's terminal-state conditions | B3–B5 | Approved 2026-07-31 | Verified on both POSIX and Windows; B5's lifecycle tests rerun with the lock in place — delivered as `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` |
-| **B7** — External request admission and detached work | Shutdown cannot race externally admitted work | B4, B5 | Not approved | Every real ingress point is identity-bound-admission-gated; does not block B1–B4 |
+| **B7** — External request admission and detached work ✅ | Shutdown cannot race externally admitted work | B4, B5 | Approved 2026-08-01 | Every real ingress point is identity-bound-admission-gated; does not block B1–B4 — delivered as `docs/B7_EXTERNAL_REQUEST_ADMISSION.md` |
 | **B8** — Remaining persistence consumers | Migrate MemoryStore/VectorStore/FTS/liveness/scheduler onto the shared policy | B1, B2 | Not approved | Each split sub-stage's consumer migrated and tested |
 | **B9** — Recovery, rollback, and adversarial validation | Validate the integrated result; formalise recovery | B0–B8 | Not approved | Adversarial scenarios pass; rollback limitations documented honestly |
 
