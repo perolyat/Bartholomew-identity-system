@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
@@ -11,6 +12,7 @@ import numpy as np
 from bartholomew.kernel import encryption_engine as _encryption_module
 from bartholomew.kernel.chunking_engine import get_chunking_engine
 from bartholomew.kernel.memory.privacy_guard import (
+    get_consent_handler,
     is_sensitive,
     request_permission_to_store,
 )
@@ -159,6 +161,27 @@ CREATE TABLE IF NOT EXISTS memory_consent (
   FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
 
+-- Consent-handler fix (2026-08): privacy_guard.is_sensitive()-flagged
+-- content that upsert_memory() would otherwise silently and permanently
+-- discard when no consent handler is registered (the real headless/API
+-- case -- distinct from an interactive handler explicitly declining,
+-- which is never queued here). Preserves the full original write request
+-- so a human can review and approve/deny it later via the consent inbox,
+-- instead of the content just vanishing with no record anywhere.
+CREATE TABLE IF NOT EXISTS pending_sensitive_writes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied')),
+  resolved_at TEXT,
+  resolved_memory_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pending_sensitive_writes_status
+  ON pending_sensitive_writes(status, id);
+
 CREATE TABLE IF NOT EXISTS system_flags (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -237,7 +260,15 @@ class MemoryStore:
         except Exception as e:
             logger.warning(f"Failed to initialize FTS5 schema: {e}")
 
-    async def upsert_memory(self, kind: str, key: str, value: str, ts: str) -> StoreResult:
+    async def upsert_memory(
+        self,
+        kind: str,
+        key: str,
+        value: str,
+        ts: str,
+        *,
+        skip_privacy_guard: bool = False,
+    ) -> StoreResult:
         # Rule evaluation: check governance rules first
         memory_dict = {
             "kind": kind,
@@ -312,7 +343,32 @@ class MemoryStore:
         # both the guaranteed crash and the undeclared dependency; consent
         # stays fail-closed (request_permission_to_store returns False when no
         # consent handler is registered).
-        if is_sensitive(value):
+        #
+        # `skip_privacy_guard` bypasses this block entirely -- used only by
+        # approve_pending_sensitive_write() to (re-)store content a human has
+        # already reviewed via the consent inbox, without re-tripping this
+        # same gate and re-queuing itself.
+        #
+        # Consent-handler fix (2026-08): `chat.py` registers a real terminal
+        # prompt for interactive CLI use -- by design, headless callers (the
+        # API/daemon) leave no handler registered and fail closed instead.
+        # That's the correct default for a synchronous stdin prompt, but it
+        # previously meant sensitive content from the live product (API
+        # requests, skills, etc.) was silently and permanently discarded --
+        # `stored=False` with no record anywhere. When no handler is
+        # registered (the genuine headless case -- NOT an interactive
+        # handler explicitly declining, which must never be second-guessed
+        # or re-queued), the content is preserved in pending_sensitive_writes
+        # for later human review instead of being dropped.
+        if not skip_privacy_guard and is_sensitive(value):
+            if get_consent_handler() is None:
+                pending_id = await self.record_pending_sensitive_write(kind, key, value, ts)
+                print(
+                    f"[Bartholomew] Sensitive content queued for review "
+                    f"(pending_id={pending_id}); not stored yet.",
+                )
+                return StoreResult(stored=False)
+
             allowed = await request_permission_to_store(value)
 
             if not allowed:
@@ -634,6 +690,105 @@ class MemoryStore:
                     conn.close()
 
         await run_off_loop(_store_chunks, executor=self._blocking_executor)
+
+    # -------------------------------------------------------------------
+    # Pending sensitive writes (consent-handler fix, 2026-08)
+    # -------------------------------------------------------------------
+
+    async def record_pending_sensitive_write(
+        self,
+        kind: str,
+        key: str,
+        value: str,
+        ts: str,
+    ) -> int:
+        """
+        Preserve a sensitive-content write that upsert_memory() refused to
+        store because no consent handler is registered (see upsert_memory()'s
+        privacy-guard block). Returns the new pending_sensitive_writes row id.
+        """
+        requested_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO pending_sensitive_writes (kind, key, value, ts, requested_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (kind, key, value, ts, requested_at),
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    async def list_pending_sensitive_writes(self, limit: int = 50) -> list[dict]:
+        """Pending (not yet approved/denied) sensitive writes, newest first."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, kind, key, value, ts, requested_at, status "
+                "FROM pending_sensitive_writes WHERE status = 'pending' "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def approve_pending_sensitive_write(self, pending_id: int) -> StoreResult:
+        """
+        Store a pending sensitive write for real, using its original
+        kind/key/ts, then mark it approved. Uses skip_privacy_guard=True so
+        this doesn't re-trip the same gate and re-queue itself.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT kind, key, value, ts, status FROM pending_sensitive_writes WHERE id = ?",
+                (pending_id,),
+            )
+            row = await cursor.fetchone()
+
+        if row is None:
+            raise ValueError(f"No pending sensitive write with id {pending_id}")
+        if row["status"] != "pending":
+            raise ValueError(
+                f"Pending sensitive write {pending_id} is already {row['status']}",
+            )
+
+        result = await self.upsert_memory(
+            row["kind"],
+            row["key"],
+            row["value"],
+            row["ts"],
+            skip_privacy_guard=True,
+        )
+
+        resolved_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE pending_sensitive_writes "
+                "SET status = 'approved', resolved_at = ?, resolved_memory_id = ? "
+                "WHERE id = ?",
+                (resolved_at, result.memory_id, pending_id),
+            )
+            await db.commit()
+
+        return result
+
+    async def deny_pending_sensitive_write(self, pending_id: int) -> None:
+        """
+        Mark a pending sensitive write reviewed and declined. No storage
+        side effect -- upsert_memory() already didn't store it; this only
+        stops it from reappearing as pending.
+        """
+        resolved_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE pending_sensitive_writes SET status = 'denied', resolved_at = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (resolved_at, pending_id),
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"No pending sensitive write with id {pending_id} in 'pending' status",
+                )
 
     async def delete_memory(self, kind: str, key: str) -> bool:
         """

@@ -7,8 +7,11 @@
 > beyond S1.1, S1.3, and S1.5 (already implemented, see below) — each of S1.2, S1.4, and S1.6 needs
 > its own separate approval before implementation begins.
 >
-> **Last updated:** 2026-08-01 (S1.3 notification settings + mute/quiet-hours implemented,
-> following S1.1 Parking Brake API + UI and S1.5 governance audit/provenance view).
+> **Last updated:** 2026-08-03 (standalone consent-handler fix implemented — see "Standalone:
+> consent-handler fix" below S1.6; not a Stage 1 sub-stage, and not a completion of S1.2, which
+> remains blocked on a separate, unfixed gap. Previously: 2026-08-01, S1.3 notification settings +
+> mute/quiet-hours implemented, following S1.1 Parking Brake API + UI and S1.5 governance
+> audit/provenance view).
 
 ## 1. Purpose
 
@@ -94,7 +97,11 @@ engage → status update → disengage, not just a curl round-trip.
 ### S1.2 — Consent / approval inbox (scoped only, not implemented)
 **Purpose:** a pending "ask"-level permission-request queue distinct from `ConsentGate`'s existing
 memory-retrieval consent.
-**Deferred until its own separate approval.**
+**Deferred until its own separate approval.** `memory_rules.yaml`'s `ask_before_store` category
+still hard-rejects storage outright (`MemoryRulesEngine.should_store()` returns `False`, nothing
+persisted, no promotion path) — confirmed empirically, not fixed by the consent-handler fix below.
+**Not the same gap as the standalone consent-handler fix** (2026-08, below S1.6) — that fix
+addresses a *different*, already-live gate (`privacy_guard.is_sensitive()`), not this one.
 
 ### S1.3 — Notification settings + mute/quiet-hours ✅ (Implemented 2026-08-01)
 **Purpose:** user-controlled notification preferences and quiet-hours windows.
@@ -169,6 +176,42 @@ sources — those remain deferred to their own sub-stages, unchanged by this one
 **Purpose:** onboarding content presenting the realistic trade-offs of each supported deployment
 target, consistent with `DECISIONS.md`'s hybrid local-first deployment-architecture entry.
 **Deferred until its own separate approval.**
+
+### Standalone: consent-handler fix ✅ (Implemented 2026-08-03)
+**Not a Stage 1 sub-stage** — a standalone fix found while investigating S1.2, kept separate from
+Stage 1's numbering since it isn't part of the original six-capability scope. Recorded here because
+it's directly adjacent to (and easily confused with) S1.2.
+**Purpose:** `MemoryStore.upsert_memory()` has a keyword-based sensitivity gate
+(`bartholomew.kernel.memory.privacy_guard.is_sensitive()`) distinct from `memory_rules.yaml`'s
+`ask_before_store` rules (S1.2's still-unfixed gap, above). It already had live handler-based
+consent plumbing — `chat.py` registers a real terminal prompt for interactive CLI use, by design
+("headless callers... leave this unset and fail closed instead"). That default is correct for a
+synchronous stdin prompt, but its practical effect was that any sensitive-content write from the
+live API/daemon was silently and permanently discarded, with zero record anywhere.
+**Scope implemented:**
+- New `pending_sensitive_writes` table (`bartholomew/kernel/memory_store.py`). When
+  `is_sensitive(value)` is true and `get_consent_handler() is None` (the genuine headless case —
+  never an interactive handler's explicit decline, which is never second-guessed or re-queued),
+  the full write request is preserved instead of discarded.
+- `upsert_memory(..., skip_privacy_guard=True)` (mirrors `identity_interpreter`'s existing
+  `skip_governance_check` pattern) so an approved item can be stored for real without re-tripping
+  the same gate.
+- `list/approve/deny_pending_sensitive_write()` on `MemoryStore`; `approve` re-stores through
+  `upsert_memory()` itself with the *original* kind/key/ts, not a reimplementation of its
+  redaction/encryption/summarization logic.
+- `GET/POST /api/consent/pending-writes/...` (`routes/consent.py`), direct `kernel.mem.*()` calls
+  matching how every other route already calls `MemoryStore` (no runtime-contract seam involved —
+  that's specific to skill execution, per the S1.3 CI lesson).
+- A "🔏 Pending Memory Consent" UI card.
+- Tests: extended `tests/test_memory_store_sensitive_consent.py` (queuing, explicit-decline is
+  never queued, `skip_privacy_guard`, approve/deny, unknown/already-resolved ids) and new
+  `tests/test_consent_api.py`; existing consent-security suites
+  (`test_consent_gates.py`/`test_consent_bypass_redteam.py`/`test_retrieval_consent_enforcement.py`)
+  re-verified with no regression.
+**Exit condition met:** a sensitive-content write with no handler registered is queued, not lost;
+approving it via the API/UI stores it under its original kind/key, verified with a real browser
+(Playwright + the pre-installed headless Chromium) from a seeded pending item through to a
+confirmed row in `memories`.
 
 ## 4. Non-negotiable invariants (mirrors Phase B's overview)
 

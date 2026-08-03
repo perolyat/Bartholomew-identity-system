@@ -168,6 +168,15 @@
     <div id="notif-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
   </div>
 
+  <!-- Consent-handler fix: Pending Memory Consent -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🔏 Pending Memory Consent</h3>
+      <button onclick="refreshPendingConsent()">Refresh</button>
+    </div>
+    <div id="pending-consent-list"></div>
+  </div>
+
   <!-- Stage 3: Self-State Panel -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
@@ -586,6 +595,67 @@
       }
     }
 
+    // === Consent-handler fix: Pending Memory Consent ===
+    async function refreshPendingConsent(){
+      const el = document.getElementById("pending-consent-list");
+      try{
+        const r = await fetch(API + "/api/consent/pending-writes");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">Failed to load pending consent: HTTP ${r.status}</div>`;
+          return;
+        }
+        const j = await r.json();
+        const entries = j.entries || [];
+
+        if(entries.length === 0){
+          el.innerHTML = '<div class="empty-state">No memories awaiting consent. You\'re all caught up! ✨</div>';
+          return;
+        }
+
+        el.innerHTML = entries.map(e => `
+          <div class="nudge-item">
+            <div class="row" style="justify-content:space-between">
+              <span class="nudge-kind">${escapeHtml(e.kind)} · ${escapeHtml(e.key)}</span>
+              <div class="row">
+                <button class="ack" onclick="approvePendingConsent(${e.id})">✓ Approve</button>
+                <button class="dismiss" onclick="denyPendingConsent(${e.id})">✕ Deny</button>
+              </div>
+            </div>
+            <div class="nudge-msg">${escapeHtml(e.value)}</div>
+            <div class="nudge-ts">requested: ${escapeHtml(e.requested_at)}</div>
+          </div>
+        `).join('');
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Failed to load pending consent: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function approvePendingConsent(id){
+      try{
+        const r = await fetch(API + `/api/consent/pending-writes/${id}/approve`, { method: "POST" });
+        if(!r.ok){
+          alert("Failed to approve: HTTP " + r.status);
+          return;
+        }
+        await refreshPendingConsent();
+      }catch(e){
+        alert("Failed to approve: " + e);
+      }
+    }
+
+    async function denyPendingConsent(id){
+      try{
+        const r = await fetch(API + `/api/consent/pending-writes/${id}/deny`, { method: "POST" });
+        if(!r.ok){
+          alert("Failed to deny: HTTP " + r.status);
+          return;
+        }
+        await refreshPendingConsent();
+      }catch(e){
+        alert("Failed to deny: " + e);
+      }
+    }
+
     // === Stage 3: Self-State ===
     async function refreshSelfState(){
       try{
@@ -990,6 +1060,7 @@
     refreshBrake();
     refreshAudit();
     refreshNotificationSettings();
+    refreshPendingConsent();
     refreshSelfState();
     refreshPersona();
     refreshEpisodes();
@@ -1003,6 +1074,7 @@
     setInterval(refreshBrake, 15000);      // Parking brake every 15s (safety-relevant)
     setInterval(refreshAudit, 30000);      // Governance audit every 30s
     setInterval(refreshNotificationSettings, 30000);  // Notification settings every 30s
+    setInterval(refreshPendingConsent, 30000);        // Pending memory consent every 30s
   </script>
 </body>
 </html>

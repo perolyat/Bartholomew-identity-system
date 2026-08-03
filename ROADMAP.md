@@ -426,6 +426,12 @@ updated 2026-07-28** (planning only): Stage 1 is sequenced *before* Stage 5/S5.1
 milestone plan" above) because Stage 5's live proactive behaviour needs a real, user-facing
 governance surface that only Stage 1 can provide.
 
+**Adjacent, non-Stage-1 fix (2026-08-03):** a standalone consent-handler fix (see
+`docs/STAGE_1_OVERVIEW.md`'s "Standalone: consent-handler fix" section) — sensitive-content memory
+writes are now queued for review instead of silently discarded when no consent handler is
+registered (the real headless/API case). This is **not** a completion of S1.2, which remains
+blocked on a separate, still-unfixed gap in `memory_rules.yaml`'s `ask_before_store` category.
+
 **Goal:** A minimal consumer web governance shell on top of the API bridge, consistent with the
 hybrid local-first deployment architecture (`DECISIONS.md`) — browser-based, reaching the trusted
 local Bartholomew runtime — that can, at minimum:
@@ -470,6 +476,8 @@ pytest -q bartholomew_api_bridge_v0_1/tests/test_sqlite_wal_api.py
 pytest -q tests/test_governance_api.py tests/test_governance_store.py
 # S1.3 Notification settings + mute/quiet-hours
 pytest -q tests/test_notify_skill_settings.py tests/test_notifications_api.py
+# Consent-handler fix (adjacent, non-Stage-1)
+pytest -q tests/test_memory_store_sensitive_consent.py tests/test_consent_api.py
 # optional smoke
 bash bartholomew_api_bridge_v0_1/scripts/curl_smoke.sh
 ```
