@@ -6,12 +6,17 @@ Exposes bartholomew.skills.notify.NotifySkill's quiet-hours/mute settings
 Stage 4 starter skill whose quiet-hours gating already existed, just
 hardcoded and with no mute concept at all until this stage -- over HTTP.
 
-Every call goes through kernel.skill_registry.execute_action(), the same
-single, already-governed choke-point every skill execution flows through
-(parking-brake "skills"-scope check, audit trail, runtime-contract shape;
-see SkillRegistry.execute_action()'s own docstring) -- a bare `await`,
-exactly matching bartholomew.kernel.runtime_contract.run_skill_through_
-runtime_contract()'s one existing production call site, not a new pattern.
+Every call goes through bartholomew.kernel.runtime_contract.run_skill_
+through_runtime_contract() -- the named production entry point every
+skill invocation must go through (tests/test_skill_runtime_contract_seam
+.py's TestNamedSeamIsTheSoleProductionEntryPath statically asserts no
+production caller invokes SkillRegistry.execute_action() directly; an
+earlier version of this file did exactly that and was caught by CI).
+That seam is a thin wrapper -- Observation/Interpretation/CandidateAction
+construction, the parking-brake "skills"-scope check, and the audit trail
+all still live inside execute_action() itself -- so this changes nothing
+about what actually runs, only which name production code is required to
+call it through.
 
 Auth note: same as governance.py -- no authentication on any route in
 this API bridge today; ROADMAP.md's Stage 1 section defers that to a
@@ -22,6 +27,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+from bartholomew.kernel.runtime_contract import run_skill_through_runtime_contract
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -44,7 +51,12 @@ def _get_kernel():
 
 
 async def _execute(kernel, action: str, params: dict) -> dict:
-    result = await kernel.skill_registry.execute_action("notify", action, params)
+    result = await run_skill_through_runtime_contract(
+        kernel.skill_registry,
+        "notify",
+        action,
+        params,
+    )
     if result.status.value == "error":
         raise HTTPException(400, result.error or "Notification action failed")
     if result.status.value == "permission_denied":
