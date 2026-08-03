@@ -145,6 +145,29 @@
     <div id="audit-list"></div>
   </div>
 
+  <!-- Stage 1 (S1.3): Notification Settings -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🔔 Notifications</h3>
+      <span id="notif-status" class="badge">notifications: checking…</span>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <label>Quiet hours start
+        <input id="quiet-start" placeholder="22:00" style="width:80px"/>
+      </label>
+      <label>end
+        <input id="quiet-end" placeholder="07:00" style="width:80px"/>
+      </label>
+      <button onclick="setQuietHours()">Save</button>
+    </div>
+    <div class="row">
+      <button class="dismiss" onclick="muteNotifications()">🔕 Mute</button>
+      <button class="ack" onclick="unmuteNotifications()">🔔 Unmute</button>
+      <button onclick="refreshNotificationSettings()">Refresh</button>
+    </div>
+    <div id="notif-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
+  </div>
+
   <!-- Stage 3: Self-State Panel -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
@@ -470,6 +493,96 @@
         }).join('');
       }catch(e){
         el.innerHTML = `<div class="empty-state">Failed to load audit log: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    // === Stage 1 (S1.3): Notification Settings ===
+    async function _notifErrorDetail(r){
+      try{
+        const j = await r.json();
+        return j.detail || `HTTP ${r.status}`;
+      }catch(e){
+        return `HTTP ${r.status}`;
+      }
+    }
+
+    async function refreshNotificationSettings(){
+      const statusEl = document.getElementById("notif-status");
+      const detailEl = document.getElementById("notif-detail");
+      try{
+        const r = await fetch(API + "/api/notifications/settings");
+        if(!r.ok){
+          throw new Error(await _notifErrorDetail(r));
+        }
+        const j = await r.json();
+
+        document.getElementById("quiet-start").value = j.quiet_hours.start;
+        document.getElementById("quiet-end").value = j.quiet_hours.end;
+
+        if(j.effective_muted){
+          statusEl.textContent = "notifications: MUTED";
+          statusEl.className = "badge kernel-offline";
+        } else if(j.quiet_hours.is_active){
+          statusEl.textContent = "notifications: quiet hours";
+          statusEl.className = "badge";
+        } else {
+          statusEl.textContent = "notifications: active";
+          statusEl.className = "badge kernel-online";
+        }
+        detailEl.textContent = j.muted_until ? `muted until: ${j.muted_until}` : "";
+      }catch(e){
+        statusEl.textContent = "notifications: UNKNOWN (unreachable)";
+        statusEl.className = "badge kernel-offline";
+        detailEl.textContent = String(e);
+      }
+    }
+
+    async function setQuietHours(){
+      const start = document.getElementById("quiet-start").value.trim();
+      const end = document.getElementById("quiet-end").value.trim();
+      try{
+        const r = await fetch(API + "/api/notifications/quiet-hours", {
+          method: "PUT",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ start, end })
+        });
+        if(!r.ok){
+          alert("Failed to set quiet hours: " + await _notifErrorDetail(r));
+          return;
+        }
+        await refreshNotificationSettings();
+      }catch(e){
+        alert("Failed to set quiet hours: " + e);
+      }
+    }
+
+    async function muteNotifications(){
+      try{
+        const r = await fetch(API + "/api/notifications/mute", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({})
+        });
+        if(!r.ok){
+          alert("Failed to mute: " + await _notifErrorDetail(r));
+          return;
+        }
+        await refreshNotificationSettings();
+      }catch(e){
+        alert("Failed to mute: " + e);
+      }
+    }
+
+    async function unmuteNotifications(){
+      try{
+        const r = await fetch(API + "/api/notifications/unmute", { method: "POST" });
+        if(!r.ok){
+          alert("Failed to unmute: " + await _notifErrorDetail(r));
+          return;
+        }
+        await refreshNotificationSettings();
+      }catch(e){
+        alert("Failed to unmute: " + e);
       }
     }
 
@@ -876,6 +989,7 @@
     refreshHealth();
     refreshBrake();
     refreshAudit();
+    refreshNotificationSettings();
     refreshSelfState();
     refreshPersona();
     refreshEpisodes();
@@ -888,6 +1002,7 @@
     setInterval(refreshEpisodes, 60000);   // Episodes every 60s
     setInterval(refreshBrake, 15000);      // Parking brake every 15s (safety-relevant)
     setInterval(refreshAudit, 30000);      // Governance audit every 30s
+    setInterval(refreshNotificationSettings, 30000);  // Notification settings every 30s
   </script>
 </body>
 </html>

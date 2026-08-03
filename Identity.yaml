@@ -429,6 +429,13 @@ tool_use:
   allowlist:
     - "web_fetch"
     - "browser_action"
+    # Stage 1, S1.3: without this, evaluate_tool_policy() denies every
+    # execute_action("notify", ...) call outright (confirmed: no skill_id
+    # is exempted from tool_use.allowlist the way scheduler drives are via
+    # _SELF_MAINTENANCE_DRIVES) -- the notify skill is already enabled
+    # (config/skills/notify.yaml) and permission-level "auto" (low-risk),
+    # just previously unreachable via the governed execute_action() path.
+    - "notify"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]

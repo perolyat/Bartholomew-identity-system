@@ -4,11 +4,11 @@
 > and stage structure*, mirroring `docs/PHASE_B_OVERVIEW.md`'s shape and role. It is subordinate to
 > and linked from `ROADMAP.md`, which remains the canonical source for Stage 1's exit criteria and
 > approval boundaries. This overview does not itself authorise implementation of any sub-stage
-> beyond S1.1 and S1.5 (already implemented, see below) — each of S1.2–S1.4 and S1.6 needs its own
-> separate approval before implementation begins.
+> beyond S1.1, S1.3, and S1.5 (already implemented, see below) — each of S1.2, S1.4, and S1.6 needs
+> its own separate approval before implementation begins.
 >
-> **Last updated:** 2026-08-01 (S1.5 Governance audit/provenance view implemented, following S1.1
-> Parking Brake API + UI).
+> **Last updated:** 2026-08-01 (S1.3 notification settings + mute/quiet-hours implemented,
+> following S1.1 Parking Brake API + UI and S1.5 governance audit/provenance view).
 
 ## 1. Purpose
 
@@ -34,7 +34,8 @@ decisions). This document applies that same discipline to Stage 1.
 - A consent/approval-request inbox for general "ask"-level capability requests. The existing
   `ConsentGate`/`memory_consent` (`bartholomew/kernel/consent_gate.py`) only gates memory
   *retrieval*, a different concern.
-- Notification settings and mute/quiet-hours controls — no schema, no route.
+- Notification settings and mute/quiet-hours controls — no schema, no route — **now closed by
+  S1.3, below.**
 - The `awaiting_response` obligation state — `COGNITIVE_RUNTIME.md`'s own words: *"this state does
   not exist in code today."* A full runtime-lifecycle concept (must traverse Observation →
   Interpretation → Executive → Governance → Capability → Execution → Reflection → Memory like any
@@ -95,9 +96,40 @@ engage → status update → disengage, not just a curl round-trip.
 memory-retrieval consent.
 **Deferred until its own separate approval.**
 
-### S1.3 — Notification settings + mute/quiet-hours (scoped only, not implemented)
+### S1.3 — Notification settings + mute/quiet-hours ✅ (Implemented 2026-08-01)
 **Purpose:** user-controlled notification preferences and quiet-hours windows.
-**Deferred until its own separate approval.**
+**Found already built** (`bartholomew/skills/notify.py`, an `enabled: true` Stage 4 starter
+skill, previously with no test file at all): a full `NotifySkill` whose quiet-hours logic already
+gated notification delivery — but quiet hours were hardcoded (`DEFAULT_QUIET_HOURS_START/END`,
+reset on every `initialize()`) with no `set_quiet_hours` action, and there was no mute concept
+anywhere in the file.
+**Scope implemented:**
+- A `notification_settings` singleton-row table persists quiet hours and mute state; `initialize()`
+  loads it (seeding class defaults on first run) instead of hardcoding.
+- New skill actions: `set_quiet_hours`, `mute` (optional `until`), `unmute`,
+  `get_notification_settings` — `get_quiet_hours`'s existing response shape is untouched.
+  `_is_muted()` lazily clears (and persists the clear) an expired `muted_until`.
+- `_action_send()`'s gate and `_process_queue()`'s delivery-bypass condition both now also check
+  mute, treated the same as an always-on quiet-hours window for non-`URGENT` notifications.
+- `GET/PUT/POST /api/notifications/{settings,quiet-hours,mute,unmute}`
+  (`routes/notifications.py`) — each a direct `await kernel.skill_registry.execute_action("notify",
+  ...)`, the same single, already-governed choke-point every skill execution goes through (no new
+  pattern introduced).
+- A "🔔 Notifications" UI card, following S1.1's `r.ok`-checking convention.
+- Tests: `tests/test_notify_skill_settings.py` (new — first test file for this skill at all) and
+  `tests/test_notifications_api.py` (HTTP-level, same pattern as `test_governance_api.py`).
+**Blocking discovery, resolved:** `kernel.skill_registry.execute_action()` denied *every* skill
+call outright in the default config — `Identity.yaml`'s `tool_use.allowlist` contained no skill_id
+at all (only `web_fetch`/`browser_action`), and `evaluate_tool_policy()` has no skill-level
+exemption (unlike scheduler drives' `_SELF_MAINTENANCE_DRIVES`). This blocked the whole feature,
+not something specific to this route. Fixed by adding `"notify"` to `Identity.yaml`'s
+`tool_use.allowlist` — a small, explicitly user-approved change (flagged before committing, since
+`Identity.yaml` names explicit approvers in its own `governance.change_control` section) for an
+already-shipped, already-enabled, `permissions.level: "auto"` (low-risk) skill that was simply
+unreachable via the governed HTTP path until now.
+**Exit condition met:** quiet hours and mute set via the API/UI persist across a real page reload
+(not just in-memory), verified with a real browser (Playwright + the pre-installed headless
+Chromium).
 
 ### S1.4 — `awaiting_response` queue (scoped only, not implemented)
 **Purpose:** implement the obligation-state concept `COGNITIVE_RUNTIME.md` documents but that does
