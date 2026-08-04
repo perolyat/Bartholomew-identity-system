@@ -161,13 +161,20 @@ CREATE TABLE IF NOT EXISTS memory_consent (
   FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
 
--- Consent-handler fix (2026-08): privacy_guard.is_sensitive()-flagged
--- content that upsert_memory() would otherwise silently and permanently
--- discard when no consent handler is registered (the real headless/API
--- case -- distinct from an interactive handler explicitly declining,
--- which is never queued here). Preserves the full original write request
--- so a human can review and approve/deny it later via the consent inbox,
--- instead of the content just vanishing with no record anywhere.
+-- Consent-handler fix (2026-08) + S1.2 (2026-08): a shared pending-write
+-- inbox for content upsert_memory() would otherwise silently and
+-- permanently discard with no record anywhere. Two independent gates feed
+-- it, distinguished by `reason`:
+--   'privacy_guard' -- privacy_guard.is_sensitive()'s keyword check, when
+--     no consent handler is registered (the real headless/API case --
+--     distinct from an interactive handler explicitly declining, which is
+--     never queued here).
+--   'rule_consent' -- memory_rules.yaml's ask_before_store category
+--     (requires_consent=true); `privacy_class` records the matched rule's
+--     classification for display. Unlike never_store (allow_store=false),
+--     which stays an unconditional hard block with no promotion path.
+-- Preserves the full original write request so a human can review and
+-- approve/deny it later via the consent inbox.
 CREATE TABLE IF NOT EXISTS pending_sensitive_writes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
@@ -177,7 +184,9 @@ CREATE TABLE IF NOT EXISTS pending_sensitive_writes (
   requested_at TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied')),
   resolved_at TEXT,
-  resolved_memory_id INTEGER
+  resolved_memory_id INTEGER,
+  reason TEXT NOT NULL DEFAULT 'privacy_guard',
+  privacy_class TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pending_sensitive_writes_status
   ON pending_sensitive_writes(status, id);
@@ -214,6 +223,25 @@ class MemoryStore:
             if "summary" not in column_names:
                 await db.execute("ALTER TABLE memories ADD COLUMN summary TEXT")
                 logger.info("Migrated memories table: added summary column")
+
+            # S1.2: migrate existing pending_sensitive_writes tables to add
+            # the reason/privacy_class columns (CREATE TABLE IF NOT EXISTS
+            # above is a no-op against an existing table).
+            cursor = await db.execute("PRAGMA table_info(pending_sensitive_writes)")
+            psw_columns = [col[1] for col in await cursor.fetchall()]
+
+            if "reason" not in psw_columns:
+                await db.execute(
+                    "ALTER TABLE pending_sensitive_writes "
+                    "ADD COLUMN reason TEXT NOT NULL DEFAULT 'privacy_guard'",
+                )
+                logger.info("Migrated pending_sensitive_writes table: added reason column")
+
+            if "privacy_class" not in psw_columns:
+                await db.execute(
+                    "ALTER TABLE pending_sensitive_writes ADD COLUMN privacy_class TEXT",
+                )
+                logger.info("Migrated pending_sensitive_writes table: added privacy_class column")
 
             # Seed parking_brake flag if not exists
             cursor = await db.execute("SELECT 1 FROM system_flags WHERE key = 'parking_brake'")
@@ -268,6 +296,7 @@ class MemoryStore:
         ts: str,
         *,
         skip_privacy_guard: bool = False,
+        skip_rule_consent: bool = False,
     ) -> StoreResult:
         # Rule evaluation: check governance rules first
         memory_dict = {
@@ -278,9 +307,34 @@ class MemoryStore:
         }
         evaluated = _rules_engine.evaluate(memory_dict)
 
-        # Check if storage is blocked by rules
-        if not _rules_engine.should_store(evaluated):
+        # never_store (allow_store=false): unconditional hard block, no
+        # promotion path, ever -- not affected by skip_rule_consent.
+        if not evaluated.get("allow_store", True):
             print(f"[Bartholomew] Memory blocked by governance rules: {kind}/{key}")
+            return StoreResult(stored=False)
+
+        # S1.2: ask_before_store (requires_consent=true) -- unlike
+        # never_store above, memory_rules.py's should_store() docstring has
+        # always said this should use "a separate promotion path" rather
+        # than being discarded outright. Queue it in the same
+        # pending_sensitive_writes inbox the consent-handler fix built for
+        # privacy_guard's gate (reason='rule_consent'), instead of losing it
+        # with no record. skip_rule_consent=True (used only by
+        # approve_pending_sensitive_write) bypasses this so re-running the
+        # pipeline on approval doesn't re-trip the gate and re-queue itself.
+        if evaluated.get("requires_consent", False) and not skip_rule_consent:
+            pending_id = await self.record_pending_write(
+                "rule_consent",
+                kind,
+                key,
+                value,
+                ts,
+                privacy_class=evaluated.get("privacy_class"),
+            )
+            print(
+                f"[Bartholomew] Memory requires consent, queued for review "
+                f"(pending_id={pending_id}); not stored yet: {kind}/{key}",
+            )
             return StoreResult(stored=False)
 
         # Apply redaction if required by rules (Phase 2a)
@@ -692,8 +746,37 @@ class MemoryStore:
         await run_off_loop(_store_chunks, executor=self._blocking_executor)
 
     # -------------------------------------------------------------------
-    # Pending sensitive writes (consent-handler fix, 2026-08)
+    # Pending sensitive/consent writes (consent-handler fix, 2026-08; S1.2)
     # -------------------------------------------------------------------
+
+    async def record_pending_write(
+        self,
+        reason: str,
+        kind: str,
+        key: str,
+        value: str,
+        ts: str,
+        privacy_class: str | None = None,
+    ) -> int:
+        """
+        Preserve a write that upsert_memory() refused to store, so a human
+        can review and approve/deny it later via the consent inbox instead
+        of it vanishing with no record. `reason` distinguishes which gate
+        queued it: 'privacy_guard' (privacy_guard.is_sensitive(), no handler
+        registered) or 'rule_consent' (memory_rules.yaml's ask_before_store,
+        requires_consent=true). Returns the new pending_sensitive_writes row
+        id.
+        """
+        requested_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO pending_sensitive_writes "
+                "(kind, key, value, ts, requested_at, reason, privacy_class) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (kind, key, value, ts, requested_at, reason, privacy_class),
+            )
+            await db.commit()
+            return cursor.lastrowid
 
     async def record_pending_sensitive_write(
         self,
@@ -705,24 +788,22 @@ class MemoryStore:
         """
         Preserve a sensitive-content write that upsert_memory() refused to
         store because no consent handler is registered (see upsert_memory()'s
-        privacy-guard block). Returns the new pending_sensitive_writes row id.
+        privacy-guard block). Thin wrapper over record_pending_write() with
+        reason='privacy_guard', kept as its own method since it's the
+        original, already-tested call site.
         """
-        requested_at = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "INSERT INTO pending_sensitive_writes (kind, key, value, ts, requested_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (kind, key, value, ts, requested_at),
-            )
-            await db.commit()
-            return cursor.lastrowid
+        return await self.record_pending_write("privacy_guard", kind, key, value, ts)
 
     async def list_pending_sensitive_writes(self, limit: int = 50) -> list[dict]:
-        """Pending (not yet approved/denied) sensitive writes, newest first."""
+        """
+        Pending (not yet approved/denied) writes, newest first -- from
+        either gate (see record_pending_write()'s `reason`), one unified
+        inbox.
+        """
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT id, kind, key, value, ts, requested_at, status "
+                "SELECT id, kind, key, value, ts, requested_at, status, reason, privacy_class "
                 "FROM pending_sensitive_writes WHERE status = 'pending' "
                 "ORDER BY id DESC LIMIT ?",
                 (limit,),
@@ -732,14 +813,23 @@ class MemoryStore:
 
     async def approve_pending_sensitive_write(self, pending_id: int) -> StoreResult:
         """
-        Store a pending sensitive write for real, using its original
-        kind/key/ts, then mark it approved. Uses skip_privacy_guard=True so
-        this doesn't re-trip the same gate and re-queue itself.
+        Store a pending write for real, using its original kind/key/ts, then
+        mark it approved. Uses skip_privacy_guard=True and
+        skip_rule_consent=True unconditionally (regardless of `reason`) so
+        this doesn't re-trip either gate and re-queue itself.
+
+        For reason='rule_consent' rows, also records a memory_consent row
+        for the new memory -- ConsentGate/Retriever re-evaluate
+        requires_consent at *retrieval* time too and only include a memory
+        with a real memory_consent row (bartholomew/kernel/consent_gate.py),
+        so without this the memory would be stored but permanently
+        unretrievable.
         """
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT kind, key, value, ts, status FROM pending_sensitive_writes WHERE id = ?",
+                "SELECT kind, key, value, ts, status, reason "
+                "FROM pending_sensitive_writes WHERE id = ?",
                 (pending_id,),
             )
             row = await cursor.fetchone()
@@ -757,6 +847,7 @@ class MemoryStore:
             row["value"],
             row["ts"],
             skip_privacy_guard=True,
+            skip_rule_consent=True,
         )
 
         resolved_at = datetime.now(timezone.utc).isoformat()
@@ -767,6 +858,18 @@ class MemoryStore:
                 "WHERE id = ?",
                 (resolved_at, result.memory_id, pending_id),
             )
+            if row["reason"] == "rule_consent" and result.memory_id is not None:
+                # Upsert, not INSERT OR IGNORE: upsert_memory()'s own
+                # embedding flow may have already inserted a memory_consent
+                # row for this memory_id (source='upsert_memory') if
+                # BARTHO_EMBED_ENABLED is set -- INSERT OR IGNORE would
+                # silently no-op and leave that source instead of recording
+                # that a human explicitly approved this write.
+                await db.execute(
+                    "INSERT INTO memory_consent (memory_id, source) VALUES (?, ?) "
+                    "ON CONFLICT(memory_id) DO UPDATE SET source = excluded.source",
+                    (result.memory_id, "consent_approval"),
+                )
             await db.commit()
 
         return result

@@ -23,6 +23,12 @@ os.environ["BARTH_DB_PATH"] = str(_db_dir / "test.db")
 from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: E402
 
 SENSITIVE_BUT_STORABLE = "my daily routine starts at 6am"
+# Matches the live ask_before_store content pattern -> a reason='rule_consent'
+# pending write (S1.2), distinct from the privacy_guard-gated content above.
+# See tests/test_memory_store_rule_consent.py for why this exact phrasing
+# was chosen (avoids privacy_guard keyword overlap and a separate,
+# higher-priority never_store rule that also matches "personal information").
+ASK_BEFORE_STORE_CONTENT = "Please remember my auth code for later."
 TS = "2026-01-01T00:00:00Z"
 
 
@@ -109,3 +115,32 @@ def test_deny_unknown_pending_id_returns_404(client):
 def test_pending_writes_rejects_out_of_bounds_limit(client):
     assert client.get("/api/consent/pending-writes", params={"limit": 0}).status_code == 400
     assert client.get("/api/consent/pending-writes", params={"limit": 101}).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_rule_consent_pending_write_round_trips_through_the_same_endpoints(client):
+    """S1.2: a requires_consent (ask_before_store) write lands in the same
+    inbox, tagged with reason/privacy_class, and approve/deny work
+    identically to the privacy_guard case."""
+    result = await app_module._kernel.mem.upsert_memory(
+        kind="chat",
+        key="api-rule-consent",
+        value=ASK_BEFORE_STORE_CONTENT,
+        ts=TS,
+    )
+    assert result.stored is False
+
+    entries = client.get("/api/consent/pending-writes").json()["entries"]
+    entry = next(e for e in entries if e["key"] == "api-rule-consent")
+    assert entry["reason"] == "rule_consent"
+    assert entry["privacy_class"] == "user.secure"
+
+    response = client.post(f"/api/consent/pending-writes/{entry['id']}/approve")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["stored"] is True
+    assert body["memory_id"] is not None
+
+    remaining = client.get("/api/consent/pending-writes").json()["entries"]
+    assert all(e["key"] != "api-rule-consent" for e in remaining)

@@ -1,14 +1,24 @@
 """
-Consent-handler fix (2026-08): pending sensitive-content memory writes.
+Consent-handler fix (2026-08) + S1.2 (2026-08): pending memory writes
+awaiting human review, from two independent gates in
+MemoryStore.upsert_memory() -- each entry's `reason` field distinguishes
+them:
 
-MemoryStore.upsert_memory() has a keyword-based sensitivity gate
-(bartholomew.kernel.memory.privacy_guard.is_sensitive()) separate from
-memory_rules.yaml's ask_before_store rules. It already had working
-handler-based consent plumbing (chat.py registers a real terminal prompt
-for interactive CLI use), but headless callers -- the API bridge/daemon --
-never registered a handler, so the content was silently and permanently
-discarded. This route exposes the fix: content queued instead of dropped,
-reviewable and resolvable here.
+- 'privacy_guard': a keyword-based sensitivity check
+  (bartholomew.kernel.memory.privacy_guard.is_sensitive()). It already had
+  working handler-based consent plumbing (chat.py registers a real
+  terminal prompt for interactive CLI use), but headless callers -- the
+  API bridge/daemon -- never registered a handler, so the content was
+  silently and permanently discarded.
+- 'rule_consent': memory_rules.yaml's ask_before_store category
+  (requires_consent=true) -- previously hard-rejected outright with no
+  promotion path, despite MemoryRulesEngine.should_store()'s own docstring
+  describing one. `privacy_class` is populated for these entries.
+
+Both land in the same pending_sensitive_writes inbox and are exposed here
+as one unified, source-agnostic list -- content queued instead of dropped,
+reviewable and resolvable via these same three endpoints regardless of
+which gate queued it.
 
 Every call is a direct `await kernel.mem.<method>()`, matching how
 app.py's existing routes already call MemoryStore (e.g.

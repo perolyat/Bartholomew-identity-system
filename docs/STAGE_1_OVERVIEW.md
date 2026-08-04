@@ -4,14 +4,14 @@
 > and stage structure*, mirroring `docs/PHASE_B_OVERVIEW.md`'s shape and role. It is subordinate to
 > and linked from `ROADMAP.md`, which remains the canonical source for Stage 1's exit criteria and
 > approval boundaries. This overview does not itself authorise implementation of any sub-stage
-> beyond S1.1, S1.3, and S1.5 (already implemented, see below) — each of S1.2, S1.4, and S1.6 needs
+> beyond S1.1, S1.2, S1.3, and S1.5 (already implemented, see below) — each of S1.4 and S1.6 needs
 > its own separate approval before implementation begins.
 >
-> **Last updated:** 2026-08-03 (standalone consent-handler fix implemented — see "Standalone:
-> consent-handler fix" below S1.6; not a Stage 1 sub-stage, and not a completion of S1.2, which
-> remains blocked on a separate, unfixed gap. Previously: 2026-08-01, S1.3 notification settings +
-> mute/quiet-hours implemented, following S1.1 Parking Brake API + UI and S1.5 governance
-> audit/provenance view).
+> **Last updated:** 2026-08-04 (S1.2 implemented — see below; builds the promotion path the
+> standalone consent-handler fix's `pending_sensitive_writes` inbox always anticipated. Previously:
+> 2026-08-03, standalone consent-handler fix implemented — see "Standalone: consent-handler fix"
+> below S1.6, not a Stage 1 sub-stage. 2026-08-01: S1.3 notification settings + mute/quiet-hours
+> implemented, following S1.1 Parking Brake API + UI and S1.5 governance audit/provenance view).
 
 ## 1. Purpose
 
@@ -94,14 +94,39 @@ the API bridge and minimal UI — pure additive wiring, no new governance semant
 verified with a real browser (Playwright + the pre-installed headless Chromium) clicking through
 engage → status update → disengage, not just a curl round-trip.
 
-### S1.2 — Consent / approval inbox (scoped only, not implemented)
-**Purpose:** a pending "ask"-level permission-request queue distinct from `ConsentGate`'s existing
-memory-retrieval consent.
-**Deferred until its own separate approval.** `memory_rules.yaml`'s `ask_before_store` category
-still hard-rejects storage outright (`MemoryRulesEngine.should_store()` returns `False`, nothing
-persisted, no promotion path) — confirmed empirically, not fixed by the consent-handler fix below.
+### S1.2 — Consent / approval inbox ✅ (Implemented 2026-08-04)
+**Purpose:** a pending "ask"-level permission-request queue for `memory_rules.yaml`'s
+`ask_before_store` category (`requires_consent: true`), distinct from `ConsentGate`'s existing
+memory-*retrieval* consent (`memory_consent` table).
+**Found:** a first attempt (built earlier in this stage) was based on a disproven assumption that
+`ask_before_store` content was already stored in some gated state; it wasn't — `should_store()`
+discarded it identically to `never_store` content, with nothing persisted and no record anywhere.
+That attempt was stashed, then dropped, once the assumption was disproven by direct testing.
+**Scope implemented** (`bartholomew/kernel/memory_store.py`):
+- `upsert_memory()`'s single `should_store()` check is now two explicit checks: `allow_store:
+  false` (`never_store`) stays an unconditional hard block, no promotion path, ever — unchanged.
+  `requires_consent: true` (`ask_before_store`) now queues the write instead of discarding it,
+  reusing the standalone consent-handler fix's `pending_sensitive_writes` inbox (below) rather than
+  building a parallel one — extended with a `reason` column (`'privacy_guard'` |
+  `'rule_consent'`) and a nullable `privacy_class` column, both additive/idempotent migrations.
+- New `skip_rule_consent` keyword-only param (sibling to `skip_privacy_guard`), used only by the
+  approval flow so re-running the pipeline doesn't re-trip the gate and re-queue itself.
+- `approve_pending_sensitive_write()` now also inserts a `memory_consent` row when resolving a
+  `reason='rule_consent'` entry — required because `ConsentGate`/`Retriever` re-evaluate
+  `requires_consent` at *retrieval* time too, and only include a memory with a real `memory_consent`
+  row (`bartholomew/kernel/consent_gate.py`, `tests/test_retrieval_consent_enforcement.py`).
+  Without this, an approved memory would be stored but permanently unretrievable. This is the
+  concrete "separate promotion path" `should_store()`'s docstring always described.
+- `routes/consent.py` and the "🔏 Pending Memory Consent" UI card needed **no new endpoints** —
+  the existing pending-writes inbox from the consent-handler fix already generalizes over
+  `pending_id`; the UI now shows a `reason`/`privacy_class` badge per entry.
 **Not the same gap as the standalone consent-handler fix** (2026-08, below S1.6) — that fix
-addresses a *different*, already-live gate (`privacy_guard.is_sensitive()`), not this one.
+addressed a *different*, already-live gate (`privacy_guard.is_sensitive()`); this closes the
+`memory_rules.yaml` gate, reusing the same inbox mechanism for both.
+**Exit condition met:** `ask_before_store` content is queued (not discarded); approval stores it
+under its original kind/key/ts *and* makes it actually retrievable (verified via
+`ConsentGate.get_memory_policy()`, not just a `memories` row); denial leaves nothing stored;
+`never_store` content remains an unconditional hard block with no promotion path.
 
 ### S1.3 — Notification settings + mute/quiet-hours ✅ (Implemented 2026-08-01)
 **Purpose:** user-controlled notification preferences and quiet-hours windows.
@@ -166,7 +191,7 @@ UI view.
   engage/disengage, `count` matches `len(entries)`, `limit` respected, out-of-bounds `limit` → 400)
   in `tests/test_governance_api.py`.
 **Explicitly out of scope (per this stage's own plan review):** `startup_incidents` (a different
-concern — runtime integrity diagnostics, not action audit) and any future S1.2/S1.4 provenance
+concern — runtime integrity diagnostics, not action audit) and any future S1.4 provenance
 sources — those remain deferred to their own sub-stages, unchanged by this one.
 **Exit condition met:** engage/disengage produce audit entries visible via `GET
 /api/governance/audit` and the minimal UI without a manual refresh, verified with a real browser
@@ -183,7 +208,8 @@ Stage 1's numbering since it isn't part of the original six-capability scope. Re
 it's directly adjacent to (and easily confused with) S1.2.
 **Purpose:** `MemoryStore.upsert_memory()` has a keyword-based sensitivity gate
 (`bartholomew.kernel.memory.privacy_guard.is_sensitive()`) distinct from `memory_rules.yaml`'s
-`ask_before_store` rules (S1.2's still-unfixed gap, above). It already had live handler-based
+`ask_before_store` rules (S1.2's gap, above — unfixed at the time this fix landed; both now share
+the same `pending_sensitive_writes` inbox). It already had live handler-based
 consent plumbing — `chat.py` registers a real terminal prompt for interactive CLI use, by design
 ("headless callers... leave this unset and fail closed instead"). That default is correct for a
 synchronous stdin prompt, but its practical effect was that any sensitive-content write from the
