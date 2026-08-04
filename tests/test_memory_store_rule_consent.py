@@ -91,6 +91,22 @@ async def test_ask_before_store_content_is_queued_for_review(store) -> None:
     assert pending[0]["reason"] == "rule_consent"
     assert pending[0]["privacy_class"] == "user.secure"
 
+    # The ask_before_store rule this content matches sets encrypt: strong --
+    # the raw row must not hold the plaintext (Codex review finding: the
+    # pending payload previously bypassed the redaction/encryption pipeline
+    # entirely). list_pending_sensitive_writes() decrypts for display above;
+    # this checks what's actually on disk.
+    conn = sqlite3.connect(store.db_path)
+    try:
+        raw_value = conn.execute(
+            "SELECT value FROM pending_sensitive_writes WHERE id = ?",
+            (pending[0]["id"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert raw_value != ASK_BEFORE_STORE_CONTENT
+    assert ASK_BEFORE_STORE_CONTENT not in raw_value
+
 
 @pytest.mark.asyncio
 async def test_never_store_content_is_not_queued(store) -> None:
@@ -185,6 +201,71 @@ async def test_deny_rule_consent_write_stores_nothing_and_clears_pending(store) 
         assert mem_row is None
         consent_rows = conn.execute("SELECT * FROM memory_consent").fetchall()
         assert consent_rows == []
+
+        # Codex review finding: denial must not leave the sensitive payload
+        # recoverable in the (kept, for audit purposes) pending row.
+        denied_value = conn.execute(
+            "SELECT value FROM pending_sensitive_writes WHERE id = ?",
+            (pending_id,),
+        ).fetchone()[0]
+        assert denied_value == ""
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_deny_after_approve_raises_and_does_not_undo_the_memory(store) -> None:
+    """Codex review finding: approve/deny used to race -- a denial that won
+    after storage had already completed would report success without
+    actually reverting anything. Approve now atomically claims the row
+    before storage runs, so a subsequent deny on an already-approved row
+    must cleanly fail instead of silently "succeeding" over a stored
+    memory."""
+    await store.upsert_memory(
+        kind="chat",
+        key="approve_then_deny",
+        value=ASK_BEFORE_STORE_CONTENT,
+        ts=TS,
+    )
+    pending_id = (await store.list_pending_sensitive_writes())[0]["id"]
+
+    approved = await store.approve_pending_sensitive_write(pending_id)
+    assert approved.stored is True
+
+    with pytest.raises(ValueError):
+        await store.deny_pending_sensitive_write(pending_id)
+
+    conn = sqlite3.connect(store.db_path)
+    try:
+        mem_row = conn.execute(
+            "SELECT id FROM memories WHERE kind = 'chat' AND key = 'approve_then_deny'",
+        ).fetchone()
+        assert mem_row is not None
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_approve_after_deny_raises_and_does_not_store(store) -> None:
+    await store.upsert_memory(
+        kind="chat",
+        key="deny_then_approve",
+        value=ASK_BEFORE_STORE_CONTENT,
+        ts=TS,
+    )
+    pending_id = (await store.list_pending_sensitive_writes())[0]["id"]
+
+    await store.deny_pending_sensitive_write(pending_id)
+
+    with pytest.raises(ValueError):
+        await store.approve_pending_sensitive_write(pending_id)
+
+    conn = sqlite3.connect(store.db_path)
+    try:
+        mem_row = conn.execute(
+            "SELECT id FROM memories WHERE kind = 'chat' AND key = 'deny_then_approve'",
+        ).fetchone()
+        assert mem_row is None
     finally:
         conn.close()
 

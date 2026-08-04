@@ -7,7 +7,7 @@ send/queue/cancel behavior.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -102,6 +102,42 @@ async def test_mute_until_future_stays_muted(skill):
     settings = await skill.execute("get_notification_settings")
     assert settings.data["effective_muted"] is True
     assert settings.data["muted_until"] == future
+
+
+@pytest.mark.asyncio
+async def test_mute_rejects_unparseable_until(skill):
+    """Codex review finding: an invalid `until` string used to be persisted
+    verbatim, and _is_muted()'s lexicographic string comparison against it
+    could never resolve to "expired" -- an effectively indefinite mute.
+    It must now be rejected outright instead."""
+    result = await skill.execute("mute", {"until": "not-a-timestamp"})
+    assert result.status.value == "error"
+
+    settings = await skill.execute("get_notification_settings")
+    assert settings.data["muted"] is False
+
+
+@pytest.mark.asyncio
+async def test_mute_with_non_utc_offset_normalizes_and_compares_correctly(skill):
+    """Codex review finding: a future `until` expressed with a non-'Z' UTC
+    offset (e.g. "-05:00") could lexicographically compare as *earlier*
+    than a same-instant-later 'Z'-suffixed `now`, incorrectly self-clearing
+    a still-active mute. Build a real future instant, express it 5 hours
+    behind UTC, and confirm it's still recognized as muted."""
+    future_utc = datetime.now(timezone.utc) + timedelta(hours=1)
+    future_minus_five = future_utc.astimezone(timezone(timedelta(hours=-5)))
+    until = future_minus_five.isoformat()
+    assert "-05:00" in until  # guard the guard: still a non-Z offset
+
+    result = await skill.execute("mute", {"until": until})
+    assert result.status.value == "success"
+
+    settings = await skill.execute("get_notification_settings")
+    assert settings.data["muted"] is True
+    assert settings.data["effective_muted"] is True
+    # Normalized to UTC/'Z' at write time, not stored as the raw offset string.
+    assert settings.data["muted_until"].endswith("Z")
+    assert "-05:00" not in settings.data["muted_until"]
 
 
 @pytest.mark.asyncio

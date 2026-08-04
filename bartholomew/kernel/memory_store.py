@@ -330,6 +330,7 @@ class MemoryStore:
                 value,
                 ts,
                 privacy_class=evaluated.get("privacy_class"),
+                evaluated=evaluated,
             )
             print(
                 f"[Bartholomew] Memory requires consent, queued for review "
@@ -416,7 +417,13 @@ class MemoryStore:
         # for later human review instead of being dropped.
         if not skip_privacy_guard and is_sensitive(value):
             if get_consent_handler() is None:
-                pending_id = await self.record_pending_sensitive_write(kind, key, value, ts)
+                pending_id = await self.record_pending_sensitive_write(
+                    kind,
+                    key,
+                    value,
+                    ts,
+                    evaluated=evaluated,
+                )
                 print(
                     f"[Bartholomew] Sensitive content queued for review "
                     f"(pending_id={pending_id}); not stored yet.",
@@ -757,6 +764,7 @@ class MemoryStore:
         value: str,
         ts: str,
         privacy_class: str | None = None,
+        evaluated: dict | None = None,
     ) -> int:
         """
         Preserve a write that upsert_memory() refused to store, so a human
@@ -766,14 +774,33 @@ class MemoryStore:
         registered) or 'rule_consent' (memory_rules.yaml's ask_before_store,
         requires_consent=true). Returns the new pending_sensitive_writes row
         id.
+
+        `evaluated` (the rules-engine metadata dict, when the caller already
+        has one) is used to encrypt the payload at rest with the same
+        policy upsert_memory()'s own storage path would apply -- content
+        matching ask_before_store patterns like password/bank/auth-code
+        rules is exactly the content configured for `encrypt: strong`, and
+        it would otherwise sit here as a plaintext duplicate while pending
+        (Codex review finding). No `evaluated` (or no encrypt policy on it)
+        stores as-is, same as upsert_memory() would for that content.
         """
+        value_to_store = value
+        if evaluated is not None:
+            cipher = _encryption_module._encryption_engine.encrypt_for_policy(
+                value,
+                evaluated,
+                {"kind": kind, "key": key, "ts": ts},
+            )
+            if cipher is not None:
+                value_to_store = cipher
+
         requested_at = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "INSERT INTO pending_sensitive_writes "
                 "(kind, key, value, ts, requested_at, reason, privacy_class) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (kind, key, value, ts, requested_at, reason, privacy_class),
+                (kind, key, value_to_store, ts, requested_at, reason, privacy_class),
             )
             await db.commit()
             return cursor.lastrowid
@@ -784,6 +811,7 @@ class MemoryStore:
         key: str,
         value: str,
         ts: str,
+        evaluated: dict | None = None,
     ) -> int:
         """
         Preserve a sensitive-content write that upsert_memory() refused to
@@ -792,13 +820,22 @@ class MemoryStore:
         reason='privacy_guard', kept as its own method since it's the
         original, already-tested call site.
         """
-        return await self.record_pending_write("privacy_guard", kind, key, value, ts)
+        return await self.record_pending_write(
+            "privacy_guard",
+            kind,
+            key,
+            value,
+            ts,
+            evaluated=evaluated,
+        )
 
     async def list_pending_sensitive_writes(self, limit: int = 50) -> list[dict]:
         """
         Pending (not yet approved/denied) writes, newest first -- from
         either gate (see record_pending_write()'s `reason`), one unified
-        inbox.
+        inbox. Values encrypted at rest (see record_pending_write()) are
+        decrypted here for review; non-envelope values pass through
+        unchanged.
         """
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -809,7 +846,12 @@ class MemoryStore:
                 (limit,),
             )
             rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+            entries = [dict(row) for row in rows]
+            for entry in entries:
+                entry["value"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                    entry["value"],
+                )
+            return entries
 
     async def approve_pending_sensitive_write(self, pending_id: int) -> StoreResult:
         """
@@ -834,29 +876,49 @@ class MemoryStore:
             )
             row = await cursor.fetchone()
 
-        if row is None:
-            raise ValueError(f"No pending sensitive write with id {pending_id}")
-        if row["status"] != "pending":
-            raise ValueError(
-                f"Pending sensitive write {pending_id} is already {row['status']}",
-            )
+            if row is None:
+                raise ValueError(f"No pending sensitive write with id {pending_id}")
+            if row["status"] != "pending":
+                raise ValueError(
+                    f"Pending sensitive write {pending_id} is already {row['status']}",
+                )
 
+            # Atomically claim it (compare-and-swap on status) *before* the
+            # slower storage work below, in the same connection as the read
+            # above. Previously the equivalent UPDATE ran unconditionally
+            # after upsert_memory() completed: if a concurrent
+            # deny_pending_sensitive_write() won the race between this read
+            # and that UPDATE, its 'denied' status would get silently
+            # overwritten back to 'approved' with the memory already stored
+            # -- a denial that reports success but doesn't stick (Codex
+            # review finding). Checking rowcount here means we bail out
+            # before ever calling upsert_memory() if we lost that race.
+            resolved_at = datetime.now(timezone.utc).isoformat()
+            claim = await db.execute(
+                "UPDATE pending_sensitive_writes SET status = 'approved', resolved_at = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (resolved_at, pending_id),
+            )
+            await db.commit()
+            if claim.rowcount == 0:
+                raise ValueError(f"Pending sensitive write {pending_id} is already resolved")
+
+        decrypted_value = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+            row["value"],
+        )
         result = await self.upsert_memory(
             row["kind"],
             row["key"],
-            row["value"],
+            decrypted_value,
             row["ts"],
             skip_privacy_guard=True,
             skip_rule_consent=True,
         )
 
-        resolved_at = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "UPDATE pending_sensitive_writes "
-                "SET status = 'approved', resolved_at = ?, resolved_memory_id = ? "
-                "WHERE id = ?",
-                (resolved_at, result.memory_id, pending_id),
+                "UPDATE pending_sensitive_writes SET resolved_memory_id = ? WHERE id = ?",
+                (result.memory_id, pending_id),
             )
             if row["reason"] == "rule_consent" and result.memory_id is not None:
                 # Upsert, not INSERT OR IGNORE: upsert_memory()'s own
@@ -876,14 +938,19 @@ class MemoryStore:
 
     async def deny_pending_sensitive_write(self, pending_id: int) -> None:
         """
-        Mark a pending sensitive write reviewed and declined. No storage
-        side effect -- upsert_memory() already didn't store it; this only
-        stops it from reappearing as pending.
+        Mark a pending sensitive write reviewed and declined, clearing its
+        payload as part of the same atomic update. No storage side effect
+        -- upsert_memory() already didn't store it. The inbox already hides
+        resolved rows, but the pre-consent payload itself (potentially a
+        password, bank detail, or other sensitive content) must not remain
+        recoverable in the database after an explicit denial just because
+        the row itself is kept for audit purposes (Codex review finding).
         """
         resolved_at = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "UPDATE pending_sensitive_writes SET status = 'denied', resolved_at = ? "
+                "UPDATE pending_sensitive_writes "
+                "SET status = 'denied', resolved_at = ?, value = '' "
                 "WHERE id = ? AND status = 'pending'",
                 (resolved_at, pending_id),
             )
