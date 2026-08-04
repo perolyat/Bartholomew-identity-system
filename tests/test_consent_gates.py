@@ -48,7 +48,7 @@ def consent_gate(temp_db):
 @pytest.fixture
 def mock_rules_engine():
     """Create mock rules engine for testing"""
-    engine = MemoryRulesEngine()
+    engine = MemoryRulesEngine(watch_file=False)
     return engine
 
 

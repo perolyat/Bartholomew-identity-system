@@ -135,7 +135,7 @@ class TestRetrievalBoost:
 
         try:
             # Create retriever
-            rules_engine = MemoryRulesEngine()
+            rules_engine = MemoryRulesEngine(watch_file=False)
             mem_store = MemoryStore(db_path)
 
             retriever = Retriever(
@@ -269,7 +269,7 @@ class TestPolicyFlags:
 
         try:
             # Create retriever
-            rules_engine = MemoryRulesEngine()
+            rules_engine = MemoryRulesEngine(watch_file=False)
             mem_store = MemoryStore(db_path)
 
             retriever = Retriever(

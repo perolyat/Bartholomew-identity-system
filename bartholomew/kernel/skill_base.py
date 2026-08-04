@@ -8,6 +8,7 @@ Part of Stage 4: Skill Registry + Starter Skills.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -292,8 +293,55 @@ class SkillBase(ABC):
         if not self._context or not self._context.workspace:
             return None
 
-        callback = handler or self.handle_event
-        sub_id = self._context.workspace.subscribe(channel, callback)
+        callback: Any = handler or self.handle_event
+
+        if asyncio.iscoroutinefunction(callback):
+            # GlobalWorkspace.publish() (the sync path used by most of the
+            # kernel, e.g. daemon.py/working_memory.py) only ever invokes the
+            # sync `callback` slot -- it never awaits `async_callback`.
+            # Passing a bare async handler as `callback` created the
+            # coroutine but never ran it (silent no-op event routing).
+            # Schedule it on the running loop instead so the sync path still
+            # executes the handler; publish_async() continues to use
+            # `async_callback` directly. Mirrors
+            # SkillRegistry._setup_subscriptions.
+            async_callback = callback
+
+            async def _run_handler(
+                event: WorkspaceEvent,
+                _async_callback: Any = async_callback,
+            ) -> None:
+                try:
+                    await _async_callback(event)
+                except Exception as e:
+                    logger.error(
+                        "Skill %s event handler error: %s",
+                        self.skill_id,
+                        e,
+                    )
+
+            def sync_callback(
+                event: WorkspaceEvent,
+                _run_handler: Any = _run_handler,
+            ) -> None:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    logger.warning(
+                        "Skill %s event dropped: no running event loop",
+                        self.skill_id,
+                    )
+                    return
+                loop.create_task(_run_handler(event))
+
+            sub_id = self._context.workspace.subscribe(
+                channel,
+                sync_callback,
+                async_callback=async_callback,
+            )
+        else:
+            sub_id = self._context.workspace.subscribe(channel, callback)
+
         self._subscription_ids.append(sub_id)
         return sub_id
 
