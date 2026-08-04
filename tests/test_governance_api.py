@@ -1,0 +1,226 @@
+"""
+HTTP-level tests for bartholomew_api_bridge_v0_1's governance router
+(/api/governance/brake, /api/governance/brake/engage,
+/api/governance/brake/disengage) -- Stage 1, S1.1.
+
+Follows the same pattern as tests/test_self_state_api.py: a module-scoped
+TestClient over the real app (real KernelDaemon startup, real
+kernel.governance_store), with its own isolated tmp DB so it doesn't
+collide with other test modules' shared BARTH_DB_PATH state.
+"""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import sqlite3
+import tempfile
+
+import pytest
+from fastapi.testclient import TestClient
+
+_db_dir = pathlib.Path(tempfile.mkdtemp()) / "data"
+_db_dir.mkdir(parents=True, exist_ok=True)
+_DB_PATH = str(_db_dir / "test.db")
+os.environ["BARTH_DB_PATH"] = _DB_PATH
+
+from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: E402
+from bartholomew_api_bridge_v0_1.services.api import db as db_module  # noqa: E402
+
+
+def _live_db_path() -> str:
+    """The actual db path the live, process-wide kernel singleton uses --
+    NOT necessarily this module's own _DB_PATH. db.py's DB_PATH constant is
+    fixed at whichever test module first imports
+    bartholomew_api_bridge_v0_1.services.api.app in the whole pytest
+    session's collection order (see test_self_state_api.py's docstring for
+    the same process-wide-singleton hazard); under the full suite that is
+    not always this file. Reading db_module.DB_PATH instead of a
+    self-computed path is what makes this correct regardless of collection
+    order."""
+    return db_module.DB_PATH
+
+
+@pytest.fixture(scope="module")
+def client():
+    with TestClient(app_module.app) as c:
+        yield c
+
+
+@pytest.fixture(autouse=True)
+def _reset_brake(client):
+    """Every test starts and ends with the brake disengaged, so tests
+    don't leak brake state into each other or into other test modules
+    (governance_store is a process-wide singleton on app_module._kernel,
+    same sharing hazard test_self_state_api.py's goal tests document)."""
+    client.post("/api/governance/brake/disengage", json={"reason": "test setup"})
+    yield
+    client.post("/api/governance/brake/disengage", json={"reason": "test teardown"})
+
+
+def test_get_brake_status_defaults_to_disengaged(client):
+    response = client.get("/api/governance/brake")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["engaged"] is False
+    assert body["scopes"] == []
+
+
+def test_engage_sets_engaged_scopes_and_increments_revision(client):
+    before = client.get("/api/governance/brake").json()["revision"]
+
+    response = client.post(
+        "/api/governance/brake/engage",
+        json={"scopes": ["skills", "sight"], "reason": "test lockdown"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["engaged"] is True
+    assert body["scopes"] == ["sight", "skills"]
+    assert body["revision"] == before + 1
+
+
+def test_engage_default_scope_is_global(client):
+    response = client.post("/api/governance/brake/engage", json={})
+    assert response.status_code == 200
+    assert response.json()["scopes"] == ["global"]
+
+
+def test_engage_rejects_unknown_scope(client):
+    response = client.post(
+        "/api/governance/brake/engage",
+        json={"scopes": ["not_a_real_scope"]},
+    )
+    assert response.status_code == 400
+
+
+def test_disengage_clears_engaged_and_scopes(client):
+    client.post("/api/governance/brake/engage", json={"scopes": ["skills"]})
+
+    response = client.post(
+        "/api/governance/brake/disengage",
+        json={"reason": "incident resolved"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["engaged"] is False
+    assert body["scopes"] == []
+
+
+def test_disengage_rejects_stale_expected_revision(client):
+    client.post("/api/governance/brake/engage", json={"scopes": ["skills"]})
+    current = client.get("/api/governance/brake").json()["revision"]
+
+    response = client.post(
+        "/api/governance/brake/disengage",
+        json={"reason": "stale attempt", "expected_revision": current - 1},
+    )
+
+    assert response.status_code == 409
+
+
+def test_get_brake_status_reflects_concurrent_external_write(client):
+    """A second GovernanceStore instance (e.g. the CLI's `brake on`) writes
+    to the same database while the API daemon is running; GET
+    /api/governance/brake must reflect that write, not the daemon
+    singleton's last-cached snapshot (Codex review, PR #34)."""
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    external = GovernanceStore(_live_db_path())
+    external.engage("skills", reason="external write (simulates CLI)", actor="cli")
+
+    response = client.get("/api/governance/brake")
+    body = response.json()
+    assert body["engaged"] is True
+    assert body["scopes"] == ["skills"]
+
+
+def test_engage_and_disengage_record_actor_in_audit_trail(client):
+    client.post(
+        "/api/governance/brake/engage",
+        json={"scopes": ["skills"], "reason": "actor check", "actor": "test-actor"},
+    )
+
+    conn = sqlite3.connect(_live_db_path())
+    try:
+        row = conn.execute(
+            "SELECT action, actor FROM governance_audit WHERE reason = 'actor check'",
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("engaged", "test-actor")
+
+
+def test_engage_default_actor_is_user(client):
+    client.post(
+        "/api/governance/brake/engage",
+        json={"scopes": ["skills"], "reason": "default actor check"},
+    )
+
+    conn = sqlite3.connect(_live_db_path())
+    try:
+        actor = conn.execute(
+            "SELECT actor FROM governance_audit WHERE reason = 'default actor check'",
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert actor == "user"
+
+
+# -- Audit log endpoint (Stage 1, S1.5) --------------------------------------
+
+
+def test_audit_log_reflects_engage_and_disengage(client):
+    client.post(
+        "/api/governance/brake/engage",
+        json={"scopes": ["skills"], "reason": "audit-log-check engage", "actor": "user"},
+    )
+    client.post(
+        "/api/governance/brake/disengage",
+        json={"reason": "audit-log-check disengage", "actor": "user"},
+    )
+
+    response = client.get("/api/governance/audit")
+
+    assert response.status_code == 200
+    body = response.json()
+    reasons = [e["reason"] for e in body["entries"]]
+    assert "audit-log-check disengage" in reasons
+    assert "audit-log-check engage" in reasons
+    # Newest first.
+    assert reasons.index("audit-log-check disengage") < reasons.index("audit-log-check engage")
+
+    disengage_entry = next(e for e in body["entries"] if e["reason"] == "audit-log-check disengage")
+    assert disengage_entry["action"] == "disengaged"
+    assert disengage_entry["actor"] == "user"
+    assert disengage_entry["scopes"] == []
+
+    engage_entry = next(e for e in body["entries"] if e["reason"] == "audit-log-check engage")
+    assert engage_entry["action"] == "engaged"
+    assert engage_entry["scopes"] == ["skills"]
+
+
+def test_audit_log_count_matches_entries_length(client):
+    response = client.get("/api/governance/audit")
+    body = response.json()
+    assert body["count"] == len(body["entries"])
+
+
+def test_audit_log_respects_limit(client):
+    for i in range(3):
+        client.post(
+            "/api/governance/brake/engage",
+            json={"scopes": ["skills"], "reason": f"limit-check {i}"},
+        )
+
+    response = client.get("/api/governance/audit", params={"limit": 2})
+
+    assert response.status_code == 200
+    assert len(response.json()["entries"]) == 2
+
+
+def test_audit_log_rejects_out_of_bounds_limit(client):
+    assert client.get("/api/governance/audit", params={"limit": 0}).status_code == 400
+    assert client.get("/api/governance/audit", params={"limit": 101}).status_code == 400

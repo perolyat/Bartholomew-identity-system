@@ -124,6 +124,19 @@ class NotifySkill(SkillBase):
         ON skill_notifications(status);
     CREATE INDEX IF NOT EXISTS idx_notif_deliver
         ON skill_notifications(deliver_at);
+
+    -- Stage 1, S1.3: persisted quiet-hours/mute settings. Singleton row
+    -- (id=1) -- previously quiet hours were hardcoded to DEFAULT_QUIET_
+    -- HOURS_START/END on every initialize() with no way to change them,
+    -- and there was no mute concept at all.
+    CREATE TABLE IF NOT EXISTS notification_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        quiet_hours_start TEXT NOT NULL,
+        quiet_hours_end TEXT NOT NULL,
+        muted INTEGER NOT NULL DEFAULT 0,
+        muted_until TEXT,
+        updated_at TEXT NOT NULL
+    );
     """
 
     # Default quiet hours (from Identity.yaml or config)
@@ -139,13 +152,19 @@ class NotifySkill(SkillBase):
         self._context = context
         self._db_path = context.db_path
 
-        # Load quiet hours config
-        self._quiet_hours_start = self.DEFAULT_QUIET_HOURS_START
-        self._quiet_hours_end = self.DEFAULT_QUIET_HOURS_END
-
         # Initialize database
         if self._db_path:
             self._init_database()
+
+        # Stage 1, S1.3: load persisted quiet-hours/mute settings (seeding
+        # the singleton row with the class defaults on first run) instead
+        # of always resetting to the hardcoded defaults.
+        self._quiet_hours_start = self.DEFAULT_QUIET_HOURS_START
+        self._quiet_hours_end = self.DEFAULT_QUIET_HOURS_END
+        self._muted = False
+        self._muted_until: str | None = None
+        if self._db_path:
+            self._load_settings()
 
         # Subscribe to events
         if context.workspace:
@@ -175,6 +194,60 @@ class NotifySkill(SkillBase):
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _load_settings(self) -> None:
+        """
+        Load persisted quiet-hours/mute settings into memory, seeding the
+        singleton row with the class defaults if this is the first run
+        against this database.
+        """
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT quiet_hours_start, quiet_hours_end, muted, muted_until "
+                "FROM notification_settings WHERE id = 1",
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO notification_settings "
+                    "(id, quiet_hours_start, quiet_hours_end, muted, muted_until, updated_at) "
+                    "VALUES (1, ?, ?, 0, NULL, ?)",
+                    (
+                        self._quiet_hours_start,
+                        self._quiet_hours_end,
+                        datetime.utcnow().isoformat() + "Z",
+                    ),
+                )
+                conn.commit()
+                return
+            self._quiet_hours_start = row["quiet_hours_start"]
+            self._quiet_hours_end = row["quiet_hours_end"]
+            self._muted = bool(row["muted"])
+            self._muted_until = row["muted_until"]
+        finally:
+            conn.close()
+
+    def _save_settings(self) -> None:
+        """Persist the current in-memory quiet-hours/mute settings."""
+        if not self._db_path:
+            return
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                "UPDATE notification_settings "
+                "SET quiet_hours_start = ?, quiet_hours_end = ?, muted = ?, "
+                "muted_until = ?, updated_at = ? WHERE id = 1",
+                (
+                    self._quiet_hours_start,
+                    self._quiet_hours_end,
+                    1 if self._muted else 0,
+                    self._muted_until,
+                    datetime.utcnow().isoformat() + "Z",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     async def shutdown(self) -> None:
         """Shutdown the notify skill."""
         self._unsubscribe_all()
@@ -195,6 +268,10 @@ class NotifySkill(SkillBase):
             "cancel": self._action_cancel,
             "get_quiet_hours": self._action_get_quiet_hours,
             "is_quiet_hours": self._action_is_quiet_hours,
+            "set_quiet_hours": self._action_set_quiet_hours,
+            "mute": self._action_mute,
+            "unmute": self._action_unmute,
+            "get_notification_settings": self._action_get_notification_settings,
         }
 
         handler = actions.get(action)
@@ -220,8 +297,10 @@ class NotifySkill(SkillBase):
 
         priority = NotificationPriority(params.get("priority", "normal"))
 
-        # Check quiet hours (urgent notifications bypass)
-        if self._is_quiet_hours() and priority != NotificationPriority.URGENT:
+        # Check mute/quiet hours (urgent notifications bypass both -- mute
+        # is treated the same as an always-on quiet-hours window rather
+        # than a separate gate, per Stage 1 S1.3's design).
+        if (self._is_muted() or self._is_quiet_hours()) and priority != NotificationPriority.URGENT:
             # Queue for later
             return await self._action_queue(
                 {
@@ -349,8 +428,86 @@ class NotifySkill(SkillBase):
         """Check if currently in quiet hours."""
         return SkillResult.ok(data={"is_quiet_hours": self._is_quiet_hours()})
 
+    async def _action_set_quiet_hours(self, params: dict[str, Any]) -> SkillResult:
+        """Set and persist quiet hours (Stage 1, S1.3)."""
+        perm_error = self._require_permission("nudge.create")
+        if perm_error:
+            return perm_error
+
+        start = params.get("start")
+        end = params.get("end")
+        if not start or not end:
+            return SkillResult.fail("start and end are required")
+        if not (self._is_valid_hhmm(start) and self._is_valid_hhmm(end)):
+            return SkillResult.fail("start and end must be 'HH:MM' (24-hour)")
+
+        self._quiet_hours_start = start
+        self._quiet_hours_end = end
+        self._save_settings()
+
+        return SkillResult.ok(
+            data={"start": start, "end": end, "is_active": self._is_quiet_hours()},
+            message="Quiet hours updated",
+        )
+
+    async def _action_mute(self, params: dict[str, Any]) -> SkillResult:
+        """Mute non-urgent notifications, optionally until a given time (Stage 1, S1.3)."""
+        perm_error = self._require_permission("nudge.create")
+        if perm_error:
+            return perm_error
+
+        until = params.get("until")
+        self._muted = True
+        self._muted_until = until
+        self._save_settings()
+
+        return SkillResult.ok(
+            data={"muted": True, "muted_until": until},
+            message="Notifications muted",
+        )
+
+    async def _action_unmute(self, params: dict[str, Any]) -> SkillResult:
+        """Clear mute (Stage 1, S1.3)."""
+        perm_error = self._require_permission("nudge.create")
+        if perm_error:
+            return perm_error
+
+        self._muted = False
+        self._muted_until = None
+        self._save_settings()
+
+        return SkillResult.ok(data={"muted": False}, message="Notifications unmuted")
+
+    async def _action_get_notification_settings(self, params: dict[str, Any]) -> SkillResult:
+        """Combined quiet-hours + mute status (Stage 1, S1.3)."""
+        # Compute effective_muted() first -- it lazily clears (and persists
+        # the clear) an expired muted_until, so muted/muted_until below
+        # must be read after that check runs, not before, or a just-expired
+        # mute would report a self-contradictory muted=true/effective=false.
+        effective_muted = self._is_muted()
+        return SkillResult.ok(
+            data={
+                "quiet_hours": {
+                    "start": self._quiet_hours_start,
+                    "end": self._quiet_hours_end,
+                    "is_active": self._is_quiet_hours(),
+                },
+                "muted": self._muted,
+                "muted_until": self._muted_until,
+                "effective_muted": effective_muted,
+            },
+        )
+
+    @staticmethod
+    def _is_valid_hhmm(value: str) -> bool:
+        try:
+            hh, mm = value.split(":")
+            return len(hh) == 2 and len(mm) == 2 and 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59
+        except (ValueError, AttributeError):
+            return False
+
     # -------------------------------------------------------------------------
-    # Quiet Hours
+    # Quiet Hours / Mute
     # -------------------------------------------------------------------------
 
     def _is_quiet_hours(self) -> bool:
@@ -366,6 +523,23 @@ class NotifySkill(SkillBase):
             return current_time >= start or current_time < end
         else:
             return start <= current_time < end
+
+    def _is_muted(self) -> bool:
+        """
+        Check if notifications are currently muted, lazily clearing (and
+        persisting the clear, not just computing a value) an expired
+        `muted_until` so a stale mute doesn't silently outlive its window.
+        """
+        if not self._muted:
+            return False
+        if self._muted_until:
+            now = datetime.utcnow().isoformat() + "Z"
+            if now >= self._muted_until:
+                self._muted = False
+                self._muted_until = None
+                self._save_settings()
+                return False
+        return True
 
     # -------------------------------------------------------------------------
     # Delivery
@@ -400,7 +574,7 @@ class NotifySkill(SkillBase):
         Called periodically to deliver due notifications.
         """
         now = datetime.utcnow().isoformat() + "Z"
-        is_quiet = self._is_quiet_hours()
+        is_suppressed = self._is_muted() or self._is_quiet_hours()
         delivered = 0
 
         notifications = self._get_pending_notifications(limit=100)
@@ -412,8 +586,10 @@ class NotifySkill(SkillBase):
             if notification.deliver_at and notification.deliver_at <= now:
                 should_deliver = True
 
-            # Check quiet hours
-            if notification.deliver_after_quiet_hours and not is_quiet:
+            # Check quiet hours/mute -- a queued item waits for both
+            # quiet hours to end AND mute to be cleared, not just whichever
+            # cleared first (Stage 1, S1.3).
+            if notification.deliver_after_quiet_hours and not is_suppressed:
                 should_deliver = True
 
             # Urgent always delivers
@@ -563,6 +739,8 @@ class NotifySkill(SkillBase):
             "end": self._quiet_hours_end,
             "is_active": self._is_quiet_hours(),
         }
+        status["muted"] = self._muted
+        status["muted_until"] = self._muted_until
 
         if self._db_path:
             pending = len(self._get_pending_notifications())

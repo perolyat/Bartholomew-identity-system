@@ -31,7 +31,7 @@ from prometheus_client import PlatformCollector, ProcessCollector
 from . import db_ctx
 from .db import DB_PATH
 from .models import ChatIn, ChatOut, ConversationList
-from .routes import liveness, metrics, self_state
+from .routes import consent, governance, liveness, metrics, notifications, self_state
 from .routes.metrics import BARTHOLOMEW_TICKS_TOTAL, KERNEL_TICKS_TOTAL, REGISTRY
 
 
@@ -61,6 +61,9 @@ app = FastAPI(title="Bartholomew API v0.1", version="0.1.0")
 # Include routers
 app.include_router(liveness.router)
 app.include_router(self_state.router)
+app.include_router(governance.router)
+app.include_router(notifications.router)
+app.include_router(consent.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)

@@ -109,6 +109,34 @@ actions:
     description: "Check if currently in quiet hours"
     parameters: []
 
+  - name: "set_quiet_hours"
+    description: "Set and persist quiet hours (Stage 1, S1.3)"
+    parameters:
+      - name: "start"
+        type: "string"
+        required: true
+        description: "Quiet hours start, 'HH:MM' 24-hour"
+      - name: "end"
+        type: "string"
+        required: true
+        description: "Quiet hours end, 'HH:MM' 24-hour"
+
+  - name: "mute"
+    description: "Mute non-urgent notifications, optionally until a given time (Stage 1, S1.3)"
+    parameters:
+      - name: "until"
+        type: "datetime"
+        required: false
+        description: "ISO 8601 timestamp to auto-unmute at; omit for indefinite"
+
+  - name: "unmute"
+    description: "Clear mute (Stage 1, S1.3)"
+    parameters: []
+
+  - name: "get_notification_settings"
+    description: "Combined quiet-hours and mute status (Stage 1, S1.3)"
+    parameters: []
+
 # Metadata
 author: "system"
 license: "MIT"

@@ -411,15 +411,26 @@ carried forward rather than fixed here:
 
 ---
 
-### Stage 1 — Console/UI integration 📋 (Deferred product slice; NOT STARTED)
+### Stage 1 — Console/UI integration 🚧 (Started 2026-08-01: sub-stages S1.1, S1.3, S1.5 complete)
 
-**Status:** Stage 1 is a deferred console/UI product slice. It has not started and was never a
-prerequisite for Stages 2–4.5. Its historical numbering is retained deliberately — the later
-stages were sequenced by architectural dependency, not by stage number, so a lower number here
-does not imply it blocked anything. **Scope updated 2026-07-28** (planning only — this update does
-not authorise implementation): Stage 1 is now sequenced *before* Stage 5/S5.1 (see "Near-term
+**Status:** Stage 1 is a console/UI product slice, now staged as sub-stages **S1.0–S1.6** —
+mirroring Phase B's B0–B9 staging, since this slice's combined exit criteria are comparably broad.
+See `docs/STAGE_1_OVERVIEW.md` for each sub-stage's purpose, scope, and deferrals; this section of
+`ROADMAP.md` remains the canonical source for Stage 1's overall exit criteria and approval
+boundaries — `docs/STAGE_1_OVERVIEW.md` is subordinate to it. **S1.1 (Parking Brake API + UI), S1.3
+(notification settings + mute/quiet-hours), and S1.5 (governance audit/provenance view) are
+implemented (2026-08-01);** S1.2, S1.4, and S1.6 (consent/approval inbox, the `awaiting_response`
+queue, host-device onboarding guidance) remain scoped-only and each require their own separate
+approval before implementation, per `docs/STAGE_1_OVERVIEW.md`'s non-negotiable invariants. **Scope
+updated 2026-07-28** (planning only): Stage 1 is sequenced *before* Stage 5/S5.1 (see "Near-term
 milestone plan" above) because Stage 5's live proactive behaviour needs a real, user-facing
 governance surface that only Stage 1 can provide.
+
+**Adjacent, non-Stage-1 fix (2026-08-03):** a standalone consent-handler fix (see
+`docs/STAGE_1_OVERVIEW.md`'s "Standalone: consent-handler fix" section) — sensitive-content memory
+writes are now queued for review instead of silently discarded when no consent handler is
+registered (the real headless/API case). This is **not** a completion of S1.2, which remains
+blocked on a separate, still-unfixed gap in `memory_rules.yaml`'s `ask_before_store` category.
 
 **Goal:** A minimal consumer web governance shell on top of the API bridge, consistent with the
 hybrid local-first deployment architecture (`DECISIONS.md`) — browser-based, reaching the trusted
@@ -461,6 +472,12 @@ consistent with).
 ```bash
 pytest -q tests/test_orchestration_integration.py
 pytest -q bartholomew_api_bridge_v0_1/tests/test_sqlite_wal_api.py
+# S1.1 Parking Brake API + UI (S1.5 audit view lives in the same test files)
+pytest -q tests/test_governance_api.py tests/test_governance_store.py
+# S1.3 Notification settings + mute/quiet-hours
+pytest -q tests/test_notify_skill_settings.py tests/test_notifications_api.py
+# Consent-handler fix (adjacent, non-Stage-1)
+pytest -q tests/test_memory_store_sensitive_consent.py tests/test_consent_api.py
 # optional smoke
 bash bartholomew_api_bridge_v0_1/scripts/curl_smoke.sh
 ```

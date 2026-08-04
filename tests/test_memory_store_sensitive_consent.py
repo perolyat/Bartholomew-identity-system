@@ -16,6 +16,8 @@ consent stays fail-closed.
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from bartholomew.kernel.memory.privacy_guard import is_sensitive, set_consent_handler
@@ -114,3 +116,142 @@ async def test_async_consent_handler_is_awaited(store) -> None:
     )
 
     assert result.stored is True
+
+
+# -- Consent-handler fix: pending sensitive writes (2026-08) -----------------
+
+
+@pytest.mark.asyncio
+async def test_no_handler_write_is_queued_instead_of_discarded(store) -> None:
+    """The actual fix: with no handler, the content must be preserved for
+    later human review, not silently and permanently dropped."""
+    result = await store.upsert_memory(
+        kind="chat",
+        key="queued",
+        value=SENSITIVE_BUT_STORABLE,
+        ts=TS,
+    )
+    assert result.stored is False
+
+    pending = await store.list_pending_sensitive_writes()
+    assert len(pending) == 1
+    assert pending[0]["kind"] == "chat"
+    assert pending[0]["key"] == "queued"
+    assert pending[0]["value"] == SENSITIVE_BUT_STORABLE
+    assert pending[0]["ts"] == TS
+    assert pending[0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_explicit_decline_is_not_queued(store) -> None:
+    """An explicit human 'no' must never be second-guessed or re-queued --
+    only the true no-handler (headless) case queues."""
+    set_consent_handler(lambda _prompt: False)
+
+    result = await store.upsert_memory(
+        kind="chat",
+        key="declined_not_queued",
+        value=SENSITIVE_BUT_STORABLE,
+        ts=TS,
+    )
+    assert result.stored is False
+
+    pending = await store.list_pending_sensitive_writes()
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_skip_privacy_guard_bypasses_the_gate(store) -> None:
+    """skip_privacy_guard=True must store sensitive content directly, with
+    no handler needed and nothing queued."""
+    result = await store.upsert_memory(
+        kind="chat",
+        key="bypassed",
+        value=SENSITIVE_BUT_STORABLE,
+        ts=TS,
+        skip_privacy_guard=True,
+    )
+
+    assert result.stored is True
+    assert (await store.list_pending_sensitive_writes()) == []
+
+
+@pytest.mark.asyncio
+async def test_approve_pending_sensitive_write_stores_with_original_context(store) -> None:
+    await store.upsert_memory(
+        kind="user_profile",
+        key="favorite_food",
+        value=SENSITIVE_BUT_STORABLE,
+        ts=TS,
+    )
+    pending = await store.list_pending_sensitive_writes()
+    assert len(pending) == 1
+    pending_id = pending[0]["id"]
+
+    result = await store.approve_pending_sensitive_write(pending_id)
+
+    assert result.stored is True
+    assert result.memory_id is not None
+    # No longer pending.
+    assert (await store.list_pending_sensitive_writes()) == []
+    # Stored under the *original* kind/key, not some generic bucket.
+    conn = sqlite3.connect(store.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM memories WHERE kind = 'user_profile' AND key = 'favorite_food'",
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row[0] == result.memory_id
+
+
+@pytest.mark.asyncio
+async def test_deny_pending_sensitive_write_stores_nothing_and_clears_pending(store) -> None:
+    await store.upsert_memory(
+        kind="chat",
+        key="to_deny",
+        value=SENSITIVE_BUT_STORABLE,
+        ts=TS,
+    )
+    pending = await store.list_pending_sensitive_writes()
+    pending_id = pending[0]["id"]
+
+    await store.deny_pending_sensitive_write(pending_id)
+
+    assert (await store.list_pending_sensitive_writes()) == []
+    conn = sqlite3.connect(store.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM memories WHERE kind = 'chat' AND key = 'to_deny'",
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is None
+
+
+@pytest.mark.asyncio
+async def test_approve_unknown_pending_id_raises(store) -> None:
+    with pytest.raises(ValueError):
+        await store.approve_pending_sensitive_write(99999)
+
+
+@pytest.mark.asyncio
+async def test_deny_unknown_pending_id_raises(store) -> None:
+    with pytest.raises(ValueError):
+        await store.deny_pending_sensitive_write(99999)
+
+
+@pytest.mark.asyncio
+async def test_approve_already_resolved_pending_write_raises(store) -> None:
+    await store.upsert_memory(
+        kind="chat",
+        key="double_approve",
+        value=SENSITIVE_BUT_STORABLE,
+        ts=TS,
+    )
+    pending_id = (await store.list_pending_sensitive_writes())[0]["id"]
+    await store.approve_pending_sensitive_write(pending_id)
+
+    with pytest.raises(ValueError):
+        await store.approve_pending_sensitive_write(pending_id)

@@ -180,6 +180,152 @@ def test_audit_reason_is_optional(db_path):
     assert reason is None
 
 
+# -- Actor field (Stage 1, S1.1) --------------------------------------------
+
+
+def test_engage_and_disengage_record_actor(db_path):
+    store = GovernanceStore(db_path)
+    store.engage("skills", reason="lockdown", actor="user")
+    store.disengage(reason="resolved", actor="user")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT action, actor FROM governance_audit ORDER BY id",
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("engaged", "user"), ("disengaged", "user")]
+
+
+def test_actor_is_optional_and_defaults_to_none(db_path):
+    store = GovernanceStore(db_path)
+    store.engage("skills")  # no actor given
+
+    conn = sqlite3.connect(db_path)
+    try:
+        actor = conn.execute("SELECT actor FROM governance_audit").fetchone()[0]
+    finally:
+        conn.close()
+    assert actor is None
+
+
+def test_legacy_migration_records_actor_as_migration(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE system_flags (key TEXT PRIMARY KEY, value TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)",
+        )
+        conn.execute(
+            "INSERT INTO system_flags VALUES ('parking_brake', ?, '1700000000')",
+            (json.dumps({"engaged": True, "scopes": ["skills"]}),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    GovernanceStore(db_path)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        actor = conn.execute(
+            "SELECT actor FROM governance_audit WHERE action = 'migrated'",
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert actor == "migration"
+
+
+def test_actor_column_is_backfilled_on_pre_existing_governance_audit_table(db_path):
+    """A database created before the `actor` column existed must not break
+    ensure_schema() -- the column is added in place, existing rows get a
+    NULL actor rather than the migration failing or the table being
+    dropped and recreated."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE parking_brake_state (id INTEGER PRIMARY KEY CHECK (id = 1), "
+            "engaged INTEGER NOT NULL DEFAULT 0, scopes TEXT NOT NULL DEFAULT '[]', "
+            "revision INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)",
+        )
+        conn.execute(
+            "INSERT INTO parking_brake_state (id, engaged, scopes, revision, updated_at) "
+            "VALUES (1, 1, '[\"skills\"]', 1, 1700000000)",
+        )
+        conn.execute(
+            "CREATE TABLE governance_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ts INTEGER NOT NULL, action TEXT NOT NULL, scopes TEXT NOT NULL, "
+            "reason TEXT, revision INTEGER NOT NULL)",
+        )
+        conn.execute(
+            "INSERT INTO governance_audit (ts, action, scopes, reason, revision) "
+            "VALUES (1700000000, 'engaged', '[\"skills\"]', 'pre-actor row', 1)",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = GovernanceStore(db_path)
+    assert store.state().engaged is True  # pre-existing state untouched
+
+    store.engage("skills", reason="post-migration", actor="user")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT reason, actor FROM governance_audit ORDER BY id",
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows[0] == ("pre-actor row", None)  # backfilled, not lost
+    assert rows[1] == ("post-migration", "user")
+
+
+# -- Audit log read (Stage 1, S1.5) ------------------------------------------
+
+
+def test_list_audit_returns_entries_newest_first(db_path):
+    store = GovernanceStore(db_path)
+    store.engage("skills", reason="first", actor="user")
+    store.disengage(reason="second", actor="user")
+    store.engage("voice", reason="third", actor="cli")
+
+    entries = store.list_audit()
+
+    assert [e["reason"] for e in entries] == ["third", "second", "first"]
+    assert [e["action"] for e in entries] == ["engaged", "disengaged", "engaged"]
+
+
+def test_list_audit_decodes_scopes_and_includes_actor(db_path):
+    store = GovernanceStore(db_path)
+    store.engage("skills", "voice", reason="lockdown", actor="user")
+
+    entry = store.list_audit()[0]
+
+    assert entry["scopes"] == ["skills", "voice"]
+    assert entry["actor"] == "user"
+    assert entry["revision"] == 1
+    assert isinstance(entry["ts"], int)
+
+
+def test_list_audit_respects_limit(db_path):
+    store = GovernanceStore(db_path)
+    for i in range(5):
+        store.engage("skills", reason=f"entry {i}")
+
+    entries = store.list_audit(limit=2)
+
+    assert len(entries) == 2
+    assert entries[0]["reason"] == "entry 4"
+    assert entries[1]["reason"] == "entry 3"
+
+
+def test_list_audit_empty_for_fresh_store(db_path):
+    store = GovernanceStore(db_path)
+    assert store.list_audit() == []
+
+
 # -- Legacy migration -------------------------------------------------------
 
 
