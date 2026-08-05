@@ -421,10 +421,12 @@ boundaries — `docs/STAGE_1_OVERVIEW.md` is subordinate to it. **S1.1 (Parking 
 (notification settings + mute/quiet-hours), and S1.5 (governance audit/provenance view) are
 implemented (2026-08-01); S1.2 (consent/approval inbox) is implemented (2026-08-04); S1.4 (the
 `awaiting_response` queue) is implemented (2026-08-05), per the explicitly approved
-`docs/S1_4_AWAITING_RESPONSE_DESIGN.md` design pass;** S1.6 (host-device onboarding guidance) has a
-proposed design (`docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md`, 2026-08-05) but is **not approved for
-implementation** — it still requires its own separate approval, per `docs/STAGE_1_OVERVIEW.md`'s
-non-negotiable invariants. **Scope updated 2026-07-28** (planning
+`docs/S1_4_AWAITING_RESPONSE_DESIGN.md` design pass;** S1.6 (host-device onboarding guidance) has an
+**approved design** (`docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md`, approved 2026-08-05 after a
+reviewer-requested revision — user-experience framing per target, future upgrade paths, and a
+priority-conditional "How should I choose?" section) but **implementation is not yet approved** — it
+still requires its own separate approval, per `docs/STAGE_1_OVERVIEW.md`'s non-negotiable
+invariants. **Scope updated 2026-07-28** (planning
 only): Stage 1 is sequenced *before* Stage 5/S5.1 (see "Near-term milestone plan" above) because
 Stage 5's live proactive behaviour needs a real, user-facing governance surface that only Stage 1
 can provide.

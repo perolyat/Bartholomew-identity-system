@@ -7,9 +7,11 @@
 > beyond S1.1, S1.2, S1.3, S1.4, and S1.5 (already implemented, see below) — S1.6 needs its own
 > separate approval before implementation begins.
 >
-> **Last updated:** 2026-08-05 (S1.6 design proposed — see
-> `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md`; design-only, not approved for implementation.
-> Previously, same day: S1.4 implemented — see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for
+> **Last updated:** 2026-08-05 (S1.6 design approved — see
+> `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md`, revised per reviewer feedback (user-experience
+> framing, future upgrade paths, a "How should I choose?" section) then approved by the project
+> owner; design-only, implementation still not approved. Previously, same day: S1.4 implemented —
+> see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for
 > the design and this document's S1.4 section for what was actually built. Previously: 2026-08-04,
 > S1.2 implemented — see below; builds the promotion path the standalone consent-handler fix's
 > `pending_sensitive_writes` inbox always anticipated. Previously: 2026-08-03, standalone
@@ -250,18 +252,24 @@ sources — those remain deferred to their own sub-stages, unchanged by this one
 /api/governance/audit` and the minimal UI without a manual refresh, verified with a real browser
 (Playwright + the pre-installed headless Chromium).
 
-### S1.6 — Host-device onboarding guidance (design proposed 2026-08-05, not approved, not implemented)
+### S1.6 — Host-device onboarding guidance (design approved 2026-08-05, implementation not approved)
 **Purpose:** onboarding content presenting the realistic trade-offs of each supported deployment
 target, consistent with `DECISIONS.md`'s hybrid local-first deployment-architecture entry.
-**Design pass complete:** see `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md` for the proposed
-five-target trade-off content (phone, personal computer, home server/hub, hosted cloud service,
-hybrid local-plus-cloud), a read-only `GET /api/onboarding/deployment-guide` endpoint plus a static
-content module (deliberately no new database schema — see the design doc's Sec 5), a first-run
-modal gated by a client-only `localStorage` flag, an always-reachable reference card, and the
-"currently-available-vs-planned" honesty framing required so unbuilt Stage 6 capabilities
-(cross-device sync, a hosted runtime, data export) are never described as available today.
-**Deferred until its own separate approval to implement** — the design document itself is not that
-approval.
+**Design approved:** see `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md` for the approved five-target
+content — each target now covers what using it will actually feel like, real advantages, real
+limitations, and a future upgrade path (e.g. starting on a phone, later migrating to a home
+server/hub or hybrid deployment) — plus a "How should I choose?" section mapping distinct user
+priorities (convenience/mobility, everyday desktop use, privacy + always-on, minimal setup, the
+long-term hybrid ideal) to distinct targets with reasoning, and an explicit, prominent "this choice
+is not permanent" migration note. Proposed shape: a read-only `GET /api/onboarding/deployment-guide`
+endpoint plus a static content module (deliberately no new database schema — see the design doc's
+Sec 6), a first-run modal gated by a client-only `localStorage` flag, an always-reachable reference
+card, and the "currently-available-vs-planned" honesty framing required so unbuilt Stage 6
+capabilities (cross-device sync, a hosted runtime, data export) are never described as available
+today. The priority-conditional choosing-guide table is deliberately not a single recommendation —
+see the design doc's Sec 7 for how that's reconciled with `ROADMAP.md`'s neutrality exit criterion.
+**Deferred until its own separate approval to implement** — approval of the design document does
+not itself approve implementation.
 
 ### Standalone: consent-handler fix ✅ (Implemented 2026-08-03)
 **Not a Stage 1 sub-stage** — a standalone fix found while investigating S1.2, kept separate from
