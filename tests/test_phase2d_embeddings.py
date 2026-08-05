@@ -252,7 +252,7 @@ class TestRetriever:
         vec_store.upsert(mem_id, test_vec, "summary", "local-sbert", "test")
 
         # Create retriever
-        rules_engine = MemoryRulesEngine()
+        rules_engine = MemoryRulesEngine(watch_file=False)
         mem_store = MemoryStore(db_path)
 
         retriever = Retriever(

@@ -412,6 +412,22 @@ class SkillRegistry:
             return subscription_ids
 
         for sub in manifest.subscriptions:
+            # Skills self-subscribe in their own initialize() (called just
+            # above in load_skill), and all three bundled skills declare the
+            # very channels they already subscribed to. Since neither path
+            # sets a filter_fn, registering again here would match every
+            # event twice and run handle_event twice per event. The skill's
+            # own registration is already live, and its shutdown() clears it
+            # via _unsubscribe_all(), so skip the duplicate.
+            if sub.channel in instance._subscribed_channels:
+                logger.debug(
+                    "Skill %s already self-subscribed to channel %s; "
+                    "skipping manifest subscription",
+                    manifest.skill_id,
+                    sub.channel,
+                )
+                continue
+
             # Create handler that routes events to skill
             async def async_handler(
                 event: WorkspaceEvent,
@@ -455,6 +471,10 @@ class SkillRegistry:
                 async_callback=async_handler,
             )
             subscription_ids.append(sub_id)
+            # Recorded so a manifest listing the same channel more than once
+            # collapses to a single registration, on the same bookkeeping the
+            # skill's own _subscribe_to_channel() uses.
+            instance._subscribed_channels.add(sub.channel)
             logger.debug(
                 "Skill %s subscribed to channel: %s",
                 manifest.skill_id,

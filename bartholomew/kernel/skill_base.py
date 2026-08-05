@@ -8,6 +8,7 @@ Part of Stage 4: Skill Registry + Starter Skills.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -157,6 +158,7 @@ class SkillBase(ABC):
         self._loaded_at: datetime | None = None
         self._last_error: str | None = None
         self._subscription_ids: list[str] = []
+        self._subscribed_channels: set[str] = set()
 
     @property
     @abstractmethod
@@ -292,9 +294,74 @@ class SkillBase(ABC):
         if not self._context or not self._context.workspace:
             return None
 
-        callback = handler or self.handle_event
-        sub_id = self._context.workspace.subscribe(channel, callback)
+        # A skill loaded through SkillRegistry reaches this channel twice:
+        # once here (skills self-subscribe in their own initialize()) and
+        # once via SkillRegistry._setup_subscriptions() for the channels the
+        # skill's manifest declares -- and all three bundled skills do both
+        # for identical channels. Neither path sets a filter_fn, so both
+        # subscriptions match every event on the channel and handle_event
+        # would run twice per event. Keep the first registration per channel
+        # and ignore repeats of the default handler. An explicit handler is
+        # a deliberate second consumer, so it is never deduplicated.
+        if handler is None and channel in self._subscribed_channels:
+            logger.debug(
+                "Skill %s already subscribed to channel %s; skipping duplicate",
+                self.skill_id,
+                channel,
+            )
+            return None
+
+        callback: Any = handler or self.handle_event
+
+        if asyncio.iscoroutinefunction(callback):
+            # GlobalWorkspace.publish() (the sync path used by most of the
+            # kernel, e.g. daemon.py/working_memory.py) only ever invokes the
+            # sync `callback` slot -- it never awaits `async_callback`.
+            # Passing a bare async handler as `callback` created the
+            # coroutine but never ran it (silent no-op event routing).
+            # Schedule it on the running loop instead so the sync path still
+            # executes the handler; publish_async() continues to use
+            # `async_callback` directly. Mirrors
+            # SkillRegistry._setup_subscriptions.
+            async_callback = callback
+
+            async def _run_handler(
+                event: WorkspaceEvent,
+                _async_callback: Any = async_callback,
+            ) -> None:
+                try:
+                    await _async_callback(event)
+                except Exception as e:
+                    logger.error(
+                        "Skill %s event handler error: %s",
+                        self.skill_id,
+                        e,
+                    )
+
+            def sync_callback(
+                event: WorkspaceEvent,
+                _run_handler: Any = _run_handler,
+            ) -> None:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    logger.warning(
+                        "Skill %s event dropped: no running event loop",
+                        self.skill_id,
+                    )
+                    return
+                loop.create_task(_run_handler(event))
+
+            sub_id = self._context.workspace.subscribe(
+                channel,
+                sync_callback,
+                async_callback=async_callback,
+            )
+        else:
+            sub_id = self._context.workspace.subscribe(channel, callback)
+
         self._subscription_ids.append(sub_id)
+        self._subscribed_channels.add(channel)
         return sub_id
 
     def _unsubscribe_all(self) -> None:
@@ -305,6 +372,9 @@ class SkillBase(ABC):
         for sub_id in self._subscription_ids:
             self._context.workspace.unsubscribe(sub_id)
         self._subscription_ids.clear()
+        # Cleared so an unload/reload cycle can resubscribe: the duplicate
+        # guard in _subscribe_to_channel() keys off this set.
+        self._subscribed_channels.clear()
 
     def _emit_event(
         self,
