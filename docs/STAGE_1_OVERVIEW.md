@@ -4,14 +4,14 @@
 > and stage structure*, mirroring `docs/PHASE_B_OVERVIEW.md`'s shape and role. It is subordinate to
 > and linked from `ROADMAP.md`, which remains the canonical source for Stage 1's exit criteria and
 > approval boundaries. This overview does not itself authorise implementation of any sub-stage
-> beyond S1.1, S1.2, S1.3, and S1.5 (already implemented, see below) — each of S1.4 and S1.6 needs
-> its own separate approval before implementation begins.
+> beyond S1.1, S1.2, S1.3, S1.4, and S1.5 (already implemented, see below) — S1.6 needs its own
+> separate approval before implementation begins.
 >
-> **Last updated:** 2026-08-05 (S1.4 design proposed — see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md`;
-> design-only, not approved for implementation. Previously: 2026-08-04, S1.2 implemented — see
-> below; builds the promotion path the standalone consent-handler fix's `pending_sensitive_writes`
-> inbox always anticipated. Previously: 2026-08-03, standalone consent-handler fix implemented —
-> see "Standalone: consent-handler fix"
+> **Last updated:** 2026-08-05 (S1.4 implemented — see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for
+> the design and this document's S1.4 section for what was actually built. Previously: 2026-08-04,
+> S1.2 implemented — see below; builds the promotion path the standalone consent-handler fix's
+> `pending_sensitive_writes` inbox always anticipated. Previously: 2026-08-03, standalone
+> consent-handler fix implemented — see "Standalone: consent-handler fix"
 > below S1.6, not a Stage 1 sub-stage. 2026-08-01: S1.3 notification settings + mute/quiet-hours
 > implemented, following S1.1 Parking Brake API + UI and S1.5 governance audit/provenance view).
 
@@ -165,16 +165,60 @@ unreachable via the governed HTTP path until now.
 (not just in-memory), verified with a real browser (Playwright + the pre-installed headless
 Chromium).
 
-### S1.4 — `awaiting_response` queue (design proposed 2026-08-05, not approved, not implemented)
-**Purpose:** implement the obligation-state concept `COGNITIVE_RUNTIME.md` documents but that does
+### S1.4 — `awaiting_response` queue ✅ (Implemented 2026-08-05)
+**Purpose:** implement the obligation-state concept `COGNITIVE_RUNTIME.md` documents but that did
 not exist in code — opened/reminded/escalated/resolved, traversing Governance like any other
-action. The largest, most novel remaining sub-stage; needed its own design pass, not just CRUD.
-**Design pass complete:** see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for the proposed schema
-(new `awaiting_response_store.py`), state machine, Runtime Contract integration (a new
-`run_awaiting_response_through_runtime_contract()` seam, reusing `NotifySkill` for delivery rather
-than a second notification path), the escalation-drive trigger, and the narrow, fail-closed
-auto-resolution rule. **Deferred until its own separate approval to implement** — the design
-document itself is not that approval.
+action. The largest, most novel Stage 1 sub-stage; needed its own design pass, not just CRUD.
+**Design:** `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` (proposed 2026-08-05, then implemented
+per that design the same day, once explicitly approved).
+**Scope implemented:**
+- `bartholomew/kernel/awaiting_response_store.py` — new isolated store (`awaiting_response`/
+  `awaiting_response_audit` schema), mirroring `governance_store.py`'s shape: synchronous class,
+  `ensure_schema()`, atomic state+audit writes. `open()`/`remind()`/`escalate()`/`resolve()`
+  implement the design's state machine exactly; an already-resolved entry raises
+  `InvalidTransitionError` rather than allowing a further transition.
+- `runtime_contract.py`'s new `run_awaiting_response_through_runtime_contract()` seam: Governance is
+  ParkingBrake("skills") then an Identity Policy check against
+  `awaiting_response_<transition>` — deliberately **not** added to `_SELF_MAINTENANCE_DRIVES`,
+  since a reminder/escalation is genuine outbound contact, not kernel-internal housekeeping (design
+  doc Sec 5). Remind/escalate delivery delegates to the existing governed `NotifySkill` path, never
+  a second notification mechanism. A caller-input error (unknown `entry_id`, or a transition against
+  an already-resolved entry) raises directly rather than being folded into a governance-style denial.
+- `scheduler/drives.py`'s new `awaiting_response_check` drive (cadence `every:900`, matching
+  `self_check`): scans for entries due their next reminder/escalation and drives each individually
+  through the seam above — also deliberately **not** self-maintenance-exempt, for the same reason as
+  the seam's own kinds; needs its own `Identity.yaml` allowlist entry to run at all (see below).
+- `Identity.yaml`'s `tool_use.allowlist` gains five entries: the four seam kinds
+  (`awaiting_response_open/remind/escalate/resolve`) design doc Sec 5 named explicitly, plus
+  `awaiting_response_check` itself (an implementation-time addition beyond what Sec 5 enumerated —
+  without it the registered-but-non-exempt scheduler drive would be denied every tick under real
+  production config and the feature would never fire; flagged here per `Identity.yaml`'s own
+  `governance.change_control` section).
+- `daemon.py`'s `start()` constructs the shared `AwaitingResponseStore` off the event loop,
+  immediately after `governance_store` (same construction-timing rationale: blocking schema I/O in
+  `__init__`).
+- Chat-side auto-resolution (design doc Sec 7's narrow MVP path): `run_chat_through_runtime_contract`
+  additively resolves a single open chat-origin entry on the next reply. This codebase's
+  `WorkingMemoryManager` has no per-session/thread partitioning (confirmed by direct read), so "same
+  session/thread" degenerates to "the chat surface as a whole" — the narrowest faithful reading of
+  that heuristic given the current architecture. Two or more open entries stays an ambiguous match
+  that fails closed to "stays open," per the design's own non-negotiable invariant.
+- `bartholomew_api_bridge_v0_1/services/api/routes/awaiting_response.py` — `GET
+  /api/awaiting-response` (list, `status` filter), `POST /api/awaiting-response` (open; a
+  dev/manual-entry endpoint mirroring `/api/reflection/run`'s "manually trigger... for testing"
+  precedent, since deciding *when* a live chat/scheduler surface implies an obligation is further,
+  separate integration work design doc Sec 8 Q3 scopes out of S1.4), `POST
+  /api/awaiting-response/{id}/resolve`, `GET /api/awaiting-response/{id}/audit`. Reads go straight to
+  the store off-loop (read paths aren't governed actions, matching `governance.py`'s own read
+  routes); the two mutations route through the seam above.
+- UI: a "⏳ Awaiting Response" card in `ui/minimal/index.html`, same auto-refresh/`r.ok`-checking
+  convention as the other Stage 1 cards.
+**Exit condition met:** every transition traverses the Runtime Contract seam (no direct store write
+from a route or skill); reminder/escalation delivery reuses `NotifySkill`; an ambiguous
+auto-resolution match always fails closed; verified by `tests/test_awaiting_response_store.py`,
+`tests/test_runtime_contract_awaiting_response.py`, `tests/test_awaiting_response_api.py` (the last
+against the real app + real `Identity.yaml`, proving the allowlist additions are actually
+sufficient), and `tests/test_scheduler_drive_convergence.py`'s updated exemption-set tests.
 
 ### S1.5 — Audit / provenance view ✅ (Implemented 2026-08-01)
 **Purpose:** read `governance_audit` (now including `actor`, per S1.1) back out through an API +

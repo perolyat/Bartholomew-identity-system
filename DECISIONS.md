@@ -746,3 +746,45 @@
   clean -- see `docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md` for the complete record. This
   is Phase B's final stage; approval of B9 authorises no further Phase B work.
 - **Date:** 2026-08-01 (Phase B stage B9)
+
+## Decision: S1.4's `awaiting_response_check` scheduler drive is deliberately not self-maintenance-exempt, requiring its own `Identity.yaml` allowlist entry beyond the design doc's four named seam kinds
+- **Decision:** implemented `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` as approved, with one
+  implementation-time judgment call the design document itself did not fully resolve: whether the
+  new scheduler drive that scans for due reminders/escalations (`awaiting_response_check`) should be
+  added to `runtime_contract._SELF_MAINTENANCE_DRIVES` (like `self_check`/`curiosity_probe`/
+  `reflection_micro`/`fts_optimize`) or evaluated for real by the Identity Policy check. The design
+  doc's own Sec 11 verify-plan comment ("`awaiting_response_check` NOT in `_SELF_MAINTENANCE_DRIVES`")
+  settled the *which*, but its Sec 5 "known dependency" only named the four seam kinds
+  (`awaiting_response_open/remind/escalate/resolve`) as needing `Identity.yaml` allowlist additions
+  -- not the scheduler task_id itself. Taken literally, that would leave the outer scan drive
+  registered but permanently denied under real production `Identity.yaml` (`default_allowed: false`,
+  and no entry named `awaiting_response_check`), making the feature dead on arrival: reminders and
+  escalations would never fire because the scan that discovers due entries never runs.
+- **Resolution:** added `awaiting_response_check` as a fifth `tool_use.allowlist` entry, alongside
+  the four seam kinds design doc Sec 5 already named, flagged here per `Identity.yaml`'s own
+  `governance.change_control` section (same explicit-flagging treatment S1.3's `"notify"` addition
+  and S1.4's own four seam-kind additions got).
+- **Alternatives:** (a) Add `awaiting_response_check` to `_SELF_MAINTENANCE_DRIVES` instead --
+  rejected: it contradicts the design doc's own explicit verify-plan statement, and while the outer
+  scan itself contacts no one directly, treating it as exempt would mean the *decision* of whether to
+  remind/escalate a specific entry is made under a scheduler-cadence exemption even though the actual
+  outbound contact a moment later is correctly gated for real -- the design's stated intent was for
+  this surface's entire path, not just its terminal step, to be a conscious inclusion rather than a
+  default carve-out. (b) Leave the drive registered without the allowlist addition, accepting it
+  never fires until a human explicitly allowlists it later -- rejected: nothing in the design or in
+  `ROADMAP.md`'s Stage 1 exit criteria calls for shipping the queue as an inert placeholder, and an
+  always-denied registered drive is indistinguishable from a bug to anyone reading production logs.
+- **Why:** the feature's own purpose (obligations "aren't silently forgotten," per
+  `COGNITIVE_RUNTIME.md`) is not met if the mechanism that notices overdue obligations never runs.
+  Functional correctness under real `Identity.yaml` was treated as a stronger constraint than a
+  literal reading of which specific allowlist entries the design prose enumerated by name.
+- **Consequences:** `tests/test_scheduler_drive_convergence.py`'s `_SELF_MAINTENANCE_DRIVES`
+  exemption-equality test was updated (not weakened) to name `awaiting_response_check` as a
+  conscious, recorded exception rather than silently breaking; new tests prove it is genuinely denied
+  without the allowlist entry and genuinely allowed with it, mirroring the existing
+  `TestPolicyDecisionIsRealForNonExemptDrives` pattern for an arbitrary non-exempt drive kind.
+  `tests/test_awaiting_response_api.py` runs its assertions against the real app and real
+  `Identity.yaml` (not a permissive test `IdentityContext`), which is what actually caught and
+  confirmed this dependency was resolved correctly, not merely asserted. See
+  `docs/STAGE_1_OVERVIEW.md`'s S1.4 section for the complete implementation record.
+- **Date:** 2026-08-05 (Stage 1, S1.4)

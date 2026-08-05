@@ -343,7 +343,12 @@ async def test_failed_integrity_check_aborts_startup_as_unsafe(config_files, mon
     assert json.loads(recovery) == []  # repair never attempted -- check failed first
     assert outcome == "failed"
     # Confirms exactly how far startup got before aborting.
-    assert set(json.loads(started)) == {"process_lock", "mem", "governance_store"}
+    assert set(json.loads(started)) == {
+        "process_lock",
+        "mem",
+        "governance_store",
+        "awaiting_response_store",
+    }
     assert "scheduler_schema" in json.loads(not_started)
 
 
@@ -375,7 +380,12 @@ async def test_failed_startup_records_incident_with_accurate_progress(config_fil
     assert lifecycle_state == "failed"
     assert exc_type == "RuntimeError"
     assert prev_clean is None  # first-ever run, nothing to have an opinion about
-    assert set(json.loads(started)) == {"process_lock", "mem", "governance_store"}
+    assert set(json.loads(started)) == {
+        "process_lock",
+        "mem",
+        "governance_store",
+        "awaiting_response_store",
+    }
     assert "scheduler_schema" in json.loads(not_started)
     assert "skills" in json.loads(not_started)
     assert outcome == "failed"

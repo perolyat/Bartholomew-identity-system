@@ -177,6 +177,19 @@
     <div id="pending-consent-list"></div>
   </div>
 
+  <!-- Stage 1 (S1.4): Awaiting Response -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">⏳ Awaiting Response</h3>
+      <button onclick="refreshAwaitingResponse()">Refresh</button>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <input id="awaiting-response-subject" placeholder="What are you waiting on a reply about?" onkeydown="if(event.key==='Enter'){openAwaitingResponse()}"/>
+      <button onclick="openAwaitingResponse()">+ Add</button>
+    </div>
+    <div id="awaiting-response-list"></div>
+  </div>
+
   <!-- Stage 3: Self-State Panel -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
@@ -661,6 +674,82 @@
       }
     }
 
+    // === Stage 1 (S1.4): Awaiting Response ===
+    async function refreshAwaitingResponse(){
+      const el = document.getElementById("awaiting-response-list");
+      try{
+        const r = await fetch(API + "/api/awaiting-response?limit=50");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">Failed to load awaiting-response queue: HTTP ${r.status}</div>`;
+          return;
+        }
+        const j = await r.json();
+        const entries = (j.entries || []).filter(e => e.status !== 'resolved');
+
+        if(entries.length === 0){
+          el.innerHTML = '<div class="empty-state">Nothing awaiting a reply. You\'re all caught up! ✨</div>';
+          return;
+        }
+
+        el.innerHTML = entries.map(e => `
+          <div class="nudge-item">
+            <div class="row" style="justify-content:space-between">
+              <span class="nudge-kind">${escapeHtml(e.status)} · ${escapeHtml(e.origin_surface)}</span>
+              <div class="row">
+                <button class="dismiss" onclick="resolveAwaitingResponse(${e.id})">✕ Resolve</button>
+              </div>
+            </div>
+            <div class="nudge-msg">${escapeHtml(e.subject)}</div>
+            <div class="nudge-ts">
+              opened: ${escapeHtml(e.opened_at)} ·
+              due: ${escapeHtml(e.due_at || '—')} ·
+              reminders: ${e.reminder_count}
+            </div>
+          </div>
+        `).join('');
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Failed to load awaiting-response queue: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function openAwaitingResponse(){
+      const input = document.getElementById("awaiting-response-subject");
+      const subject = input.value.trim();
+      if(!subject) return;
+      try{
+        const r = await fetch(API + "/api/awaiting-response", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ subject, origin_surface: "chat", actor: "user" })
+        });
+        if(!r.ok){
+          alert("Failed to add: HTTP " + r.status);
+          return;
+        }
+        input.value = "";
+        await refreshAwaitingResponse();
+      }catch(e){
+        alert("Failed to add: " + e);
+      }
+    }
+
+    async function resolveAwaitingResponse(id){
+      try{
+        const r = await fetch(API + `/api/awaiting-response/${id}/resolve`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ resolution: "user_dismissed", actor: "user" })
+        });
+        if(!r.ok){
+          alert("Failed to resolve: HTTP " + r.status);
+          return;
+        }
+        await refreshAwaitingResponse();
+      }catch(e){
+        alert("Failed to resolve: " + e);
+      }
+    }
+
     // === Stage 3: Self-State ===
     async function refreshSelfState(){
       try{
@@ -1066,6 +1155,7 @@
     refreshAudit();
     refreshNotificationSettings();
     refreshPendingConsent();
+    refreshAwaitingResponse();
     refreshSelfState();
     refreshPersona();
     refreshEpisodes();
@@ -1080,6 +1170,7 @@
     setInterval(refreshAudit, 30000);      // Governance audit every 30s
     setInterval(refreshNotificationSettings, 30000);  // Notification settings every 30s
     setInterval(refreshPendingConsent, 30000);        // Pending memory consent every 30s
+    setInterval(refreshAwaitingResponse, 30000);       // Awaiting-response queue every 30s
   </script>
 </body>
 </html>
