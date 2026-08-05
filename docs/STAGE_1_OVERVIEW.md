@@ -7,9 +7,11 @@
 > beyond S1.1, S1.2, S1.3, and S1.5 (already implemented, see below) — each of S1.4 and S1.6 needs
 > its own separate approval before implementation begins.
 >
-> **Last updated:** 2026-08-04 (S1.2 implemented — see below; builds the promotion path the
-> standalone consent-handler fix's `pending_sensitive_writes` inbox always anticipated. Previously:
-> 2026-08-03, standalone consent-handler fix implemented — see "Standalone: consent-handler fix"
+> **Last updated:** 2026-08-05 (S1.4 design proposed — see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md`;
+> design-only, not approved for implementation. Previously: 2026-08-04, S1.2 implemented — see
+> below; builds the promotion path the standalone consent-handler fix's `pending_sensitive_writes`
+> inbox always anticipated. Previously: 2026-08-03, standalone consent-handler fix implemented —
+> see "Standalone: consent-handler fix"
 > below S1.6, not a Stage 1 sub-stage. 2026-08-01: S1.3 notification settings + mute/quiet-hours
 > implemented, following S1.1 Parking Brake API + UI and S1.5 governance audit/provenance view).
 
@@ -163,11 +165,16 @@ unreachable via the governed HTTP path until now.
 (not just in-memory), verified with a real browser (Playwright + the pre-installed headless
 Chromium).
 
-### S1.4 — `awaiting_response` queue (scoped only, not implemented)
+### S1.4 — `awaiting_response` queue (design proposed 2026-08-05, not approved, not implemented)
 **Purpose:** implement the obligation-state concept `COGNITIVE_RUNTIME.md` documents but that does
 not exist in code — opened/reminded/escalated/resolved, traversing Governance like any other
-action. The largest, most novel remaining sub-stage; needs its own design pass, not just CRUD.
-**Deferred until its own separate approval.**
+action. The largest, most novel remaining sub-stage; needed its own design pass, not just CRUD.
+**Design pass complete:** see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for the proposed schema
+(new `awaiting_response_store.py`), state machine, Runtime Contract integration (a new
+`run_awaiting_response_through_runtime_contract()` seam, reusing `NotifySkill` for delivery rather
+than a second notification path), the escalation-drive trigger, and the narrow, fail-closed
+auto-resolution rule. **Deferred until its own separate approval to implement** — the design
+document itself is not that approval.
 
 ### S1.5 — Audit / provenance view ✅ (Implemented 2026-08-01)
 **Purpose:** read `governance_audit` (now including `actor`, per S1.1) back out through an API +
