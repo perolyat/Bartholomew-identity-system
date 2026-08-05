@@ -622,7 +622,12 @@
               </div>
             </div>
             <div class="nudge-msg">${escapeHtml(e.value)}</div>
-            <div class="nudge-ts">requested: ${escapeHtml(e.requested_at)}</div>
+            <div class="nudge-ts">
+              requested: ${escapeHtml(e.requested_at)} ·
+              ${e.reason === 'rule_consent'
+                ? `📋 requires consent${e.privacy_class ? ` (${escapeHtml(e.privacy_class)})` : ''}`
+                : '🔒 sensitive keyword'}
+            </div>
           </div>
         `).join('');
       }catch(e){

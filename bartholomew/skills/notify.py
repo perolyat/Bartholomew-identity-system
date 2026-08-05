@@ -13,7 +13,7 @@ import logging
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -457,12 +457,18 @@ class NotifySkill(SkillBase):
             return perm_error
 
         until = params.get("until")
+        normalized_until = None
+        if until is not None:
+            normalized_until = self._normalize_until(until)
+            if normalized_until is None:
+                return SkillResult.fail("until must be a valid ISO-8601 timestamp")
+
         self._muted = True
-        self._muted_until = until
+        self._muted_until = normalized_until
         self._save_settings()
 
         return SkillResult.ok(
-            data={"muted": True, "muted_until": until},
+            data={"muted": True, "muted_until": normalized_until},
             message="Notifications muted",
         )
 
@@ -506,6 +512,26 @@ class NotifySkill(SkillBase):
         except (ValueError, AttributeError):
             return False
 
+    @staticmethod
+    def _normalize_until(value: str) -> str | None:
+        """
+        Parse a mute-expiration timestamp and normalize it to a UTC
+        ISO-8601 string with a 'Z' suffix. `_is_muted()` used to compare
+        `muted_until` lexicographically against a same-format `now` string
+        -- correct only when every stored value already uses that exact
+        format. An offset-aware ISO timestamp (e.g. "...-05:00") or an
+        unparseable string would compare incorrectly or never expire.
+        Normalizing at write time keeps the later comparison unambiguous.
+        Returns None if `value` isn't a parseable ISO-8601 timestamp.
+        """
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     # -------------------------------------------------------------------------
     # Quiet Hours / Mute
     # -------------------------------------------------------------------------
@@ -533,8 +559,15 @@ class NotifySkill(SkillBase):
         if not self._muted:
             return False
         if self._muted_until:
-            now = datetime.utcnow().isoformat() + "Z"
-            if now >= self._muted_until:
+            try:
+                until_dt = datetime.fromisoformat(self._muted_until.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                until_dt = None
+            # An unparseable stored value (corrupt/legacy data) is treated
+            # as already expired rather than an indefinite mute -- fails
+            # toward notifications resuming, not toward a mute nothing can
+            # clear.
+            if until_dt is None or datetime.now(timezone.utc) >= until_dt:
                 self._muted = False
                 self._muted_until = None
                 self._save_settings()

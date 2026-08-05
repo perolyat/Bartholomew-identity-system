@@ -593,12 +593,13 @@ approval before work begins — this list records sequencing, not authorisation)
    onboarding — see `ROADMAP.md`'s Stage 1 section). **In progress as of 2026-08-01:** Phase B
    merged (PR #33); Stage 1 is now staged as sub-stages S1.0–S1.6 (`docs/STAGE_1_OVERVIEW.md`),
    with **S1.1 (Parking Brake API + UI), S1.3 (notification settings + mute/quiet-hours), and S1.5
-   (governance audit/provenance view) implemented** — S1.2, S1.4, and S1.6 remain scoped-only, each
+   (governance audit/provenance view) implemented** — S1.4 and S1.6 remain scoped-only, each
    requiring its own separate approval. **2026-08-03:** a standalone, adjacent-but-not-S1.2 fix
    landed — sensitive-content memory writes are now queued for review instead of silently
    discarded when no consent handler is registered (see `docs/STAGE_1_OVERVIEW.md`'s "Standalone:
-   consent-handler fix"). S1.2 itself remains blocked on a separate, unfixed
-   `memory_rules.yaml`/`should_store()` gap.
+   consent-handler fix"). **2026-08-04: S1.2 (consent/approval inbox) implemented** — closes the
+   separate `memory_rules.yaml`/`should_store()` `ask_before_store` gap, reusing the
+   consent-handler fix's `pending_sensitive_writes` inbox rather than a parallel one.
 4. **Stage 5 / S5.1 remains paused**, now sequenced *after* Stage 1 rather than before it, pending
    its own explicit approval. The locked internal sequence (safety scaffolding before live
    proactivity) is recorded under P3 above and in `ROADMAP.md`. Live proactive *reflection*
