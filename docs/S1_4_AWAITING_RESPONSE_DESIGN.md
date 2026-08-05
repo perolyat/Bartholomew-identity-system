@@ -102,19 +102,36 @@ shape (this is a kernel-internal/scheduler-adjacent surface, not a user-facing c
 - **Stage 3 (Executive):** `CandidateAction` kind — one of `awaiting_response_open`,
   `awaiting_response_remind`, `awaiting_response_escalate`, `awaiting_response_resolve`.
 - **Stage 4 (Governance):** ParkingBrake(`"skills"` scope — no new brake scope; see §8 open
-  question), then the standard additive Identity Policy check. **Not** added to
-  `_SELF_MAINTENANCE_DRIVES`-equivalent exemption: unlike `self_check`/`curiosity_probe`, a
-  reminder/escalation is genuine outbound contact about specific user content, so it must be
-  evaluated for real, same posture the module docstring already applies to any drive outside that
-  frozen exempt set.
+  question), then the standard additive Identity Policy check against the `CandidateAction.kind`
+  itself (`evaluate_tool_policy(identity_context, candidate_action.kind)`, same call chat/drives/
+  device seams already make). **Not** added to `_SELF_MAINTENANCE_DRIVES`-equivalent exemption:
+  unlike `self_check`/`curiosity_probe`, a reminder/escalation is genuine outbound contact about
+  specific user content, so it must be evaluated for real, same posture the module docstring
+  already applies to any drive outside that frozen exempt set.
+  **Known dependency, not yet satisfied (flagged in review, 2026-08-05):** because it's evaluated
+  for real, `evaluate_tool_policy()` checks the *seam's own* four kinds
+  (`awaiting_response_open/remind/escalate/resolve`) against `Identity.yaml`'s `tool_use.allowlist`
+  — a separate check from whatever `NotifySkill`'s delegated call underneath it is evaluated
+  against (see Stage 5+6 below). Production `Identity.yaml` today has `default_allowed: false` and
+  allowlists only `web_fetch`, `browser_action`, and `notify` (S1.3's addition) — none of the four
+  new kinds. Unless added, every transition would be denied by the Governance stage before the
+  delegated `notify.send` call is ever reached, regardless of `notify` already being allowlisted.
+  This mirrors S1.3's own "blocking discovery" exactly (see `docs/STAGE_1_OVERVIEW.md`'s S1.3
+  section) and must be resolved the same way: implementation adds all four kinds to
+  `Identity.yaml`'s `tool_use.allowlist`, flagged before committing per `Identity.yaml`'s own
+  `governance.change_control` section (the same explicit-approval treatment S1.3's `"notify"`
+  addition got) — not a silent default-allow, and not deferred as an open question, since the
+  answer here is unambiguous.
 - **Stage 5+6 (Capability + Execution):** the store mutation itself (open/remind/escalate/resolve
   on `awaiting_response_store.py`). For `remind`/`escalate` specifically, delivery is **delegated
   to the existing governed `NotifySkill` path** (`run_skill_through_runtime_contract(registry,
   "notify", "send", {...})`) rather than a second notification mechanism — reusing exactly the
   machinery S1.3 built (quiet-hours/mute already enforced there), per this project's "one authority
-  per architectural concept" rule. This also means the `"notify"` skill's `Identity.yaml`
-  `tool_use.allowlist` entry S1.3 already added is a **satisfied dependency**, not new blocking
-  work.
+  per architectural concept" rule. `SkillRegistry.execute_action()` runs its *own* independent
+  Governance pass on `skill_id="notify"` (brake + `skill_permissions.py` + Identity Policy on
+  `"notify"` itself) — this is the check S1.3's allowlist addition satisfies, and it remains a
+  satisfied dependency for that inner call specifically. It does not substitute for the outer
+  seam's own kind-based check above; both must independently allow the transition.
 - **Stage 7+8 (Reflection + Memory):** one `ActionReflection` per transition into the existing
   shared sink (`record_action_reflection`), same as every other seam — closes the "every state
   transition... remain auditable" requirement without a bespoke audit mechanism competing with the
