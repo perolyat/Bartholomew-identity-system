@@ -11,9 +11,17 @@
 > `propose` from `deliver` unambiguously).
 >
 > **Status:** proposed 2026-08-06, revised 2026-08-06 per reviewer feedback (section 9, "Cadence
-> produces eligibility, not delivery" — the expiry-policy exemption in section 7 is approved;
-> section 9's eligibility/delivery separation is added and awaits final confirmation). Not yet
-> approved as a whole, not yet implemented.
+> produces eligibility, not delivery"), **approved and implemented 2026-08-06.** One
+> implementation-time judgment call worth noting: section 7's approved `expire`-transition
+> exemption text names only "the Identity Policy gate," but implementing it surfaced the identical
+> stuck-row risk against gate 3 (per-category consent) — revoked consent after approval would
+> otherwise block `expire` exactly the way denied policy would. Extended the same exemption to
+> cover gate 3 too, for the same reasoning, rather than leaving a half-fixed gap; documented inline
+> at the exemption's definition
+> (`_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS` in `runtime_contract.py`) and covered by a regression
+> test (`tests/test_runtime_contract_initiative.py::test_expire_bypasses_identity_policy_and_
+> consent`, `tests/test_initiative_sweep_drive.py::test_sweep_expires_even_when_category_consent_
+> and_policy_deny`).
 >
 > **Scope of this pass:** the typed cadence model (interval, window, daily, weekly), its parsing/
 > validation/next-run computation, wiring it into the existing scheduler loop with no schema

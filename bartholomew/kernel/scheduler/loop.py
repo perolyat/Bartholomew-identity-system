@@ -165,6 +165,7 @@ async def run_scheduler(ctx: Any) -> None:
                             cadence_str=cadence_str,
                             now_ts=now_ts,
                             window_state=due_task["window_state"],
+                            tz=getattr(ctx, "tz", None),
                         )
                         await store.update_next_run(
                             task_id,
@@ -221,6 +222,7 @@ async def run_scheduler(ctx: Any) -> None:
                     cadence_str=cadence_str,
                     now_ts=now_ts,
                     window_state=due_task["window_state"],
+                    tz=getattr(ctx, "tz", None),
                 )
 
                 # Update scheduled task

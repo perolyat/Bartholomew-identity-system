@@ -139,7 +139,7 @@ concept" entry; this file is the reference copy going forward.)
 |---|---|---|
 | Identity | Identity System (`identity_interpreter`) | YAML today (`Identity.yaml`), database tomorrow |
 | Planning | Kernel Executive | `daemon.py` / `planner.py` / `scheduler/*` |
-| Initiative | Kernel Executive | `initiative_store.py`, `run_initiative_through_runtime_contract()` (S5.1, `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md`, architecture approved 2026-08-06, not yet implemented) |
+| Initiative | Kernel Executive | `initiative_store.py`, `run_initiative_through_runtime_contract()` (S5.1/S5.2, implemented 2026-08-06 — the generic chassis + Typed Cadence + `initiative_sweep`; no concrete proactive drive exists yet, that's S5.7+) |
 | Memory | Memory Substrate | SQLite now, Postgres later |
 | Experience | Experience Kernel | `experience_kernel.py`, `narrator.py`, `working_memory.py` |
 | Governance | Governance (`ParkingBrake` + `skill_permissions.py`) | — |

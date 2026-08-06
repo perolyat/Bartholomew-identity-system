@@ -9,6 +9,47 @@ from dataclasses import dataclass
 from typing import Any
 
 
+@dataclass(frozen=True)
+class IntervalCadence:
+    """S5.2 Typed Cadence: the existing 'every:<seconds>' shape, given a
+    real type. See docs/S5_2_TYPED_CADENCE_DESIGN.md Sec 3."""
+
+    seconds: int
+
+
+@dataclass(frozen=True)
+class WindowCadence:
+    """S5.2 Typed Cadence: the existing 'window:<seconds>:<times>' shape,
+    given a real type. See docs/S5_2_TYPED_CADENCE_DESIGN.md Sec 3."""
+
+    window_seconds: int
+    times: int
+
+
+@dataclass(frozen=True)
+class DailyCadence:
+    """S5.2 Typed Cadence: fire once per wall-clock day at hour:minute, in
+    the daemon's configured timezone (KernelDaemon.tz, config/kernel.yaml's
+    `timezone` key). See docs/S5_2_TYPED_CADENCE_DESIGN.md Sec 3/4."""
+
+    hour: int  # 0-23
+    minute: int  # 0-59
+
+
+@dataclass(frozen=True)
+class WeeklyCadence:
+    """S5.2 Typed Cadence: fire once per wall-clock week at
+    day_of_week/hour:minute, in the daemon's configured timezone. See
+    docs/S5_2_TYPED_CADENCE_DESIGN.md Sec 3/4."""
+
+    day_of_week: int  # 0=Monday .. 6=Sunday (Python date.weekday() convention)
+    hour: int
+    minute: int
+
+
+Cadence = IntervalCadence | WindowCadence | DailyCadence | WeeklyCadence
+
+
 @dataclass
 class Tick:
     """Record of a single drive execution."""

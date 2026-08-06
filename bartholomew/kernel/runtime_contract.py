@@ -83,8 +83,21 @@ _CONVERSATIONAL_KINDS = frozenset({"chat_response"})
 # a drive that sends something on the user's behalf) is still evaluated for
 # real -- the same room _CONVERSATIONAL_KINDS leaves for a future
 # tool-shaped chat action.
+#
+# "initiative_sweep" (S5.2, docs/S5_2_TYPED_CADENCE_DESIGN.md Sec 6) joins
+# this set for the same reason: it only walks the Initiative store for rows
+# already past their expires_at and transitions them to "expired" -- it
+# never proposes new outbound contact, only closes out old rows. Unlike
+# "awaiting_response_check" below, this is the *drive's own tick* being
+# exempted here; the `expire` transition it dispatches has its own,
+# separate exemption from Identity Policy inside
+# run_initiative_through_runtime_contract() itself
+# (_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS), since a scheduler drive being
+# self-maintenance-shaped and an individual Initiative transition being
+# self-maintenance-shaped are different questions answered in different
+# places (see that constant's own docstring).
 _SELF_MAINTENANCE_DRIVES = frozenset(
-    {"self_check", "curiosity_probe", "reflection_micro", "fts_optimize"},
+    {"self_check", "curiosity_probe", "reflection_micro", "fts_optimize", "initiative_sweep"},
 )
 
 
@@ -1185,3 +1198,435 @@ async def _maybe_auto_resolve_awaiting_response(
         )
     except Exception:
         logger.exception("Failed to auto-resolve awaiting_response from a chat reply")
+
+
+# =============================================================================
+# Stage 5, S5.1/S5.2: the Initiative Engine (see
+# docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md and
+# docs/S5_2_TYPED_CADENCE_DESIGN.md). Every propose/defer/deliver/resolve/
+# expire/cancel/supersede transition traverses this same Observation ->
+# Interpretation -> Executive -> Governance -> Capability -> Execution ->
+# Reflection -> Memory shape -- the generic chassis every future proactive
+# behaviour (check-in, reminder, review, next-best-action, maintenance,
+# wellness) is built on, instead of each getting its own feature-specific
+# implementation.
+# =============================================================================
+
+_INITIATIVE_TRANSITIONS = frozenset(
+    {"propose", "defer", "deliver", "resolve", "expire", "cancel", "supersede"},
+)
+
+# Transitions that can never represent new outbound contact -- by
+# construction, not convenience (S5.2 design doc Sec 7, the narrow fix
+# approved by the project owner 2026-08-06): "expire" only closes out an
+# initiative already past its TTL. Exempted from BOTH the Identity Policy
+# gate and the per-category consent gate below -- extending the approved
+# fix to the consent gate for the identical "stuck row" reasoning it was
+# written for: if a user revokes a category's consent after one of its
+# initiatives was already approved, that initiative's own `expire`
+# transition would otherwise be blocked by the very gate it exists to stop
+# being subject to, the same failure mode the approved fix closed for
+# Identity Policy. `propose`, `defer`, `deliver`, `resolve`, `cancel`, and
+# `supersede` remain evaluated for real, every time, no exemption.
+_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS = frozenset({"expire"})
+
+
+@dataclass(frozen=True)
+class ProactiveIntent:
+    """Stage 2.5, between Interpretation and Executive (S5.1 design doc Sec
+    7): structured classification of a proposed Initiative, so Governance's
+    category-scoped gates have something stable to key off of instead of
+    free text. In this implementation, classification means accepting and
+    normalising the caller-supplied category/urgency/sensitivity --
+    deriving them from content instead is future work, not designed here."""
+
+    category: str
+    urgency: str = "normal"
+    sensitivity: bool = False
+
+
+def classify_proactive_intent(
+    category: str,
+    urgency: str = "normal",
+    sensitivity: bool = False,
+) -> ProactiveIntent:
+    from . import initiative_store as initiative_store_module
+
+    if category not in initiative_store_module.VALID_CATEGORIES:
+        raise ValueError(
+            f"category must be one of {sorted(initiative_store_module.VALID_CATEGORIES)}, "
+            f"got {category!r}",
+        )
+    if urgency not in {"low", "normal", "high"}:
+        raise ValueError(f"urgency must be one of low/normal/high, got {urgency!r}")
+    return ProactiveIntent(category=category, urgency=urgency, sensitivity=sensitivity)
+
+
+@dataclass
+class InitiativeRuntimeResult:
+    """Outcome of one Initiative transition through the Runtime Contract.
+    `outcome` is either the initiative's resulting status ("approved",
+    "denied", "deferred", "delivered", "accepted", "dismissed", "snoozed",
+    "expired", "cancelled", "superseded") or one of "parking_brake_denied",
+    "governance_denied", "rejected" (caller-input error, also raised),
+    "error"."""
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    outcome: str
+    reason: str | None
+    initiative: Any
+
+
+async def _record_initiative_reflection(
+    ctx: Any,
+    candidate_action: CandidateAction,
+    outcome: str,
+    initiative: Any,
+    reason: str | None,
+) -> None:
+    """Exactly one ActionReflection per transition -- mirrors
+    _record_awaiting_response_reflection()'s rationale: the
+    initiative_audit table is the queryable per-initiative detail view;
+    this is the cross-surface stream."""
+    details: dict[str, Any] = {}
+    if initiative is not None:
+        details["initiative_id"] = initiative.id
+        details["category"] = initiative.category
+        details["priority"] = initiative.priority
+        details["confidence"] = initiative.confidence
+        details["governance_decision"] = initiative.governance_decision
+    if reason:
+        details["reason"] = reason
+    reflection = ActionReflection(
+        surface="initiative",
+        action=candidate_action.kind,
+        outcome=outcome,
+        summary=f"Initiative ({candidate_action.kind}): {outcome}",
+        details=details,
+    )
+    await record_action_reflection(getattr(ctx, "mem", None), reflection)
+
+
+async def _deliver_initiative_notification(ctx: Any, initiative: Any) -> None:
+    """Delivery delegates to the existing governed NotifySkill path (S5.1
+    design doc Sec 7), reused exactly as awaiting_response's remind/
+    escalate transitions already do -- no new delivery channel.
+    SkillRegistry.execute_action() runs its own independent Governance pass
+    on skill_id="notify"; that is additive to, not a substitute for, this
+    seam's own gates above. Best-effort: a delivery failure must not undo
+    the state transition that already committed."""
+    if initiative is None:
+        return
+    try:
+        await run_skill_through_runtime_contract(
+            ctx.skill_registry,
+            "notify",
+            "send",
+            {
+                "message": initiative.rationale,
+                "title": f"Bartholomew: {initiative.kind}",
+                "priority": "high" if initiative.priority == "high" else "normal",
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to deliver initiative %s notification for id %s",
+            initiative.kind,
+            getattr(initiative, "id", None),
+        )
+
+
+def _record_initiative_working_memory_note(ctx: Any, initiative: Any) -> None:
+    """On deliver, add a Working Memory item tagged source="initiative"
+    (S5.1 design doc Sec 10), mirroring chat's own source="chat" tagging,
+    so a delivered proactive suggestion feeds back into Experience Kernel
+    continuity instead of being invisible to it. Best-effort, additive --
+    absent working_memory is a silent no-op."""
+    working_memory = getattr(ctx, "working_memory", None)
+    if working_memory is None or initiative is None:
+        return
+    try:
+        working_memory.add(
+            content=f"Bartholomew (proactive, {initiative.kind}): {initiative.rationale}",
+            source="initiative",
+            tags=["initiative", initiative.kind],
+        )
+    except Exception:
+        logger.exception(
+            "Failed to record Working Memory item for initiative %s",
+            initiative.id,
+        )
+
+
+async def run_initiative_through_runtime_contract(
+    ctx: Any,
+    transition: str,
+    *,
+    initiative_id: int | None = None,
+    kind: str | None = None,
+    category: str | None = None,
+    urgency: str = "normal",
+    sensitivity: bool = False,
+    priority: str = "normal",
+    confidence: float | None = None,
+    rationale: str | None = None,
+    payload: dict[str, Any] | None = None,
+    origin_drive: str | None = None,
+    due_at: str | None = None,
+    expires_at: str | None = None,
+    parent_initiative_id: int | None = None,
+    depends_on: list[int] | None = None,
+    resolution: str | None = None,
+    reason: str | None = None,
+    actor: str | None = None,
+) -> InitiativeRuntimeResult:
+    """
+    Trace one Initiative transition through the Runtime Contract seam.
+    `transition` is one of "propose" (requires kind, category, confidence,
+    rationale, origin_drive, expires_at), "defer" (requires initiative_id;
+    `reason` recommended), "deliver"/"cancel"/"supersede" (require
+    initiative_id), "resolve" (requires initiative_id + resolution;
+    `due_at` required when resolution="snoozed"), "expire" (requires
+    initiative_id).
+
+    `ctx` needs `.mem.db_path` and `.initiative_store`
+    (bartholomew.kernel.initiative_store.InitiativeStore) at minimum --
+    typically a KernelDaemon instance. `.governance_store`/
+    `.blocking_executor`/`.identity_context`/`.skill_registry`/
+    `.working_memory` are consulted via getattr with the same additive
+    fallbacks every other seam function here uses.
+
+    Governance is three independent gates, all before any store write
+    (S5.1 design doc Sec 8), except for `expire`
+    (see _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS's own docstring for why):
+      1. ParkingBrake("initiative") -- a scope dedicated to Initiative
+         Engine proposals, distinct from "scheduler" (which already gates
+         whether the originating drive tick runs at all). Applies even to
+         `expire`: an operator-engaged emergency stop must still hold.
+      2. Identity Context -> Policy Decision, evaluated against
+         f"allow_proactive.{category}" -- deliberately NOT exempted for any
+         transition except `expire`.
+      3. Per-category user consent (initiative_consent table,
+         default-off) -- an end-user-level opt-in, distinct from gate 2's
+         operator-level allowlist. No UI/API exists yet to grant it (S5.3),
+         so every category is effectively denied here until then -- the
+         intended "default-OFF consent... a prerequisite for live
+         delivery" behaviour, not a bug in the absence of that UI.
+
+    A caller-input error (unknown initiative_id, a transition attempted
+    against an initiative not in that transition's allowed pre-state, or
+    an invalid category/priority/confidence/resolution) raises
+    InitiativeNotFoundError/InvalidTransitionError directly -- the caller's
+    mistake, not a governance denial or an execution failure.
+    """
+    from . import initiative_store as initiative_store_module
+
+    if transition not in _INITIATIVE_TRANSITIONS:
+        raise ValueError(
+            f"transition must be one of {sorted(_INITIATIVE_TRANSITIONS)}, got {transition!r}",
+        )
+
+    store = ctx.initiative_store
+    executor = getattr(ctx, "blocking_executor", None)
+
+    existing = None
+    if initiative_id is not None:
+        existing = await run_off_loop(store.get, initiative_id, executor=executor)
+
+    intent: ProactiveIntent | None = None
+    if transition == "propose":
+        if not kind or not origin_drive or not rationale or confidence is None or not expires_at:
+            raise ValueError(
+                "initiative 'propose' requires kind, category, confidence, rationale, "
+                "origin_drive, and expires_at",
+            )
+        intent = classify_proactive_intent(category or "", urgency, sensitivity)
+        prompt = rationale
+    else:
+        if initiative_id is None:
+            raise ValueError(f"initiative {transition!r} requires initiative_id")
+        if existing is None:
+            # Caller's mistake, not a governance denial: every non-propose
+            # transition needs a real row both to execute and to know
+            # which category gates 2/3 below should evaluate. Raised here,
+            # before any Governance work, rather than left to surface (or
+            # be masked by an "unknown"-category gate denial) once the
+            # store call itself is reached.
+            from . import initiative_store as initiative_store_module
+
+            raise initiative_store_module.InitiativeNotFoundError(
+                f"No initiative {initiative_id}",
+            )
+        prompt = existing.rationale
+        intent = ProactiveIntent(category=existing.category)
+
+    action_category = intent.category if intent is not None else "unknown"
+    action_kind = f"initiative_{transition}_{action_category}"
+    action_ref = initiative_id if initiative_id is not None else (kind or "new")
+
+    observation = Observation(source="scheduler", raw_content=f"{transition}:{action_ref}")
+    interpretation = Interpretation(observation=observation, prompt=prompt)
+    candidate_action = CandidateAction(kind=action_kind, interpretation=interpretation)
+
+    governance_allowed = True
+    governance_decision = "denied"
+    outcome = "governance_denied"
+    reason_out: str | None = None
+    exempt = transition in _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS
+
+    # Gate 1: ParkingBrake("initiative"), fail-closed. Applies unconditionally.
+    try:
+        from bartholomew.orchestrator.safety.governance_store import (
+            is_blocked_fail_closed_off_loop,
+        )
+
+        blocked = await is_blocked_fail_closed_off_loop(
+            "initiative",
+            ctx.mem.db_path,
+            governance_store=getattr(ctx, "governance_store", None),
+            executor=executor,
+        )
+        if blocked:
+            governance_allowed = False
+            outcome = "parking_brake_denied"
+            reason_out = "Blocked by parking brake (scope=initiative)"
+    except Exception:
+        logger.exception("Governance check failed for %s; failing closed", action_kind)
+        governance_allowed = False
+        outcome = "parking_brake_denied"
+        reason_out = "Governance check errored"
+
+    # Gate 2: Identity Policy, skipped for exempt transitions.
+    identity_context = getattr(ctx, "identity_context", None)
+    if governance_allowed and not exempt and identity_context is not None:
+        policy_kind = f"allow_proactive.{action_category}"
+        decision = policy_engine.evaluate_tool_policy(identity_context, policy_kind)
+        if not decision.allowed:
+            governance_allowed = False
+            outcome = "governance_denied"
+            reason_out = f"Denied by Identity policy: {decision.reason}"
+
+    # Gate 3: per-category user consent, skipped for exempt transitions.
+    if governance_allowed and not exempt:
+        consented = await run_off_loop(
+            store.is_category_consented,
+            action_category,
+            executor=executor,
+        )
+        if not consented:
+            governance_allowed = False
+            outcome = "governance_denied"
+            reason_out = f"No user consent granted for category {action_category!r}"
+
+    if governance_allowed:
+        governance_decision = "allowed"
+
+    initiative = existing
+    if transition == "propose":
+        # propose always writes a row -- denied is a real, audited,
+        # terminal outcome (design doc Sec 5), not a no-op.
+        try:
+            initiative = await run_off_loop(
+                store.propose,
+                kind=kind,
+                category=intent.category,
+                priority=priority,
+                confidence=confidence,
+                rationale=rationale,
+                payload=payload,
+                origin_drive=origin_drive,
+                due_at=due_at,
+                expires_at=expires_at,
+                parent_initiative_id=parent_initiative_id,
+                depends_on=depends_on,
+                governance_decision=governance_decision,
+                governance_reason=reason_out,
+                actor=actor,
+                executor=executor,
+            )
+        except initiative_store_module.InvalidTransitionError as exc:
+            await _record_initiative_reflection(ctx, candidate_action, "rejected", None, str(exc))
+            raise
+        except Exception as exc:
+            logger.exception("initiative propose failed")
+            governance_allowed = False
+            outcome = "error"
+            reason_out = str(exc)
+        else:
+            outcome = initiative.status
+    elif governance_allowed:
+        try:
+            if transition == "defer":
+                initiative = await run_off_loop(
+                    store.defer,
+                    initiative_id,
+                    reason=reason or "unspecified",
+                    actor=actor,
+                    executor=executor,
+                )
+            elif transition == "deliver":
+                initiative = await run_off_loop(
+                    store.deliver,
+                    initiative_id,
+                    actor=actor,
+                    executor=executor,
+                )
+            elif transition == "resolve":
+                initiative = await run_off_loop(
+                    store.resolve,
+                    initiative_id,
+                    resolution=resolution or "dismissed",
+                    due_at=due_at,
+                    actor=actor,
+                    executor=executor,
+                )
+            elif transition == "expire":
+                initiative = await run_off_loop(
+                    store.expire,
+                    initiative_id,
+                    actor=actor,
+                    executor=executor,
+                )
+            elif transition == "cancel":
+                initiative = await run_off_loop(
+                    store.cancel,
+                    initiative_id,
+                    actor=actor,
+                    executor=executor,
+                )
+            else:  # supersede
+                initiative = await run_off_loop(
+                    store.supersede,
+                    initiative_id,
+                    actor=actor,
+                    executor=executor,
+                )
+        except (
+            initiative_store_module.InitiativeNotFoundError,
+            initiative_store_module.InvalidTransitionError,
+        ) as exc:
+            await _record_initiative_reflection(ctx, candidate_action, "rejected", None, str(exc))
+            raise
+        except Exception as exc:
+            logger.exception("initiative transition %s failed", action_kind)
+            governance_allowed = False
+            outcome = "error"
+            reason_out = str(exc)
+        else:
+            outcome = initiative.status
+            if transition == "deliver" and getattr(ctx, "skill_registry", None) is not None:
+                await _deliver_initiative_notification(ctx, initiative)
+                _record_initiative_working_memory_note(ctx, initiative)
+
+    await _record_initiative_reflection(ctx, candidate_action, outcome, initiative, reason_out)
+
+    return InitiativeRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=governance_allowed,
+        outcome=outcome,
+        reason=reason_out,
+        initiative=initiative,
+    )

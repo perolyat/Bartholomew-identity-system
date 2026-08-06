@@ -10,10 +10,13 @@
 >
 > **Status:** proposed 2026-08-06, revised twice the same day per reviewer feedback (Initiative
 > Dependencies and hierarchical parent/child reservation, §13; then the declarative/informational
-> non-negotiable invariants, §16), **design approved 2026-08-06.** Approval covers the
-> architecture only — per this document's own §2/§14/§15, S5.2 (Typed Cadence) and every later
-> sub-stage still require their own separate, explicit approval before implementation, same as
-> every other Phase B/Stage 1 sub-stage.
+> non-negotiable invariants, §16), design approved 2026-08-06, **implementation approved and
+> completed 2026-08-06** (alongside S5.2, whose own approval covered this document's
+> implementation too — see `docs/S5_2_TYPED_CADENCE_DESIGN.md`'s Status line). See `ROADMAP.md`'s
+> Stage 5 section for what was actually built: `bartholomew/kernel/initiative_store.py` and
+> `run_initiative_through_runtime_contract()` in `runtime_contract.py`, exactly as designed here.
+> S5.7 and every later sub-stage still require their own separate, explicit approval before
+> implementation, same as every other Phase B/Stage 1 sub-stage.
 >
 > **Scope of this pass:** architecture only — the generic `Initiative` object, its lifecycle, its
 > Runtime Contract seam, and the governance/audit/memory contracts every future proactive

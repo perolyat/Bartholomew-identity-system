@@ -62,6 +62,7 @@ _STARTUP_RESOURCE_ORDER = [
     "mem",
     "governance_store",
     "awaiting_response_store",
+    "initiative_store",
     "scheduler_schema",
     "experience_kernel",
     "skills",
@@ -156,6 +157,12 @@ class KernelDaemon:
         # it's constructed off the event loop in start(), not here. None
         # until then.
         self.awaiting_response_store = None
+
+        # The daemon's Initiative Engine store (Stage 5, S5.1/S5.2; see
+        # docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md and
+        # docs/S5_2_TYPED_CADENCE_DESIGN.md). Same construction-timing
+        # rationale as awaiting_response_store immediately above.
+        self.initiative_store = None
 
         # Owned by this daemon instance for its entire lifetime -- closed
         # in stop(). Construction is cheap (no I/O, no thread spawned
@@ -343,6 +350,19 @@ class KernelDaemon:
                 executor=self.blocking_executor,
             )
             resources_started.append("awaiting_response_store")
+
+            # Stage 5, S5.1/S5.2: the Initiative Engine store. Constructed
+            # off the event loop for the same reason as
+            # awaiting_response_store immediately above (blocking schema
+            # I/O in __init__()).
+            from bartholomew.kernel.initiative_store import InitiativeStore
+
+            self.initiative_store = await run_off_loop(
+                InitiativeStore,
+                self.mem.db_path,
+                executor=self.blocking_executor,
+            )
+            resources_started.append("initiative_store")
 
             # Phase B stage B5: read whether the previous runtime (if any)
             # against this db_path confirmed a clean shutdown, then open

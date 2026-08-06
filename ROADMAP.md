@@ -659,37 +659,47 @@ not itself grant.
 
 ---
 
-### Stage 5 — Initiative engine (scheduled check-ins + workflows) 🚧 S5.1 design approved
+### Stage 5 — Initiative engine (scheduled check-ins + workflows) 🚧 S5.1/S5.2 implemented
 
-**Status as of 2026-08-06:** Stage 5 is now staged **S5.0–S5.7**, mirroring Stage 1's S1.0–S1.6
-and Phase B's B0–B9, per `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md` (approved
-2026-08-06). **S5.1's architecture is approved; no implementation exists yet for S5.1 or any later
-sub-stage** — approving one sub-stage never implicitly approves the next, same as every other
-staged workstream in this document.
+**Status as of 2026-08-06:** Stage 5 is staged **S5.0–S5.7**, mirroring Stage 1's S1.0–S1.6 and
+Phase B's B0–B9. S5.1 and S5.2 are both implemented — **no concrete proactive drive exists yet**
+(check-in, weekly review, next-best-action, maintenance, wellness are all S5.7+); approving one
+sub-stage never implicitly approves the next, same as every other staged workstream in this
+document.
 
 | Stage | Objective | Status |
 |---|---|---|
 | **S5.0** | Scheduler-schema readiness (closes issue #24) | ✅ done 2026-07-25, PR #25 |
-| **S5.1** | Initiative Engine architecture | ✅ design approved 2026-08-06 — `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md`; not yet implemented |
-| **S5.2** | Typed cadence | proposed 2026-08-06 — `docs/S5_2_TYPED_CADENCE_DESIGN.md`; not approved |
+| **S5.1** | Initiative Engine architecture | ✅ implemented 2026-08-06 — `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md` |
+| **S5.2** | Typed cadence | ✅ implemented 2026-08-06 — `docs/S5_2_TYPED_CADENCE_DESIGN.md` |
 | **S5.3** | Default-off consent + functional mute | not started |
 | **S5.4** | Quiet-hours defer | not started |
 | **S5.5** | Dry-run mode | not started |
 | **S5.6** | Structured rationale logging | not started |
 | **S5.7** | Live check-in / weekly-review / next-best-action drives under `allow_proactive` | not started |
 
-**S5.1 in brief:** a generic `Initiative` object (kind/category/status/priority/confidence/
+**S5.1/S5.2 in brief:** a generic `Initiative` object (kind/category/status/priority/confidence/
 rationale) that every future proactive behaviour instantiates instead of each getting its own
 feature-specific scheduler, owned by the Kernel Executive (see `COGNITIVE_RUNTIME.md`'s ownership
-table) via a new `run_initiative_through_runtime_contract()` seam mirroring
-`run_awaiting_response_through_runtime_contract()`'s shape. Covers the lifecycle state machine, a
-proactive-intent classification step ahead of Governance, three independent governance gates (a
-dedicated `"initiative"` Parking Brake scope, a default-deny `allow_proactive` Identity Policy
-category, and a default-off per-category user-consent table), mandatory audited rationale, and
-reserved (not yet implemented) schema support for initiative dependencies and hierarchical
-parent/child initiatives. Does not touch the already-shipped `awaiting_response_store.py`, and
-does not close the reflection-ownership gap below (blocks only a future `review` initiative kind
-specifically).
+table). `bartholomew/kernel/initiative_store.py` (schema: `initiatives`, `initiative_audit`, plus
+reserved-only `initiative_dependencies`/`parent_initiative_id` and `initiative_consent`) and a new
+`run_initiative_through_runtime_contract()` seam in `runtime_contract.py` (mirroring
+`run_awaiting_response_through_runtime_contract()`'s shape) implement the full
+propose/defer/deliver/resolve/expire/cancel/supersede lifecycle, a proactive-intent classification
+step ahead of Governance, and three independent governance gates (a dedicated `"initiative"`
+Parking Brake scope, a default-deny `allow_proactive.<category>` Identity Policy key, and a
+default-off per-category `initiative_consent` table — every category is effectively denied until
+S5.3 ships a UI/API to grant consent, the intended behaviour). S5.2 adds `DailyCadence`/
+`WeeklyCadence` wall-clock cadence types to `scheduler/cadence.py` (alongside the pre-existing
+`IntervalCadence`/`WindowCadence`, unchanged) reusing `KernelDaemon.tz`, and `initiative_sweep`
+(`REGISTRY`, `every:900`) — the first production consumer of the store/seam, exercising only the
+`expire` transition, which is exempted from the Identity Policy and consent gates (approved
+2026-08-06: an already-approved initiative must always be able to reach `expired`). Neither stage
+touches the already-shipped `awaiting_response_store.py`, and neither closes the
+reflection-ownership gap below (blocks only a future `review` initiative kind specifically). 99
+new tests across `tests/test_initiative_store.py`, `tests/test_runtime_contract_initiative.py`,
+`tests/test_cadence_types.py`, `tests/test_scheduler_cadence_regression.py`, and
+`tests/test_initiative_sweep_drive.py`.
 
 **Status as of 2026-07-27 (superseded by the above, kept for record):** No Stage 5 feature code
 existed beyond S5.0 — no typed cadence, no proactive consent or mute, no quiet-hours defer, no
@@ -730,6 +740,11 @@ architecture underlies every one of these — see above.
 
 **Verify:**
 ```bash
+# S5.1/S5.2: Initiative Engine chassis + Typed Cadence + initiative_sweep
+pytest -q tests/test_initiative_store.py tests/test_runtime_contract_initiative.py \
+  tests/test_cadence_types.py tests/test_scheduler_cadence_regression.py \
+  tests/test_initiative_sweep_drive.py
+# S5.7+ (not yet implemented)
 pytest -q tests/test_scheduler_checkins.py
 ```
 

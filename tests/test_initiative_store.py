@@ -1,0 +1,314 @@
+"""
+Tests for bartholomew.kernel.initiative_store (Stage 5, S5.1/S5.2). Isolated
+tests against the new initiatives/initiative_audit/initiative_dependencies/
+initiative_consent schema -- see
+docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md for the design this
+implements.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+from bartholomew.kernel.initiative_store import (
+    InitiativeNotFoundError,
+    InitiativeStore,
+    InvalidTransitionError,
+)
+
+FAR_FUTURE = "2099-01-01T00:00:00Z"
+FAR_PAST = "2000-01-01T00:00:00Z"
+
+
+@pytest.fixture
+def db_path(tmp_path):
+    return str(tmp_path / "initiative.db")
+
+
+def _propose(store, **overrides):
+    kwargs = {
+        "kind": "checkin.morning",
+        "category": "check_in",
+        "confidence": 0.8,
+        "rationale": "Good morning check-in",
+        "origin_drive": "checkin_morning",
+        "expires_at": FAR_FUTURE,
+        "governance_decision": "allowed",
+    }
+    kwargs.update(overrides)
+    return store.propose(**kwargs)
+
+
+def test_fresh_schema_is_empty(db_path):
+    store = InitiativeStore(db_path)
+    assert store.list() == []
+
+
+def test_propose_allowed_creates_approved_status(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    assert initiative.status == "approved"
+    assert initiative.governance_decision == "allowed"
+    assert initiative.kind == "checkin.morning"
+    assert initiative.category == "check_in"
+    assert initiative.priority == "normal"
+
+
+def test_propose_denied_still_persists_a_row(db_path):
+    """S5.1 design doc Sec 5: 'denied ... Still audited and reflected -- a
+    denial is not silently dropped.'"""
+    store = InitiativeStore(db_path)
+    initiative = _propose(
+        store,
+        governance_decision="denied",
+        governance_reason="no consent",
+    )
+    assert initiative.status == "denied"
+    assert initiative.governance_reason == "no consent"
+    assert store.get(initiative.id) is not None
+
+
+def test_propose_writes_an_audit_row(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT transition FROM initiative_audit WHERE initiative_id = ?",
+            (initiative.id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [r[0] for r in rows] == ["propose"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"category": "not_a_real_category"},
+        {"priority": "urgent"},
+        {"confidence": 1.5},
+        {"confidence": -0.1},
+        {"rationale": ""},
+        {"rationale": "   "},
+        {"expires_at": ""},
+        {"expires_at": None},
+    ],
+)
+def test_propose_rejects_invalid_input(db_path, overrides):
+    store = InitiativeStore(db_path)
+    with pytest.raises(InvalidTransitionError):
+        _propose(store, **overrides)
+
+
+def test_propose_records_reserved_dependencies_write_only(db_path):
+    """S5.1 design doc Sec 13: depends_on is recorded but nothing reads or
+    enforces it in this pass."""
+    store = InitiativeStore(db_path)
+    parent = _propose(store, kind="a")
+    child = _propose(store, kind="b", depends_on=[parent.id])
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT depends_on_id FROM initiative_dependencies WHERE initiative_id = ?",
+            (child.id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [r[0] for r in rows] == [parent.id]
+    # Recording it does not itself block or gate anything.
+    assert child.status == "approved"
+
+
+def test_propose_records_parent_initiative_id(db_path):
+    store = InitiativeStore(db_path)
+    parent = _propose(store, kind="workflow.parent")
+    child = _propose(store, kind="workflow.child", parent_initiative_id=parent.id)
+    assert child.parent_initiative_id == parent.id
+
+
+def test_defer_requires_approved(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    deferred = store.defer(initiative.id, reason="quiet_hours", actor="test")
+    assert deferred.status == "deferred"
+    assert deferred.deferred_reason == "quiet_hours"
+
+
+def test_defer_rejects_from_denied(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store, governance_decision="denied")
+    with pytest.raises(InvalidTransitionError):
+        store.defer(initiative.id, reason="x")
+
+
+@pytest.mark.parametrize("pre_status_fixture", ["approved", "deferred", "snoozed"])
+def test_deliver_accepts_approved_deferred_or_snoozed(db_path, pre_status_fixture):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    if pre_status_fixture == "deferred":
+        store.defer(initiative.id, reason="muted")
+    elif pre_status_fixture == "snoozed":
+        store.deliver(initiative.id)
+        store.resolve(initiative.id, resolution="snoozed", due_at=FAR_FUTURE)
+
+    delivered = store.deliver(initiative.id, actor="test")
+    assert delivered.status == "delivered"
+    assert delivered.delivered_at is not None
+
+
+def test_deliver_rejects_from_denied(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store, governance_decision="denied")
+    with pytest.raises(InvalidTransitionError):
+        store.deliver(initiative.id)
+
+
+def test_resolve_accepted_and_dismissed(db_path):
+    store = InitiativeStore(db_path)
+    a = _propose(store, kind="a")
+    store.deliver(a.id)
+    resolved = store.resolve(a.id, resolution="accepted")
+    assert resolved.status == "accepted"
+    assert resolved.resolution == "accepted"
+    assert resolved.resolved_at is not None
+
+    b = _propose(store, kind="b")
+    store.deliver(b.id)
+    dismissed = store.resolve(b.id, resolution="dismissed")
+    assert dismissed.status == "dismissed"
+
+
+def test_resolve_snoozed_updates_due_at_not_resolved_at(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.deliver(initiative.id)
+    snoozed = store.resolve(initiative.id, resolution="snoozed", due_at="2030-01-01T00:00:00Z")
+    assert snoozed.status == "snoozed"
+    assert snoozed.due_at == "2030-01-01T00:00:00Z"
+    assert snoozed.resolved_at is None
+
+
+def test_resolve_snoozed_can_re_enter_delivery(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.deliver(initiative.id)
+    store.resolve(initiative.id, resolution="snoozed", due_at=FAR_FUTURE)
+    redelivered = store.deliver(initiative.id)
+    assert redelivered.status == "delivered"
+
+
+def test_resolve_rejects_invalid_resolution_value(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.deliver(initiative.id)
+    with pytest.raises(InvalidTransitionError):
+        store.resolve(initiative.id, resolution="not_a_real_resolution")
+
+
+def test_resolve_rejects_from_non_delivered(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)  # status: approved, not delivered
+    with pytest.raises(InvalidTransitionError):
+        store.resolve(initiative.id, resolution="accepted")
+
+
+@pytest.mark.parametrize("terminal_fn_name", ["expire", "cancel", "supersede"])
+def test_terminal_transitions_from_various_non_terminal_states(db_path, terminal_fn_name):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    fn = getattr(store, terminal_fn_name)
+    result = fn(initiative.id, actor="test")
+    assert (
+        result.status
+        == {"expire": "expired", "cancel": "cancelled", "supersede": "superseded"}[terminal_fn_name]
+    )
+    assert result.resolved_at is not None
+    assert result.resolution == result.status
+
+
+def test_terminal_transitions_reject_already_terminal(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.cancel(initiative.id)
+    with pytest.raises(InvalidTransitionError):
+        store.cancel(initiative.id)
+    with pytest.raises(InvalidTransitionError):
+        store.expire(initiative.id)
+    with pytest.raises(InvalidTransitionError):
+        store.supersede(initiative.id)
+
+
+def test_unknown_initiative_id_raises_not_found(db_path):
+    store = InitiativeStore(db_path)
+    with pytest.raises(InitiativeNotFoundError):
+        store.defer(99999, reason="x")
+    with pytest.raises(InitiativeNotFoundError):
+        store.expire(99999)
+
+
+def test_list_expiring_only_returns_non_terminal_past_expiry(db_path):
+    store = InitiativeStore(db_path)
+    expired_open = _propose(store, kind="a", expires_at=FAR_PAST)
+    not_expired = _propose(store, kind="b", expires_at=FAR_FUTURE)
+    expired_but_terminal = _propose(store, kind="c", expires_at=FAR_PAST)
+    store.cancel(expired_but_terminal.id)
+
+    import time
+
+    due = store.list_expiring(int(time.time()))
+    due_ids = {e.id for e in due}
+    assert due_ids == {expired_open.id}
+    assert not_expired.id not in due_ids
+    assert expired_but_terminal.id not in due_ids
+
+
+def test_list_open_by_kind_excludes_terminal(db_path):
+    store = InitiativeStore(db_path)
+    a = _propose(store, kind="checkin.morning")
+    b = _propose(store, kind="checkin.morning")
+    store.cancel(b.id)
+
+    open_entries = store.list_open_by_kind("checkin.morning")
+    assert [e.id for e in open_entries] == [a.id]
+
+
+def test_is_category_consented_defaults_to_false(db_path):
+    store = InitiativeStore(db_path)
+    assert store.is_category_consented("check_in") is False
+
+
+def test_is_category_consented_true_once_row_allows_it(db_path):
+    store = InitiativeStore(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO initiative_consent (category, allowed, updated_at) "
+            "VALUES ('check_in', 1, '2026-01-01T00:00:00Z')",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert store.is_category_consented("check_in") is True
+    assert store.is_category_consented("wellness") is False
+
+
+def test_payload_round_trips_through_json(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store, payload={"memory_ids": [1, 2, 3], "note": "x"})
+    fetched = store.get(initiative.id)
+    assert fetched.payload == {"memory_ids": [1, 2, 3], "note": "x"}
+
+
+def test_list_audit_records_every_transition(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.deliver(initiative.id)
+    store.resolve(initiative.id, resolution="accepted")
+
+    audit = store.list_audit(initiative.id)
+    transitions = [row["transition"] for row in reversed(audit)]
+    assert transitions == ["propose", "deliver", "resolve"]

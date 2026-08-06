@@ -220,6 +220,64 @@ async def drive_awaiting_response_check(ctx: Any) -> Nudge | None:
     return None
 
 
+async def drive_initiative_sweep(ctx: Any) -> Nudge | None:
+    """
+    Initiative sweep drive (Stage 5, S5.2; see
+    docs/S5_2_TYPED_CADENCE_DESIGN.md Sec 6): scan the Initiative store for
+    non-terminal initiatives whose expires_at has passed, and drive each
+    through the governed `expire` transition individually -- a denial/
+    failure on one entry must not affect any other (mirrors
+    `drive_awaiting_response_check`'s own per-entry loop).
+
+    This is the first production code exercising `initiative_store.py` /
+    `run_initiative_through_runtime_contract()`, but only the `expire`
+    transition -- `propose`/`defer`/`deliver`/`resolve`/`cancel`/
+    `supersede` remain untested against a real drive until S5.7 designs
+    one (design doc Sec 6's own honest scope note).
+
+    Deliberately IS in _SELF_MAINTENANCE_DRIVES
+    (bartholomew.kernel.runtime_contract): unlike `awaiting_response_check`,
+    this drive never proposes new outbound contact, only closes out rows
+    already past their TTL. The `expire` transition it dispatches has its
+    own, separate exemption from Identity Policy and consent inside
+    run_initiative_through_runtime_contract()
+    (_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS) -- design doc Sec 7,
+    approved by the project owner 2026-08-06.
+
+    Args:
+        ctx: Context object (typically KernelDaemon instance). Must have an
+            initiative_store (bartholomew.kernel.initiative_store.
+            InitiativeStore) -- a missing store (pre-S5.2-wiring callers,
+            e.g. existing scheduler tests) is treated as "nothing to sweep
+            yet", not an error.
+
+    Returns:
+        None always -- expiry has no user-facing delivery of its own.
+    """
+    store = getattr(ctx, "initiative_store", None)
+    if store is None:
+        return None
+
+    from bartholomew.kernel.runtime_contract import run_initiative_through_runtime_contract
+
+    now_ts = int(time.time())
+    executor = getattr(ctx, "blocking_executor", None)
+    expiring = await run_off_loop(store.list_expiring, now_ts, executor=executor)
+
+    for initiative in expiring:
+        try:
+            await run_initiative_through_runtime_contract(
+                ctx,
+                "expire",
+                initiative_id=initiative.id,
+                actor="scheduler:initiative_sweep",
+            )
+        except Exception as e:
+            print(f"[Scheduler] Error expiring initiative {initiative.id}: {e}")
+
+    return None
+
+
 # Drive registry with default cadences
 REGISTRY: dict[str, dict[str, Any]] = {
     "self_check": {
@@ -241,5 +299,9 @@ REGISTRY: dict[str, dict[str, Any]] = {
     "awaiting_response_check": {
         "fn": drive_awaiting_response_check,
         "cadence": "every:900",  # Every 15 minutes (design doc Sec 6)
+    },
+    "initiative_sweep": {
+        "fn": drive_initiative_sweep,
+        "cadence": "every:900",  # Every 15 minutes -- matches awaiting_response_check
     },
 }

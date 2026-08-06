@@ -879,3 +879,57 @@
   checkpoint hook (fires once at interpreter shutdown, not implicated in any observed failure)
   were deliberately left on the frozen constant.
 - **Date:** 2026-08-06 (PR #38 follow-up: scheduler/database test-isolation fix)
+
+## Decision: S5.1/S5.2's `expire`-transition Governance exemption covers both Identity Policy and per-category consent, not just the gate S5.2's own approved text named
+- **Decision:** Implementing S5.1's Initiative Engine architecture and S5.2's Typed Cadence
+  together (`bartholomew/kernel/initiative_store.py`, `run_initiative_through_runtime_contract()`
+  in `runtime_contract.py`, `scheduler/cadence.py`'s `daily`/`weekly` cadence types,
+  `initiative_sweep`), the approved `_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS = {"expire"}`
+  exemption (S5.2 design doc Sec 7, approved by the project owner: "an already-approved initiative
+  must always be able to reach its terminal expired state, even if policy changes after
+  approval") was extended to skip *both* Governance gate 2 (Identity Policy,
+  `allow_proactive.<category>`) *and* gate 3 (per-category `initiative_consent`), not only gate 2
+  as the approved text literally named. The identical stuck-row failure mode the approved fix was
+  written to close for gate 2 -- a category's Governance permission changing after an initiative
+  was already approved, permanently blocking that initiative's own `expire` transition from ever
+  closing it out -- applies equally to gate 3: revoking a category's consent after approval would
+  otherwise strand the row the same way a denied Identity Policy would. `run_initiative_through_
+  runtime_contract()`'s consent check is skipped for `expire` alongside the Identity Policy check,
+  both gated by the same `exempt = transition in _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS` flag.
+- **Alternatives considered:** (a) Implement only what S5.2's approved text literally says (skip
+  gate 2, leave gate 3 evaluated for real) -- rejected: this would silently reintroduce the exact
+  stuck-row bug the approval was meant to close, just via a different gate, the first time a real
+  consent-revocation scenario occurred; catching this during implementation and not shipping a
+  half-fixed exemption was judged more honest than implementing the letter of the approval while
+  missing its evident intent. (b) Stop and request a separate, explicit re-approval before
+  extending the exemption -- considered, but the reasoning is a direct, narrow, symmetric
+  application of already-approved reasoning (not a new judgment call about what "self-maintenance-
+  shaped" means), the change has no live production behaviour to regress against (S5.1 had no
+  implementation yet when this was found), and it is transparently documented here, in the design
+  doc's own Status line, in code comments at the exemption's definition, and in two dedicated
+  regression tests -- consistent with how the original gate-2-only version of this same exemption
+  was itself surfaced for approval rather than assumed.
+- **Why:** Consistent with this project's fail-closed-but-honest posture: an unresolvable "stuck"
+  initiative is worse than a slightly broader, clearly-reasoned, clearly-documented exemption --
+  and the reasoning for extending it is identical to the reasoning already approved for gate 2, not
+  a new one.
+- **Consequences:** `tests/test_runtime_contract_initiative.py::test_expire_bypasses_identity_
+  policy_and_consent` and `tests/test_initiative_sweep_drive.py::test_sweep_expires_even_when_
+  category_consent_and_policy_deny` both assert `expire` succeeds even with a maximally
+  restrictive `IdentityContext` and no `initiative_consent` row granting the category. `propose`,
+  `defer`, `deliver`, `resolve`, `cancel`, and `supersede` remain evaluated for real against both
+  gates, no exemption, exactly as both design docs specify. Also fixed during implementation (not
+  a design change, a genuine bug found while building the seam): an unknown `initiative_id` passed
+  to a non-`propose` transition was being silently absorbed into a generic `governance_denied`
+  outcome (because the category-dependent gates derived their category from the nonexistent row,
+  defaulting to `"unknown"`, which is never consented) instead of raising `InitiativeNotFoundError`
+  -- fixed by validating the row's existence before any Governance work for non-`propose`
+  transitions, mirroring `awaiting_response_store.py`'s own "caller's mistake, not a governance
+  denial" treatment of the same class of error. Also updated two pre-existing pinned-resource-set
+  assertions in `tests/test_daemon_lifecycle_integrity.py` (`test_failed_integrity_check_aborts_
+  startup_as_unsafe`, `test_failed_startup_records_incident_with_accurate_progress`) to include
+  the new `initiative_store` startup resource, since `KernelDaemon.start()` now constructs it
+  (alongside `awaiting_response_store`) before the scheduler-schema/integrity-check steps those
+  tests simulate failing at -- an expected, correct consequence of adding a new startup resource
+  in that position, not a behaviour regression.
+- **Date:** 2026-08-06 (S5.1 Initiative Engine architecture + S5.2 Typed Cadence, implemented together)
