@@ -672,7 +672,7 @@ document.
 | **S5.0** | Scheduler-schema readiness (closes issue #24) | ✅ done 2026-07-25, PR #25 |
 | **S5.1** | Initiative Engine architecture | ✅ implemented 2026-08-06 — `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md` |
 | **S5.2** | Typed cadence | ✅ implemented 2026-08-06 — `docs/S5_2_TYPED_CADENCE_DESIGN.md` |
-| **S5.3** | Default-off consent + functional mute | not started |
+| **S5.3** | Default-off consent + functional mute | proposed 2026-08-06 — `docs/S5_3_DEFAULT_OFF_CONSENT_AND_MUTE_DESIGN.md`; not approved |
 | **S5.4** | Quiet-hours defer | not started |
 | **S5.5** | Dry-run mode | not started |
 | **S5.6** | Structured rationale logging | not started |
