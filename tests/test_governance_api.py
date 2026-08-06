@@ -25,24 +25,37 @@ _DB_PATH = str(_db_dir / "test.db")
 os.environ["BARTH_DB_PATH"] = _DB_PATH
 
 from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: E402
-from bartholomew_api_bridge_v0_1.services.api import db as db_module  # noqa: E402
 
 
 def _live_db_path() -> str:
-    """The actual db path the live, process-wide kernel singleton uses --
-    NOT necessarily this module's own _DB_PATH. db.py's DB_PATH constant is
-    fixed at whichever test module first imports
-    bartholomew_api_bridge_v0_1.services.api.app in the whole pytest
-    session's collection order (see test_self_state_api.py's docstring for
-    the same process-wide-singleton hazard); under the full suite that is
-    not always this file. Reading db_module.DB_PATH instead of a
-    self-computed path is what makes this correct regardless of collection
-    order."""
-    return db_module.DB_PATH
+    """The actual db path the live, process-wide kernel singleton uses.
+
+    Previously read db_module.DB_PATH (a module-level constant, frozen at
+    whichever test module first imported bartholomew_api_bridge_v0_1.
+    services.api.db in the whole pytest session's collection order) as a
+    workaround: under that now-fixed bug, every test file's KernelDaemon
+    silently shared one physical SQLite file regardless of its own
+    BARTH_DB_PATH assignment above, so the frozen constant happened to
+    equal whatever file was actually live. db.py's DB_PATH is now only a
+    backward-compatible fallback for the few callers that still read it
+    as a plain constant; app.py's startup() resolves BARTH_DB_PATH fresh
+    at KernelDaemon-construction time instead (see db.resolve_db_path()'s
+    docstring), so each test file's own env var assignment now genuinely
+    determines its own daemon's database again -- this module's own
+    _DB_PATH (set above, before importing app_module) is correct on its
+    own, no cross-module indirection needed anymore."""
+    return _DB_PATH
 
 
 @pytest.fixture(scope="module")
 def client():
+    # Re-assert right before starting the app -- see
+    # tests/test_api_admission_gate.py's client fixture for why (pytest
+    # collects/imports every test module, running each one's own
+    # os.environ[...] assignment, before running any test; a
+    # later-collected module can overwrite this by the time this fixture
+    # actually fires).
+    os.environ["BARTH_DB_PATH"] = _DB_PATH
     with TestClient(app_module.app) as c:
         yield c
 

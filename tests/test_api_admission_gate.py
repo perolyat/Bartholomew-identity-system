@@ -24,7 +24,8 @@ from fastapi.testclient import TestClient
 # lock, not just file locks).
 _db_dir = pathlib.Path(tempfile.mkdtemp()) / "data"
 _db_dir.mkdir(parents=True, exist_ok=True)
-os.environ["BARTH_DB_PATH"] = str(_db_dir / "test.db")
+_DB_PATH = str(_db_dir / "test.db")
+os.environ["BARTH_DB_PATH"] = _DB_PATH
 
 from bartholomew.kernel.daemon import DaemonLifecycleState  # noqa: E402
 from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: E402
@@ -32,6 +33,17 @@ from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: 
 
 @pytest.fixture(scope="module")
 def client():
+    # Re-assert immediately before starting the app: pytest imports every
+    # collected test module (running each one's own os.environ[...] = ...
+    # assignment above) *before* running any test, so by the time this
+    # fixture actually fires, BARTH_DB_PATH may already have been
+    # overwritten by a later-collected module doing the same thing.
+    # Confirmed by direct experiment while investigating a CI flake on
+    # PR #38 -- see db.resolve_db_path()'s docstring for the fix this
+    # complements (app.py's startup() reads the env var fresh instead of
+    # a frozen constant; this line guarantees what it reads is *this*
+    # module's own value, not whichever module was collected last).
+    os.environ["BARTH_DB_PATH"] = _DB_PATH
     with TestClient(app_module.app) as c:
         yield c
 

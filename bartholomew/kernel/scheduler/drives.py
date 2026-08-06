@@ -9,6 +9,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from bartholomew.kernel.blocking_executor import run_off_loop
+
 from .health import check_drift
 from .models import Nudge
 
@@ -158,6 +160,66 @@ async def drive_fts_optimize(ctx: Any) -> Nudge | None:
     return None
 
 
+async def drive_awaiting_response_check(ctx: Any) -> Nudge | None:
+    """
+    Awaiting-response check drive (Stage 1, S1.4; see
+    docs/S1_4_AWAITING_RESPONSE_DESIGN.md Sec 6): scan the
+    awaiting_response obligation queue for entries due their next
+    reminder/escalation, and drive each through the governed
+    awaiting_response seam individually -- a denial/failure on one entry
+    must not affect any other (mirrors NotifySkill._process_queue()'s own
+    per-notification loop).
+
+    Deliberately NOT in _SELF_MAINTENANCE_DRIVES
+    (bartholomew.kernel.runtime_contract): unlike self_check/
+    curiosity_probe/reflection_micro/fts_optimize, this drive's whole
+    purpose is triggering genuine outbound contact (a reminder/escalation
+    notification) about specific user content, not kernel-internal
+    housekeeping -- it is evaluated for real by the Identity Policy check
+    the same as the per-entry remind/escalate/resolve transitions it
+    dispatches, and Identity.yaml's tool_use.allowlist has been extended
+    with this task_id accordingly (governance.change_control-flagged, per
+    the design doc's Sec 5 precedent).
+
+    Args:
+        ctx: Context object (typically KernelDaemon instance). Must have an
+            awaiting_response_store
+            (bartholomew.kernel.awaiting_response_store
+            .AwaitingResponseStore) -- a missing store (pre-S1.4-wiring
+            callers, e.g. existing scheduler tests) is treated as "nothing
+            to scan yet", not an error.
+
+    Returns:
+        None always -- delivery for a due entry happens inside the
+        per-entry seam call (via NotifySkill), not via a scheduler Nudge.
+    """
+    store = getattr(ctx, "awaiting_response_store", None)
+    if store is None:
+        return None
+
+    from bartholomew.kernel.runtime_contract import (
+        run_awaiting_response_through_runtime_contract,
+    )
+
+    now_ts = int(time.time())
+    executor = getattr(ctx, "blocking_executor", None)
+    due_entries = await run_off_loop(store.list_due_for_transition, now_ts, executor=executor)
+
+    for entry in due_entries:
+        transition = store.next_transition_for(entry, now_ts)
+        try:
+            await run_awaiting_response_through_runtime_contract(
+                ctx,
+                transition,
+                entry_id=entry.id,
+                actor="scheduler:awaiting_response_check",
+            )
+        except Exception as e:
+            print(f"[Scheduler] Error advancing awaiting_response entry {entry.id}: {e}")
+
+    return None
+
+
 # Drive registry with default cadences
 REGISTRY: dict[str, dict[str, Any]] = {
     "self_check": {
@@ -175,5 +237,9 @@ REGISTRY: dict[str, dict[str, Any]] = {
     "fts_optimize": {
         "fn": drive_fts_optimize,
         "cadence": "every:604800",  # Every 7 days (weekly)
+    },
+    "awaiting_response_check": {
+        "fn": drive_awaiting_response_check,
+        "cadence": "every:900",  # Every 15 minutes (design doc Sec 6)
     },
 }

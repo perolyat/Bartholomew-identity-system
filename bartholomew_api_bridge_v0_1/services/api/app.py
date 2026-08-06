@@ -29,9 +29,18 @@ except Exception:
 from prometheus_client import PlatformCollector, ProcessCollector
 
 from . import db_ctx
-from .db import DB_PATH
+from .db import DB_PATH, resolve_db_path
 from .models import ChatIn, ChatOut, ConversationList
-from .routes import consent, governance, liveness, metrics, notifications, self_state
+from .routes import (
+    awaiting_response,
+    consent,
+    governance,
+    liveness,
+    metrics,
+    notifications,
+    onboarding,
+    self_state,
+)
 from .routes.metrics import BARTHOLOMEW_TICKS_TOTAL, KERNEL_TICKS_TOTAL, REGISTRY
 
 
@@ -64,6 +73,8 @@ app.include_router(self_state.router)
 app.include_router(governance.router)
 app.include_router(notifications.router)
 app.include_router(consent.router)
+app.include_router(awaiting_response.router)
+app.include_router(onboarding.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)
@@ -80,10 +91,14 @@ atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
 # written for), and don't touch _kernel's governed state at all. Everything
 # else that isn't one of these is real external ingress into governed
 # daemon state, and is gated below.
+#
+# /api/onboarding (Stage 1, S1.6) joins this list for the same reason:
+# static deployment-guide content with no _kernel dependency at all (see
+# routes/onboarding.py's module docstring).
 _ADMISSION_EXEMPT_PATHS = frozenset(
     {"/healthz", "/api/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"},
 )
-_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness",)
+_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding")
 
 
 def _admission_exempt(path: str) -> bool:
@@ -182,10 +197,14 @@ async def startup():
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
 
-    # Start kernel in-process
+    # Start kernel in-process. Resolved fresh here (not the DB_PATH constant
+    # imported above) -- see db.resolve_db_path()'s docstring: this is the
+    # call site that was silently sharing one physical SQLite file across
+    # unrelated test files before this fix (found investigating a CI flake
+    # on PR #38).
     _kernel = KernelDaemon(
         cfg_path="config/kernel.yaml",
-        db_path=DB_PATH,
+        db_path=resolve_db_path(),
         persona_path="config/persona.yaml",
         policy_path="config/policy.yaml",
         drives_path="config/drives.yaml",

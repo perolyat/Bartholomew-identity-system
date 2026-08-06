@@ -411,20 +411,26 @@ carried forward rather than fixed here:
 
 ---
 
-### Stage 1 — Console/UI integration 🚧 (Started 2026-08-01: sub-stages S1.1, S1.2, S1.3, S1.5 complete)
+### Stage 1 — Console/UI integration ✅ (Complete 2026-08-05: sub-stages S1.0–S1.6 all implemented)
 
-**Status:** Stage 1 is a console/UI product slice, now staged as sub-stages **S1.0–S1.6** —
-mirroring Phase B's B0–B9 staging, since this slice's combined exit criteria are comparably broad.
-See `docs/STAGE_1_OVERVIEW.md` for each sub-stage's purpose, scope, and deferrals; this section of
+**Status:** Stage 1 is a console/UI product slice, staged as sub-stages **S1.0–S1.6** — mirroring
+Phase B's B0–B9 staging, since this slice's combined exit criteria are comparably broad. See
+`docs/STAGE_1_OVERVIEW.md` for each sub-stage's purpose, scope, and deferrals; this section of
 `ROADMAP.md` remains the canonical source for Stage 1's overall exit criteria and approval
 boundaries — `docs/STAGE_1_OVERVIEW.md` is subordinate to it. **S1.1 (Parking Brake API + UI), S1.3
 (notification settings + mute/quiet-hours), and S1.5 (governance audit/provenance view) are
-implemented (2026-08-01); S1.2 (consent/approval inbox) is implemented (2026-08-04);** S1.4 and
-S1.6 (the `awaiting_response` queue, host-device onboarding guidance) remain scoped-only and each
-require their own separate approval before implementation, per `docs/STAGE_1_OVERVIEW.md`'s
-non-negotiable invariants. **Scope updated 2026-07-28** (planning only): Stage 1 is sequenced
-*before* Stage 5/S5.1 (see "Near-term milestone plan" above) because Stage 5's live proactive
-behaviour needs a real, user-facing governance surface that only Stage 1 can provide.
+implemented (2026-08-01); S1.2 (consent/approval inbox) is implemented (2026-08-04); S1.4 (the
+`awaiting_response` queue) is implemented (2026-08-05), per the explicitly approved
+`docs/S1_4_AWAITING_RESPONSE_DESIGN.md` design pass; S1.6 (host-device onboarding guidance) is
+implemented (2026-08-05), per the explicitly approved `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md`
+design pass (itself revised per reviewer feedback — user-experience framing per target, future
+upgrade paths, and a priority-conditional "How should I choose?" section — before approval).** Each
+sub-stage's plan and implementation diff was separately and explicitly approved, per
+`docs/STAGE_1_OVERVIEW.md`'s non-negotiable invariants; approving one never implicitly approved the
+next. **Scope updated 2026-07-28** (planning
+only): Stage 1 is sequenced *before* Stage 5/S5.1 (see "Near-term milestone plan" above) because
+Stage 5's live proactive behaviour needs a real, user-facing governance surface that only Stage 1
+can provide.
 
 **Adjacent, non-Stage-1 fix (2026-08-03):** a standalone consent-handler fix (see
 `docs/STAGE_1_OVERVIEW.md`'s "Standalone: consent-handler fix" section) — sensitive-content memory
@@ -482,6 +488,11 @@ pytest -q tests/test_notify_skill_settings.py tests/test_notifications_api.py
 pytest -q tests/test_memory_store_sensitive_consent.py tests/test_memory_store_rule_consent.py \
   tests/test_consent_api.py tests/test_consent_gates.py tests/test_consent_bypass_redteam.py \
   tests/test_retrieval_consent_enforcement.py
+# S1.4 awaiting_response queue
+pytest -q tests/test_awaiting_response_store.py tests/test_runtime_contract_awaiting_response.py \
+  tests/test_awaiting_response_api.py tests/test_scheduler_drive_convergence.py
+# S1.6 host-device onboarding guidance
+pytest -q tests/test_onboarding_api.py
 # optional smoke
 bash bartholomew_api_bridge_v0_1/scripts/curl_smoke.sh
 ```

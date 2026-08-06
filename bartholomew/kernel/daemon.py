@@ -61,6 +61,7 @@ _STARTUP_RESOURCE_ORDER = [
     "process_lock",
     "mem",
     "governance_store",
+    "awaiting_response_store",
     "scheduler_schema",
     "experience_kernel",
     "skills",
@@ -147,6 +148,14 @@ class KernelDaemon:
         # closed{,_off_loop}()'s own fallback (construct a temporary
         # instance) -- see docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md.
         self.governance_store = None
+
+        # The daemon's awaiting_response obligation queue (Stage 1, S1.4;
+        # see docs/S1_4_AWAITING_RESPONSE_DESIGN.md). Same construction-
+        # timing rationale as governance_store immediately above --
+        # AwaitingResponseStore.__init__() does blocking schema I/O, so
+        # it's constructed off the event loop in start(), not here. None
+        # until then.
+        self.awaiting_response_store = None
 
         # Owned by this daemon instance for its entire lifetime -- closed
         # in stop(). Construction is cheap (no I/O, no thread spawned
@@ -321,6 +330,19 @@ class KernelDaemon:
             )
             resources_started.append("governance_store")
             self.skill_registry.set_governance_store(self.governance_store)
+
+            # Stage 1, S1.4: the awaiting_response obligation queue store.
+            # Constructed off the event loop for the same reason as
+            # governance_store immediately above (blocking schema I/O in
+            # __init__()).
+            from bartholomew.kernel.awaiting_response_store import AwaitingResponseStore
+
+            self.awaiting_response_store = await run_off_loop(
+                AwaitingResponseStore,
+                self.mem.db_path,
+                executor=self.blocking_executor,
+            )
+            resources_started.append("awaiting_response_store")
 
             # Phase B stage B5: read whether the previous runtime (if any)
             # against this db_path confirmed a clean shutdown, then open

@@ -10,13 +10,21 @@ from fastapi.testclient import TestClient
 os.environ["BARTH_SPEED_FACTOR"] = "0.01"
 _db_dir = pathlib.Path(tempfile.mkdtemp()) / "data"
 _db_dir.mkdir(parents=True, exist_ok=True)
-os.environ["BARTH_DB_PATH"] = str(_db_dir / "test.db")
+_DB_PATH = str(_db_dir / "test.db")
+os.environ["BARTH_DB_PATH"] = _DB_PATH
 
 from bartholomew_api_bridge_v0_1.services.api.app import app  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def client():
+    # Re-assert right before starting the app -- see
+    # tests/test_api_admission_gate.py's client fixture for why (pytest
+    # collects/imports every test module, running each one's own
+    # os.environ[...] assignment, before running any test; a
+    # later-collected module can overwrite this by the time this fixture
+    # actually fires).
+    os.environ["BARTH_DB_PATH"] = _DB_PATH
     with TestClient(app) as c:
         yield c
 

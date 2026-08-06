@@ -110,13 +110,78 @@ async def _boom_drive(ctx):
     raise ValueError("drive crashed")
 
 
+# Stage 1, S1.4 (docs/S1_4_AWAITING_RESPONSE_DESIGN.md): registered but
+# deliberately NOT self-maintenance-exempt -- see
+# bartholomew.kernel.scheduler.drives.drive_awaiting_response_check's
+# docstring for why (it triggers genuine outbound contact, not
+# kernel-internal housekeeping).
+_NON_EXEMPT_REGISTERED_DRIVES = frozenset({"awaiting_response_check"})
+
+
 class TestSelfMaintenanceDrivesMatchRegistry:
-    def test_exempt_set_matches_registered_drives(self):
+    def test_exempt_set_matches_registered_drives_minus_conscious_exceptions(self):
         """If a new drive is ever registered, this fails until someone
         consciously decides whether it belongs in the self-maintenance
         exemption or should be evaluated for real -- exactly the decision
-        item 11.2's first attempt skipped."""
-        assert _SELF_MAINTENANCE_DRIVES == frozenset(DRIVE_REGISTRY.keys())
+        item 11.2's first attempt skipped. _NON_EXEMPT_REGISTERED_DRIVES is
+        that conscious decision recorded, not an escape hatch: every entry
+        in it must also be proven genuinely gated (see
+        TestAwaitingResponseCheckIsGenuinelyGated below)."""
+        assert _SELF_MAINTENANCE_DRIVES == (
+            frozenset(DRIVE_REGISTRY.keys()) - _NON_EXEMPT_REGISTERED_DRIVES
+        )
+        assert _NON_EXEMPT_REGISTERED_DRIVES <= frozenset(DRIVE_REGISTRY.keys())
+
+
+@pytest.mark.asyncio
+class TestAwaitingResponseCheckIsGenuinelyGated:
+    """awaiting_response_check is registered but not self-maintenance-exempt
+    (see _NON_EXEMPT_REGISTERED_DRIVES above) -- proves it is genuinely
+    evaluated by the Identity Policy check, the same way
+    TestPolicyDecisionIsRealForNonExemptDrives proves it for an arbitrary
+    unregistered drive kind."""
+
+    async def test_denied_by_restrictive_policy_without_allowlisting(self, daemon):
+        daemon.identity_context = IdentityContext(
+            tool_use_default_allowed=False,
+            tool_use_allowlist=[],
+        )
+
+        result, success = await run_drive_through_runtime_contract(
+            daemon,
+            "awaiting_response_check",
+            _noop_drive,
+            timeout=1.0,
+        )
+
+        assert (result, success) == (None, 0)
+
+    async def test_allowed_once_allowlisted(self, daemon):
+        daemon.identity_context = IdentityContext(
+            tool_use_default_allowed=False,
+            tool_use_allowlist=["awaiting_response_check"],
+        )
+
+        result, success = await run_drive_through_runtime_contract(
+            daemon,
+            "awaiting_response_check",
+            _noop_drive,
+            timeout=1.0,
+        )
+
+        assert success == 1
+
+    async def test_skipped_entirely_when_no_identity_context_wired(self, daemon):
+        assert daemon.identity_context is None
+
+        result, success = await run_drive_through_runtime_contract(
+            daemon,
+            "awaiting_response_check",
+            _noop_drive,
+            timeout=1.0,
+        )
+
+        assert success == 1
 
 
 @pytest.mark.asyncio

@@ -26,14 +26,17 @@ regression -- that's a deliberate, tracked follow-up, not an oversight.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import inspect
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import policy_engine
+from .blocking_executor import run_off_loop
 from .memory.privacy_guard import get_consent_handler
 from .reflection import ActionReflection, record_action_reflection
 
@@ -296,6 +299,14 @@ async def run_chat_through_runtime_contract(
             summary=f"Chat turn ({candidate_action.kind}): responded",
             details={"response_preview": (response or "")[:200]},
         )
+
+        # Stage 1, S1.4 (design doc Sec 7): a chat reply is one of the two
+        # awaiting_response resolution paths. Best-effort and additive --
+        # never breaks the chat turn itself -- gated by the daemon actually
+        # having an awaiting_response_store wired in (start()-time only), so
+        # existing duck-typed test contexts are unaffected.
+        if getattr(daemon, "awaiting_response_store", None) is not None:
+            await _maybe_auto_resolve_awaiting_response(daemon, item.item_id)
     else:
         reflection = ActionReflection(
             surface="chat",
@@ -803,3 +814,374 @@ async def run_voice_through_runtime_contract(
         reason=reason,
         result=stream_result,
     )
+
+
+# =============================================================================
+# awaiting_response obligation queue (Stage 1, S1.4; see
+# docs/S1_4_AWAITING_RESPONSE_DESIGN.md). Every open/remind/escalate/resolve
+# transition traverses this same Observation -> Interpretation -> Executive ->
+# Governance -> Capability -> Execution -> Reflection -> Memory shape --
+# COGNITIVE_RUNTIME.md's requirement that "creating/escalating/resolving an
+# entry traverses the full Runtime Contract, not a side channel."
+# =============================================================================
+
+_AWAITING_RESPONSE_TRANSITIONS = frozenset({"open", "remind", "escalate", "resolve"})
+
+_AWAITING_RESPONSE_OUTCOME_BY_TRANSITION = {
+    "open": "opened",
+    "remind": "reminded",
+    "escalate": "escalated",
+    "resolve": "resolved",
+}
+
+
+@dataclass
+class AwaitingResponseRuntimeResult:
+    """Outcome of one awaiting_response transition through the Runtime
+    Contract. `outcome` is one of: "opened", "reminded", "escalated",
+    "resolved", "parking_brake_denied", "governance_denied", "error"."""
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    outcome: str
+    reason: str | None
+    entry: Any
+
+
+async def _record_awaiting_response_reflection(
+    ctx: Any,
+    candidate_action: CandidateAction,
+    outcome: str,
+    entry: Any,
+    reason: str | None,
+) -> None:
+    """Exactly one ActionReflection per transition, into the shared Memory
+    sink -- closes COGNITIVE_RUNTIME.md's "every transition remains
+    auditable" requirement without a bespoke audit mechanism competing with
+    the one Reflection already provides (the awaiting_response_audit table
+    is the queryable per-entry detail view; this is the cross-surface
+    stream). Best-effort: record_action_reflection swallows and logs any
+    failure of its own."""
+    details: dict[str, Any] = {}
+    if entry is not None:
+        details["entry_id"] = entry.id
+        details["status"] = entry.status
+    if reason:
+        details["reason"] = reason
+    reflection = ActionReflection(
+        surface="awaiting_response",
+        action=candidate_action.kind,
+        outcome=outcome,
+        summary=f"Awaiting-response ({candidate_action.kind}): {outcome}",
+        details=details,
+    )
+    await record_action_reflection(getattr(ctx, "mem", None), reflection)
+
+
+async def _notify_awaiting_response(ctx: Any, entry: Any, transition: str) -> None:
+    """Reminder/escalation delivery delegates to the existing governed
+    NotifySkill path (design doc Sec 5) rather than a second notification
+    mechanism -- reusing S1.3's quiet-hours/mute enforcement.
+    SkillRegistry.execute_action() runs its own independent Governance pass
+    on skill_id="notify" (brake + skill_permissions.py + Identity Policy on
+    "notify" itself); that is additive to, not a substitute for, this
+    seam's own kind-based check above. Best-effort: a delivery failure must
+    not undo the state transition that already committed."""
+    if entry is None:
+        return
+    priority = "high" if transition == "escalate" else "normal"
+    title = (
+        "Still waiting on your reply"
+        if transition == "escalate"
+        else "Bartholomew is waiting on your reply"
+    )
+    try:
+        await run_skill_through_runtime_contract(
+            ctx.skill_registry,
+            "notify",
+            "send",
+            {"message": entry.subject, "title": title, "priority": priority},
+        )
+    except Exception:
+        logger.exception(
+            "Failed to deliver awaiting_response %s notification for entry %s",
+            transition,
+            getattr(entry, "id", None),
+        )
+
+
+async def _execute_awaiting_response_transition(
+    ctx: Any,
+    store: Any,
+    transition: str,
+    *,
+    entry_id: int | None,
+    subject: str | None,
+    origin_surface: str | None,
+    context_ref: str | None,
+    due_at: str | None,
+    resolution: str | None,
+    actor: str | None,
+) -> Any:
+    executor = getattr(ctx, "blocking_executor", None)
+    if transition == "open":
+        if not subject or not origin_surface:
+            raise ValueError("awaiting_response 'open' requires subject and origin_surface")
+        return await run_off_loop(
+            store.open,
+            subject=subject,
+            origin_surface=origin_surface,
+            context_ref=context_ref,
+            due_at=due_at,
+            actor=actor,
+            executor=executor,
+        )
+    if entry_id is None:
+        raise ValueError(f"awaiting_response {transition!r} requires entry_id")
+    if transition == "remind":
+        return await run_off_loop(store.remind, entry_id, actor=actor, executor=executor)
+    if transition == "escalate":
+        return await run_off_loop(store.escalate, entry_id, actor=actor, executor=executor)
+    return await run_off_loop(
+        store.resolve,
+        entry_id,
+        resolution=resolution or "manual",
+        actor=actor,
+        executor=executor,
+    )
+
+
+async def run_awaiting_response_through_runtime_contract(
+    ctx: Any,
+    transition: str,
+    *,
+    entry_id: int | None = None,
+    subject: str | None = None,
+    origin_surface: str | None = None,
+    context_ref: str | None = None,
+    due_at: str | None = None,
+    resolution: str | None = None,
+    actor: str | None = None,
+) -> AwaitingResponseRuntimeResult:
+    """
+    Trace one awaiting_response transition through the Runtime Contract
+    seam. `transition` is one of "open" (requires subject + origin_surface),
+    "remind"/"escalate"/"resolve" (require entry_id; "resolve" also takes
+    `resolution`).
+
+    `ctx` needs `.mem.db_path` and `.awaiting_response_store`
+    (bartholomew.kernel.awaiting_response_store.AwaitingResponseStore) at
+    minimum -- typically a KernelDaemon instance, once S1.4's start()
+    wiring constructs one. `.governance_store`/`.blocking_executor`/
+    `.identity_context`/`.skill_registry` are consulted via getattr with
+    the same additive fallbacks every other seam function here uses.
+
+    Governance is two independent gates, both before any store write:
+      1. ParkingBrake("skills") -- reuses the skills scope (design doc Sec
+         8 Q1): delivery already gates through NotifySkill's own
+         "skills"-scoped check, so no dedicated brake scope is needed here.
+      2. Identity Context -> Policy Decision, evaluated against the kind
+         "awaiting_response_<transition>" -- deliberately NOT exempted the
+         way `_SELF_MAINTENANCE_DRIVES` scheduler drives are: unlike
+         self_check/curiosity_probe, a reminder/escalation is genuine
+         outbound contact about specific user content (design doc Sec 5).
+         Additive: skipped entirely when no IdentityContext is wired in.
+
+    A caller-input error (unknown entry_id, or a transition attempted
+    against an already-resolved entry) raises
+    AwaitingResponseNotFoundError/InvalidTransitionError directly -- these
+    are the caller's mistake, not a governance denial or an execution
+    failure, so they propagate rather than being folded into `outcome`.
+    """
+    from .awaiting_response_store import AwaitingResponseNotFoundError, InvalidTransitionError
+
+    if transition not in _AWAITING_RESPONSE_TRANSITIONS:
+        raise ValueError(
+            f"transition must be one of {sorted(_AWAITING_RESPONSE_TRANSITIONS)}, got {transition!r}",
+        )
+    # Malformed-call validation, before any Observation/Governance/store
+    # work: a missing required argument is the caller's programming
+    # mistake, not a governed event or an execution failure, so it's
+    # raised immediately rather than folded into `outcome` or recorded as
+    # a Reflection.
+    if transition == "open":
+        if not subject or not origin_surface:
+            raise ValueError("awaiting_response 'open' requires subject and origin_surface")
+    elif entry_id is None:
+        raise ValueError(f"awaiting_response {transition!r} requires entry_id")
+
+    store = ctx.awaiting_response_store
+    kind = f"awaiting_response_{transition}"
+
+    existing = None
+    if entry_id is not None:
+        existing = await run_off_loop(
+            store.get,
+            entry_id,
+            executor=getattr(ctx, "blocking_executor", None),
+        )
+    prompt_subject = subject or (existing.subject if existing is not None else "awaiting_response")
+
+    observation = Observation(
+        source="awaiting_response",
+        raw_content=f"{transition}:{entry_id if entry_id is not None else 'new'}",
+    )
+    interpretation = Interpretation(observation=observation, prompt=prompt_subject)
+    candidate_action = CandidateAction(kind=kind, interpretation=interpretation)
+
+    governance_allowed = True
+    outcome = "governance_denied"
+    reason: str | None = None
+
+    # Governance gate 1: ParkingBrake("skills"), fail-closed.
+    try:
+        from bartholomew.orchestrator.safety.governance_store import (
+            is_blocked_fail_closed_off_loop,
+        )
+
+        blocked = await is_blocked_fail_closed_off_loop(
+            "skills",
+            ctx.mem.db_path,
+            governance_store=getattr(ctx, "governance_store", None),
+            executor=getattr(ctx, "blocking_executor", None),
+        )
+        if blocked:
+            governance_allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Blocked by parking brake (scope=skills)"
+    except Exception:
+        logger.exception("Governance check failed for %s; failing closed", kind)
+        governance_allowed = False
+        outcome = "parking_brake_denied"
+        reason = "Governance check errored"
+
+    # Governance gate 2: Identity Policy Decision, evaluated for real (see
+    # docstring above for why this is NOT in an exempt set).
+    identity_context = getattr(ctx, "identity_context", None)
+    if governance_allowed and identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, kind)
+        if not decision.allowed:
+            governance_allowed = False
+            outcome = "governance_denied"
+            reason = f"Denied by Identity policy: {decision.reason}"
+
+    entry = existing
+    if governance_allowed:
+        try:
+            entry = await _execute_awaiting_response_transition(
+                ctx,
+                store,
+                transition,
+                entry_id=entry_id,
+                subject=subject,
+                origin_surface=origin_surface,
+                context_ref=context_ref,
+                due_at=due_at,
+                resolution=resolution,
+                actor=actor,
+            )
+        except (AwaitingResponseNotFoundError, InvalidTransitionError) as exc:
+            await _record_awaiting_response_reflection(
+                ctx,
+                candidate_action,
+                "rejected",
+                None,
+                str(exc),
+            )
+            raise
+        except Exception as exc:
+            logger.exception("awaiting_response transition %s failed", kind)
+            governance_allowed = False
+            outcome = "error"
+            reason = str(exc)
+        else:
+            outcome = _AWAITING_RESPONSE_OUTCOME_BY_TRANSITION[transition]
+            if (
+                transition in ("remind", "escalate")
+                and getattr(ctx, "skill_registry", None) is not None
+            ):
+                await _notify_awaiting_response(ctx, entry, transition)
+
+    await _record_awaiting_response_reflection(ctx, candidate_action, outcome, entry, reason)
+
+    return AwaitingResponseRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=governance_allowed,
+        outcome=outcome,
+        reason=reason,
+        entry=entry,
+    )
+
+
+def _parse_awaiting_response_opened_at(opened_at: str) -> float | None:
+    """Parse an awaiting_response entry's `opened_at`
+    ("YYYY-MM-DDTHH:MM:SSZ", see awaiting_response_store._now_iso()) to a
+    Unix epoch second count, comparable against WorkingMemoryItem.added_at
+    .timestamp(). Returns None for an unparseable value -- treated as "an
+    adjacency claim can't be proven" by the caller, not as "no constraint"."""
+    try:
+        return calendar.timegm(time.strptime(opened_at, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+
+
+async def _maybe_auto_resolve_awaiting_response(
+    daemon: KernelDaemon,
+    current_wm_item_id: str,
+) -> None:
+    """Narrow MVP auto-resolution on reply (design doc Sec 7): resolves an
+    open chat-origin awaiting_response entry only when exactly one such
+    entry exists AND this chat turn is genuinely the next one since the
+    entry opened -- not merely some later turn that happens to land while
+    it's still the sole open entry (a real gap a PR review on #38 caught:
+    without an adjacency check, an unrelated reply arbitrarily later would
+    silently resolve an entry that was never actually replied to).
+    Adjacency is proven via Working Memory's own chat-item timestamps: if
+    any other "chat"-sourced item was added after the entry's `opened_at`
+    (excluding this turn's own item, `current_wm_item_id`), a reply has
+    already happened since -- this is not that reply, so the entry stays
+    open rather than guessing.
+
+    This codebase's WorkingMemoryManager is a single rolling buffer with no
+    per-session/thread partitioning (confirmed by direct read), so "same
+    session/thread" (design doc Sec 7) degenerates to "the chat surface as
+    a whole, in chronological order" here -- the narrowest faithful reading
+    of that heuristic given the current architecture, not a loosening of
+    it. Two or more open entries remains an ambiguous match and always
+    fails closed to "stays open." Best-effort: never breaks the chat turn
+    that triggered it.
+    """
+    try:
+        executor = getattr(daemon, "blocking_executor", None)
+        open_entries = await run_off_loop(
+            daemon.awaiting_response_store.list_open_by_origin,
+            "chat",
+            executor=executor,
+        )
+        if len(open_entries) != 1:
+            return
+        entry = open_entries[0]
+
+        opened_ts = _parse_awaiting_response_opened_at(entry.opened_at)
+        if opened_ts is None:
+            return
+
+        chat_items = daemon.working_memory.get_by_source("chat")
+        intervening_reply_exists = any(
+            item.item_id != current_wm_item_id and item.added_at.timestamp() > opened_ts
+            for item in chat_items
+        )
+        if intervening_reply_exists:
+            return
+
+        await run_awaiting_response_through_runtime_contract(
+            daemon,
+            "resolve",
+            entry_id=entry.id,
+            resolution="reply_received",
+            actor="chat_auto_resolve",
+        )
+    except Exception:
+        logger.exception("Failed to auto-resolve awaiting_response from a chat reply")

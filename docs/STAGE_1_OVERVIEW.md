@@ -3,15 +3,20 @@
 > **Authority note:** this document is the concise explanation of the *approved Stage 1 direction
 > and stage structure*, mirroring `docs/PHASE_B_OVERVIEW.md`'s shape and role. It is subordinate to
 > and linked from `ROADMAP.md`, which remains the canonical source for Stage 1's exit criteria and
-> approval boundaries. This overview does not itself authorise implementation of any sub-stage
-> beyond S1.1, S1.2, S1.3, and S1.5 (already implemented, see below) — each of S1.4 and S1.6 needs
-> its own separate approval before implementation begins.
+> approval boundaries. This overview does not itself authorise implementation of any future Stage 1
+> work — every sub-stage's plan and every implementation diff was separately and explicitly gated.
+> All of S1.0–S1.6 are now implemented.
 >
-> **Last updated:** 2026-08-05 (S1.4 design proposed — see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md`;
-> design-only, not approved for implementation. Previously: 2026-08-04, S1.2 implemented — see
-> below; builds the promotion path the standalone consent-handler fix's `pending_sensitive_writes`
-> inbox always anticipated. Previously: 2026-08-03, standalone consent-handler fix implemented —
-> see "Standalone: consent-handler fix"
+> **Last updated:** 2026-08-05 (S1.6 implemented — see
+> `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md` for the design (revised per reviewer feedback:
+> user-experience framing, future upgrade paths, a "How should I choose?" section) and this
+> document's S1.6 section for what was actually built. All six Stage 1 sub-stages are now complete.
+> Previously, same day: S1.4 implemented —
+> see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for
+> the design and this document's S1.4 section for what was actually built. Previously: 2026-08-04,
+> S1.2 implemented — see below; builds the promotion path the standalone consent-handler fix's
+> `pending_sensitive_writes` inbox always anticipated. Previously: 2026-08-03, standalone
+> consent-handler fix implemented — see "Standalone: consent-handler fix"
 > below S1.6, not a Stage 1 sub-stage. 2026-08-01: S1.3 notification settings + mute/quiet-hours
 > implemented, following S1.1 Parking Brake API + UI and S1.5 governance audit/provenance view).
 
@@ -165,16 +170,60 @@ unreachable via the governed HTTP path until now.
 (not just in-memory), verified with a real browser (Playwright + the pre-installed headless
 Chromium).
 
-### S1.4 — `awaiting_response` queue (design proposed 2026-08-05, not approved, not implemented)
-**Purpose:** implement the obligation-state concept `COGNITIVE_RUNTIME.md` documents but that does
+### S1.4 — `awaiting_response` queue ✅ (Implemented 2026-08-05)
+**Purpose:** implement the obligation-state concept `COGNITIVE_RUNTIME.md` documents but that did
 not exist in code — opened/reminded/escalated/resolved, traversing Governance like any other
-action. The largest, most novel remaining sub-stage; needed its own design pass, not just CRUD.
-**Design pass complete:** see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for the proposed schema
-(new `awaiting_response_store.py`), state machine, Runtime Contract integration (a new
-`run_awaiting_response_through_runtime_contract()` seam, reusing `NotifySkill` for delivery rather
-than a second notification path), the escalation-drive trigger, and the narrow, fail-closed
-auto-resolution rule. **Deferred until its own separate approval to implement** — the design
-document itself is not that approval.
+action. The largest, most novel Stage 1 sub-stage; needed its own design pass, not just CRUD.
+**Design:** `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` (proposed 2026-08-05, then implemented
+per that design the same day, once explicitly approved).
+**Scope implemented:**
+- `bartholomew/kernel/awaiting_response_store.py` — new isolated store (`awaiting_response`/
+  `awaiting_response_audit` schema), mirroring `governance_store.py`'s shape: synchronous class,
+  `ensure_schema()`, atomic state+audit writes. `open()`/`remind()`/`escalate()`/`resolve()`
+  implement the design's state machine exactly; an already-resolved entry raises
+  `InvalidTransitionError` rather than allowing a further transition.
+- `runtime_contract.py`'s new `run_awaiting_response_through_runtime_contract()` seam: Governance is
+  ParkingBrake("skills") then an Identity Policy check against
+  `awaiting_response_<transition>` — deliberately **not** added to `_SELF_MAINTENANCE_DRIVES`,
+  since a reminder/escalation is genuine outbound contact, not kernel-internal housekeeping (design
+  doc Sec 5). Remind/escalate delivery delegates to the existing governed `NotifySkill` path, never
+  a second notification mechanism. A caller-input error (unknown `entry_id`, or a transition against
+  an already-resolved entry) raises directly rather than being folded into a governance-style denial.
+- `scheduler/drives.py`'s new `awaiting_response_check` drive (cadence `every:900`, matching
+  `self_check`): scans for entries due their next reminder/escalation and drives each individually
+  through the seam above — also deliberately **not** self-maintenance-exempt, for the same reason as
+  the seam's own kinds; needs its own `Identity.yaml` allowlist entry to run at all (see below).
+- `Identity.yaml`'s `tool_use.allowlist` gains five entries: the four seam kinds
+  (`awaiting_response_open/remind/escalate/resolve`) design doc Sec 5 named explicitly, plus
+  `awaiting_response_check` itself (an implementation-time addition beyond what Sec 5 enumerated —
+  without it the registered-but-non-exempt scheduler drive would be denied every tick under real
+  production config and the feature would never fire; flagged here per `Identity.yaml`'s own
+  `governance.change_control` section).
+- `daemon.py`'s `start()` constructs the shared `AwaitingResponseStore` off the event loop,
+  immediately after `governance_store` (same construction-timing rationale: blocking schema I/O in
+  `__init__`).
+- Chat-side auto-resolution (design doc Sec 7's narrow MVP path): `run_chat_through_runtime_contract`
+  additively resolves a single open chat-origin entry on the next reply. This codebase's
+  `WorkingMemoryManager` has no per-session/thread partitioning (confirmed by direct read), so "same
+  session/thread" degenerates to "the chat surface as a whole" — the narrowest faithful reading of
+  that heuristic given the current architecture. Two or more open entries stays an ambiguous match
+  that fails closed to "stays open," per the design's own non-negotiable invariant.
+- `bartholomew_api_bridge_v0_1/services/api/routes/awaiting_response.py` — `GET
+  /api/awaiting-response` (list, `status` filter), `POST /api/awaiting-response` (open; a
+  dev/manual-entry endpoint mirroring `/api/reflection/run`'s "manually trigger... for testing"
+  precedent, since deciding *when* a live chat/scheduler surface implies an obligation is further,
+  separate integration work design doc Sec 8 Q3 scopes out of S1.4), `POST
+  /api/awaiting-response/{id}/resolve`, `GET /api/awaiting-response/{id}/audit`. Reads go straight to
+  the store off-loop (read paths aren't governed actions, matching `governance.py`'s own read
+  routes); the two mutations route through the seam above.
+- UI: a "⏳ Awaiting Response" card in `ui/minimal/index.html`, same auto-refresh/`r.ok`-checking
+  convention as the other Stage 1 cards.
+**Exit condition met:** every transition traverses the Runtime Contract seam (no direct store write
+from a route or skill); reminder/escalation delivery reuses `NotifySkill`; an ambiguous
+auto-resolution match always fails closed; verified by `tests/test_awaiting_response_store.py`,
+`tests/test_runtime_contract_awaiting_response.py`, `tests/test_awaiting_response_api.py` (the last
+against the real app + real `Identity.yaml`, proving the allowlist additions are actually
+sufficient), and `tests/test_scheduler_drive_convergence.py`'s updated exemption-set tests.
 
 ### S1.5 — Audit / provenance view ✅ (Implemented 2026-08-01)
 **Purpose:** read `governance_audit` (now including `actor`, per S1.1) back out through an API +
@@ -204,10 +253,53 @@ sources — those remain deferred to their own sub-stages, unchanged by this one
 /api/governance/audit` and the minimal UI without a manual refresh, verified with a real browser
 (Playwright + the pre-installed headless Chromium).
 
-### S1.6 — Host-device onboarding guidance (scoped only, not implemented)
+### S1.6 — Host-device onboarding guidance ✅ (Implemented 2026-08-05)
 **Purpose:** onboarding content presenting the realistic trade-offs of each supported deployment
 target, consistent with `DECISIONS.md`'s hybrid local-first deployment-architecture entry.
-**Deferred until its own separate approval.**
+**Design:** `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md` (proposed, revised per reviewer feedback,
+approved, then implemented per that design, all 2026-08-05).
+**Scope implemented:**
+- `bartholomew_api_bridge_v0_1/services/api/onboarding_content.py` — static content module (no
+  database, no I/O) with a `DeploymentTarget` per target (`feel`, `advantages`, `limitations`,
+  `upgrade_path`, `available_today`) for all five targets the design specifies (phone, personal
+  computer, home server/hub, hosted cloud service, hybrid local-plus-cloud), a `CHOOSING_GUIDE` list
+  of five `{priority, target_id, rationale}` rows (design doc Sec 4), and a `MIGRATION_NOTE`
+  constant carrying the "this choice is not permanent" copy. `hosted_cloud_service` is the one
+  target flagged `available_today=False`, matching the design's non-negotiable honesty requirement
+  that this project's lack of a first-party hosted runtime is never misrepresented.
+- `bartholomew_api_bridge_v0_1/services/api/routes/onboarding.py` — `GET
+  /api/onboarding/deployment-guide` → `{"targets": [...], "choosing_guide": [...],
+  "migration_note": "..."}`. No governance check (equivalent to serving a static asset, not a
+  capability) and no `_kernel` dependency at all; added to `app.py`'s admission-middleware exempt
+  prefixes alongside `/api/liveness` so it answers even during startup/shutdown windows, for the
+  same "doesn't touch governed daemon state" reason.
+- UI (`ui/minimal/index.html`): a first-run modal gated by a client-only `localStorage` flag
+  (`bartholomew_onboarding_seen`, never server-persisted — design doc Sec 6) leading with the
+  choosing-guide table and migration note, with full per-target detail available via expandable
+  `<details>`; an always-reachable "🏠 Deployment Guide" reference card rendering the identical
+  content outside the modal. Verified with a real browser (Playwright + the pre-installed headless
+  Chromium): the modal appears on first load, does not reappear after dismissal (including across a
+  page reload), and the reference card renders all five targets with the "not offered today" badge
+  correctly shown only on hosted cloud service.
+- Tests: `tests/test_onboarding_api.py` (17 tests) — content-module shape (five targets, five
+  distinct choosing-guide priorities/targets), every target's fields non-empty, `hosted_cloud_service`
+  flagged unavailable, the migration note present in the API response, no dangling choosing-guide
+  target references, no "recommended"/"best choice"/"get started with" language anywhere in the
+  copy (Sec 7's neutrality requirement, tested directly), and the endpoint reachable with no auth.
+**One content-fidelity deviation from the design doc's literal prose (flagged per Open Question 2's
+own "wording polish is implementation-time, not design-blocking" scoping):** Sec 3/4's approved
+copy cites internal artifacts (`Identity.yaml`, `CONSTITUTION.md`, "Stage 6", cross-references to
+the design doc's own section numbers) that are appropriate in a design document but not in
+consumer-facing onboarding copy. The implemented copy preserves every substantive claim and honesty
+requirement from the design (compute/battery/storage limits, the "not built yet" caveats on
+cross-device/data-export/hosted-runtime capability, the exact five-target and five-priority
+structure) while rendering it in plain language a real user would read, with no internal doc
+citations. Every fact-level assertion in the design doc's Sec 3/4 tables is represented in the
+shipped copy; nothing in scope was added or removed.
+**Exit condition met:** onboarding presents all five targets' trade-offs and a future upgrade path
+each, none flagged as the only supported option, with a priority-conditional (not single-verdict)
+choosing guide and a prominent non-permanence note — verified by the test suite above and a real
+browser check.
 
 ### Standalone: consent-handler fix ✅ (Implemented 2026-08-03)
 **Not a Stage 1 sub-stage** — a standalone fix found while investigating S1.2, kept separate from

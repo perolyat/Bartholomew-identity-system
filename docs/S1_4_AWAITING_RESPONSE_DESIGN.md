@@ -1,13 +1,15 @@
 # S1.4 Design — The `awaiting_response` Obligation Queue
 
-> **Authority note:** this document is a *design proposal*, not an approval. It is subordinate to
-> `ROADMAP.md` (Stage 1's canonical exit criteria) and `docs/STAGE_1_OVERVIEW.md` (S1.4's scope
-> stub), and to `COGNITIVE_RUNTIME.md`'s `awaiting_response` section, which is the canonical
-> requirement this design implements. Nothing in this document authorises implementation — per
-> `docs/STAGE_1_OVERVIEW.md`'s non-negotiable invariants, S1.4 needs its own separate, explicit
-> approval before any code is written, same as every other Stage 1 sub-stage.
+> **Authority note:** this document is the design this sub-stage was implemented against. It is
+> subordinate to `ROADMAP.md` (Stage 1's canonical exit criteria) and `docs/STAGE_1_OVERVIEW.md`
+> (S1.4's implemented-scope record), and to `COGNITIVE_RUNTIME.md`'s `awaiting_response` section,
+> which is the canonical requirement this design implements.
 >
-> **Status:** proposed 2026-08-05. Not approved. Not implemented.
+> **Status:** proposed 2026-08-05, approved and implemented 2026-08-05. See
+> `docs/STAGE_1_OVERVIEW.md`'s S1.4 section for what was actually built, including the one
+> implementation-time judgment call not fully resolved here (the `awaiting_response_check`
+> scheduler drive's own `Identity.yaml` allowlist entry — see `DECISIONS.md`'s corresponding
+> 2026-08-05 entry).
 
 ## 1. What this closes
 

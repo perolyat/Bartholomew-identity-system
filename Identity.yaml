@@ -436,6 +436,26 @@ tool_use:
     # (config/skills/notify.yaml) and permission-level "auto" (low-risk),
     # just previously unreachable via the governed execute_action() path.
     - "notify"
+    # Stage 1, S1.4 (docs/S1_4_AWAITING_RESPONSE_DESIGN.md): the
+    # awaiting_response obligation queue's own seam kinds -- deliberately
+    # NOT exempted from evaluate_tool_policy() the way self-maintenance
+    # scheduler drives are (a reminder/escalation is genuine outbound
+    # contact about specific user content), so without these four entries
+    # every open/remind/escalate/resolve transition would be denied by
+    # this Governance stage before NotifySkill's own "notify" allowlisting
+    # above is ever reached. Same "blocking discovery" shape S1.3's
+    # "notify" addition resolved.
+    - "awaiting_response_open"
+    - "awaiting_response_remind"
+    - "awaiting_response_escalate"
+    - "awaiting_response_resolve"
+    # The scheduler drive task_id that scans for entries due a
+    # reminder/escalation and dispatches the four kinds above -- also
+    # deliberately not self-maintenance-exempt (see
+    # bartholomew.kernel.scheduler.drives.drive_awaiting_response_check's
+    # docstring), so it needs its own allowlist entry to ever run against
+    # this Identity.yaml.
+    - "awaiting_response_check"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]
