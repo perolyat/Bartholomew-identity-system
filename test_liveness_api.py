@@ -38,7 +38,10 @@ def test_get_ticks_returns_empty_when_table_missing(tmp_path, monkeypatch):
     """
     db = tmp_path / "no_ticks.db"
     sqlite3.connect(str(db)).close()  # empty DB: no `ticks` table
-    monkeypatch.setattr(liveness, "DB_PATH", str(db))
+    # liveness.py resolves its db path fresh on every call via
+    # resolve_db_path() (see db.resolve_db_path()'s docstring for why it's
+    # no longer a frozen DB_PATH constant) -- patch that instead.
+    monkeypatch.setattr(liveness, "resolve_db_path", lambda: str(db))
 
     assert liveness.get_ticks(limit=5, offset=0) == []
 
