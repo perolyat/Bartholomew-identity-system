@@ -788,3 +788,78 @@
   confirmed this dependency was resolved correctly, not merely asserted. See
   `docs/STAGE_1_OVERVIEW.md`'s S1.4 section for the complete implementation record.
 - **Date:** 2026-08-05 (Stage 1, S1.4)
+
+## Decision: PR #38's CI flake root cause is a pre-existing frozen-DB_PATH test-isolation defect, not a defect in S1.4/S1.6 feature logic -- fixed by resolving BARTH_DB_PATH fresh at daemon-startup time
+- **Decision:** After three CI failures on PR #38 (S1.4 + S1.6), each a different specific test
+  in `tests/test_notifications_api.py` failing with `sqlite3.OperationalError: database is
+  locked`, investigation was escalated per explicit user direction: isolate the exact root cause
+  rather than retry or work around symptoms, and restore previous scheduler behaviour before
+  merging. Root cause, confirmed by direct code reading and a targeted reproduction (not
+  speculation): `bartholomew_api_bridge_v0_1/services/api/db.py`'s `DB_PATH` was a module-level
+  constant, resolved from `BARTH_DB_PATH` exactly once at this module's first import. Because
+  pytest imports (collects) every test module before running any test, and roughly a dozen test
+  files each set `os.environ["BARTH_DB_PATH"]` to their own private tempdir immediately before
+  importing `app.py` -- each expecting an isolated database -- only whichever file's import
+  happened to run last during collection actually determined the value every later `from .db
+  import DB_PATH` (in `app.py`, in `routes/liveness.py`) would ever see; a small standalone
+  reproduction (two dummy test files, each printing `os.environ["PROBE"]` at import time and at
+  test-run time) confirmed every test in the session observed whichever file was collected *last*,
+  not its own file's assignment. Every one of these test files' `KernelDaemon` -- including its
+  live background scheduler -- ended up silently sharing ONE physical SQLite file instead of each
+  getting its own, so one file's scheduler ticks and another, entirely unrelated file's
+  foreground HTTP-triggered writes (`test_notifications_api.py`'s notify-skill settings save) were
+  genuinely racing each other for the same file under SQLite's finite busy-timeout. This defect
+  predates PR #38 entirely (`tests/test_governance_api.py`'s own `_live_db_path()` helper already
+  carried a code comment describing and working around it) and is not a logic bug in the
+  `awaiting_response_check` scheduler drive or any other S1.4/S1.6 code. S1.4's addition of a
+  fifth, unconditionally-registered scheduler drive (running inside every `KernelDaemon`
+  system-wide, not just S1.4-relevant ones) measurably raised the number of concurrent
+  scheduler-vs-foreground contention windows across the whole test suite, which is what tipped
+  this pre-existing, latent architectural fragility into visibly, repeatedly failing CI, without
+  itself being the underlying defect.
+- **Fix:** `db.py` gains `resolve_db_path()`, which reads `BARTH_DB_PATH` fresh on every call
+  instead of caching it; `app.py`'s `startup()` now calls it at `KernelDaemon` construction time
+  instead of importing the frozen `DB_PATH` constant. Because pytest's collect-everything-first
+  behaviour means even a "fresh" read at fixture-setup time can still observe whichever file was
+  *collected* last rather than the currently-running file's own assignment, every affected test
+  file's `client` fixture (`test_api_admission_gate.py`, `test_api_chat_runtime_contract.py`,
+  `test_awaiting_response_api.py`, `test_consent_api.py`, `test_governance_api.py`,
+  `test_notifications_api.py`, `test_onboarding_api.py`, `test_self_state_api.py`,
+  `test_stage0_alive.py`) now re-asserts its own `BARTH_DB_PATH` immediately before constructing
+  its `TestClient`, guaranteeing genuine per-file isolation regardless of collection order.
+  `test_governance_api.py`'s `_live_db_path()` workaround (which read the now-decoupled frozen
+  `DB_PATH` constant specifically because that used to reliably equal whatever file was actually
+  live) is simplified to return the module's own `_DB_PATH` directly, since the two are correctly
+  the same value again. No change to `awaiting_response_check`'s registration, cadence, or any
+  other S1.4/S1.6 approved-design element; `db.DB_PATH` remains for the one remaining consumer
+  (`routes/liveness.py`) and the `atexit` checkpoint hook, both out of scope (neither implicated
+  in the observed failures, and both behave identically to before in a real single-process
+  deployment, where `BARTH_DB_PATH` is set once before the process starts and never changes).
+- **Alternatives considered:** (a) Add application-level retry/backoff around the specific writes
+  that failed (`notify.py`'s `_save_settings()`) -- rejected: doesn't address the root cause (two
+  daemons genuinely sharing one file), only masks its symptom, and the busy-timeout window it
+  would need to outlast is unbounded under this defect (two independent daemons' schedulers can
+  contend indefinitely, not just briefly). (b) Remove `awaiting_response_check` from the drive
+  registry or make it conditional -- rejected without a separate approval: this is part of S1.4's
+  already-approved design (`docs/S1_4_AWAITING_RESPONSE_DESIGN.md` Sec 6), and investigation found
+  no implementation defect in the drive itself to justify changing it; the drive was only ever the
+  trigger that made a pre-existing, unrelated defect visible more often, not the defect itself.
+  (c) A broader rewrite of the shared-test-database architecture (e.g. per-test-function isolation,
+  a conftest-level fixture consolidating all ~9 files) -- rejected as larger than necessary: fixing
+  the one proven, narrow defect (frozen constant + no re-assertion at the point of use) fully
+  restores isolation without restructuring how these tests are written.
+- **Why:** The user's explicit direction was to isolate the exact root cause rather than work
+  around symptoms, and to restore previous (i.e., correctly isolated) scheduler behaviour without
+  changing S1.4/S1.6's approved scope. A verifiable, minimal fix to an objectively-broken caching
+  assumption satisfies both: it is provably correct (confirmed by direct reproduction), narrowly
+  scoped (two production call sites plus nine test fixtures, each a small and obviously-correct
+  change), and requires no revision to either sub-stage's approved design.
+- **Consequences:** New regression coverage: `tests/test_api_db_path_isolation.py` proves
+  `resolve_db_path()` reflects the current env var (not a cached value), creates its parent
+  directory, falls back to the default when unset, and that two sequential `TestClient` lifecycles
+  with different `BARTH_DB_PATH` values get genuinely isolated `KernelDaemon` instances. The
+  combined previously-failing test set (`test_notifications_api.py` plus every other file sharing
+  this pattern) was run repeatedly clean after the fix, where it had failed on 3 of 3 prior CI
+  attempts. PR #38 remains unmerged pending this fix's own CI verification, per explicit user
+  instruction not to merge while the regression exists.
+- **Date:** 2026-08-06 (PR #38 follow-up: scheduler/database test-isolation fix)

@@ -29,7 +29,7 @@ except Exception:
 from prometheus_client import PlatformCollector, ProcessCollector
 
 from . import db_ctx
-from .db import DB_PATH
+from .db import DB_PATH, resolve_db_path
 from .models import ChatIn, ChatOut, ConversationList
 from .routes import (
     awaiting_response,
@@ -197,10 +197,14 @@ async def startup():
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
 
-    # Start kernel in-process
+    # Start kernel in-process. Resolved fresh here (not the DB_PATH constant
+    # imported above) -- see db.resolve_db_path()'s docstring: this is the
+    # call site that was silently sharing one physical SQLite file across
+    # unrelated test files before this fix (found investigating a CI flake
+    # on PR #38).
     _kernel = KernelDaemon(
         cfg_path="config/kernel.yaml",
-        db_path=DB_PATH,
+        db_path=resolve_db_path(),
         persona_path="config/persona.yaml",
         policy_path="config/policy.yaml",
         drives_path="config/drives.yaml",
