@@ -4,12 +4,16 @@
 > criteria and locked safety-scaffolding sequence), `COGNITIVE_RUNTIME.md` (the Runtime Contract
 > pipeline and ownership table this design extends), and `CONSTITUTION.md` (the Five Pillars,
 > Automation Philosophy, and Safety/Accessibility/Product Invariants this design must satisfy).
-> It does not modify any of those documents; it proposes specific additions to each, listed
-> inline, that only take effect on approval.
+> It does not modify any of those documents; approval of this document authorises the specific
+> additions to each proposed inline (the ownership-table row, §2; the S5.0–S5.7 sub-staging, §2)
+> to actually be made.
 >
-> **Status:** proposed 2026-08-06, revised 2026-08-06 (added Initiative Dependencies and
-> hierarchical parent/child reservation, §13, per reviewer feedback before approval), not yet
-> approved, not yet implemented.
+> **Status:** proposed 2026-08-06, revised twice the same day per reviewer feedback (Initiative
+> Dependencies and hierarchical parent/child reservation, §13; then the declarative/informational
+> non-negotiable invariants, §16), **design approved 2026-08-06.** Approval covers the
+> architecture only — per this document's own §2/§14/§15, S5.2 (Typed Cadence) and every later
+> sub-stage still require their own separate, explicit approval before implementation, same as
+> every other Phase B/Stage 1 sub-stage.
 >
 > **Scope of this pass:** architecture only — the generic `Initiative` object, its lifecycle, its
 > Runtime Contract seam, and the governance/audit/memory contracts every future proactive
@@ -70,20 +74,22 @@ New module: `bartholomew/kernel/initiative_store.py` — sibling to `awaiting_re
 `governance_store.py`, and `scheduler/persistence.py`. Same shape: isolated class, `ensure_schema()`,
 tested standalone before any Runtime Contract wiring.
 
-**Proposed addition to `COGNITIVE_RUNTIME.md`'s ownership table** (on approval):
+**Addition to `COGNITIVE_RUNTIME.md`'s ownership table** (this design is approved; the table itself
+is updated in the same change as this approval):
 
 | Concept | Authoritative owner | Implementations |
 |---|---|---|
 | Initiative | Kernel Executive | `initiative_store.py`, `run_initiative_through_runtime_contract()` |
 
-**Proposed Stage 5 sub-staging** (on approval, mirroring Stage 1's S1.0–S1.6 and Phase B's B0–B9):
-Stage 5 is currently one undifferentiated block in `ROADMAP.md` beyond the already-landed S5.0
-prerequisite. This document proposes formalising the six locked-sequence steps as their own gates:
+**Stage 5 sub-staging** (adopted alongside this approval, mirroring Stage 1's S1.0–S1.6 and Phase
+B's B0–B9; `ROADMAP.md` is updated in the same change): Stage 5 was one undifferentiated block
+beyond the already-landed S5.0 prerequisite. This document formalises the six locked-sequence
+steps as their own gates:
 
 | Stage | Objective | Status |
 |---|---|---|
 | **S5.0** | Scheduler-schema readiness (closes issue #24) | ✅ done 2026-07-25, PR #25 |
-| **S5.1** | Initiative Engine architecture (this document) | proposed |
+| **S5.1** | Initiative Engine architecture (this document) | ✅ design approved 2026-08-06 (architecture only — implementation not yet approved) |
 | **S5.2** | Typed cadence | not started — proposed next |
 | **S5.3** | Default-off consent + functional mute | not started |
 | **S5.4** | Quiet-hours defer | not started |
@@ -593,7 +599,36 @@ rather than silently picking one:
   dependency flagged here, added when a concrete category is first implemented, per
   `governance.change_control`, exactly as S1.4's allowlist gap was handled.
 
-## 16. Verify plan
+## 16. Non-negotiable invariants
+
+Two architectural invariants, established here alongside §6's existing one (no route, skill, or
+drive writes to `initiative_store.py` outside the Runtime Contract seam):
+
+1. **An Initiative is declarative, not imperative.** It represents *what* the Executive intends
+   (`kind`, `category`, `rationale`, `payload`, per §4) — never *how* it will be carried out.
+   Execution strategy stays the Capability layer's responsibility, decided only after Governance
+   approval, at `deliver` time (§7) — the same separation every other Runtime Contract surface
+   already keeps between its `CandidateAction` (what's proposed) and its Capability (how it's
+   done). A drive proposing `checkin.morning` never encodes which notification channel, retry
+   policy, or delivery mechanism to use; that decision belongs entirely to whatever Capability
+   executes at delivery time, free to change without altering a single `Initiative` row's shape.
+   This keeps the generic object stable as delivery mechanisms evolve, and closes a specific
+   failure mode: a drive's `payload` smuggling in an implicit "and do it exactly this way"
+   instruction would let it dictate execution unilaterally, exactly the kind of unchecked
+   Executive-to-Capability shortcut Governance exists to sit between.
+2. **Dependencies and hierarchy are informational until promoted by Governance.** Recording a
+   `depends_on` edge or a `parent_initiative_id` (§13) is a plain, side-effect-free write — it
+   must never itself schedule, defer, block, or execute anything. Any future dependency- or
+   hierarchy-enforcement logic (§13's sketch; §14 item 7) must still flow through the same
+   Executive-proposes, Governance-evaluates pipeline as every other Initiative transition: a
+   recorded dependency may *inform* a future `defer` decision at the delivery-timing check (§7),
+   but it can never itself cause a `deliver`, `cancel`, or any other transition to fire without
+   passing through Governance again. This forecloses the failure mode dependency graphs
+   characteristically invite — "B depends on A" quietly becoming "A's resolution directly
+   triggers B" through a side channel — the same class of shortcut `awaiting_response_store.py`'s
+   own non-negotiable invariant (§6) was written to prevent for a simpler case.
+
+## 17. Verify plan
 
 None yet — this is architecture only, no code changes. S5.2 (Typed Cadence)'s own design and
 implementation pass will include the first concrete tests exercising this chassis:

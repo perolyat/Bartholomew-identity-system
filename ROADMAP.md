@@ -659,20 +659,51 @@ not itself grant.
 
 ---
 
-### Stage 5 — Initiative engine (scheduled check-ins + workflows) 📋 NOT STARTED
+### Stage 5 — Initiative engine (scheduled check-ins + workflows) 🚧 S5.1 design approved
 
-**Status as of 2026-07-27:** **S5.1 has not begun.** Only the prerequisite S5.0 has landed. No
-Stage 5 feature code exists — no typed cadence, no proactive consent or mute, no quiet-hours
-defer, no dry-run mode, no structured rationale logging, and no `allow_proactive` governance
-category. Resuming Stage 5 requires separate explicit approval; S5.0 landing early does not
-constitute Stage 5 being in progress. **Sequencing corrected 2026-07-28:** Stage 5 now also
-requires Stage 1's minimal consumer web governance shell (parking-brake access, consent/approval
-inbox, mute/notification controls, awaiting-response queue) to exist and be proven working before
-live proactive delivery is permitted — see "Near-term milestone plan" above. Additionally, live
-proactive *reflection* behaviour specifically remains blocked on the reflection-ownership
-implementation gap tracked in `COGNITIVE_RUNTIME.md` (current concatenation vs. approved
-`ReflectionGenerator`-authoritative target) until that gap is closed by a separately authorised
-code change with verifying tests.
+**Status as of 2026-08-06:** Stage 5 is now staged **S5.0–S5.7**, mirroring Stage 1's S1.0–S1.6
+and Phase B's B0–B9, per `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md` (approved
+2026-08-06). **S5.1's architecture is approved; no implementation exists yet for S5.1 or any later
+sub-stage** — approving one sub-stage never implicitly approves the next, same as every other
+staged workstream in this document.
+
+| Stage | Objective | Status |
+|---|---|---|
+| **S5.0** | Scheduler-schema readiness (closes issue #24) | ✅ done 2026-07-25, PR #25 |
+| **S5.1** | Initiative Engine architecture | ✅ design approved 2026-08-06 — `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md`; not yet implemented |
+| **S5.2** | Typed cadence | not started |
+| **S5.3** | Default-off consent + functional mute | not started |
+| **S5.4** | Quiet-hours defer | not started |
+| **S5.5** | Dry-run mode | not started |
+| **S5.6** | Structured rationale logging | not started |
+| **S5.7** | Live check-in / weekly-review / next-best-action drives under `allow_proactive` | not started |
+
+**S5.1 in brief:** a generic `Initiative` object (kind/category/status/priority/confidence/
+rationale) that every future proactive behaviour instantiates instead of each getting its own
+feature-specific scheduler, owned by the Kernel Executive (see `COGNITIVE_RUNTIME.md`'s ownership
+table) via a new `run_initiative_through_runtime_contract()` seam mirroring
+`run_awaiting_response_through_runtime_contract()`'s shape. Covers the lifecycle state machine, a
+proactive-intent classification step ahead of Governance, three independent governance gates (a
+dedicated `"initiative"` Parking Brake scope, a default-deny `allow_proactive` Identity Policy
+category, and a default-off per-category user-consent table), mandatory audited rationale, and
+reserved (not yet implemented) schema support for initiative dependencies and hierarchical
+parent/child initiatives. Does not touch the already-shipped `awaiting_response_store.py`, and
+does not close the reflection-ownership gap below (blocks only a future `review` initiative kind
+specifically).
+
+**Status as of 2026-07-27 (superseded by the above, kept for record):** No Stage 5 feature code
+existed beyond S5.0 — no typed cadence, no proactive consent or mute, no quiet-hours defer, no
+dry-run mode, no structured rationale logging, and no `allow_proactive` governance category.
+**Sequencing corrected 2026-07-28:** Stage 5 requires Stage 1's minimal consumer web governance
+shell (parking-brake access, consent/approval inbox, mute/notification controls,
+awaiting-response queue) to exist and be proven working before live proactive delivery is
+permitted — see "Near-term milestone plan" above. **Both of Stage 5's named prerequisites are now
+satisfied**: Stage 1 shipped 2026-08-06 (PR #38), and `COGNITIVE_RUNTIME.md`'s Runtime Contract
+Exit Gate is "yes" on all seven questions. Live proactive *reflection* behaviour specifically
+remains blocked on the reflection-ownership implementation gap tracked in `COGNITIVE_RUNTIME.md`
+(current concatenation vs. approved `ReflectionGenerator`-authoritative target) until that gap is
+closed by a separately authorised code change with verifying tests — this blocks only a `review`-
+category initiative kind (S5.7+), not S5.1's architecture or S5.2's typed cadence.
 
 **Goal:** Proactive suggestions and check-ins that are safe, useful, and not naggy.
 
@@ -684,12 +715,13 @@ confirmed closed. Proven by `tests/test_scheduler_startup_readiness.py` (10 test
 3.10 + 3.11 matrix. See MASTER_PLAN.md's P3 "S5.0" note and DECISIONS.md.
 
 **Sequencing (locked):** safety scaffolding lands before any live proactivity — typed cadence
-(interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** →
-quiet-hours *defer* (not suppress, with coalescing/expiry) → dry-run → structured rationale
-logging → *then* live check-in / weekly-review / next-best-action drives under a default-deny
-`allow_proactive` governance category (suggestion-only, brake-blocked, excluded from `tool_use`,
-no self-maintenance exemption). Default-off consent and working mute are prerequisites for live
-delivery, not later enhancements.
+(interval / daily / weekly wall-clock, S5.2) → **default-OFF** consent + **functional mute**
+(S5.3) → quiet-hours *defer* (not suppress, with coalescing/expiry, S5.4) → dry-run (S5.5) →
+structured rationale logging (S5.6) → *then* live check-in / weekly-review / next-best-action
+drives under a default-deny `allow_proactive` governance category (S5.7; suggestion-only,
+brake-blocked, excluded from `tool_use`, no self-maintenance exemption). Default-off consent and
+working mute are prerequisites for live delivery, not later enhancements. S5.1's Initiative Engine
+architecture underlies every one of these — see above.
 
 **Exit criteria:**
 - Scheduler runs check-ins (morning/evening) and weekly review in dry-run + live.
