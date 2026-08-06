@@ -1,16 +1,19 @@
 # S1.6 Design — Host-Device Onboarding Guidance
 
-> **Authority note:** this document is the design this sub-stage will be implemented against. It
-> is subordinate to `ROADMAP.md` (Stage 1's canonical exit criteria) and `docs/STAGE_1_OVERVIEW.md`
-> (S1.6's scope stub), and to `DECISIONS.md`'s "Deployment architecture: hybrid local-first" entry,
-> which is the approved direction this onboarding content must stay consistent with. Approval of
-> this document authorises the *design* only — per `docs/STAGE_1_OVERVIEW.md`'s non-negotiable
-> invariants, implementation still needs its own separate, explicit approval before any code is
-> written, same as every other Stage 1 sub-stage.
+> **Authority note:** this document is the design this sub-stage was implemented against. It is
+> subordinate to `ROADMAP.md` (Stage 1's canonical exit criteria) and `docs/STAGE_1_OVERVIEW.md`
+> (S1.6's implemented-scope record), and to `DECISIONS.md`'s "Deployment architecture: hybrid
+> local-first" entry, which is the approved direction this onboarding content stays consistent
+> with.
 >
 > **Status:** proposed 2026-08-05, revised the same day per reviewer feedback (user-experience
-> framing, future upgrade paths, and a "How should I choose?" section — see Sec 4), **design
-> approved 2026-08-05.** Implementation not yet approved.
+> framing, future upgrade paths, and a "How should I choose?" section — see Sec 4), design
+> approved 2026-08-05, **implementation approved and completed 2026-08-05.** See
+> `docs/STAGE_1_OVERVIEW.md`'s S1.6 section for what was actually built, including the one
+> content-fidelity deviation worth noting (Sec 3/4's prose was adapted for end-user-facing copy —
+> internal doc citations like `Identity.yaml`/`CONSTITUTION.md`/section cross-references were
+> replaced with plain language while preserving every substantive claim, per Open Question 2's own
+> "wording polish is implementation-time, not design-blocking" scoping).
 
 ## 1. What this closes
 

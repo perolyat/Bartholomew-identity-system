@@ -95,10 +95,35 @@
     .episode-narrative { font-size: 13px; line-height: 1.5; }
     .episode-type { font-size: 10px; color: #6b7280; margin-top: 6px; }
     .episode-filters { margin-bottom: 12px; }
+
+    /* Stage 1 (S1.6): Host-device onboarding guidance */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
+    .modal-box { background: #111827; border: 1px solid #374151; border-radius: 14px; padding: 24px; max-width: 720px; width: 100%; max-height: 85vh; overflow: auto; }
+    .choosing-guide-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    .choosing-guide-table th, .choosing-guide-table td { text-align: left; padding: 8px; border-bottom: 1px solid #374151; font-size: 13px; vertical-align: top; }
+    .choosing-guide-table th { color: #9ca3af; font-weight: 600; }
+    .migration-note { background: #1a2332; border-radius: 8px; padding: 12px; margin: 12px 0; font-size: 13px; }
+    .target-detail { background: #1a2332; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+    .target-detail summary { cursor: pointer; }
+    .target-name { font-weight: 600; color: #60a5fa; }
+    .target-feel { margin: 8px 0; font-size: 13px; }
+    .target-list { margin: 6px 0; padding-left: 20px; font-size: 13px; }
+    .target-badge-unavailable { font-size: 11px; color: #ef4444; border: 1px solid #dc2626; border-radius: 999px; padding: 2px 8px; margin-left: 8px; }
   </style>
 </head>
 <body>
   <h1>Bartholomew <span class="badge">v0.1</span></h1>
+
+  <!-- Stage 1 (S1.6): Host-device onboarding guidance -- first-run modal -->
+  <div id="onboarding-modal-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="row" style="justify-content:space-between;margin-bottom:12px">
+        <h3 style="margin:0">🏠 Choosing where Bartholomew runs</h3>
+        <button onclick="dismissOnboardingModal()">✕ Close</button>
+      </div>
+      <div id="onboarding-modal-content"><div class="empty-state">Loading…</div></div>
+    </div>
+  </div>
 
   <!-- Health / Status -->
   <div class="card">
@@ -113,6 +138,15 @@
       <summary style="cursor:pointer;color:#6b7280">Full health JSON</summary>
       <div id="health" class="mono" style="margin-top:8px"></div>
     </details>
+  </div>
+
+  <!-- Stage 1 (S1.6): Deployment Guide reference card -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🏠 Deployment Guide</h3>
+      <button onclick="refreshOnboardingGuide()">Refresh</button>
+    </div>
+    <div id="onboarding-card-content"><div class="empty-state">Loading…</div></div>
   </div>
 
   <!-- Stage 1 (S1.1): Parking Brake -->
@@ -750,6 +784,92 @@
       }
     }
 
+    // === Stage 1 (S1.6): Host-device onboarding guidance ===
+    let onboardingGuideCache = null;
+    const ONBOARDING_SEEN_KEY = "bartholomew_onboarding_seen";
+
+    function renderChoosingGuideTable(guide, targetsById){
+      const rows = (guide || []).map(g => {
+        const target = targetsById[g.target_id] || {};
+        return `
+          <tr>
+            <td>${escapeHtml(g.priority)}</td>
+            <td>${escapeHtml(target.name || g.target_id)}</td>
+            <td>${escapeHtml(g.rationale)}</td>
+          </tr>
+        `;
+      }).join('');
+      return `
+        <table class="choosing-guide-table">
+          <thead><tr><th>If your priority is…</th><th>Consider…</th><th>Why</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function renderTargetDetail(t){
+      const unavailableBadge = t.available_today
+        ? ''
+        : '<span class="target-badge-unavailable">not offered today</span>';
+      const advantages = (t.advantages || []).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+      const limitations = (t.limitations || []).map(l => `<li>${escapeHtml(l)}</li>`).join('');
+      return `
+        <details class="target-detail">
+          <summary><span class="target-name">${escapeHtml(t.name)}</span>${unavailableBadge}</summary>
+          <div class="target-feel">${escapeHtml(t.feel)}</div>
+          <div><strong>Advantages</strong><ul class="target-list">${advantages}</ul></div>
+          <div><strong>Limitations</strong><ul class="target-list">${limitations}</ul></div>
+          <div><strong>Future upgrade path</strong><p style="font-size:13px;margin:6px 0 0">${escapeHtml(t.upgrade_path)}</p></div>
+        </details>
+      `;
+    }
+
+    function renderOnboardingGuide(guideData){
+      const targetsById = {};
+      (guideData.targets || []).forEach(t => { targetsById[t.target_id] = t; });
+      const choosingTable = renderChoosingGuideTable(guideData.choosing_guide, targetsById);
+      const migrationNote = `<div class="migration-note">🔁 ${escapeHtml(guideData.migration_note || '')}</div>`;
+      const details = (guideData.targets || []).map(renderTargetDetail).join('');
+      return choosingTable + migrationNote + details;
+    }
+
+    async function loadOnboardingGuideData(forceRefresh){
+      if(onboardingGuideCache && !forceRefresh) return onboardingGuideCache;
+      const r = await fetch(API + "/api/onboarding/deployment-guide");
+      if(!r.ok) throw new Error(`HTTP ${r.status}`);
+      onboardingGuideCache = await r.json();
+      return onboardingGuideCache;
+    }
+
+    async function refreshOnboardingGuide(){
+      const el = document.getElementById("onboarding-card-content");
+      try{
+        const data = await loadOnboardingGuideData(true);
+        el.innerHTML = renderOnboardingGuide(data);
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Failed to load deployment guide: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function maybeShowOnboardingModal(){
+      // Client-only "seen this" flag (design doc Sec 6) -- never a
+      // server-persisted field; a cleared browser just sees the modal
+      // again, with zero consequence beyond that.
+      if(localStorage.getItem(ONBOARDING_SEEN_KEY)) return;
+      try{
+        const data = await loadOnboardingGuideData(false);
+        document.getElementById("onboarding-modal-content").innerHTML = renderOnboardingGuide(data);
+        document.getElementById("onboarding-modal-overlay").style.display = "flex";
+      }catch(e){
+        console.error("Onboarding modal load failed:", e);
+      }
+    }
+
+    function dismissOnboardingModal(){
+      localStorage.setItem(ONBOARDING_SEEN_KEY, "1");
+      document.getElementById("onboarding-modal-overlay").style.display = "none";
+    }
+
     // === Stage 3: Self-State ===
     async function refreshSelfState(){
       try{
@@ -1156,6 +1276,8 @@
     refreshNotificationSettings();
     refreshPendingConsent();
     refreshAwaitingResponse();
+    refreshOnboardingGuide();
+    maybeShowOnboardingModal();
     refreshSelfState();
     refreshPersona();
     refreshEpisodes();

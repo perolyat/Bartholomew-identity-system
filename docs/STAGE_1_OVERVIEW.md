@@ -3,14 +3,15 @@
 > **Authority note:** this document is the concise explanation of the *approved Stage 1 direction
 > and stage structure*, mirroring `docs/PHASE_B_OVERVIEW.md`'s shape and role. It is subordinate to
 > and linked from `ROADMAP.md`, which remains the canonical source for Stage 1's exit criteria and
-> approval boundaries. This overview does not itself authorise implementation of any sub-stage
-> beyond S1.1, S1.2, S1.3, S1.4, and S1.5 (already implemented, see below) — S1.6 needs its own
-> separate approval before implementation begins.
+> approval boundaries. This overview does not itself authorise implementation of any future Stage 1
+> work — every sub-stage's plan and every implementation diff was separately and explicitly gated.
+> All of S1.0–S1.6 are now implemented.
 >
-> **Last updated:** 2026-08-05 (S1.6 design approved — see
-> `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md`, revised per reviewer feedback (user-experience
-> framing, future upgrade paths, a "How should I choose?" section) then approved by the project
-> owner; design-only, implementation still not approved. Previously, same day: S1.4 implemented —
+> **Last updated:** 2026-08-05 (S1.6 implemented — see
+> `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md` for the design (revised per reviewer feedback:
+> user-experience framing, future upgrade paths, a "How should I choose?" section) and this
+> document's S1.6 section for what was actually built. All six Stage 1 sub-stages are now complete.
+> Previously, same day: S1.4 implemented —
 > see `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` for
 > the design and this document's S1.4 section for what was actually built. Previously: 2026-08-04,
 > S1.2 implemented — see below; builds the promotion path the standalone consent-handler fix's
@@ -252,24 +253,53 @@ sources — those remain deferred to their own sub-stages, unchanged by this one
 /api/governance/audit` and the minimal UI without a manual refresh, verified with a real browser
 (Playwright + the pre-installed headless Chromium).
 
-### S1.6 — Host-device onboarding guidance (design approved 2026-08-05, implementation not approved)
+### S1.6 — Host-device onboarding guidance ✅ (Implemented 2026-08-05)
 **Purpose:** onboarding content presenting the realistic trade-offs of each supported deployment
 target, consistent with `DECISIONS.md`'s hybrid local-first deployment-architecture entry.
-**Design approved:** see `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md` for the approved five-target
-content — each target now covers what using it will actually feel like, real advantages, real
-limitations, and a future upgrade path (e.g. starting on a phone, later migrating to a home
-server/hub or hybrid deployment) — plus a "How should I choose?" section mapping distinct user
-priorities (convenience/mobility, everyday desktop use, privacy + always-on, minimal setup, the
-long-term hybrid ideal) to distinct targets with reasoning, and an explicit, prominent "this choice
-is not permanent" migration note. Proposed shape: a read-only `GET /api/onboarding/deployment-guide`
-endpoint plus a static content module (deliberately no new database schema — see the design doc's
-Sec 6), a first-run modal gated by a client-only `localStorage` flag, an always-reachable reference
-card, and the "currently-available-vs-planned" honesty framing required so unbuilt Stage 6
-capabilities (cross-device sync, a hosted runtime, data export) are never described as available
-today. The priority-conditional choosing-guide table is deliberately not a single recommendation —
-see the design doc's Sec 7 for how that's reconciled with `ROADMAP.md`'s neutrality exit criterion.
-**Deferred until its own separate approval to implement** — approval of the design document does
-not itself approve implementation.
+**Design:** `docs/S1_6_HOST_DEVICE_ONBOARDING_DESIGN.md` (proposed, revised per reviewer feedback,
+approved, then implemented per that design, all 2026-08-05).
+**Scope implemented:**
+- `bartholomew_api_bridge_v0_1/services/api/onboarding_content.py` — static content module (no
+  database, no I/O) with a `DeploymentTarget` per target (`feel`, `advantages`, `limitations`,
+  `upgrade_path`, `available_today`) for all five targets the design specifies (phone, personal
+  computer, home server/hub, hosted cloud service, hybrid local-plus-cloud), a `CHOOSING_GUIDE` list
+  of five `{priority, target_id, rationale}` rows (design doc Sec 4), and a `MIGRATION_NOTE`
+  constant carrying the "this choice is not permanent" copy. `hosted_cloud_service` is the one
+  target flagged `available_today=False`, matching the design's non-negotiable honesty requirement
+  that this project's lack of a first-party hosted runtime is never misrepresented.
+- `bartholomew_api_bridge_v0_1/services/api/routes/onboarding.py` — `GET
+  /api/onboarding/deployment-guide` → `{"targets": [...], "choosing_guide": [...],
+  "migration_note": "..."}`. No governance check (equivalent to serving a static asset, not a
+  capability) and no `_kernel` dependency at all; added to `app.py`'s admission-middleware exempt
+  prefixes alongside `/api/liveness` so it answers even during startup/shutdown windows, for the
+  same "doesn't touch governed daemon state" reason.
+- UI (`ui/minimal/index.html`): a first-run modal gated by a client-only `localStorage` flag
+  (`bartholomew_onboarding_seen`, never server-persisted — design doc Sec 6) leading with the
+  choosing-guide table and migration note, with full per-target detail available via expandable
+  `<details>`; an always-reachable "🏠 Deployment Guide" reference card rendering the identical
+  content outside the modal. Verified with a real browser (Playwright + the pre-installed headless
+  Chromium): the modal appears on first load, does not reappear after dismissal (including across a
+  page reload), and the reference card renders all five targets with the "not offered today" badge
+  correctly shown only on hosted cloud service.
+- Tests: `tests/test_onboarding_api.py` (17 tests) — content-module shape (five targets, five
+  distinct choosing-guide priorities/targets), every target's fields non-empty, `hosted_cloud_service`
+  flagged unavailable, the migration note present in the API response, no dangling choosing-guide
+  target references, no "recommended"/"best choice"/"get started with" language anywhere in the
+  copy (Sec 7's neutrality requirement, tested directly), and the endpoint reachable with no auth.
+**One content-fidelity deviation from the design doc's literal prose (flagged per Open Question 2's
+own "wording polish is implementation-time, not design-blocking" scoping):** Sec 3/4's approved
+copy cites internal artifacts (`Identity.yaml`, `CONSTITUTION.md`, "Stage 6", cross-references to
+the design doc's own section numbers) that are appropriate in a design document but not in
+consumer-facing onboarding copy. The implemented copy preserves every substantive claim and honesty
+requirement from the design (compute/battery/storage limits, the "not built yet" caveats on
+cross-device/data-export/hosted-runtime capability, the exact five-target and five-priority
+structure) while rendering it in plain language a real user would read, with no internal doc
+citations. Every fact-level assertion in the design doc's Sec 3/4 tables is represented in the
+shipped copy; nothing in scope was added or removed.
+**Exit condition met:** onboarding presents all five targets' trade-offs and a future upgrade path
+each, none flagged as the only supported option, with a priority-conditional (not single-verdict)
+choosing guide and a prominent non-permanence note — verified by the test suite above and a real
+browser check.
 
 ### Standalone: consent-handler fix ✅ (Implemented 2026-08-03)
 **Not a Stage 1 sub-stage** — a standalone fix found while investigating S1.2, kept separate from

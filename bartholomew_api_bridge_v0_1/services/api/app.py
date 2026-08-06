@@ -38,6 +38,7 @@ from .routes import (
     liveness,
     metrics,
     notifications,
+    onboarding,
     self_state,
 )
 from .routes.metrics import BARTHOLOMEW_TICKS_TOTAL, KERNEL_TICKS_TOTAL, REGISTRY
@@ -73,6 +74,7 @@ app.include_router(governance.router)
 app.include_router(notifications.router)
 app.include_router(consent.router)
 app.include_router(awaiting_response.router)
+app.include_router(onboarding.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)
@@ -89,10 +91,14 @@ atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
 # written for), and don't touch _kernel's governed state at all. Everything
 # else that isn't one of these is real external ingress into governed
 # daemon state, and is gated below.
+#
+# /api/onboarding (Stage 1, S1.6) joins this list for the same reason:
+# static deployment-guide content with no _kernel dependency at all (see
+# routes/onboarding.py's module docstring).
 _ADMISSION_EXEMPT_PATHS = frozenset(
     {"/healthz", "/api/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"},
 )
-_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness",)
+_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding")
 
 
 def _admission_exempt(path: str) -> bool:
