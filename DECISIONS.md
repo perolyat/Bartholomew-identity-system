@@ -862,4 +862,20 @@
   this pattern) was run repeatedly clean after the fix, where it had failed on 3 of 3 prior CI
   attempts. PR #38 remains unmerged pending this fix's own CI verification, per explicit user
   instruction not to merge while the regression exists.
+- **Follow-up correction (same day):** the first push of this fix only updated `app.py`'s
+  `startup()` to resolve fresh; `routes/liveness.py` still imported the frozen `DB_PATH` constant
+  for its three `/api/liveness/*` routes. Once `app.py`'s daemon and `liveness.py`'s routes could
+  resolve to *different* files (each test file's daemon now correctly isolated, but liveness still
+  reading whichever file happened to freeze `DB_PATH` at first import across the *entire* test
+  suite -- not the 9-file subset this was verified against locally), CI caught a real second-order
+  bug this fix introduced: `tests/test_stage0_alive.py::test_liveness_endpoints` failing with
+  `sqlite3.OperationalError: no such table: nudges` (reading a file no daemon had ever
+  initialized). This was missed locally because manually-composed local test runs happened to list
+  files in an order where the frozen constant coincidentally pointed at *some* already-initialized
+  daemon's file, masking the divergence; CI's full-suite run (true collection order across the
+  whole codebase) did not get that same lucky coincidence. Fixed by making `liveness.py` call
+  `resolve_db_path()` too, so its routes read the same file the live daemon actually uses.
+  `db.get_conn()`/`init_db()` (unused dead code, confirmed by search) and `app.py`'s `atexit`
+  checkpoint hook (fires once at interpreter shutdown, not implicated in any observed failure)
+  were deliberately left on the frozen constant.
 - **Date:** 2026-08-06 (PR #38 follow-up: scheduler/database test-isolation fix)
