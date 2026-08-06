@@ -26,8 +26,10 @@ regression -- that's a deliberate, tracked follow-up, not an oversight.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import inspect
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -304,7 +306,7 @@ async def run_chat_through_runtime_contract(
         # having an awaiting_response_store wired in (start()-time only), so
         # existing duck-typed test contexts are unaffected.
         if getattr(daemon, "awaiting_response_store", None) is not None:
-            await _maybe_auto_resolve_awaiting_response(daemon)
+            await _maybe_auto_resolve_awaiting_response(daemon, item.item_id)
     else:
         reflection = ActionReflection(
             surface="chat",
@@ -1113,17 +1115,43 @@ async def run_awaiting_response_through_runtime_contract(
     )
 
 
-async def _maybe_auto_resolve_awaiting_response(daemon: KernelDaemon) -> None:
+def _parse_awaiting_response_opened_at(opened_at: str) -> float | None:
+    """Parse an awaiting_response entry's `opened_at`
+    ("YYYY-MM-DDTHH:MM:SSZ", see awaiting_response_store._now_iso()) to a
+    Unix epoch second count, comparable against WorkingMemoryItem.added_at
+    .timestamp(). Returns None for an unparseable value -- treated as "an
+    adjacency claim can't be proven" by the caller, not as "no constraint"."""
+    try:
+        return calendar.timegm(time.strptime(opened_at, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+
+
+async def _maybe_auto_resolve_awaiting_response(
+    daemon: KernelDaemon,
+    current_wm_item_id: str,
+) -> None:
     """Narrow MVP auto-resolution on reply (design doc Sec 7): resolves an
     open chat-origin awaiting_response entry only when exactly one such
-    entry exists. This codebase's WorkingMemoryManager is a single rolling
-    buffer with no per-session/thread partitioning (confirmed by direct
-    read), so "same session/thread" degenerates to "the chat surface as a
-    whole" here -- the narrowest faithful reading of that heuristic given
-    the current architecture, not a loosening of it. Two or more open
-    entries is an ambiguous match and always fails closed to "stays open,"
-    never guesses which one the reply was for. Best-effort: never breaks
-    the chat turn that triggered it.
+    entry exists AND this chat turn is genuinely the next one since the
+    entry opened -- not merely some later turn that happens to land while
+    it's still the sole open entry (a real gap a PR review on #38 caught:
+    without an adjacency check, an unrelated reply arbitrarily later would
+    silently resolve an entry that was never actually replied to).
+    Adjacency is proven via Working Memory's own chat-item timestamps: if
+    any other "chat"-sourced item was added after the entry's `opened_at`
+    (excluding this turn's own item, `current_wm_item_id`), a reply has
+    already happened since -- this is not that reply, so the entry stays
+    open rather than guessing.
+
+    This codebase's WorkingMemoryManager is a single rolling buffer with no
+    per-session/thread partitioning (confirmed by direct read), so "same
+    session/thread" (design doc Sec 7) degenerates to "the chat surface as
+    a whole, in chronological order" here -- the narrowest faithful reading
+    of that heuristic given the current architecture, not a loosening of
+    it. Two or more open entries remains an ambiguous match and always
+    fails closed to "stays open." Best-effort: never breaks the chat turn
+    that triggered it.
     """
     try:
         executor = getattr(daemon, "blocking_executor", None)
@@ -1134,10 +1162,24 @@ async def _maybe_auto_resolve_awaiting_response(daemon: KernelDaemon) -> None:
         )
         if len(open_entries) != 1:
             return
+        entry = open_entries[0]
+
+        opened_ts = _parse_awaiting_response_opened_at(entry.opened_at)
+        if opened_ts is None:
+            return
+
+        chat_items = daemon.working_memory.get_by_source("chat")
+        intervening_reply_exists = any(
+            item.item_id != current_wm_item_id and item.added_at.timestamp() > opened_ts
+            for item in chat_items
+        )
+        if intervening_reply_exists:
+            return
+
         await run_awaiting_response_through_runtime_contract(
             daemon,
             "resolve",
-            entry_id=open_entries[0].id,
+            entry_id=entry.id,
             resolution="reply_received",
             actor="chat_auto_resolve",
         )

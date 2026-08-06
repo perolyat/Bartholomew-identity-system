@@ -23,8 +23,10 @@ separate future project.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from bartholomew.kernel.awaiting_response_store import (
     VALID_RESOLUTIONS,
@@ -39,6 +41,11 @@ router = APIRouter(prefix="/api/awaiting-response", tags=["awaiting-response"])
 
 VALID_ORIGIN_SURFACES = frozenset({"chat", "scheduler"})
 
+# The exact format awaiting_response_store._parse_iso()/_now_iso() use --
+# due_at must normalize to this or list_due_for_transition() silently
+# excludes the entry forever (PR #38 review finding).
+_DUE_AT_STORE_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
 
 class OpenRequest(BaseModel):
     subject: str
@@ -46,6 +53,43 @@ class OpenRequest(BaseModel):
     context_ref: str | None = None
     due_at: str | None = None
     actor: str = "user"
+
+    @field_validator("subject")
+    @classmethod
+    def _subject_must_be_non_empty(cls, value: str) -> str:
+        # PR #38 review finding: an empty/whitespace-only subject previously
+        # reached run_awaiting_response_through_runtime_contract()'s own
+        # precondition check, which raises a bare ValueError -- an
+        # uncaught 500, not a validation-shaped 4xx. Rejecting it here
+        # instead makes it a normal FastAPI/Pydantic 422.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("subject must not be empty or whitespace-only")
+        return stripped
+
+    @field_validator("due_at")
+    @classmethod
+    def _due_at_must_be_parseable_iso8601(cls, value: str | None) -> str | None:
+        # PR #38 review finding: due_at was persisted unchanged, but
+        # AwaitingResponseStore._parse_iso() only understands the exact
+        # "YYYY-MM-DDTHH:MM:SSZ" form -- any other valid RFC 3339 form
+        # (e.g. an explicit "+00:00" offset) or malformed input was
+        # accepted here and then silently excluded from
+        # list_due_for_transition() forever. Normalize valid input to that
+        # exact form (mirrors bartholomew.skills.notify.NotifySkill.
+        # _normalize_until()'s same normalize-at-write-time approach);
+        # reject anything unparseable outright.
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                "due_at must be a valid ISO-8601 timestamp, e.g. '2026-08-07T12:00:00Z'",
+            ) from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).strftime(_DUE_AT_STORE_FORMAT)
 
 
 class ResolveRequest(BaseModel):

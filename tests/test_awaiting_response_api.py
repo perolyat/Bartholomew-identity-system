@@ -62,6 +62,45 @@ def test_open_rejects_unknown_origin_surface(client):
     assert response.status_code == 400
 
 
+def test_open_rejects_empty_subject(client):
+    """PR #38 review finding: an empty subject previously reached the
+    Runtime Contract seam's own precondition (a bare ValueError), turning
+    ordinary invalid client input into an HTTP 500 instead of a 4xx."""
+    response = client.post(
+        "/api/awaiting-response",
+        json={"subject": "", "origin_surface": "chat"},
+    )
+    assert response.status_code == 422
+
+
+def test_open_rejects_whitespace_only_subject(client):
+    response = client.post(
+        "/api/awaiting-response",
+        json={"subject": "   ", "origin_surface": "chat"},
+    )
+    assert response.status_code == 422
+
+
+def test_open_rejects_malformed_due_at(client):
+    """PR #38 review finding: a malformed due_at was previously accepted
+    and persisted unchanged, then silently excluded from
+    list_due_for_transition() forever (since _parse_iso() couldn't parse
+    it) -- now rejected outright at the request boundary."""
+    response = client.post(
+        "/api/awaiting-response",
+        json={"subject": "x", "origin_surface": "chat", "due_at": "not-a-timestamp"},
+    )
+    assert response.status_code == 422
+
+
+def test_open_normalizes_due_at_with_explicit_offset(client):
+    """A valid RFC 3339 timestamp using an explicit offset (rather than the
+    store's exact 'Z'-suffixed form) must be normalized, not silently
+    accepted-and-then-ignored (PR #38 review finding)."""
+    entry = _open(client, "api due_at offset", due_at="2026-08-07T12:00:00+00:00")
+    assert entry["due_at"] == "2026-08-07T12:00:00Z"
+
+
 def test_resolve_clears_entry_from_open_list(client):
     entry = _open(client, "api resolve me")
 

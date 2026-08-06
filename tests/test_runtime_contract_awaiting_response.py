@@ -367,6 +367,49 @@ class TestChatAutoResolve:
         result = await run_chat_through_runtime_contract(daemon, "hi", _noop_respond)
         assert result.governance_allowed is True
 
+    async def test_a_later_unrelated_reply_does_not_resolve_a_stale_entry(self, daemon):
+        """PR #38 review finding: without an adjacency check, a chat turn
+        arbitrarily later than the entry's opening -- not the entry's own
+        actual reply -- could still resolve it, as long as it happened to
+        be the sole open entry at that moment. Reproduces the exact
+        mechanism: two entries open (so the first reply resolves neither,
+        per the ambiguous-match test above), one gets resolved manually
+        (not via chat), leaving exactly one open entry whose real reply
+        already happened turns ago -- the next chat turn must NOT resolve
+        it, since it demonstrably isn't the entry's own reply."""
+        daemon = await _ready(daemon)
+        stale = await run_awaiting_response_through_runtime_contract(
+            daemon,
+            "open",
+            subject="stale entry -- already replied to, long ago",
+            origin_surface="chat",
+        )
+        other = await run_awaiting_response_through_runtime_contract(
+            daemon,
+            "open",
+            subject="other entry",
+            origin_surface="chat",
+        )
+
+        # This is "stale"'s real reply -- but auto-resolve is skipped here
+        # because two entries are open (ambiguous).
+        await run_chat_through_runtime_contract(daemon, "the actual reply", _noop_respond)
+        assert daemon.awaiting_response_store.get(stale.entry.id).status == "open"
+
+        # Resolve "other" out-of-band (not via chat), leaving "stale" as the
+        # sole open entry -- but its own reply already happened above.
+        await run_awaiting_response_through_runtime_contract(
+            daemon,
+            "resolve",
+            entry_id=other.entry.id,
+            resolution="manual",
+        )
+
+        # An unrelated later message must not resolve "stale".
+        await run_chat_through_runtime_contract(daemon, "hello, unrelated", _noop_respond)
+
+        assert daemon.awaiting_response_store.get(stale.entry.id).status == "open"
+
     async def test_chat_unaffected_when_no_store_wired(self, mock_config_files):
         """A daemon that never went through S1.4's start() wiring (the
         pre-existing shape every other chat seam test uses) must see no
