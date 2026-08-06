@@ -671,7 +671,7 @@ staged workstream in this document.
 |---|---|---|
 | **S5.0** | Scheduler-schema readiness (closes issue #24) | ✅ done 2026-07-25, PR #25 |
 | **S5.1** | Initiative Engine architecture | ✅ design approved 2026-08-06 — `docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md`; not yet implemented |
-| **S5.2** | Typed cadence | not started |
+| **S5.2** | Typed cadence | proposed 2026-08-06 — `docs/S5_2_TYPED_CADENCE_DESIGN.md`; not approved |
 | **S5.3** | Default-off consent + functional mute | not started |
 | **S5.4** | Quiet-hours defer | not started |
 | **S5.5** | Dry-run mode | not started |
