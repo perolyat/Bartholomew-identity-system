@@ -7,7 +7,9 @@
 > It does not modify any of those documents; it proposes specific additions to each, listed
 > inline, that only take effect on approval.
 >
-> **Status:** proposed 2026-08-06, not yet approved, not yet implemented.
+> **Status:** proposed 2026-08-06, revised 2026-08-06 (added Initiative Dependencies and
+> hierarchical parent/child reservation, §13, per reviewer feedback before approval), not yet
+> approved, not yet implemented.
 >
 > **Scope of this pass:** architecture only — the generic `Initiative` object, its lifecycle, its
 > Runtime Contract seam, and the governance/audit/memory contracts every future proactive
@@ -107,7 +109,7 @@ until this gap is closed by a separately authorised code change." **This documen
 is not blocked by that gap** — nothing here requires reading `ReflectionGenerator`/`narrator.py`
 output. But it means one specific *future* Initiative category — a `review` kind that
 summarises daily/weekly reflections as a proactive prompt — cannot be implemented until that gap
-closes separately. §14 records this as an explicit scope boundary, not a silent omission.
+closes separately. §15 records this as an explicit scope boundary, not a silent omission.
 
 ## 4. The generic `Initiative` object
 
@@ -129,6 +131,8 @@ class Initiative:
     rationale: str         # required, non-empty, structured "why now" (Stage 5 exit criterion)
     payload: dict          # kind-specific data, opaque to the Initiative Engine itself
     origin_drive: str      # the REGISTRY task_id that proposed this
+    parent_initiative_id: int | None  # reserved for hierarchical initiatives -- see section 13.
+                                       # Always None in S5.1; nothing reads or enforces it yet.
     created_at: str        # ISO8601
     due_at: str | None     # earliest eligible delivery time
     expires_at: str | None # hard TTL -- past this, the initiative is abandoned, not delivered late
@@ -157,6 +161,8 @@ CREATE TABLE IF NOT EXISTS initiatives (
     rationale TEXT NOT NULL,
     payload TEXT,                 -- JSON, kind-specific, opaque to this store
     origin_drive TEXT NOT NULL,
+    parent_initiative_id INTEGER REFERENCES initiatives(id),  -- reserved, see section 13;
+                                                                -- NULL and unread in S5.1
     created_at TEXT NOT NULL,
     due_at TEXT,
     expires_at TEXT,
@@ -170,6 +176,7 @@ CREATE TABLE IF NOT EXISTS initiatives (
 );
 CREATE INDEX IF NOT EXISTS idx_initiatives_status ON initiatives(status, due_at);
 CREATE INDEX IF NOT EXISTS idx_initiatives_category ON initiatives(category, status);
+CREATE INDEX IF NOT EXISTS idx_initiatives_parent ON initiatives(parent_initiative_id);
 
 CREATE TABLE IF NOT EXISTS initiative_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,6 +185,17 @@ CREATE TABLE IF NOT EXISTS initiative_audit (
     transition TEXT NOT NULL,
     actor TEXT,
     detail TEXT
+);
+
+-- Reserved, see section 13. Many-to-many prerequisite edges (a DAG, not a tree --
+-- hierarchy is parent_initiative_id above). Write-only in S5.1: propose() records
+-- rows here if a drive supplies depends_on, but no transition reads or enforces
+-- this table yet -- proposing an initiative with unresolved dependencies is not
+-- blocked in this pass.
+CREATE TABLE IF NOT EXISTS initiative_dependencies (
+    initiative_id INTEGER NOT NULL REFERENCES initiatives(id),
+    depends_on_id INTEGER NOT NULL REFERENCES initiatives(id),
+    PRIMARY KEY (initiative_id, depends_on_id)
 );
 ```
 
@@ -263,12 +281,17 @@ async def run_initiative_through_runtime_contract(
     expires_at: str | None = None,
     resolution: str | None = None,
     actor: str | None = None,
+    parent_initiative_id: int | None = None,   # reserved, recorded only -- see section 13
+    depends_on: list[int] | None = None,       # reserved, recorded only -- see section 13
 ) -> InitiativeRuntimeResult: ...
 ```
 
 This mirrors `run_awaiting_response_through_runtime_contract()`'s `transition`-parameterised shape
 exactly, for the same reason: one function, one Governance pass, one Reflection, per call —
-callers never see `initiative_store.py` at all.
+callers never see `initiative_store.py` at all. `parent_initiative_id` and `depends_on` are
+accepted and written by `propose` in this pass (a drive that already knows its parent or
+prerequisites today can record that fact without waiting for a future pass) but are not read or
+enforced by anything else — no transition blocks, defers, or cascades on them yet.
 
 **Individual drives become thin proposal generators, not schedulers.** This is the concrete
 mechanism satisfying "a generic Initiative object rather than feature-specific schedulers": a
@@ -322,7 +345,7 @@ Mapped onto the 8-stage Runtime Contract pipeline:
 | **Capability** | For this document's scope: writing to `initiative_store.py` (`propose`/`defer`/`resolve`/etc.), and — only once approved and delivery-eligible — the existing `NotifySkill` path via `run_skill_through_runtime_contract(ctx.skill_registry, "notify", "send", {...})`, reused exactly as `awaiting_response`'s `remind`/`escalate` transitions already do. No new delivery channel is introduced here. |
 | **Execution** | Running the above; `deliver` transition is a no-op write (dry-run mode, S5.5, not designed here) or a real `NotifySkill` call, gated by a mode flag this document defers |
 | **Reflection** | `ActionReflection(surface="initiative", action=candidate_action.kind, outcome=..., summary=rationale, details={initiative_id, category, priority, confidence, governance_decision})` — written at every *transition* (not on every deferred re-check, to avoid reflection spam; a `deferred` initiative re-checked hourly by the sweep does not get a new reflection each hour, only on its actual state change) |
-| **Memory** | Reflections table (as above) + `initiative_audit` (full transition history, mirroring `awaiting_response_audit`) + Working Memory — see §9 |
+| **Memory** | Reflections table (as above) + `initiative_audit` (full transition history, mirroring `awaiting_response_audit`) + Working Memory — see §10 |
 
 `kind` is deliberately **not** added to `_SELF_MAINTENANCE_DRIVES` in `runtime_contract.py`, for
 the same reason `awaiting_response_*` kinds are excluded: an Initiative represents genuine
@@ -370,7 +393,7 @@ Three gates, evaluated in order, inside the `propose` transition:
    Mirrors `governance_store.py`'s `parking_brake_state` shape (state + `updated_at` + `actor`)
    but keyed per-category rather than a `CHECK (id=1)` singleton, since it's inherently multi-row.
    Whether this needs `governance_store.py`'s revision-guarded-loosening pattern
-   (`StaleGovernanceWriteError`) is an open question for approval (§13) — consent flags are
+   (`StaleGovernanceWriteError`) is an open question for approval (§14) — consent flags are
    lower-stakes than the Parking Brake kill switch, but the same race is theoretically possible.
 
 **`muted` vs. `deferred`-by-quiet-hours — a distinction this document establishes even though
@@ -405,7 +428,7 @@ without a schema change.
   from `ReflectionGenerator`'s daily/weekly narrative reflections. The reflection-ownership gap
   (§3) does not block this — nothing here writes to or reads from that pipeline. It only becomes
   relevant to a *specific future initiative kind* (`review`) that would summarise narrative
-  reflection content as its payload — flagged again in §14, not glossed over.
+  reflection content as its payload — flagged again in §15, not glossed over.
 - **Working Memory**: on `deliver`, this document proposes creating a Working Memory item tagged
   `source="initiative"` (mirroring chat's `source="chat"` tagging), so a delivered proactive
   suggestion becomes visible to the Experience Kernel and subsequent conversational context — the
@@ -431,7 +454,7 @@ unapproved change to approved, merged functionality — exactly what the user's 
 instruction on the PR #38 regression fix warned against doing casually. Whether
 `awaiting_response`'s `remind`/`escalate` transitions should *emit* an Initiative in some future
 integration (e.g. so an escalated obligation also shows up in a unified proactive-suggestions
-view) is recorded in §13 as an open question, explicitly not decided here.
+view) is recorded in §14 as an open question, explicitly not decided here.
 
 ## 12. Expiry, cancellation, priority, confidence handling
 
@@ -448,7 +471,7 @@ view) is recorded in §13 as an open question, explicitly not decided here.
   `initiative_store.py` exposes `list_open_by_kind(kind)` for a drive to check before proposing,
   mirroring `awaiting_response_store.py`'s `list_open_by_origin()`.
 - **Priority**: a 3-tier enum (`low`/`normal`/`high`), not a numeric scale — deliberately minimal
-  for this MVP-architecture pass. Flagged in §13 as revisitable if a concrete need for finer-grained
+  for this MVP-architecture pass. Flagged in §14 as revisitable if a concrete need for finer-grained
   ranking emerges once real initiative kinds compete for the user's attention simultaneously.
 - **Confidence**: a required `float` in `[0.0, 1.0]`, drive-supplied, validated for range at the
   seam boundary. **This document captures and audits confidence; it does not define any policy
@@ -458,7 +481,54 @@ view) is recorded in §13 as an open question, explicitly not decided here.
   generic engine would be exactly the kind of feature-specific logic this document exists to keep
   out of the shared chassis.
 
-## 13. Open design questions for approval time
+## 13. Initiative dependencies and hierarchy (reserved, not implemented in S5.1)
+
+Two relationship shapes the Executive will plausibly need once multiple drives propose
+initiatives that interact — a longer-running workflow whose steps are separate initiatives, and
+a coordinating initiative that decomposes into sub-initiatives. Both are reserved here at the
+schema level, so no future migration is needed to add them and no individual drive is tempted to
+invent its own private notion of "wait for X before proposing Y." **Neither is functionally
+implemented in this pass** — no state-machine check, no seam-level enforcement, no delivery gate
+reads either of them yet. This satisfies the request to add these "if they fit naturally without
+complicating the current implementation, otherwise explicitly reserve the extension points" —
+recording a relationship is a plain write with no new control flow; *acting* on one is deferred.
+
+**Dependencies** (prerequisite relationships, many-to-many, a DAG, not a tree): the new
+`initiative_dependencies` join table (§4). `propose` accepts an optional `depends_on: list[int]`
+(§6) and records it; nothing currently reads it. A drive proposing, say, a future `review.weekly`
+kind that should only fire after that week's `checkin.morning` instances resolve could record that
+dependency today without waiting for a future pass to enforce it — the data survives the gap
+between "recorded" and "enforced."
+
+*Future direction (not decided, sketch only):* the natural place to enforce a dependency is the
+delivery-timing check already planned for S5.3/S5.4 (§7's `deferred`-vs-`approved` distinction) —
+an initiative with an unresolved `depends_on_id` would stay `approved` but never reach `deliver`,
+reusing the existing `deferred`-style non-denial semantics rather than adding a new `blocked`
+status, likely via a new `deferred_reason="blocked_on_dependency"` value. This is a plausible
+shape, not a commitment; a real proposal needs its own design pass once a concrete multi-step
+workflow exists to design against, per §14 item 7 below.
+
+**Hierarchy** (parent/child, a tree): `parent_initiative_id` (§4), nullable, self-referencing.
+`propose` accepts an optional `parent_initiative_id` (§6) and records it; nothing currently reads
+it, computes a rollup status, or cascades resolution/cancellation between parent and children.
+
+*Future direction (not decided, sketch only):* a coordinating "workflow" initiative could
+represent a multi-step proactive plan (e.g. a parent spawning separate `checkin.evening` and
+`reminder.pack_bag` child initiatives), with the parent's own resolution defined as a rollup of
+its children's (e.g. resolved once all children reach a terminal state). Rollup semantics,
+cascade-on-cancel behaviour, and whether a parent can be delivered independently of its children
+are all real design questions a future pass must answer — reserving the column does not imply an
+answer to any of them.
+
+**Why reserve rather than fully build:** neither relationship has a concrete consumer yet — Typed
+Cadence (S5.2, proposed next) needs neither one. Building enforcement logic against a hypothetical
+workflow risks the exact mistake `CONSTITUTION.md`'s consumer-value gate warns against:
+"architectural sophistication alone is not sufficient product value." Reserving the schema costs
+nothing now (two nullable columns and one small join table, no new state, no new seam behaviour)
+and avoids a breaking migration later; building the coordination logic itself is deferred until a
+real multi-step proactive behaviour needs it.
+
+## 14. Open design questions for approval time
 
 Each with a recommendation, per this project's own convention for surfacing undecided points
 rather than silently picking one:
@@ -490,8 +560,14 @@ rather than silently picking one:
    initiative with no TTL that's forgotten indefinitely is a "message blindness"/trust failure
    waiting to happen (`CONSTITUTION.md` §5); forcing the caller to state one is cheap and keeps
    the failure mode visible in code review rather than in production.
+7. **When dependency-blocking is eventually designed, does it reuse `deferred`/`deferred_reason`
+   (§13's sketch) or introduce a new `blocked` status?** *Recommend: reuse `deferred_reason`* — it
+   keeps the state machine (§5) unchanged for a mechanism not yet needed by any drive, consistent
+   with how mute and quiet-hours already share `deferred` for the same reason. Not binding on
+   whichever future pass actually designs dependency enforcement — recorded as a starting lean,
+   not a decision.
 
-## 14. Explicitly deferred / out of scope for this document
+## 15. Explicitly deferred / out of scope for this document
 
 - **Typed Cadence itself** (S5.2, proposed next) — the actual interval/daily/weekly wall-clock
   scheduling model for concrete drives built on this chassis.
@@ -510,11 +586,14 @@ rather than silently picking one:
   `run_initiative_through_runtime_contract(ctx, "propose", ...)` per §6.
 - **The reflection-ownership architectural gap** (§3) — not closed here; blocks only the future
   `review` initiative kind specifically, not this architecture.
+- **Dependency-blocking and hierarchy-rollup enforcement logic** (§13) — the schema is reserved
+  (`initiative_dependencies`, `parent_initiative_id`); no transition reads, blocks, or cascades on
+  either yet. A future pass, once a concrete multi-step workflow needs it.
 - **`Identity.yaml`'s actual `allow_proactive.*` allowlist entries** (§8) — an implementation-time
   dependency flagged here, added when a concrete category is first implemented, per
   `governance.change_control`, exactly as S1.4's allowlist gap was handled.
 
-## 15. Verify plan
+## 16. Verify plan
 
 None yet — this is architecture only, no code changes. S5.2 (Typed Cadence)'s own design and
 implementation pass will include the first concrete tests exercising this chassis:
