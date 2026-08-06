@@ -5,9 +5,15 @@
 > DESIGN.md` (S5.1, approved 2026-08-06), whose chassis this builds directly on top of. It does
 > not modify either document's already-approved content except where explicitly noted in section 7
 > (a narrow, flagged extension of S5.1's Governance-exemption boundary, found while designing this
-> stage's first real consumer of that seam).
+> stage's first real consumer of that seam, approved by the project owner 2026-08-06) and a small
+> precision fix to S5.1 §7's Runtime Contract pipeline table (splitting its Capability-stage
+> description per-transition; no behaviour change, since the state machine already separated
+> `propose` from `deliver` unambiguously).
 >
-> **Status:** proposed 2026-08-06, not yet approved, not yet implemented.
+> **Status:** proposed 2026-08-06, revised 2026-08-06 per reviewer feedback (section 9, "Cadence
+> produces eligibility, not delivery" — the expiry-policy exemption in section 7 is approved;
+> section 9's eligibility/delivery separation is added and awaits final confirmation). Not yet
+> approved as a whole, not yet implemented.
 >
 > **Scope of this pass:** the typed cadence model (interval, window, daily, weekly), its parsing/
 > validation/next-run computation, wiring it into the existing scheduler loop with no schema
@@ -151,7 +157,7 @@ self-maintenance load to avoid synchronized ticks (irrelevant to a single daily 
 `BARTH_SPEED_FACTOR` compresses intervals for fast test runs (e.g. `tests/test_stage0_alive.py`
 sets it to `0.01`), which has no coherent meaning against a wall-clock target — "8am, but 100x
 faster" isn't a real time. **This means daily/weekly cadences cannot be sped up for testing the way
-existing drives are** — flagged as an explicit consequence (§10 item 3) with a recommendation for
+existing drives are** — flagged as an explicit consequence (§11 item 3) with a recommendation for
 how future S5.7 tests should instead exercise them (mocking/injecting `now_ts`, not env-scaling).
 
 **Missed ticks are not caught up.** If the daemon is down at the scheduled time and restarts
@@ -179,7 +185,7 @@ revisit timezone handling more broadly regardless. Recorded honestly, not glosse
 - **Regression guard**: the existing five `REGISTRY` cadence strings (`self_check`,
   `curiosity_probe`, `reflection_micro`, `fts_optimize`, `awaiting_response_check`) must parse to
   behaviourally-identical `IntervalCadence`/`WindowCadence` values and produce identical
-  `compute_next_run()` output before and after this change — a pinned-values test (§11) is the
+  `compute_next_run()` output before and after this change — a pinned-values test (§13) is the
   acceptance bar for "no behaviour change to any existing drive."
 
 ## 6. `initiative_sweep`: the first drive built on S5.1 and S5.2
@@ -225,10 +231,10 @@ proposes new outbound contact, only closes out rows already past their `expires_
 only its `expire` transition. `propose`/`defer`/`deliver`/`resolve`/`cancel`/`supersede` remain
 untested against a real drive until S5.7 designs one. Recorded here rather than implied — sweeping
 before any drive proposes anything means there is, by construction, nothing to sweep in production
-until S5.7 lands; this drive is correct but inert until then, and its own tests (§11) must
+until S5.7 lands; this drive is correct but inert until then, and its own tests (§13) must
 therefore seed synthetic rows directly rather than relying on a real proposing drive to exist yet.
 
-## 7. Found while designing this: a gap in S5.1's Governance-exemption boundary
+## 7. Found while designing this: a gap in S5.1's Governance-exemption boundary (approved)
 
 S5.1 §7 states, deliberately: *"`kind` is deliberately not added to `_SELF_MAINTENANCE_DRIVES`...
 an Initiative represents genuine potential outbound contact... it must be evaluated by Identity
@@ -252,11 +258,17 @@ why `initiative_sweep`'s own drive-level exemption exists (§6) — a mechanism 
 construction, never constitute new outbound contact does not need Identity Policy's protection,
 and denying it can only cause harm (a permanently stuck row) with no corresponding benefit.
 
-This is flagged prominently, not folded in silently, because it technically narrows a rule S5.1
-stated as absolute. No live behaviour regresses — S5.1 is not yet implemented, so there is nothing
-in production this changes — but per the standing instruction that a design change (however small)
-gets surfaced rather than assumed, this needs your explicit confirmation alongside S5.2's approval,
-not just S5.2's own internal consistency.
+This was flagged prominently rather than folded in silently, because it technically narrows a rule
+S5.1 stated as absolute. No live behaviour regressed — S5.1 was not yet implemented, so nothing in
+production changed — but per the standing instruction that a design change (however small) gets
+surfaced rather than assumed, it was held for explicit confirmation rather than assumed correct on
+S5.2's own internal consistency alone.
+
+**Approved by the project owner** (2026-08-06): "An already-approved initiative must always be
+able to reach its terminal expired state, even if policy changes after approval... this
+strengthens the lifecycle semantics without weakening Governance." Treated as settled for S5.2's
+implementation; `_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS = frozenset({"expire"})` is part of this
+design as approved, not merely proposed.
 
 ## 8. Cadence-aware Initiative default-window helper (optional)
 
@@ -268,25 +280,79 @@ day]`; `WeeklyCadence` → `[now, end of local week]`. This does **not** weaken 
 computes a value; the caller must still pass it explicitly. It exists only to reduce boilerplate
 once a real drive needs it, not to become an implicit default inside the seam itself.
 
-## 9. Non-negotiable invariants
+## 9. Cadence produces eligibility, not delivery
+
+This principle already exists implicitly in S5.1's state machine (§5 of that document): `propose`
+and `deliver` are named as categorically separate transitions (listed separately in S5.1 §6's seam
+signature), and `approved` is explicitly described there as "not yet delivered; awaiting its
+delivery-timing check." This document makes it explicit and binding, because Typed Cadence is
+precisely the layer responsible for the "becoming due" trigger S5.1 left unspecified, and the
+boundary matters most exactly where a cadence tick and a delivery decision could otherwise be
+conflated. (S5.1 §7's own Runtime Contract pipeline table has also been tightened to describe the
+Capability stage per-transition rather than in a way that could be read as `propose` conditionally
+reaching `deliver` within the same call — a precision fix, not a behaviour change, since the state
+machine and transition list were already unambiguous on this point.)
+
+**The rule:** a cadence reaching its scheduled time makes a drive *tick* — nothing more. A tick
+gives a drive the opportunity to evaluate whether to propose an Initiative (`propose`, which runs
+Executive → Governance and lands the initiative in `approved` or `denied`) or, for a
+maintenance-shaped drive like `initiative_sweep` (§6), to sweep a store for a different transition
+entirely (`expire`). **No cadence tick may call `deliver` directly, and no drive may treat "my
+cadence is due" as sufficient reason to deliver anything.** The full path is always:
+
+```
+Cadence due -> drive tick -> propose -> Executive -> Governance -> approved -> [separate
+delivery-timing check, not this drive's cadence] -> deliver
+```
+
+**Why this needs its own gate, separate from the proposing drive's cadence:** an `approved`
+initiative's actual delivery must remain contingent on conditions that have nothing to do with why
+it was proposed, and that can change after proposal — quiet hours (S5.4), mute (S5.3), and (per
+this principle, reserved for later, not designed here) user activity, device state, and
+competing-priority arbitration among several simultaneously-`approved` initiatives. None of these
+are Typed Cadence's concern, and none of them are decided by *when* the proposing drive happened
+to tick. Coupling delivery to the proposing drive's own cadence would mean every future
+contextual-gating feature has to be reimplemented inside every drive that proposes anything —
+exactly the "feature-specific scheduler" duplication S5.1 §1 named as the problem this whole
+chassis exists to avoid.
+
+**Concretely, within this document's own scope:** `initiative_sweep` (§6) is a clean illustration
+— its cadence governs only when it *checks* for expired rows; it never delivers anything. §8's
+default-window helper computes a `due_at`/`expires_at` pair for a `propose` call, not a delivery
+decision. Neither piece of code in this document ever calls `deliver`, and this section makes
+explicit that nothing added by a later stage should either, purely as a consequence of a cadence
+firing.
+
+**What this reserves for S5.3/S5.4, not decided here:** the actual delivery-timing check — the
+mechanism that walks `approved`/`deferred` initiatives whose `due_at` has passed and decides,
+against current mute/quiet-hours/(future contextual) state, whether to call `deliver` now — is
+*not* designed in this document. It is very likely its own small, independently-cadenced sweep
+(structurally similar to `initiative_sweep`, but calling `deliver`/`defer` instead of `expire`),
+but that is S5.3/S5.4's decision to make, not asserted here (see §11 item 5). This document's
+contribution is the boundary itself: whatever that future mechanism turns out to be, it is
+guaranteed to be a distinct component from any proposing drive's cadence, because no proposing
+drive is ever given a `deliver` call to make.
+
+## 10. Non-negotiable invariants
 
 - `parse()` is fail-closed for every cadence type: a malformed string raises `ValueError`, never
   silently substitutes a default (§3).
 - `compute_next_run()` never returns a `next_run_ts` in the past relative to its inputs — no
   immediate double-fire, no catch-up storm (§4).
 - No behavioural change to any of the five existing `REGISTRY` drives' actual firing schedule,
-  proven by a pinned regression test, not asserted by inspection alone (§5, §11).
+  proven by a pinned regression test, not asserted by inspection alone (§5, §13).
 - `daily`/`weekly` cadences require an explicit `tz`; there is no silent UTC fallback (§4).
 - `initiative_sweep` never proposes, delivers, or resolves — only `expire`, per §6/§7's narrowly
   scoped exemption. Widening that exemption to any other transition is out of scope for this
   document and would need its own review.
+- **A cadence tick may only lead to `propose` or a non-outbound-contact transition like `expire` —
+  never `deliver` directly** (§9). Delivery is always decided by a separate, independently
+  gated mechanism, not by the proposing drive's own cadence firing.
 
-## 10. Open design questions for approval time
+## 11. Open design questions for approval time
 
-1. **§7's proposed `expire`-transition exemption** — approve as scoped, or handle differently
-   (e.g. a manual/operator-only unstick path instead of an automatic exemption)? *Recommend:
-   approve as scoped* — the alternative (a stuck row with no automatic path to closure) is worse,
-   and the exemption is narrow and reasoned by construction, not by convenience.
+1. ~~**§7's proposed `expire`-transition exemption**~~ — **resolved, approved by the project owner
+   (2026-08-06)**: `_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS = frozenset({"expire"})` as scoped.
 2. **`initiative_sweep`'s cadence** — fixed at `every:900`, or configurable like every other drive
    via `kernel.yaml`/env override? *Recommend: configurable* — `resolve_cadences()`'s existing
    precedence already applies uniformly to every `REGISTRY` entry; special-casing this one would
@@ -299,8 +365,15 @@ once a real drive needs it, not to become an implicit default inside the seam it
    (Monday=0), not cron's (Sunday=0) or ISO 8601's (Monday=1)? *Recommend: keep Python's
    convention* — it's what `datetime`/`dateutil` already use internally, avoiding a translation
    layer at every call site.
+5. **Should the future delivery-timing check (S5.3/S5.4, §9) be its own dedicated `REGISTRY`
+   drive with its own cadence, or folded into `initiative_sweep`?** *Recommend: its own drive* —
+   delivery-timing logic will need to reason about mute/quiet-hours/future contextual gating,
+   categorically different from `initiative_sweep`'s simple TTL bookkeeping (§6); keeping them
+   separate is a direct consequence of §9's own eligibility/delivery separation principle, not
+   just a style preference. Non-binding on S5.3/S5.4's own design, recorded here only so that
+   design doesn't have to rediscover the reasoning.
 
-## 11. Explicitly deferred / out of scope
+## 12. Explicitly deferred / out of scope
 
 - Any concrete check-in / weekly-review / next-best-action / maintenance / wellness drive (S5.7+).
 - Default-off consent (S5.3), quiet-hours defer (S5.4), dry-run mode (S5.5), rationale-logging
@@ -314,7 +387,7 @@ once a real drive needs it, not to become an implicit default inside the seam it
   cadence — these remain manual/dev-command-triggered only (`handle_command`), unchanged by this
   document; doing so would also run into S5.1 §3's reflection-ownership gap, a separate blocker.
 
-## 12. Verify plan
+## 13. Verify plan
 
 - `tests/test_cadence_types.py` (new) — `parse()` round-trips for all four types, including
   malformed-input rejection (bad hour/minute/day-of-week ranges) for the two new ones;
