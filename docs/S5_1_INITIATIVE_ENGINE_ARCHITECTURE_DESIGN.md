@@ -18,6 +18,14 @@
 > S5.7 and every later sub-stage still require their own separate, explicit approval before
 > implementation, same as every other Phase B/Stage 1 sub-stage.
 >
+> **Correction, 2026-08-07 (S5.5 approval):** §7's Execution-stage table row and §15's "Dry-run
+> mode's plumbing" bullet originally left ambiguous whether a dry-run `deliver` would still
+> perform a real `initiative_store.py` write (skipping only the `NotifySkill` call) or skip the
+> store write too. `docs/S5_5_DRY_RUN_MODE_DESIGN.md` (approved 2026-08-07) resolves this
+> explicitly: **a dry run never writes to `initiatives`/`initiative_audit` at all** — both
+> passages below are corrected accordingly. This is a resolution of a question both passages
+> already flagged as deferred to S5.5, not a reversal of anything S5.1 firmly decided.
+>
 > **Scope of this pass:** architecture only — the generic `Initiative` object, its lifecycle, its
 > Runtime Contract seam, and the governance/audit/memory contracts every future proactive
 > behaviour will be built against. **No scheduling policy, no consent UI, no quiet-hours logic, no
@@ -352,7 +360,7 @@ Mapped onto the 8-stage Runtime Contract pipeline:
 | **Executive** | `CandidateAction(kind=f"initiative_{transition}_{category}", ...)` — the full `Initiative` proposal (kind, payload, rationale, confidence, priority, due_at, expires_at) plus its `ProactiveIntent` |
 | **Governance** | Three gates, in order — see §8 |
 | **Capability** | Per-transition, not uniform: `propose`/`defer`/`resolve`/`expire`/`cancel`/`supersede` write to `initiative_store.py` only. `deliver` alone invokes the existing `NotifySkill` path via `run_skill_through_runtime_contract(ctx.skill_registry, "notify", "send", {...})`, reused exactly as `awaiting_response`'s `remind`/`escalate` transitions already do — no new delivery channel is introduced here. A single `propose` call never itself reaches `deliver`; see S5.2's `docs/S5_2_TYPED_CADENCE_DESIGN.md` for the fuller treatment of why a cadence tick (or any other proposal trigger) produces eligibility, not delivery. |
-| **Execution** | Running the above; `deliver` transition is a no-op write (dry-run mode, S5.5, not designed here) or a real `NotifySkill` call, gated by a mode flag this document defers |
+| **Execution** | Running the above; in live mode, `deliver` performs a real `initiative_store.py` write and a real `NotifySkill` call. **Corrected 2026-08-07 (S5.5, see `docs/S5_5_DRY_RUN_MODE_DESIGN.md`): under dry-run mode, this stage does not run at all** — neither the store write nor the `NotifySkill` call happens; the entire transition is simulated into a separate, non-authoritative `DryRunResult` instead. This replaces the row's original "no-op write ... gated by a mode flag this document defers" framing, which left open whether the store write itself would still occur under dry-run — S5.5 resolves that it does not. |
 | **Reflection** | `ActionReflection(surface="initiative", action=candidate_action.kind, outcome=..., summary=rationale, details={initiative_id, category, priority, confidence, governance_decision})` — written at every *transition* (not on every deferred re-check, to avoid reflection spam; a `deferred` initiative re-checked hourly by the sweep does not get a new reflection each hour, only on its actual state change) |
 | **Memory** | Reflections table (as above) + `initiative_audit` (full transition history, mirroring `awaiting_response_audit`) + Working Memory — see §10 |
 
@@ -585,9 +593,11 @@ rather than silently picking one:
 - **Quiet-hours defer's coalescing/expiry semantics** — this document only establishes that
   `deferred` is a state the machine supports and that `deferred_reason` distinguishes mute from
   quiet-hours (§7); the actual quiet-hours window logic is S5.4.
-- **Dry-run mode's plumbing** — §7 notes `deliver` can be a no-op write instead of a real
-  `NotifySkill` call, but the mode flag, its storage, and its interaction with `initiative_audit`
-  are S5.5.
+- **Dry-run mode's plumbing** — §7 (corrected 2026-08-07) now states the resolved behaviour: under
+  dry-run, `propose`/`deliver` never write to `initiatives`/`initiative_audit` at all. The mode
+  flag, its storage (a new Governance-owned scoped switch, mirroring `parking_brake_state`), and
+  the separate `DryRunResult` provenance mechanism are fully specified in
+  `docs/S5_5_DRY_RUN_MODE_DESIGN.md` (approved 2026-08-07).
 - **Structured rationale logging's presentation** — §9 makes `rationale` mandatory and audited;
   how it's formatted/surfaced for review is S5.6.
 - **Every concrete drive** (check-in, weekly review, next-best-action, maintenance suggestion,
