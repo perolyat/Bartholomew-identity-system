@@ -47,17 +47,28 @@ class ActionParameter:
 
 @dataclass
 class SkillAction:
-    """Action definition for a skill."""
+    """Action definition for a skill.
+
+    `side_effect` (Stage 5, S5.5) declares whether this action has any
+    real effect beyond returning data -- a manifest-authored, reviewed
+    classification, not something the skill's own code decides at call
+    time. Defaults to `True` (fail-closed): an action the manifest
+    doesn't explicitly mark `side_effect: false` is treated as
+    side-effecting, and `SkillRegistry.execute_action()` never invokes it
+    for real under dry-run. See docs/S5_5_DRY_RUN_MODE_DESIGN.md Sec 5.
+    """
 
     name: str
     description: str = ""
     parameters: list[ActionParameter] = field(default_factory=list)
+    side_effect: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
             "parameters": [p.to_dict() for p in self.parameters],
+            "side_effect": self.side_effect,
         }
 
     @classmethod
@@ -67,6 +78,7 @@ class SkillAction:
             name=data["name"],
             description=data.get("description", ""),
             parameters=params,
+            side_effect=data.get("side_effect", True),
         )
 
 

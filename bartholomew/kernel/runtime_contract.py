@@ -1316,6 +1316,12 @@ class InitiativeRuntimeResult:
     outcome: str
     reason: str | None
     initiative: Any
+    dry_run_result: Any = None
+    """Stage 5, S5.5: populated only when this call was actually
+    simulated (see `run_initiative_through_runtime_contract()`'s `dry_run`
+    param) -- a `bartholomew.kernel.dry_run.DryRunResult`, never a real
+    `Initiative`. `None` for every ordinary live call, unchanged from
+    before S5.5."""
 
 
 async def _record_initiative_reflection(
@@ -1440,6 +1446,7 @@ async def run_initiative_through_runtime_contract(
     coalesced: bool = False,
     batch_id: str | None = None,
     batch_size: int = 1,
+    dry_run: bool = False,
 ) -> InitiativeRuntimeResult:
     """
     Trace one Initiative transition through the Runtime Contract seam.
@@ -1464,6 +1471,24 @@ async def run_initiative_through_runtime_contract(
     no behavioural effect here. The seam itself stays policy-agnostic: it
     doesn't need to know what any given `delivery_policy` value means, only
     how to thread these through.
+
+    S5.5 design doc (docs/S5_5_DRY_RUN_MODE_DESIGN.md) -- `dry_run` is
+    consulted only for "propose"/"deliver" (every other transition ignores
+    it; out of scope for this pass, see that document's own scope note).
+    The effective dry-run decision is `dry_run OR <the global dry-run
+    switch's "initiative" scope>` -- the caller's own request can only
+    push toward simulation, and so can the global switch; neither can push
+    away from it once the other has. All three Governance gates below
+    still evaluate for real regardless of dry-run -- only the store write
+    (`propose`)/(`deliver`'s store write + NotifySkill call + Working
+    Memory note) is replaced with a `bartholomew.kernel.dry_run.
+    DryRunResult`, recorded to its own `dry_run_results` table, never to
+    `initiatives`/`initiative_audit`/the unified Reflection sink/Working
+    Memory. If resolving the global switch itself errors and the caller
+    did not already request `dry_run=True`, the call is denied outright
+    (fail-closed) rather than guessing whether the switch would have
+    forced simulation -- see `is_dry_run_engaged_fail_closed_off_loop()`'s
+    docstring.
 
     `ctx` needs `.mem.db_path` and `.initiative_store`
     (bartholomew.kernel.initiative_store.InitiativeStore) at minimum --
@@ -1550,33 +1575,115 @@ async def run_initiative_through_runtime_contract(
     reason_out: str | None = None
     exempt = transition in _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS
 
-    # Gate 1: ParkingBrake("initiative"), fail-closed. Applies unconditionally.
-    try:
-        from bartholomew.orchestrator.safety.governance_store import (
-            is_blocked_fail_closed_off_loop,
-        )
+    # S5.5: resolve dry-run mode, for "propose"/"deliver" only, before any
+    # Governance gate runs -- the gates below evaluate identically either
+    # way (design doc Sec 2/9: Governance is never weakened by dry-run).
+    # The caller's own `dry_run=True` is trusted unconditionally (it can
+    # only ever push toward simulation); the global switch is then OR'd
+    # in. If reading the global switch itself errors while the caller
+    # asked for a live call, deny outright rather than risk a real
+    # execution the switch might have forbidden -- if the caller already
+    # asked for dry_run=True, the switch's own read failure changes
+    # nothing (still simulate, as the caller already required).
+    effective_dry_run = dry_run
+    dry_run_resolution_failed = False
+    if transition in ("propose", "deliver"):
+        try:
+            from bartholomew.orchestrator.safety.governance_store import (
+                is_dry_run_engaged_fail_closed_off_loop,
+            )
 
-        blocked = await is_blocked_fail_closed_off_loop(
-            "initiative",
-            ctx.mem.db_path,
-            governance_store=getattr(ctx, "governance_store", None),
-            executor=executor,
-        )
-        if blocked:
+            globally_engaged = await is_dry_run_engaged_fail_closed_off_loop(
+                "initiative",
+                ctx.mem.db_path,
+                governance_store=getattr(ctx, "governance_store", None),
+                executor=executor,
+            )
+            effective_dry_run = effective_dry_run or globally_engaged
+        except Exception:
+            if not dry_run:
+                logger.exception(
+                    "Dry-run state resolution failed for %s; denying (fail-closed)",
+                    action_kind,
+                )
+                # S5.5 correction: this is an infrastructure/safety-
+                # resolution failure, not a Governance verdict. Reusing
+                # "denied" here (and letting propose's own "always writes
+                # a row" behaviour below run as normal) would leave a
+                # real, terminal Initiative row that reads exactly like a
+                # legitimate Governance denial when it isn't one --
+                # Governance was never actually consulted. `outcome =
+                # "error"` reuses this seam's own existing vocabulary for
+                # "failed before any verdict was reached" (see the
+                # propose/dispatch except blocks below, which already use
+                # it identically). `dry_run_resolution_failed` additionally
+                # skips the whole dispatch block entirely, so no
+                # Initiative row -- denied or otherwise -- and no
+                # DryRunResult are written for this path at all. See
+                # docs/S5_5_DRY_RUN_MODE_DESIGN.md Sec 10.
+                governance_allowed = False
+                outcome = "error"
+                reason_out = "Dry-run state check errored"
+                dry_run_resolution_failed = True
+
+    # Gate 1: ParkingBrake("initiative"), fail-closed. Applies unconditionally.
+    # S5.5 correction: `gate_evidence` records each gate's own real verdict
+    # as it's evaluated, independent of `reason_out` (a single string the
+    # first denying gate already overwrites) -- this is what lets a dry
+    # run's `approval_requirements` (below) report genuine per-gate
+    # provenance instead of a coarse summary. Read-only bookkeeping: it
+    # never feeds back into `governance_allowed` and changes no gate's own
+    # decision -- Governance's authority is reported here, not duplicated
+    # or re-decided.
+    gate_evidence: dict[str, Any] = {
+        "parking_brake": {"scope": "initiative", "checked": False, "blocked": None},
+        "identity_policy": {
+            "exempt": exempt,
+            "checked": False,
+            "allowed": None,
+            "reason": None,
+        },
+        "consent": {
+            "exempt": exempt,
+            "category": action_category,
+            "checked": False,
+            "consented": None,
+        },
+    }
+    if governance_allowed:
+        try:
+            from bartholomew.orchestrator.safety.governance_store import (
+                is_blocked_fail_closed_off_loop,
+            )
+
+            blocked = await is_blocked_fail_closed_off_loop(
+                "initiative",
+                ctx.mem.db_path,
+                governance_store=getattr(ctx, "governance_store", None),
+                executor=executor,
+            )
+            gate_evidence["parking_brake"]["checked"] = True
+            gate_evidence["parking_brake"]["blocked"] = blocked
+            if blocked:
+                governance_allowed = False
+                outcome = "parking_brake_denied"
+                reason_out = "Blocked by parking brake (scope=initiative)"
+        except Exception:
+            logger.exception("Governance check failed for %s; failing closed", action_kind)
+            gate_evidence["parking_brake"]["checked"] = True
+            gate_evidence["parking_brake"]["error"] = "Governance check errored"
             governance_allowed = False
             outcome = "parking_brake_denied"
-            reason_out = "Blocked by parking brake (scope=initiative)"
-    except Exception:
-        logger.exception("Governance check failed for %s; failing closed", action_kind)
-        governance_allowed = False
-        outcome = "parking_brake_denied"
-        reason_out = "Governance check errored"
+            reason_out = "Governance check errored"
 
     # Gate 2: Identity Policy, skipped for exempt transitions.
     identity_context = getattr(ctx, "identity_context", None)
     if governance_allowed and not exempt and identity_context is not None:
         policy_kind = f"allow_proactive.{action_category}"
         decision = policy_engine.evaluate_tool_policy(identity_context, policy_kind)
+        gate_evidence["identity_policy"]["checked"] = True
+        gate_evidence["identity_policy"]["allowed"] = decision.allowed
+        gate_evidence["identity_policy"]["reason"] = decision.reason
         if not decision.allowed:
             governance_allowed = False
             outcome = "governance_denied"
@@ -1589,6 +1696,8 @@ async def run_initiative_through_runtime_contract(
             action_category,
             executor=executor,
         )
+        gate_evidence["consent"]["checked"] = True
+        gate_evidence["consent"]["consented"] = consented
         if not consented:
             governance_allowed = False
             outcome = "governance_denied"
@@ -1598,7 +1707,106 @@ async def run_initiative_through_runtime_contract(
         governance_decision = "allowed"
 
     initiative = existing
-    if transition == "propose":
+    dry_result = None
+    if dry_run_resolution_failed:
+        # S5.5 correction: represent the infrastructure failure and stop
+        # here -- no real store write (denied or otherwise), and no
+        # simulated DryRunResult either, since we were never able to
+        # determine whether this call should have been live or simulated,
+        # let alone what Governance would have said.
+        pass
+    elif effective_dry_run and transition in ("propose", "deliver"):
+        # S5.5: simulate the entire transaction instead of writing/calling
+        # for real -- for both an allowed and a denied outcome (design doc
+        # Sec 1/17: a dry run reports Governance's real verdict truthfully,
+        # it does not only simulate the happy path). No store.propose()/
+        # store.deliver() call, no NotifySkill call, no Working Memory
+        # note -- see docs/S5_5_DRY_RUN_MODE_DESIGN.md Sec 4.
+        from .dry_run import DryRunResult, record_dry_run_result
+
+        approval_requirements: dict[str, Any] = {
+            "parking_brake": gate_evidence["parking_brake"],
+            "identity_policy": gate_evidence["identity_policy"],
+            "consent": gate_evidence["consent"],
+            "reason": reason_out,
+        }
+        if transition == "propose":
+            target = "new"
+            parameters = {
+                "kind": kind,
+                "category": intent.category if intent is not None else category,
+                "priority": priority,
+                "confidence": confidence,
+                "rationale": rationale,
+                "payload": payload,
+                "origin_drive": origin_drive,
+                "due_at": due_at,
+                "expires_at": expires_at,
+                "delivery_policy": delivery_policy,
+            }
+            expected_effects: dict[str, Any] = {
+                "would_create_status": "approved" if governance_allowed else "denied",
+            }
+            initiative = None
+        else:  # deliver
+            target = str(initiative_id)
+            parameters = {
+                "coalesced": coalesced,
+                "batch_id": batch_id,
+                "batch_size": batch_size,
+            }
+            expected_effects = {"current_status": existing.status if existing else None}
+            if existing is not None:
+                # Informational only -- category mute (S5.3) is evaluated
+                # by the initiative_delivery_check drive before it ever
+                # calls `deliver`, not by this seam's own three gates
+                # (design doc Sec 8). Reading it here doesn't gate
+                # anything and never overrides governance_allowed; it's
+                # additional truthful context for "would this actually
+                # have reached the user," per your request to preserve
+                # mute state where applicable.
+                muted = await run_off_loop(
+                    store.is_category_muted,
+                    existing.category,
+                    executor=executor,
+                )
+                approval_requirements["category_mute"] = {
+                    "category": existing.category,
+                    "muted": muted,
+                }
+            if governance_allowed and existing is not None:
+                expected_effects["would_transition"] = f"{existing.status} -> delivered"
+                if getattr(ctx, "skill_registry", None) is not None and not suppress_notification:
+                    notify_params = {
+                        "message": existing.rationale,
+                        "title": f"Bartholomew: {existing.kind}",
+                        "priority": "high" if existing.priority == "high" else "normal",
+                    }
+                    if notify_overrides:
+                        notify_params.update(notify_overrides)
+                    expected_effects["would_call"] = "notify.send"
+                    expected_effects["notify_params"] = notify_params
+            initiative = existing
+
+        dry_result = DryRunResult(
+            surface="initiative",
+            proposed_action=action_kind,
+            target=target,
+            parameters=parameters,
+            expected_effects=expected_effects,
+            governance_decision=governance_decision,
+            approval_requirements=approval_requirements,
+            would_execute=governance_allowed,
+            actor=actor,
+        )
+        await run_off_loop(
+            record_dry_run_result,
+            ctx.mem.db_path,
+            dry_result,
+            executor=executor,
+        )
+        outcome = f"dry_run_{'approved' if governance_allowed else 'denied'}"
+    elif transition == "propose":
         # propose always writes a row -- denied is a real, audited,
         # terminal outcome (design doc Sec 5), not a no-op.
         try:
@@ -1708,7 +1916,15 @@ async def run_initiative_through_runtime_contract(
                     )
                 _record_initiative_working_memory_note(ctx, initiative)
 
-    await _record_initiative_reflection(ctx, candidate_action, outcome, initiative, reason_out)
+    if dry_result is None and not dry_run_resolution_failed:
+        # S5.5: a simulated call never reaches the real Reflection sink, and
+        # neither does an infrastructure resolution failure -- dry_result
+        # alone is not a sufficient guard, since it is also None on that
+        # failure path (S5.5 correction: no real action ground truth may be
+        # recorded when we never even determined whether this call should
+        # have been live or simulated, let alone what Governance would have
+        # said).
+        await _record_initiative_reflection(ctx, candidate_action, outcome, initiative, reason_out)
 
     return InitiativeRuntimeResult(
         observation=observation,
@@ -1717,4 +1933,5 @@ async def run_initiative_through_runtime_contract(
         outcome=outcome,
         reason=reason_out,
         initiative=initiative,
+        dry_run_result=dry_result,
     )

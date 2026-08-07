@@ -554,6 +554,7 @@ class SkillRegistry:
         skill_id: str,
         action: str,
         params: dict[str, Any] | None = None,
+        dry_run: bool = False,
     ) -> SkillResult:
         """
         Execute an action on a loaded skill.
@@ -582,10 +583,25 @@ class SkillRegistry:
         remains the directly-callable, directly-tested execution primitive
         underneath it, not a competing path.
 
+        S5.5 design doc Sec 5/6 -- `dry_run` (OR'd with the global dry-run
+        switch's "skills" scope, same fail-closed composition
+        `run_initiative_through_runtime_contract()` uses) only changes
+        Stage 5+6: every Governance check above still runs for real. Once
+        Governance allows the call, the manifest's per-action
+        `side_effect` classification decides what happens next -- an
+        action declared `side_effect: false` (a capability-authored,
+        reviewed classification, checked here, never by the skill's own
+        code) still genuinely executes even under dry-run, maximizing
+        fidelity at zero risk; anything else (the fail-closed default) is
+        never passed to `loaded.instance.execute()` at all under
+        effective dry-run -- a `DryRunResult` is recorded instead. See
+        `_finish_dry_run()`.
+
         Args:
             skill_id: ID of skill
             action: Action name to execute
             params: Parameters for the action
+            dry_run: simulate instead of executing a side-effecting action
 
         Returns:
             SkillResult from the skill
@@ -677,8 +693,51 @@ class SkillRegistry:
         if consent_result is not None:
             return await self._finish(observation, candidate_action, action, params, consent_result)
 
+        # S5.5: resolve dry-run mode -- after every real Governance check
+        # above has already allowed this call, before Capability/Execution
+        # runs. The caller's own dry_run is trusted unconditionally (can
+        # only push toward simulation); the global "skills" scope is OR'd
+        # in. A missing db_path resolves as "not engaged" (mirrors
+        # _is_blocked_by_brake()'s own permissive default for the
+        # identical condition); otherwise, if the global-switch read
+        # itself errors and the caller wanted a real call, deny outright
+        # rather than risk executing something the switch might have
+        # forbidden -- see is_dry_run_engaged_fail_closed_off_loop()'s
+        # docstring.
+        effective_dry_run = dry_run
+        if self._db_path:
+            try:
+                from bartholomew.orchestrator.safety.governance_store import (
+                    is_dry_run_engaged_fail_closed_off_loop,
+                )
+
+                globally_engaged = await is_dry_run_engaged_fail_closed_off_loop(
+                    "skills",
+                    self._db_path,
+                    governance_store=self._governance_store,
+                    executor=self._blocking_executor,
+                )
+                effective_dry_run = effective_dry_run or globally_engaged
+            except Exception:
+                if not dry_run:
+                    logger.exception(
+                        "Dry-run state resolution failed for skill %s action %s; "
+                        "denying (fail-closed)",
+                        skill_id,
+                        action,
+                    )
+                    return await self._finish(
+                        observation,
+                        candidate_action,
+                        action,
+                        params,
+                        SkillResult.fail("Dry-run state check errored"),
+                    )
+
         # Stage 5+6: Capability + Execution -- only reached once every
         # Governance check above has allowed the CandidateAction.
+        if effective_dry_run and manifest_action.side_effect:
+            return await self._finish_dry_run(observation, candidate_action, action, params)
         try:
             loaded.instance._set_state(SkillState.RUNNING)
             result = await loaded.instance.execute(action, params or {})
@@ -829,6 +888,48 @@ class SkillRegistry:
         )
         await self._record_reflection(observation, skill_id, action, params, result)
         return result
+
+    async def _finish_dry_run(
+        self,
+        observation: Observation,
+        candidate_action: CandidateAction,
+        action: str,
+        params: dict[str, Any] | None,
+    ) -> SkillResult:
+        """S5.5: the dry-run-intercepted counterpart to `_finish()` --
+        `loaded.instance.execute()` was never called (see
+        `execute_action()`'s own dry-run branch). Records a
+        `bartholomew.kernel.dry_run.DryRunResult` to its own
+        `dry_run_results` table -- never `skill_action_audit`, never the
+        unified Reflection sink `_finish()` writes to -- so a simulated
+        skill call can never be mistaken for a real one by anything that
+        reads those tables. Only reached after every real Governance check
+        in `execute_action()` already allowed the call, so
+        `governance_decision` is always "allowed" here by construction."""
+        from .blocking_executor import run_off_loop
+        from .dry_run import DryRunResult, record_dry_run_result
+
+        skill_id = candidate_action.kind
+        dry_result = DryRunResult(
+            surface=observation.source,
+            proposed_action=f"{skill_id}.{action}",
+            target=skill_id,
+            parameters=params or {},
+            expected_effects={"would_call": f"{skill_id}.{action}"},
+            governance_decision="allowed",
+            approval_requirements={"parking_brake_scope": "skills"},
+            would_execute=True,
+        )
+        await run_off_loop(
+            record_dry_run_result,
+            self._db_path,
+            dry_result,
+            executor=self._blocking_executor,
+        )
+        return SkillResult.dry_run(
+            data=dry_result.to_dict(),
+            message=f"Dry-run: {skill_id}.{action} was not executed",
+        )
 
     async def _record_reflection(
         self,

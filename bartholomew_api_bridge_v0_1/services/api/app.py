@@ -34,6 +34,7 @@ from .models import ChatIn, ChatOut, ConversationList
 from .routes import (
     awaiting_response,
     consent,
+    dry_run,
     governance,
     initiative_settings,
     liveness,
@@ -76,6 +77,7 @@ app.include_router(notifications.router)
 app.include_router(consent.router)
 app.include_router(awaiting_response.router)
 app.include_router(initiative_settings.router)
+app.include_router(dry_run.router)
 app.include_router(onboarding.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)

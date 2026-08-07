@@ -87,6 +87,7 @@ actions:
 
   - name: "list_pending"
     description: "List queued notifications"
+    side_effect: false  # S5.5: pure read
     parameters:
       - name: "limit"
         type: "integer"
@@ -103,10 +104,12 @@ actions:
 
   - name: "get_quiet_hours"
     description: "Get current quiet hours settings"
+    side_effect: false  # S5.5: pure read
     parameters: []
 
   - name: "is_quiet_hours"
     description: "Check if currently in quiet hours"
+    side_effect: false  # S5.5: pure read
     parameters: []
 
   - name: "set_quiet_hours"
@@ -135,6 +138,7 @@ actions:
 
   - name: "get_notification_settings"
     description: "Combined quiet-hours and mute status (Stage 1, S1.3)"
+    side_effect: false  # S5.5: pure read
     parameters: []
 
 # Metadata

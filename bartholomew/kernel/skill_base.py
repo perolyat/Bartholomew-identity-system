@@ -45,6 +45,16 @@ class SkillResultStatus(Enum):
     PENDING = "pending"
     CANCELLED = "cancelled"
     PERMISSION_DENIED = "permission_denied"
+    # Stage 5, S5.5: the action was not actually executed -- Governance
+    # evaluated it for real, but the call was (or was forced into)
+    # dry-run mode, so the capability's own execute() was never invoked.
+    # Distinct from SUCCESS (nothing really happened) and from ERROR/
+    # PERMISSION_DENIED (Governance did not deny this -- it would have
+    # run, had this not been a simulation). `.success` deliberately stays
+    # False for this status: no caller checking `.success` can mistake a
+    # dry run for a completed action. See
+    # docs/S5_5_DRY_RUN_MODE_DESIGN.md Sec 8.
+    DRY_RUN = "dry_run"
 
 
 @dataclass
@@ -98,6 +108,16 @@ class SkillResult:
         return cls(
             status=SkillResultStatus.PERMISSION_DENIED,
             error=f"Permission denied: {permission}",
+        )
+
+    @classmethod
+    def dry_run(cls, data: Any = None, message: str = "") -> SkillResult:
+        """Create a dry-run result (Stage 5, S5.5) -- the action was
+        simulated, not executed. See SkillResultStatus.DRY_RUN's docstring."""
+        return cls(
+            status=SkillResultStatus.DRY_RUN,
+            data=data,
+            message=message,
         )
 
 

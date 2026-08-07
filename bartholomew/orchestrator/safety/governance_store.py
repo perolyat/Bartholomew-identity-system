@@ -111,6 +111,21 @@ class GovernanceState:
 
 
 @dataclass(frozen=True)
+class DryRunSwitchState:
+    """Stage 5, S5.5: the global dry-run switch's state snapshot, with the
+    revision it was read at. Structurally identical to `GovernanceState`
+    (engaged/scopes/revision, same revision-guarded engage/disengage
+    shape) but a distinct type on purpose -- dry-run and Parking Brake are
+    distinct concepts with distinct outcome semantics (simulate vs. stop),
+    per docs/S5_5_DRY_RUN_MODE_DESIGN.md Sec 9, never conflated even
+    though the underlying persistence pattern is shared."""
+
+    engaged: bool
+    scopes: frozenset[str]
+    revision: int
+
+
+@dataclass(frozen=True)
 class RuntimeMarker:
     """brake_runtime's persisted state: the current (or most recent)
     runtime's identity and whether its shutdown was confirmed clean."""
@@ -184,6 +199,40 @@ def ensure_schema(db_path: str) -> None:
                 write_fence_open INTEGER NOT NULL DEFAULT 1
             )
             """,
+        )
+        # Stage 5, S5.5: the global dry-run switch -- additive, alongside
+        # parking_brake_state, not merged into it (see DryRunSwitchState's
+        # docstring for why they stay distinct concepts). No legacy import
+        # needed (unlike parking_brake_state's system_flags migration --
+        # there is no pre-existing dry-run mechanism to import from).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dry_run_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                engaged INTEGER NOT NULL DEFAULT 0,
+                scopes TEXT NOT NULL DEFAULT '[]',
+                revision INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL
+            )
+            """,
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dry_run_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                scopes TEXT NOT NULL,
+                reason TEXT,
+                revision INTEGER NOT NULL,
+                actor TEXT
+            )
+            """,
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO dry_run_state (id, engaged, scopes, revision, updated_at) "
+            "VALUES (1, 0, '[]', 0, ?)",
+            (int(time.time()),),
         )
         conn.execute(
             """
@@ -280,6 +329,7 @@ class GovernanceStore:
         self.db_path = db_path
         ensure_schema(db_path)
         self._cache = self._load()
+        self._dry_run_cache = self._load_dry_run()
 
     def _load(self) -> GovernanceState:
         conn = connect(self.db_path)
@@ -304,6 +354,175 @@ class GovernanceStore:
     def is_blocked(self, scope: str) -> bool:
         st = self._cache
         return st.engaged and ("global" in st.scopes or scope in st.scopes)
+
+    # -- Stage 5, S5.5: global dry-run switch ---------------------------
+
+    def _load_dry_run(self) -> DryRunSwitchState:
+        conn = connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT engaged, scopes, revision FROM dry_run_state WHERE id = ?",
+                (_STATE_ROW_ID,),
+            ).fetchone()
+        finally:
+            conn.close()
+        engaged, scopes_json, revision = row
+        return DryRunSwitchState(bool(engaged), frozenset(json.loads(scopes_json)), revision)
+
+    def refresh_dry_run(self) -> DryRunSwitchState:
+        """Re-read persisted dry-run-switch state, replacing this
+        instance's cached view -- mirrors refresh()."""
+        self._dry_run_cache = self._load_dry_run()
+        return self._dry_run_cache
+
+    def dry_run_state(self) -> DryRunSwitchState:
+        return self._dry_run_cache
+
+    def is_dry_run_engaged(self, scope: str) -> bool:
+        """Same OR-composed scope semantics as `is_blocked()` -- "global"
+        or the specific scope engaged both count. Callers still need to
+        OR this with any caller-supplied `dry_run` flag themselves (S5.5
+        design doc Sec 11: the global switch can only push *toward*
+        simulation, never away from it -- that composition happens at the
+        seam, not here, since this method only knows about the global
+        switch's own state)."""
+        st = self._dry_run_cache
+        return st.engaged and ("global" in st.scopes or scope in st.scopes)
+
+    def list_dry_run_audit(self, limit: int = 50) -> list[dict]:
+        """Most recent dry_run_audit entries, newest first. Read-only;
+        does not touch or require self._dry_run_cache. Mirrors
+        list_audit()'s shape exactly, against the separate dry-run audit
+        trail."""
+        conn = connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, ts, action, scopes, reason, revision, actor "
+                "FROM dry_run_audit ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            {
+                "id": row[0],
+                "ts": row[1],
+                "action": row[2],
+                "scopes": json.loads(row[3]),
+                "reason": row[4],
+                "revision": row[5],
+                "actor": row[6],
+            }
+            for row in rows
+        ]
+
+    def engage_dry_run(
+        self,
+        *scopes: str,
+        reason: str | None = None,
+        actor: str | None = None,
+    ) -> DryRunSwitchState:
+        """Engage (tighten toward simulation-only). Always applies --
+        monotonic tightening is never refused, same as engage(). Mirrors
+        engage()'s exact contract against the separate dry-run state."""
+        scopes_set = set(scopes) if scopes else {"global"}
+        return self._write_dry_run(
+            engaged=True,
+            scopes=scopes_set,
+            action="engaged",
+            reason=reason,
+            actor=actor,
+        )
+
+    def disengage_dry_run(
+        self,
+        *,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        actor: str | None = None,
+    ) -> DryRunSwitchState:
+        """Disengage (loosen back to live-eligible). Refused with
+        StaleGovernanceWriteError if `expected_revision` (defaulting to
+        this instance's own last-loaded revision) no longer matches the
+        currently-persisted revision -- mirrors disengage()'s exact
+        stale-write protection against the separate dry-run state."""
+        if expected_revision is None:
+            expected_revision = self._dry_run_cache.revision
+        return self._write_dry_run(
+            engaged=False,
+            scopes=set(),
+            action="disengaged",
+            reason=reason,
+            expected_revision=expected_revision,
+            actor=actor,
+        )
+
+    def _write_dry_run(
+        self,
+        *,
+        engaged: bool,
+        scopes: set[str],
+        action: str,
+        reason: str | None,
+        expected_revision: int | None = None,
+        actor: str | None = None,
+    ) -> DryRunSwitchState:
+        """Mirrors `_write()`'s exact transaction shape (atomic state +
+        audit write, revision-guarded loosening, write-fence check) against
+        `dry_run_state`/`dry_run_audit` instead of `parking_brake_state`/
+        `governance_audit`. The write fence still applies -- a dry-run
+        switch change is still a Governance write, gated the same as any
+        other during shutdown."""
+        now = int(time.time())
+        conn = connect(self.db_path)
+        try:
+            set_wal_pragmas(conn)
+            conn.execute("BEGIN IMMEDIATE")
+
+            fence_row = conn.execute(
+                "SELECT write_fence_open FROM brake_runtime WHERE id = ?",
+                (_RUNTIME_ROW_ID,),
+            ).fetchone()
+            if fence_row is not None and not fence_row[0]:
+                raise WriteFenceClosedError(
+                    "Governance write refused: write fence is closed "
+                    "(shutdown in progress or already completed)",
+                )
+
+            current_revision = conn.execute(
+                "SELECT revision FROM dry_run_state WHERE id = ?",
+                (_STATE_ROW_ID,),
+            ).fetchone()[0]
+
+            if expected_revision is not None and expected_revision != current_revision:
+                raise StaleGovernanceWriteError(
+                    f"disengage_dry_run() expected revision {expected_revision}, "
+                    f"but persisted state is at revision {current_revision} -- "
+                    "refusing to loosen based on stale data",
+                )
+
+            new_revision = current_revision + 1
+            sorted_scopes = sorted(scopes)
+            conn.execute(
+                "UPDATE dry_run_state "
+                "SET engaged = ?, scopes = ?, revision = ?, updated_at = ? "
+                "WHERE id = ?",
+                (int(engaged), json.dumps(sorted_scopes), new_revision, now, _STATE_ROW_ID),
+            )
+            conn.execute(
+                "INSERT INTO dry_run_audit (ts, action, scopes, reason, revision, actor) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (now, action, json.dumps(sorted_scopes), reason, new_revision, actor),
+            )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        self._dry_run_cache = DryRunSwitchState(engaged, frozenset(scopes), new_revision)
+        return self._dry_run_cache
 
     def list_audit(self, limit: int = 50) -> list[dict]:
         """
@@ -684,6 +903,51 @@ async def is_blocked_fail_closed_off_loop(
     """
     return await run_off_loop(
         is_blocked_fail_closed,
+        scope,
+        db_path,
+        governance_store=governance_store,
+        executor=executor,
+    )
+
+
+def is_dry_run_engaged_fail_closed(
+    scope: str,
+    db_path: str,
+    *,
+    governance_store: GovernanceStore | None = None,
+) -> bool:
+    """
+    Stage 5, S5.5: a plain refresh_dry_run() + is_dry_run_engaged() read,
+    mirroring is_blocked_fail_closed()'s exact shape for the separate
+    dry-run switch. "Fail-closed" here is enforced by the caller (see
+    docs/S5_5_DRY_RUN_MODE_DESIGN.md Sec 10): this function does not catch
+    its own exceptions -- a raised error must propagate so the Runtime
+    Contract seam calling it can deny the action outright rather than
+    guess at whether the global switch would have forced simulation.
+    """
+    store = governance_store or GovernanceStore(db_path)
+    store.refresh_dry_run()
+    return store.is_dry_run_engaged(scope)
+
+
+async def is_dry_run_engaged_fail_closed_off_loop(
+    scope: str,
+    db_path: str,
+    *,
+    governance_store: GovernanceStore | None = None,
+    executor: SingleWorkerExecutor | None = None,
+) -> bool:
+    """
+    Off-event-loop wrapper (Phase B stage B2 pattern) around
+    is_dry_run_engaged_fail_closed() -- see run_off_loop()'s docstring for
+    the executor/fallback behavior. Every dry-run-state read/write
+    reachable from async code must go through this (or run_off_loop
+    directly), never a bare synchronous sqlite3 call on the event loop --
+    see docs/S5_5_DRY_RUN_MODE_DESIGN.md's event-loop-isolation
+    requirement.
+    """
+    return await run_off_loop(
+        is_dry_run_engaged_fail_closed,
         scope,
         db_path,
         governance_store=governance_store,

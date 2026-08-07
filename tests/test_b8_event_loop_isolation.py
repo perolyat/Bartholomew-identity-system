@@ -276,3 +276,180 @@ async def test_skill_state_persistence_runs_off_the_event_loop(tmp_path):
         assert all(tid != main_thread_id for tid in seen_thread_ids)
     finally:
         await executor.close()
+
+
+# -- Group 4: S5.5 dry-run persistence (runtime_contract.py + skill_registry.py) --
+#
+# Same proof technique as Groups 1-3: every new SQLite-backed dry-run
+# operation reachable from async code (the global switch's resolution
+# read, and DryRunResult's write) must run off the event loop via
+# run_off_loop(), never as a bare synchronous sqlite3 call on the loop
+# itself. See docs/S5_5_DRY_RUN_MODE_DESIGN.md.
+
+
+async def test_dry_run_switch_resolution_runs_off_the_event_loop(tmp_path, monkeypatch):
+    """The global dry-run switch's read (GovernanceStore.refresh_dry_run(),
+    invoked via is_dry_run_engaged_fail_closed_off_loop() ->
+    is_dry_run_engaged_fail_closed() -> run_off_loop()) inside
+    run_initiative_through_runtime_contract()'s propose/deliver dry-run
+    resolution step."""
+    from bartholomew.kernel.initiative_store import InitiativeStore
+    from bartholomew.kernel.runtime_contract import run_initiative_through_runtime_contract
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    class FakeMem:
+        def __init__(self, db_path):
+            self.db_path = db_path
+
+    class Ctx:
+        def __init__(self, db_path, executor):
+            self.mem = FakeMem(db_path)
+            self.initiative_store = InitiativeStore(db_path)
+            self.governance_store = GovernanceStore(db_path)
+            self.blocking_executor = executor
+            self.identity_context = None
+            self.skill_registry = None
+            self.working_memory = None
+
+    db_path = str(tmp_path / "test.db")
+    executor = SingleWorkerExecutor(thread_name_prefix="test-b8-dry-run")
+    try:
+        ctx = Ctx(db_path, executor)
+        ctx.initiative_store.set_category_consent("maintenance", allowed=True)
+
+        main_thread_id = threading.get_ident()
+        seen_thread_ids: list[int] = []
+
+        real_refresh = GovernanceStore.refresh_dry_run
+
+        def spying_refresh(self):
+            seen_thread_ids.append(threading.get_ident())
+            return real_refresh(self)
+
+        monkeypatch.setattr(GovernanceStore, "refresh_dry_run", spying_refresh)
+
+        result = await run_initiative_through_runtime_contract(
+            ctx,
+            "propose",
+            kind="checkin.morning",
+            category="maintenance",
+            confidence=0.8,
+            rationale="off-loop test",
+            origin_drive="test",
+            expires_at="2099-01-01T00:00:00Z",
+            dry_run=True,
+        )
+
+        assert result.outcome == "dry_run_approved", "test precondition not met"
+        assert seen_thread_ids, "refresh_dry_run() was never called"
+        assert all(tid != main_thread_id for tid in seen_thread_ids)
+    finally:
+        await executor.close()
+
+
+async def test_dry_run_result_write_runs_off_the_event_loop_for_initiatives(
+    tmp_path,
+    monkeypatch,
+):
+    """record_dry_run_result() (bartholomew.kernel.dry_run), invoked from
+    run_initiative_through_runtime_contract()'s propose/deliver dry-run
+    branch via run_off_loop()."""
+    from bartholomew.kernel import dry_run as dry_run_module
+    from bartholomew.kernel.initiative_store import InitiativeStore
+    from bartholomew.kernel.runtime_contract import run_initiative_through_runtime_contract
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    class FakeMem:
+        def __init__(self, db_path):
+            self.db_path = db_path
+
+    class Ctx:
+        def __init__(self, db_path, executor):
+            self.mem = FakeMem(db_path)
+            self.initiative_store = InitiativeStore(db_path)
+            self.governance_store = GovernanceStore(db_path)
+            self.blocking_executor = executor
+            self.identity_context = None
+            self.skill_registry = None
+            self.working_memory = None
+
+    db_path = str(tmp_path / "test.db")
+    executor = SingleWorkerExecutor(thread_name_prefix="test-b8-dry-run-write")
+    try:
+        ctx = Ctx(db_path, executor)
+        ctx.initiative_store.set_category_consent("maintenance", allowed=True)
+
+        main_thread_id = threading.get_ident()
+        seen_thread_ids: list[int] = []
+
+        real_record = dry_run_module.record_dry_run_result
+
+        def spying_record(*args, **kwargs):
+            seen_thread_ids.append(threading.get_ident())
+            return real_record(*args, **kwargs)
+
+        monkeypatch.setattr(dry_run_module, "record_dry_run_result", spying_record)
+
+        result = await run_initiative_through_runtime_contract(
+            ctx,
+            "propose",
+            kind="checkin.morning",
+            category="maintenance",
+            confidence=0.8,
+            rationale="off-loop test",
+            origin_drive="test",
+            expires_at="2099-01-01T00:00:00Z",
+            dry_run=True,
+        )
+
+        assert result.outcome == "dry_run_approved", "test precondition not met"
+        assert seen_thread_ids, "record_dry_run_result() was never called"
+        assert all(tid != main_thread_id for tid in seen_thread_ids)
+    finally:
+        await executor.close()
+
+
+async def test_dry_run_result_write_runs_off_the_event_loop_for_skills(tmp_path, monkeypatch):
+    """record_dry_run_result(), invoked from SkillRegistry.execute_action()'s
+    dry-run branch (_finish_dry_run()) via run_off_loop()."""
+    from bartholomew.kernel import dry_run as dry_run_module
+    from bartholomew.kernel.skill_registry import SkillRegistry
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    db_path = str(tmp_path / "test.db")
+    executor = SingleWorkerExecutor(thread_name_prefix="test-b8-dry-run-skills")
+    try:
+        governance_store = GovernanceStore(db_path)
+        registry = SkillRegistry(
+            skills_dir="config/skills",
+            db_path=db_path,
+            blocking_executor=executor,
+            governance_store=governance_store,
+        )
+        registry.discover_skills()
+        loaded = await registry.load_skill("notify")
+        assert loaded, "test precondition not met -- notify skill failed to load"
+
+        main_thread_id = threading.get_ident()
+        seen_thread_ids: list[int] = []
+
+        real_record = dry_run_module.record_dry_run_result
+
+        def spying_record(*args, **kwargs):
+            seen_thread_ids.append(threading.get_ident())
+            return real_record(*args, **kwargs)
+
+        monkeypatch.setattr(dry_run_module, "record_dry_run_result", spying_record)
+
+        result = await registry.execute_action(
+            "notify",
+            "send",
+            {"message": "off-loop test"},
+            dry_run=True,
+        )
+
+        assert result.status.value == "dry_run", "test precondition not met"
+        assert seen_thread_ids, "record_dry_run_result() was never called"
+        assert all(tid != main_thread_id for tid in seen_thread_ids)
+    finally:
+        await executor.close()
