@@ -667,6 +667,13 @@ Record of approved changes with commit tracking (most recent 5):
 > fact. Each entry below cites a real merge commit verified with `git log`; nothing here is
 > recorded as committed without one.
 
+- 2026-08-07 — S5.4: quiet-hours defer with an extensible notification suppression-policy
+  registry, per-initiative delivery_policy overrides, richer audit detail, and coalesced digest
+  notifications (`docs/S5_4_QUIET_HOURS_DEFER_DESIGN.md`) — Approved by project owner, with an
+  explicit confirmation that all delivery paths remain fully subject to the three Runtime
+  Contract Governance gates (ParkingBrake, Identity Policy, per-category consent) and that
+  category mute/consent are never bypassed by any delivery_policy value — Commit: `5498e95`
+  (branch `claude/next-priorities-7qso6n`)
 - 2026-07-28 — Documentation reconciliation pass 2 — canonical-document audit and noncanonical
   documentation cleanup — Approved by project owner — Commit:
   `8df4efb7ad6a7cda3a8b2d5fd0a90533ace497c0` (recorded on
