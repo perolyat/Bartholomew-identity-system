@@ -667,6 +667,29 @@ Record of approved changes with commit tracking (most recent 5):
 > fact. Each entry below cites a real merge commit verified with `git log`; nothing here is
 > recorded as committed without one.
 
+- 2026-08-07 — S5.5: dry-run mode as a Governance/safety primitive — simulated
+  propose/deliver transactions never write to real ground truth (`initiatives`,
+  `initiative_audit`, the unified Reflection sink, `skill_action_audit`, Working Memory),
+  recording to a separate `dry_run_results` table instead; a global `dry_run_state`/
+  `dry_run_audit` switch OR-composed with the caller's own request (`effective_dry_run =
+  caller_dry_run OR globally_engaged`, so a caller can never override an engaged switch); a
+  `side_effect` skill-manifest flag (fail-closed default) gating whether `SkillRegistry`
+  actually calls `execute()` under dry-run (`docs/S5_5_DRY_RUN_MODE_DESIGN.md`) — Approved by
+  project owner in two steps: (1) design/technical-direction approval with one correction
+  raised and resolved before implementation (`DryRunResult.approval_requirements` upgraded to
+  carry real per-gate evidence — Parking Brake scope/checked/blocked, Identity Policy
+  checked/allowed/reason, consent checked/consented, plus informational `category_mute` on
+  deliver — rather than a coarse summary, without weakening or duplicating Governance's own
+  allow/deny computation; and a dry-run-switch resolution failure on a live `propose`
+  represented as an infrastructure/safety-resolution failure (`outcome="error"`) rather than a
+  fabricated Governance denial, writing zero `initiatives`/`initiative_audit`/`dry_run_results`
+  rows); (2) a further correction identified by the project owner after the first round — the
+  same resolution-failure path was still falling through to a real unified-Reflection-sink
+  write (`if dry_result is None:` alone doesn't distinguish "simulated" from "resolution
+  failed," since `dry_result` is `None` in both cases), fixed with one added guard clause
+  (`and not dry_run_resolution_failed`) and proven with tests that were confirmed to fail
+  against the pre-fix code and pass after; (3) final commit approval ("approved") — Commit:
+  `15ef139` (branch `claude/next-priorities-7qso6n`)
 - 2026-08-07 — S5.4: quiet-hours defer with an extensible notification suppression-policy
   registry, per-initiative delivery_policy overrides, richer audit detail, and coalesced digest
   notifications (`docs/S5_4_QUIET_HOURS_DEFER_DESIGN.md`) — Approved by project owner, with an
