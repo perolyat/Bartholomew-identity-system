@@ -30,6 +30,11 @@ NEW_S5_2_CADENCES = {
     "initiative_sweep": "every:900",
 }
 
+# S5.3's own new drive, pinned as its own baseline (design doc Sec 4).
+NEW_S5_3_CADENCES = {
+    "initiative_delivery_check": "every:900",
+}
+
 
 def test_registry_still_has_every_pre_existing_drive_with_unchanged_cadence():
     for task_id, expected_cadence in PRE_S5_2_CADENCES.items():
@@ -42,6 +47,12 @@ def test_registry_still_has_every_pre_existing_drive_with_unchanged_cadence():
 
 def test_registry_has_the_new_s5_2_drive():
     for task_id, expected_cadence in NEW_S5_2_CADENCES.items():
+        assert task_id in REGISTRY
+        assert REGISTRY[task_id]["cadence"] == expected_cadence
+
+
+def test_registry_has_the_new_s5_3_drive():
+    for task_id, expected_cadence in NEW_S5_3_CADENCES.items():
         assert task_id in REGISTRY
         assert REGISTRY[task_id]["cadence"] == expected_cadence
 

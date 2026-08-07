@@ -301,11 +301,11 @@ class InitiativeStore:
         return _row_to_initiative(row) if row is not None else None
 
     def is_category_consented(self, category: str) -> bool:
-        """Governance gate 3 (design doc Sec 8): default-off per-category
-        user consent. No row (the default -- no UI/API exists yet to grant
-        one, S5.3) means not consented, same as an explicit `allowed=0`
-        row -- this is the intended "default-OFF consent" behaviour, not a
-        bug in the absence of that UI."""
+        """Governance gate 3 (S5.1 design doc Sec 8): default-off per-category
+        user consent. No row (the default) means not consented, same as an
+        explicit `allowed=0` row -- the intended "default-OFF consent"
+        behaviour. `set_category_consent()` (S5.3) is how a row comes to
+        exist at all."""
         conn = self._connect()
         try:
             row = conn.execute(
@@ -315,6 +315,110 @@ class InitiativeStore:
         finally:
             conn.close()
         return bool(row is not None and row["allowed"])
+
+    def is_category_muted(self, category: str) -> bool:
+        """S5.3 design doc Sec 3: functional per-category mute, the
+        delivery-eligibility-check drive's gate. No row (default) means
+        not muted -- distinct from consent's default-off, since a category
+        with no mute preference set has simply never been muted, not
+        implicitly silenced."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT muted FROM initiative_consent WHERE category = ?",
+                (category,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return bool(row is not None and row["muted"])
+
+    def get_category_consent(self, category: str) -> dict[str, Any]:
+        """S5.3 design doc Sec 3: the current consent/mute row for
+        `category`, or the default-off baseline if none exists yet."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT category, allowed, muted, updated_at, actor "
+                "FROM initiative_consent WHERE category = ?",
+                (category,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return {
+                "category": category,
+                "allowed": False,
+                "muted": False,
+                "updated_at": None,
+                "actor": None,
+            }
+        return {
+            "category": row["category"],
+            "allowed": bool(row["allowed"]),
+            "muted": bool(row["muted"]),
+            "updated_at": row["updated_at"],
+            "actor": row["actor"],
+        }
+
+    def list_category_consent(self) -> list[dict[str, Any]]:
+        """S5.3 design doc Sec 3: every registered category's consent/mute
+        state, defaulted for any category with no row yet -- the whole
+        picture in one call, for a future settings UI (not built here)."""
+        return [self.get_category_consent(category) for category in sorted(VALID_CATEGORIES)]
+
+    def set_category_consent(
+        self,
+        category: str,
+        *,
+        allowed: bool | None = None,
+        muted: bool | None = None,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """S5.3 design doc Sec 3/5: upsert `initiative_consent` for
+        `category`. Only the field(s) explicitly passed change; the other
+        stays at its current (or default-off/`False`) value. Direct,
+        audited write -- not a Runtime Contract transition, per the design
+        doc's Sec 5 reasoning (this isn't any single initiative's own
+        lifecycle event, the same category `GovernanceStore.engage()`/
+        `disengage()` fall into for Parking Brake state)."""
+        if category not in VALID_CATEGORIES:
+            raise InvalidTransitionError(
+                f"category must be one of {sorted(VALID_CATEGORIES)}, got {category!r}",
+            )
+        now = _now_iso()
+
+        # Read-then-write inside one BEGIN IMMEDIATE transaction -- a
+        # partial update (e.g. only `muted` passed) must not clobber a
+        # concurrent partial update to `allowed` computed from a
+        # separately-read, now-stale "current" row.
+        conn = self._connect()
+        try:
+            set_wal_pragmas(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT allowed, muted FROM initiative_consent WHERE category = ?",
+                (category,),
+            ).fetchone()
+            current_allowed = bool(row["allowed"]) if row is not None else False
+            current_muted = bool(row["muted"]) if row is not None else False
+            new_allowed = current_allowed if allowed is None else allowed
+            new_muted = current_muted if muted is None else muted
+
+            conn.execute(
+                "INSERT INTO initiative_consent (category, allowed, muted, updated_at, actor) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(category) DO UPDATE SET "
+                "allowed = excluded.allowed, muted = excluded.muted, "
+                "updated_at = excluded.updated_at, actor = excluded.actor",
+                (category, int(new_allowed), int(new_muted), now, actor),
+            )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return self.get_category_consent(category)
 
     def list(
         self,
@@ -379,6 +483,37 @@ class InitiativeStore:
         finally:
             conn.close()
         return [_row_to_initiative(row) for row in rows]
+
+    def list_due_for_delivery(self, now_ts: int) -> list[Initiative]:
+        """S5.3 design doc Sec 4: every initiative in `approved`,
+        `deferred`, or `snoozed` status (deliver()'s own allowed pre-states,
+        `_ALLOWED_PRE_STATES["deliver"]`) whose `due_at` has passed --
+        `initiative_delivery_check`'s sole query. A NULL `due_at` is
+        treated as immediately due (design doc Sec 8 open question 4):
+        `expires_at` is mandatory at `propose` time, but `due_at` was left
+        optional, and "no due_at" reading as "eligible now" is the only
+        interpretation consistent with `propose` not requiring one."""
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" for _ in _ALLOWED_PRE_STATES["deliver"])
+            rows = conn.execute(
+                f"SELECT * FROM initiatives "
+                f"WHERE status IN ({placeholders}) "
+                f"ORDER BY COALESCE(due_at, created_at) ASC",
+                tuple(_ALLOWED_PRE_STATES["deliver"]),
+            ).fetchall()
+        finally:
+            conn.close()
+        entries = [_row_to_initiative(row) for row in rows]
+        due = []
+        for e in entries:
+            if e.due_at is None:
+                due.append(e)
+                continue
+            due_ts = _parse_iso(e.due_at)
+            if due_ts is not None and due_ts <= now_ts:
+                due.append(e)
+        return due
 
     def list_audit(self, initiative_id: int, limit: int = 50) -> list[dict]:
         conn = self._connect()

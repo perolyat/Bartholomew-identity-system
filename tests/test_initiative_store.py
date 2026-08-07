@@ -1,18 +1,21 @@
 """
-Tests for bartholomew.kernel.initiative_store (Stage 5, S5.1/S5.2). Isolated
-tests against the new initiatives/initiative_audit/initiative_dependencies/
-initiative_consent schema -- see
-docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md for the design this
+Tests for bartholomew.kernel.initiative_store (Stage 5, S5.1/S5.2/S5.3).
+Isolated tests against the new initiatives/initiative_audit/
+initiative_dependencies/initiative_consent schema -- see
+docs/S5_1_INITIATIVE_ENGINE_ARCHITECTURE_DESIGN.md and
+docs/S5_3_DEFAULT_OFF_CONSENT_AND_MUTE_DESIGN.md for the designs this
 implements.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import time
 
 import pytest
 
 from bartholomew.kernel.initiative_store import (
+    VALID_CATEGORIES,
     InitiativeNotFoundError,
     InitiativeStore,
     InvalidTransitionError,
@@ -312,3 +315,116 @@ def test_list_audit_records_every_transition(db_path):
     audit = store.list_audit(initiative.id)
     transitions = [row["transition"] for row in reversed(audit)]
     assert transitions == ["propose", "deliver", "resolve"]
+
+
+# ---------------------------------------------------------------------------
+# S5.3: default-off consent + functional mute
+# ---------------------------------------------------------------------------
+
+
+def test_is_category_consented_and_muted_default_off(db_path):
+    store = InitiativeStore(db_path)
+    for category in VALID_CATEGORIES:
+        assert store.is_category_consented(category) is False
+        assert store.is_category_muted(category) is False
+
+
+def test_get_category_consent_defaults_when_no_row(db_path):
+    store = InitiativeStore(db_path)
+    assert store.get_category_consent("check_in") == {
+        "category": "check_in",
+        "allowed": False,
+        "muted": False,
+        "updated_at": None,
+        "actor": None,
+    }
+
+
+def test_set_category_consent_grants_allowed(db_path):
+    store = InitiativeStore(db_path)
+    result = store.set_category_consent("check_in", allowed=True, actor="user")
+    assert result["allowed"] is True
+    assert result["muted"] is False
+    assert result["updated_at"] is not None
+    assert result["actor"] == "user"
+    assert store.is_category_consented("check_in") is True
+
+
+def test_set_category_consent_partial_update_preserves_other_field(db_path):
+    store = InitiativeStore(db_path)
+    store.set_category_consent("check_in", allowed=True)
+    result = store.set_category_consent("check_in", muted=True)
+    assert result["allowed"] is True  # unchanged by the muted-only update
+    assert result["muted"] is True
+
+    result2 = store.set_category_consent("check_in", muted=False)
+    assert result2["allowed"] is True  # still unchanged
+    assert result2["muted"] is False
+
+
+def test_set_category_consent_rejects_unknown_category(db_path):
+    store = InitiativeStore(db_path)
+    with pytest.raises(InvalidTransitionError):
+        store.set_category_consent("not_a_real_category", allowed=True)
+
+
+def test_list_category_consent_covers_every_valid_category_defaulted(db_path):
+    store = InitiativeStore(db_path)
+    store.set_category_consent("check_in", allowed=True)
+
+    rows = store.list_category_consent()
+    assert {row["category"] for row in rows} == VALID_CATEGORIES
+    by_category = {row["category"]: row for row in rows}
+    assert by_category["check_in"]["allowed"] is True
+    assert by_category["wellness"]["allowed"] is False  # never touched, default-off
+
+
+def test_list_due_for_delivery_treats_null_due_at_as_due_now(db_path):
+    store = InitiativeStore(db_path)
+    no_due_at = _propose(store, kind="a")  # due_at defaults to None
+    now_ts = int(time.time())
+    due = store.list_due_for_delivery(now_ts)
+    assert no_due_at.id in {e.id for e in due}
+
+
+def test_list_due_for_delivery_excludes_not_yet_due(db_path):
+    store = InitiativeStore(db_path)
+    future = _propose(store, kind="a", due_at="2099-06-01T00:00:00Z")
+    now_ts = int(time.time())
+    due = store.list_due_for_delivery(now_ts)
+    assert future.id not in {e.id for e in due}
+
+
+def test_list_due_for_delivery_includes_past_due_at(db_path):
+    store = InitiativeStore(db_path)
+    past = _propose(store, kind="a", due_at="2000-01-01T00:00:00Z")
+    now_ts = int(time.time())
+    due = store.list_due_for_delivery(now_ts)
+    assert past.id in {e.id for e in due}
+
+
+def test_list_due_for_delivery_includes_deferred_and_snoozed(db_path):
+    store = InitiativeStore(db_path)
+    deferred = _propose(store, kind="a")
+    store.defer(deferred.id, reason="muted")
+    snoozed = _propose(store, kind="b")
+    store.deliver(snoozed.id)
+    store.resolve(snoozed.id, resolution="snoozed", due_at=FAR_PAST)
+
+    now_ts = int(time.time())
+    due_ids = {e.id for e in store.list_due_for_delivery(now_ts)}
+    assert deferred.id in due_ids
+    assert snoozed.id in due_ids
+
+
+def test_list_due_for_delivery_excludes_terminal_and_proposed_only_states(db_path):
+    store = InitiativeStore(db_path)
+    denied = _propose(store, kind="a", governance_decision="denied")
+    delivered = _propose(store, kind="b")
+    store.deliver(delivered.id)
+    store.resolve(delivered.id, resolution="accepted")
+
+    now_ts = int(time.time())
+    due_ids = {e.id for e in store.list_due_for_delivery(now_ts)}
+    assert denied.id not in due_ids
+    assert delivered.id not in due_ids  # now "accepted", terminal

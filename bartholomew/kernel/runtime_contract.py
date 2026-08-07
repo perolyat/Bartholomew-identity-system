@@ -96,8 +96,26 @@ _CONVERSATIONAL_KINDS = frozenset({"chat_response"})
 # self-maintenance-shaped and an individual Initiative transition being
 # self-maintenance-shaped are different questions answered in different
 # places (see that constant's own docstring).
+#
+# "initiative_delivery_check" (S5.3, docs/S5_3_DEFAULT_OFF_CONSENT_AND_MUTE_
+# DESIGN.md Sec 4/8) joins this set for the same drive-tick-level reasoning
+# as "initiative_sweep" above: deciding *whether to check* an initiative's
+# delivery eligibility is not itself outbound contact. This is deliberately
+# NOT the same question as whether the `deliver`/`defer`/`cancel`
+# transitions this drive dispatches are exempt -- they are not (only
+# `expire` has a transition-level exemption, via
+# _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS below), so every actual
+# proposal/delivery decision this drive makes still passes through
+# Identity Policy and consent for real.
 _SELF_MAINTENANCE_DRIVES = frozenset(
-    {"self_check", "curiosity_probe", "reflection_micro", "fts_optimize", "initiative_sweep"},
+    {
+        "self_check",
+        "curiosity_probe",
+        "reflection_micro",
+        "fts_optimize",
+        "initiative_sweep",
+        "initiative_delivery_check",
+    },
 )
 
 
@@ -1226,9 +1244,30 @@ _INITIATIVE_TRANSITIONS = frozenset(
 # initiatives was already approved, that initiative's own `expire`
 # transition would otherwise be blocked by the very gate it exists to stop
 # being subject to, the same failure mode the approved fix closed for
-# Identity Policy. `propose`, `defer`, `deliver`, `resolve`, `cancel`, and
-# `supersede` remain evaluated for real, every time, no exemption.
-_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS = frozenset({"expire"})
+# Identity Policy.
+#
+# "cancel" joins this set for the identical reason, found while building
+# S5.3's initiative_delivery_check drive (docs/S5_3_DEFAULT_OFF_CONSENT_
+# AND_MUTE_DESIGN.md Sec 4) and confirmed by a failing test, not by
+# inspection: that drive's whole reason for calling `cancel` on an
+# initiative is that its category's consent was just revoked -- but
+# `cancel`, unexempted, re-evaluates gate 3 (consent) for itself, which
+# denies the very `cancel` call meant to close the initiative out because
+# consent is (correctly) no longer granted. The initiative would be
+# permanently stuck in `approved`, never reachable by any transition,
+# exactly the failure mode the `expire` exemption was written to prevent.
+# `cancel` qualifies for the same reasoning `expire` did (S5.2 Sec 7): by
+# construction it never constitutes new outbound contact either -- it only
+# ever withdraws a pending initiative, the same as `expire` only ever
+# closes one out. Exempting it changes nothing when a category IS
+# consented/allowed (gates 2/3 would pass regardless); it only ever
+# unblocks the specific case where governance state itself is what
+# `cancel` exists to react to. `propose`, `defer`, `deliver`, `resolve`,
+# and `supersede` remain evaluated for real, every time, no exemption --
+# `defer` in particular is not at risk of the same stuck-row shape, since
+# its only current caller (the muted branch of initiative_delivery_check)
+# is reached only when consent is already confirmed present.
+_SELF_MAINTENANCE_INITIATIVE_TRANSITIONS = frozenset({"expire", "cancel"})
 
 
 @dataclass(frozen=True)

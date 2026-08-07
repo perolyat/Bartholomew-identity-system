@@ -278,6 +278,103 @@ async def drive_initiative_sweep(ctx: Any) -> Nudge | None:
     return None
 
 
+async def drive_initiative_delivery_check(ctx: Any) -> Nudge | None:
+    """
+    Initiative delivery-eligibility-check drive (Stage 5, S5.3; see
+    docs/S5_3_DEFAULT_OFF_CONSENT_AND_MUTE_DESIGN.md Sec 4): the drive
+    S5.2's own design doc (Sec 11 item 5) named as still missing --
+    without it, an `approved` initiative had no path to `delivered` in
+    production at all. Scans the Initiative store for initiatives in
+    `approved`/`deferred`/`snoozed` status whose `due_at` has passed (or
+    is unset, treated as immediately due), and for each, in order:
+
+    1. Consent revoked since approval (`is_category_consented()` now
+       False) -> `cancel`. A stronger, more deliberate signal than a
+       mute -- matches `cancel`'s existing S5.1 semantics ("the condition
+       that motivated it no longer holds"), approved by the project owner
+       2026-08-06.
+    2. Category currently muted (`is_category_muted()`) -> `defer` with
+       `reason="muted"`. Temporary and re-checked on a later tick, once
+       the mute is lifted -- distinct from consent revocation.
+    3. Otherwise -> `deliver`.
+
+    One entry's failure never affects another's (mirrors
+    `drive_initiative_sweep`'s and `drive_awaiting_response_check`'s own
+    per-entry try/except loops).
+
+    Deliberately IS in _SELF_MAINTENANCE_DRIVES at the drive-tick level
+    (bartholomew.kernel.runtime_contract) -- deciding *whether to check*
+    delivery eligibility is not itself outbound contact, the same
+    reasoning `initiative_sweep`'s own drive-tick exemption uses. This is
+    NOT the same question as whether the `deliver` transition it
+    dispatches is exempt from Governance -- it is not, and stays fully
+    gated (only `expire` has that exemption, and only at the transition
+    level, per _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS).
+
+    Args:
+        ctx: Context object (typically KernelDaemon instance). Must have an
+            initiative_store (bartholomew.kernel.initiative_store.
+            InitiativeStore) -- a missing store (pre-S5.3-wiring callers,
+            e.g. existing scheduler tests) is treated as "nothing to check
+            yet", not an error.
+
+    Returns:
+        None always -- delivery for a due entry happens inside the
+        per-entry seam call, not via a scheduler Nudge.
+    """
+    store = getattr(ctx, "initiative_store", None)
+    if store is None:
+        return None
+
+    from bartholomew.kernel.runtime_contract import run_initiative_through_runtime_contract
+
+    now_ts = int(time.time())
+    executor = getattr(ctx, "blocking_executor", None)
+    due = await run_off_loop(store.list_due_for_delivery, now_ts, executor=executor)
+
+    for initiative in due:
+        try:
+            consented = await run_off_loop(
+                store.is_category_consented,
+                initiative.category,
+                executor=executor,
+            )
+            if not consented:
+                await run_initiative_through_runtime_contract(
+                    ctx,
+                    "cancel",
+                    initiative_id=initiative.id,
+                    actor="scheduler:initiative_delivery_check",
+                )
+                continue
+
+            muted = await run_off_loop(
+                store.is_category_muted,
+                initiative.category,
+                executor=executor,
+            )
+            if muted:
+                await run_initiative_through_runtime_contract(
+                    ctx,
+                    "defer",
+                    initiative_id=initiative.id,
+                    reason="muted",
+                    actor="scheduler:initiative_delivery_check",
+                )
+                continue
+
+            await run_initiative_through_runtime_contract(
+                ctx,
+                "deliver",
+                initiative_id=initiative.id,
+                actor="scheduler:initiative_delivery_check",
+            )
+        except Exception as e:
+            print(f"[Scheduler] Error checking delivery for initiative {initiative.id}: {e}")
+
+    return None
+
+
 # Drive registry with default cadences
 REGISTRY: dict[str, dict[str, Any]] = {
     "self_check": {
@@ -303,5 +400,9 @@ REGISTRY: dict[str, dict[str, Any]] = {
     "initiative_sweep": {
         "fn": drive_initiative_sweep,
         "cadence": "every:900",  # Every 15 minutes -- matches awaiting_response_check
+    },
+    "initiative_delivery_check": {
+        "fn": drive_initiative_delivery_check,
+        "cadence": "every:900",  # Every 15 minutes -- matches initiative_sweep (S5.3)
     },
 }

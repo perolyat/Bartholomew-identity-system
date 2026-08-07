@@ -35,6 +35,7 @@ from .routes import (
     awaiting_response,
     consent,
     governance,
+    initiative_settings,
     liveness,
     metrics,
     notifications,
@@ -74,6 +75,7 @@ app.include_router(governance.router)
 app.include_router(notifications.router)
 app.include_router(consent.router)
 app.include_router(awaiting_response.router)
+app.include_router(initiative_settings.router)
 app.include_router(onboarding.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
