@@ -2,14 +2,19 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: the legacy-implementation-
+> **Last updated:** 2026-08-07 (R2 addendum: S5.4's `critical_override` delivery_policy has no
+> dedicated authorization gate controlling who may assign it, distinct from — and not fixed by —
+> Governance remaining authoritative over whether such an initiative is actually delivered; see
+> R2 below. Future hardening item, not yet scheduled.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: the legacy-implementation-
 > notes cleanup deferred on 2026-07-27 is done — see the tech-debt watchlist entry below for the
 > full disposition; the FastAPI-lifespan-migration ticket merged in from its own standalone file
 > (still open); three new items added — hydration/water-logging code cleanup recorded as a future
 > unapproved decision, the cross-device auth threat model gap, and jurisdiction-aware
-> capture/recording compliance.)
+> capture/recording compliance.
 >
-> **Previously (2026-07-27):** Phase A recorded as merged (`8b96319`); R3/R4's "first Windows
+> **Earlier (2026-07-27):** Phase A recorded as merged (`8b96319`); R3/R4's "first Windows
 > evidence will come from the first CI run" replaced with the actual result; Phase A's deferred
 > findings F9–F11 added to the tech-debt watchlist, where they had previously existed only in
 > PR #26's description and so were at risk of being lost. Earlier: 2026-07-25 Phase A
@@ -78,6 +83,25 @@
   this risk — not something a point-in-time audit closes permanently; the item 11.21 AST
   structural test (placeholder capability never callable outside the seam) is one guard against
   that specific regression for voice/sight.
+- **2026-08-07 addendum — S5.4 `critical_override` authorization gap (future hardening item, not
+  yet scheduled):** S5.4 (`docs/S5_4_QUIET_HOURS_DEFER_DESIGN.md`) added a per-initiative
+  `delivery_policy`, including `critical_override`, which bypasses the notification
+  suppression-policy registry (quiet hours, NotifySkill's own manual mute) and forces
+  NotifySkill's own internal `priority="urgent"` so that gate can't silently re-queue it either.
+  Verified and confirmed to the project owner (2026-08-07) that this bypass is narrowly scoped:
+  it never reaches the three Runtime Contract Governance gates (ParkingBrake, Identity Policy,
+  per-category consent) or S5.3's category mute, all of which still run unconditionally on every
+  `deliver` call regardless of `delivery_policy` — so Governance remains authoritative over
+  whether a `critical_override` initiative is delivered at all. The gap: there is currently **no
+  dedicated Identity-Policy-style authorization gate controlling who or what may *assign*
+  `delivery_policy="critical_override"` at `propose()` time** — any proposer passes the same
+  standard `allow_proactive.<category>` + consent gates as any other proposal for that category,
+  with no additional elevated-privilege check specific to requesting the override itself.
+  Mitigation direction (not implemented, not scheduled): an explicit authorization/policy
+  mechanism for the `critical_override` assignment itself — e.g. a dedicated policy key such as
+  `allow_proactive.<category>.critical_override` — rather than relying solely on the existing
+  category consent and elevated-privilege checks that gate the initiative generally. Do not
+  implement until it is part of an explicitly approved work item.
 
 ### R3 — SQLite / FTS feature variability causes false confidence
 - **Category:** Reliability

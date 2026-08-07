@@ -674,6 +674,19 @@ Record of approved changes with commit tracking (most recent 5):
   Contract Governance gates (ParkingBrake, Identity Policy, per-category consent) and that
   category mute/consent are never bypassed by any delivery_policy value — Commit: `5498e95`
   (branch `claude/next-priorities-7qso6n`)
+- **[RETROSPECTIVE BACKFILL, entered 2026-08-07 — this entry documents an approval that already
+  occurred, it is not a new approval]** 2026-08-07 — S5.3: default-off per-category consent and
+  functional mute, layering on the existing global NotifySkill mute/quiet-hours system rather
+  than duplicating it, plus the `initiative_delivery_check` drive that enforces both
+  (`docs/S5_3_DEFAULT_OFF_CONSENT_AND_MUTE_DESIGN.md`) — Approved by project owner in two steps,
+  both on the record in this session's transcript: (1) technical-direction approval, explicitly
+  endorsing muted→defer / revoked-consent→cancel and correcting process to require explicit
+  approval before any future commit ("you have my approval to proceed with implementing S5.3
+  exactly as proposed"); (2) post-implementation commit approval ("Approved. The implementation,
+  testing and verification all look good ... Please commit this work") — Commit:
+  `0901c10b0fdce9aebfbc0c3faa56dab0abbccb4e` (branch `claude/next-priorities-7qso6n`). This entry
+  was missing from the ledger until identified as a gap and backfilled at the project owner's
+  explicit request; no new approval was sought or given to create it.
 - 2026-07-28 — Documentation reconciliation pass 2 — canonical-document audit and noncanonical
   documentation cleanup — Approved by project owner — Commit:
   `8df4efb7ad6a7cda3a8b2d5fd0a90533ace497c0` (recorded on
