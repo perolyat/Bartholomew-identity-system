@@ -6,6 +6,7 @@ autonomy task and optionally emits a Nudge.
 """
 
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -278,29 +279,80 @@ async def drive_initiative_sweep(ctx: Any) -> Nudge | None:
     return None
 
 
+def summarize_batch(initiatives: list[Any]) -> tuple[str, str]:
+    """Deterministic grouped-by-category digest for a coalesced delivery
+    (S5.4 design doc Sec 5) -- grouping rather than a flat concatenation of
+    every rationale in arrival order, so a burst of unrelated initiatives
+    reads as one organized update instead of a noisy list. Isolated on
+    purpose: a smarter/LLM-based summarizer can replace this function's
+    body later without any change to the drive's control flow. Not called
+    for a batch of size 1 -- that path keeps today's single-item message.
+    """
+    by_category: dict[str, list[Any]] = {}
+    for initiative in initiatives:
+        by_category.setdefault(initiative.category, []).append(initiative)
+
+    category_counts = ", ".join(
+        f"{len(items)} {category}" for category, items in sorted(by_category.items())
+    )
+    title = f"Bartholomew: {len(initiatives)} updates ({category_counts})"
+
+    lines: list[str] = []
+    for category, items in sorted(by_category.items()):
+        lines.append(f"{category.replace('_', ' ').title()} ({len(items)}):")
+        lines.extend(f"- {initiative.rationale}" for initiative in items)
+    message = "\n".join(lines)
+    return title, message
+
+
 async def drive_initiative_delivery_check(ctx: Any) -> Nudge | None:
     """
-    Initiative delivery-eligibility-check drive (Stage 5, S5.3; see
-    docs/S5_3_DEFAULT_OFF_CONSENT_AND_MUTE_DESIGN.md Sec 4): the drive
-    S5.2's own design doc (Sec 11 item 5) named as still missing --
-    without it, an `approved` initiative had no path to `delivered` in
-    production at all. Scans the Initiative store for initiatives in
-    `approved`/`deferred`/`snoozed` status whose `due_at` has passed (or
-    is unset, treated as immediately due), and for each, in order:
+    Initiative delivery-eligibility-check drive (Stage 5, S5.3/S5.4; see
+    docs/S5_3_DEFAULT_OFF_CONSENT_AND_MUTE_DESIGN.md Sec 4 and
+    docs/S5_4_QUIET_HOURS_DEFER_DESIGN.md): the drive S5.2's own design doc
+    (Sec 11 item 5) named as still missing -- without it, an `approved`
+    initiative had no path to `delivered` in production at all. Scans the
+    Initiative store for initiatives in `approved`/`deferred`/`snoozed`
+    status whose `due_at` has passed (or is unset, treated as immediately
+    due), and for each, in order:
 
     1. Consent revoked since approval (`is_category_consented()` now
        False) -> `cancel`. A stronger, more deliberate signal than a
        mute -- matches `cancel`'s existing S5.1 semantics ("the condition
        that motivated it no longer holds"), approved by the project owner
-       2026-08-06.
+       2026-08-06. Never bypassed by `delivery_policy` (S5.4 design doc
+       Sec 2's invariant).
     2. Category currently muted (`is_category_muted()`) -> `defer` with
        `reason="muted"`. Temporary and re-checked on a later tick, once
-       the mute is lifted -- distinct from consent revocation.
-    3. Otherwise -> `deliver`.
+       the mute is lifted -- distinct from consent revocation. Also never
+       bypassed by `delivery_policy`.
+    3. `delivery_policy in ("immediate", "critical_override")` -> `deliver`
+       right away, bypassing the suppression-policy registry entirely, and
+       forcing NotifySkill's own `priority="urgent"` so NotifySkill's
+       independent quiet-hours/mute gate can't silently queue it either
+       (S5.4 design doc Sec 3).
+    4. Otherwise, check `notification_suppression.active_suppression_
+       reason()` (quiet hours, NotifySkill's own manual mute, and any
+       future policy registered there):
+       - Active and `delivery_policy != "silent"` -> `defer` with
+         `reason=<policy name>`.
+       - Active and `delivery_policy == "silent"` -> `deliver` right away
+         with `notify_overrides={"sound": False}`.
+       - Not active -> collected as a coalescing candidate (below), not
+         delivered inside this loop iteration.
+
+    After the loop, every collected `standard`-policy candidate is
+    delivered: individually (unchanged, pre-S5.4 behaviour) if there's
+    exactly one, or as a single coalesced digest (S5.4 design doc Sec 5)
+    via `summarize_batch()` if there's more than one -- each initiative
+    still transitions to `delivered` individually
+    (`suppress_notification=True` skips only its own auto-notify), mark-
+    then-notify order, and only one `notify.send` covers the whole batch.
 
     One entry's failure never affects another's (mirrors
     `drive_initiative_sweep`'s and `drive_awaiting_response_check`'s own
-    per-entry try/except loops).
+    per-entry try/except loops); the same isolation applies to the
+    post-loop per-batch-member delivery pass.
 
     Deliberately IS in _SELF_MAINTENANCE_DRIVES at the drive-tick level
     (bartholomew.kernel.runtime_contract) -- deciding *whether to check*
@@ -308,8 +360,8 @@ async def drive_initiative_delivery_check(ctx: Any) -> Nudge | None:
     reasoning `initiative_sweep`'s own drive-tick exemption uses. This is
     NOT the same question as whether the `deliver` transition it
     dispatches is exempt from Governance -- it is not, and stays fully
-    gated (only `expire` has that exemption, and only at the transition
-    level, per _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS).
+    gated (only `expire`/`cancel` have that exemption, and only at the
+    transition level, per _SELF_MAINTENANCE_INITIATIVE_TRANSITIONS).
 
     Args:
         ctx: Context object (typically KernelDaemon instance). Must have an
@@ -320,17 +372,24 @@ async def drive_initiative_delivery_check(ctx: Any) -> Nudge | None:
 
     Returns:
         None always -- delivery for a due entry happens inside the
-        per-entry seam call, not via a scheduler Nudge.
+        per-entry seam call(s), not via a scheduler Nudge.
     """
     store = getattr(ctx, "initiative_store", None)
     if store is None:
         return None
 
-    from bartholomew.kernel.runtime_contract import run_initiative_through_runtime_contract
+    from bartholomew.kernel.notification_suppression import active_suppression_reason
+    from bartholomew.kernel.runtime_contract import (
+        run_initiative_through_runtime_contract,
+        run_skill_through_runtime_contract,
+    )
 
     now_ts = int(time.time())
     executor = getattr(ctx, "blocking_executor", None)
     due = await run_off_loop(store.list_due_for_delivery, now_ts, executor=executor)
+
+    suppression_cache: dict[str, Any] = {}
+    to_coalesce: list[Any] = []
 
     for initiative in due:
         try:
@@ -363,6 +422,47 @@ async def drive_initiative_delivery_check(ctx: Any) -> Nudge | None:
                 )
                 continue
 
+            if initiative.delivery_policy in ("immediate", "critical_override"):
+                await run_initiative_through_runtime_contract(
+                    ctx,
+                    "deliver",
+                    initiative_id=initiative.id,
+                    actor="scheduler:initiative_delivery_check",
+                    notify_overrides={"priority": "urgent"},
+                )
+                continue
+
+            reason = await active_suppression_reason(ctx, suppression_cache)
+            if reason and initiative.delivery_policy != "silent":
+                await run_initiative_through_runtime_contract(
+                    ctx,
+                    "defer",
+                    initiative_id=initiative.id,
+                    reason=reason,
+                    actor="scheduler:initiative_delivery_check",
+                )
+                continue
+
+            if reason and initiative.delivery_policy == "silent":
+                await run_initiative_through_runtime_contract(
+                    ctx,
+                    "deliver",
+                    initiative_id=initiative.id,
+                    actor="scheduler:initiative_delivery_check",
+                    notify_overrides={"sound": False},
+                )
+                continue
+
+            to_coalesce.append(initiative)
+        except Exception as e:
+            print(f"[Scheduler] Error checking delivery for initiative {initiative.id}: {e}")
+
+    if not to_coalesce:
+        return None
+
+    if len(to_coalesce) == 1:
+        initiative = to_coalesce[0]
+        try:
             await run_initiative_through_runtime_contract(
                 ctx,
                 "deliver",
@@ -370,7 +470,45 @@ async def drive_initiative_delivery_check(ctx: Any) -> Nudge | None:
                 actor="scheduler:initiative_delivery_check",
             )
         except Exception as e:
-            print(f"[Scheduler] Error checking delivery for initiative {initiative.id}: {e}")
+            print(f"[Scheduler] Error delivering initiative {initiative.id}: {e}")
+        return None
+
+    # Coalesced path (S5.4 design doc Sec 5/9): mark every batch member
+    # delivered first, notify once after -- minimizes duplicate-send risk
+    # (a failure between the two steps leaves an initiative delivered-but-
+    # unseen, never seen twice) and matches _deliver_initiative_
+    # notification's existing best-effort contract.
+    batch_id = str(uuid.uuid4())
+    delivered = []
+    for initiative in to_coalesce:
+        try:
+            await run_initiative_through_runtime_contract(
+                ctx,
+                "deliver",
+                initiative_id=initiative.id,
+                actor="scheduler:initiative_delivery_check",
+                suppress_notification=True,
+                coalesced=True,
+                batch_id=batch_id,
+                batch_size=len(to_coalesce),
+            )
+            delivered.append(initiative)
+        except Exception as e:
+            print(
+                f"[Scheduler] Error delivering initiative {initiative.id} in batch {batch_id}: {e}"
+            )
+
+    if delivered and getattr(ctx, "skill_registry", None) is not None:
+        title, message = summarize_batch(delivered)
+        try:
+            await run_skill_through_runtime_contract(
+                ctx.skill_registry,
+                "notify",
+                "send",
+                {"message": message, "title": title, "priority": "normal"},
+            )
+        except Exception as e:
+            print(f"[Scheduler] Error sending coalesced notification for batch {batch_id}: {e}")
 
     return None
 

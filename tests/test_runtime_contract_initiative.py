@@ -16,6 +16,7 @@ from bartholomew.kernel.initiative_store import (
     InvalidTransitionError,
 )
 from bartholomew.kernel.runtime_contract import run_initiative_through_runtime_contract
+from bartholomew.kernel.skill_base import SkillResult, SkillResultStatus
 from identity_interpreter.identity_context import IdentityContext
 
 DENY_CONTEXT = IdentityContext(tool_use_default_allowed=False, tool_use_allowlist=[])
@@ -374,3 +375,130 @@ class TestParkingBrakeScope:
             **_propose_kwargs(),
         )
         assert result.governance_allowed is True
+
+
+class FakeSkillRegistry:
+    """Records every notify.send call instead of actually sending, so S5.4
+    tests can assert on suppress_notification/notify_overrides wiring
+    without a real NotifySkill instance."""
+
+    def __init__(self):
+        self.send_calls: list[dict] = []
+
+    async def execute_action(self, skill_id, action, params=None):
+        if skill_id == "notify" and action == "send":
+            self.send_calls.append(params or {})
+            return SkillResult(status=SkillResultStatus.SUCCESS, data={})
+        return SkillResult(status=SkillResultStatus.ERROR, error="unexpected call")
+
+
+@pytest.mark.asyncio
+class TestS54DeliveryPolicyAndSuppression:
+    """Stage 5, S5.4: delivery_policy propagation and the suppress_
+    notification/notify_overrides seam params coalescing relies on. See
+    docs/S5_4_QUIET_HOURS_DEFER_DESIGN.md Sec 2/10."""
+
+    async def test_propose_forwards_delivery_policy(self, daemon):
+        daemon = await _ready(daemon, consent_categories=["check_in"])
+        result = await run_initiative_through_runtime_contract(
+            daemon,
+            "propose",
+            **_propose_kwargs(),
+            delivery_policy="critical_override",
+        )
+        assert result.initiative.delivery_policy == "critical_override"
+
+    async def test_propose_default_delivery_policy_is_standard(self, daemon):
+        daemon = await _ready(daemon, consent_categories=["check_in"])
+        result = await run_initiative_through_runtime_contract(
+            daemon,
+            "propose",
+            **_propose_kwargs(),
+        )
+        assert result.initiative.delivery_policy == "standard"
+
+    async def test_propose_invalid_delivery_policy_raises(self, daemon):
+        daemon = await _ready(daemon, consent_categories=["check_in"])
+        with pytest.raises(InvalidTransitionError):
+            await run_initiative_through_runtime_contract(
+                daemon,
+                "propose",
+                **_propose_kwargs(),
+                delivery_policy="not_a_real_policy",
+            )
+
+    async def test_suppress_notification_skips_auto_notify(self, daemon):
+        daemon = await _ready(daemon, consent_categories=["check_in"])
+        daemon.skill_registry = FakeSkillRegistry()
+        proposed = await run_initiative_through_runtime_contract(
+            daemon,
+            "propose",
+            **_propose_kwargs(),
+        )
+        result = await run_initiative_through_runtime_contract(
+            daemon,
+            "deliver",
+            initiative_id=proposed.initiative.id,
+            suppress_notification=True,
+        )
+        assert result.outcome == "delivered"
+        assert daemon.skill_registry.send_calls == []
+
+    async def test_without_suppress_notification_auto_notify_still_fires(self, daemon):
+        """Regression guard: suppress_notification defaults to False, so
+        pre-S5.4 per-item delivery behaviour is unchanged."""
+        daemon = await _ready(daemon, consent_categories=["check_in"])
+        daemon.skill_registry = FakeSkillRegistry()
+        proposed = await run_initiative_through_runtime_contract(
+            daemon,
+            "propose",
+            **_propose_kwargs(),
+        )
+        result = await run_initiative_through_runtime_contract(
+            daemon,
+            "deliver",
+            initiative_id=proposed.initiative.id,
+        )
+        assert result.outcome == "delivered"
+        assert len(daemon.skill_registry.send_calls) == 1
+
+    async def test_notify_overrides_merge_into_send_params(self, daemon):
+        daemon = await _ready(daemon, consent_categories=["check_in"])
+        daemon.skill_registry = FakeSkillRegistry()
+        proposed = await run_initiative_through_runtime_contract(
+            daemon,
+            "propose",
+            **_propose_kwargs(),
+        )
+        await run_initiative_through_runtime_contract(
+            daemon,
+            "deliver",
+            initiative_id=proposed.initiative.id,
+            notify_overrides={"priority": "urgent", "sound": False},
+        )
+        assert len(daemon.skill_registry.send_calls) == 1
+        sent = daemon.skill_registry.send_calls[0]
+        assert sent["priority"] == "urgent"
+        assert sent["sound"] is False
+
+    async def test_coalesced_metadata_recorded_in_audit_not_behaviour(self, daemon):
+        daemon = await _ready(daemon, consent_categories=["check_in"])
+        proposed = await run_initiative_through_runtime_contract(
+            daemon,
+            "propose",
+            **_propose_kwargs(),
+        )
+        result = await run_initiative_through_runtime_contract(
+            daemon,
+            "deliver",
+            initiative_id=proposed.initiative.id,
+            coalesced=True,
+            batch_id="batch-123",
+            batch_size=4,
+        )
+        assert result.outcome == "delivered"
+        audit = daemon.initiative_store.list_audit(proposed.initiative.id)
+        deliver_row = next(row for row in audit if row["transition"] == "deliver")
+        assert deliver_row["detail"]["coalesced"] is True
+        assert deliver_row["detail"]["batch_id"] == "batch-123"
+        assert deliver_row["detail"]["batch_size"] == 4

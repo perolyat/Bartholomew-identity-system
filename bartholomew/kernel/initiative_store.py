@@ -87,6 +87,18 @@ VALID_RESOLUTIONS = frozenset({"accepted", "dismissed", "snoozed"})
 VALID_CATEGORIES = frozenset(
     {"check_in", "reminder", "review", "next_best_action", "maintenance", "wellness"},
 )
+# Stage 5, S5.4 design doc Sec 2: how a delivery decision may override or
+# opt out of the suppression-policy registry (notification_suppression.py)
+# -- "standard" is the S5.3 default (defers while any suppression policy,
+# e.g. quiet hours, is active); "immediate"/"critical_override" bypass
+# suppression policies entirely and deliver at once; "silent" also
+# delivers at once during an active suppression window rather than
+# deferring, but without sound. None of the four ever bypasses consent or
+# category mute -- that boundary is a separate, unchanged governance
+# decision.
+VALID_DELIVERY_POLICIES = frozenset(
+    {"standard", "immediate", "silent", "critical_override"},
+)
 
 # Pre-states each transition accepts. "propose" is not listed -- it always
 # creates a new row rather than advancing an existing one.
@@ -132,6 +144,7 @@ class Initiative:
     resolved_at: str | None
     resolution: str | None
     actor: str | None
+    delivery_policy: str
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +168,7 @@ class Initiative:
             "resolved_at": self.resolved_at,
             "resolution": self.resolution,
             "actor": self.actor,
+            "delivery_policy": self.delivery_policy,
         }
 
 
@@ -191,6 +205,15 @@ def ensure_schema(db_path: str) -> None:
             )
             """,
         )
+        # S5.4: additive migration for pre-existing databases (mirrors
+        # memory_store.py's own PRAGMA table_info + ALTER TABLE pattern) --
+        # CREATE TABLE IF NOT EXISTS above is a no-op against a table that
+        # already exists from before this column was added.
+        existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(initiatives)")}
+        if "delivery_policy" not in existing_columns:
+            conn.execute(
+                "ALTER TABLE initiatives ADD COLUMN delivery_policy TEXT NOT NULL DEFAULT 'standard'",
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_initiatives_status ON initiatives(status, due_at)",
         )
@@ -265,6 +288,7 @@ def _row_to_initiative(row: sqlite3.Row) -> Initiative:
         resolved_at=row["resolved_at"],
         resolution=row["resolution"],
         actor=row["actor"],
+        delivery_policy=row["delivery_policy"],
     )
 
 
@@ -516,6 +540,12 @@ class InitiativeStore:
         return due
 
     def list_audit(self, initiative_id: int, limit: int = 50) -> list[dict]:
+        """`detail` is parsed as JSON (S5.4 design doc Sec 4: defer/deliver
+        write a structured object -- reason/policy, coalescing, timing).
+        Rows written before S5.4 (and every other transition's plain-status
+        rows, unchanged) store a bare status string instead -- those come
+        back as `{"status": <that string>}` rather than raising, so no
+        backfill is needed and older history stays readable."""
         conn = self._connect()
         try:
             rows = conn.execute(
@@ -526,17 +556,24 @@ class InitiativeStore:
             ).fetchall()
         finally:
             conn.close()
-        return [
-            {
-                "id": row["id"],
-                "initiative_id": row["initiative_id"],
-                "ts": row["ts"],
-                "transition": row["transition"],
-                "actor": row["actor"],
-                "detail": row["detail"],
-            }
-            for row in rows
-        ]
+        result = []
+        for row in rows:
+            raw_detail = row["detail"]
+            try:
+                parsed_detail = json.loads(raw_detail) if raw_detail is not None else None
+            except json.JSONDecodeError:
+                parsed_detail = {"status": raw_detail}
+            result.append(
+                {
+                    "id": row["id"],
+                    "initiative_id": row["initiative_id"],
+                    "ts": row["ts"],
+                    "transition": row["transition"],
+                    "actor": row["actor"],
+                    "detail": parsed_detail,
+                },
+            )
+        return result
 
     def propose(
         self,
@@ -555,6 +592,7 @@ class InitiativeStore:
         governance_decision: str,
         governance_reason: str | None = None,
         actor: str | None = None,
+        delivery_policy: str = "standard",
     ) -> Initiative:
         """Insert a new Initiative, already resolved to its final
         `governance_decision` ("allowed" -> status "approved", anything
@@ -563,7 +601,9 @@ class InitiativeStore:
         docstring. `expires_at` is required (design doc Sec 14 item 6: no
         silent default). `depends_on` (design doc Sec 13, reserved) is
         recorded into initiative_dependencies if supplied; nothing reads
-        it yet."""
+        it yet. `delivery_policy` (S5.4 design doc Sec 2) controls how
+        `initiative_delivery_check` weighs the suppression-policy registry
+        against consent/mute -- see VALID_DELIVERY_POLICIES."""
         if category not in VALID_CATEGORIES:
             raise InvalidTransitionError(
                 f"category must be one of {sorted(VALID_CATEGORIES)}, got {category!r}",
@@ -571,6 +611,11 @@ class InitiativeStore:
         if priority not in VALID_PRIORITIES:
             raise InvalidTransitionError(
                 f"priority must be one of {sorted(VALID_PRIORITIES)}, got {priority!r}",
+            )
+        if delivery_policy not in VALID_DELIVERY_POLICIES:
+            raise InvalidTransitionError(
+                f"delivery_policy must be one of {sorted(VALID_DELIVERY_POLICIES)}, "
+                f"got {delivery_policy!r}",
             )
         if not (0.0 <= confidence <= 1.0):
             raise InvalidTransitionError(f"confidence must be in [0.0, 1.0], got {confidence!r}")
@@ -591,8 +636,8 @@ class InitiativeStore:
                 "INSERT INTO initiatives "
                 "(kind, category, status, priority, confidence, rationale, payload, "
                 " origin_drive, parent_initiative_id, created_at, due_at, expires_at, "
-                " governance_decision, governance_reason, actor) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " governance_decision, governance_reason, actor, delivery_policy) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     kind,
                     category,
@@ -609,6 +654,7 @@ class InitiativeStore:
                     governance_decision,
                     governance_reason,
                     actor,
+                    delivery_policy,
                 ),
             )
             initiative_id = cur.lastrowid
@@ -638,9 +684,23 @@ class InitiativeStore:
             "defer",
             actor=actor,
             extra={"deferred_reason": reason},
+            detail={"status": "deferred", "reason": reason},
         )
 
-    def deliver(self, initiative_id: int, *, actor: str | None = None) -> Initiative:
+    def deliver(
+        self,
+        initiative_id: int,
+        *,
+        actor: str | None = None,
+        coalesced: bool = False,
+        batch_id: str | None = None,
+        batch_size: int = 1,
+    ) -> Initiative:
+        """`coalesced`/`batch_id`/`batch_size` (S5.4 design doc Sec 5) are
+        audit-only -- they say whether this delivery was folded into a
+        multi-initiative digest notification rather than sent individually;
+        they don't change the store write itself, only what's recorded in
+        `initiative_audit.detail`."""
         now = _now_iso()
         return self._advance(
             initiative_id,
@@ -648,6 +708,18 @@ class InitiativeStore:
             "deliver",
             actor=actor,
             extra={"delivered_at": now},
+            detail={
+                "status": "delivered",
+                "coalesced": coalesced,
+                "batch_id": batch_id,
+                "batch_size": batch_size,
+                # S5.4 design doc Sec 4: this drive delivers the instant it
+                # detects eligibility -- no queueing delay exists between
+                # "eligible" and "delivered" in this architecture, so this
+                # is deliberately the same instant as `delivered_at`/`ts`,
+                # recorded explicitly rather than left implicit.
+                "eligible_at": now,
+            },
         )
 
     def resolve(
@@ -710,6 +782,7 @@ class InitiativeStore:
         *,
         actor: str | None,
         extra: dict[str, Any],
+        detail: dict[str, Any] | None = None,
     ) -> Initiative:
         now = _now_iso()
         conn = self._connect()
@@ -739,10 +812,16 @@ class InitiativeStore:
                 f"UPDATE initiatives SET {', '.join(set_clauses)} WHERE id = ?",
                 params,
             )
+            # S5.4 design doc Sec 4: callers that need richer history than
+            # the bare resulting status (defer/deliver, via their own
+            # `detail` argument) get a JSON object here instead -- everything
+            # else keeps writing the bare status string exactly as before,
+            # handled uniformly by list_audit()'s parse-with-fallback.
+            detail_value = json.dumps(detail) if detail is not None else new_status
             conn.execute(
                 "INSERT INTO initiative_audit (initiative_id, ts, transition, actor, detail) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (initiative_id, now, transition, actor, new_status),
+                (initiative_id, now, transition, actor, detail_value),
             )
             conn.commit()
         except BaseException:

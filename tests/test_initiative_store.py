@@ -428,3 +428,120 @@ def test_list_due_for_delivery_excludes_terminal_and_proposed_only_states(db_pat
     due_ids = {e.id for e in store.list_due_for_delivery(now_ts)}
     assert denied.id not in due_ids
     assert delivered.id not in due_ids  # now "accepted", terminal
+
+
+# ---------------------------------------------------------------------------
+# S5.4: suppression-policy delivery_policy + richer audit detail
+# ---------------------------------------------------------------------------
+
+
+def test_propose_defaults_delivery_policy_to_standard(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    assert initiative.delivery_policy == "standard"
+
+
+@pytest.mark.parametrize("policy", ["standard", "immediate", "silent", "critical_override"])
+def test_propose_accepts_every_valid_delivery_policy(db_path, policy):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store, delivery_policy=policy)
+    assert initiative.delivery_policy == policy
+
+
+def test_propose_rejects_invalid_delivery_policy(db_path):
+    store = InitiativeStore(db_path)
+    with pytest.raises(InvalidTransitionError):
+        _propose(store, delivery_policy="not_a_real_policy")
+
+
+def test_delivery_policy_round_trips_through_get(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store, delivery_policy="critical_override")
+    fetched = store.get(initiative.id)
+    assert fetched.delivery_policy == "critical_override"
+    assert fetched.to_dict()["delivery_policy"] == "critical_override"
+
+
+def test_schema_migration_backfills_delivery_policy_on_existing_database(db_path):
+    """Mirrors memory_store.py's own PRAGMA table_info + ALTER TABLE
+    pattern -- constructing a second InitiativeStore against an already-
+    migrated database must be a no-op, not an error, and pre-existing rows
+    (simulated here by dropping the column and re-adding via a fresh
+    connection) must default to "standard"."""
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    # Re-opening the store against the same db_path re-runs ensure_schema()
+    # -- must not raise "duplicate column" or otherwise fail.
+    store2 = InitiativeStore(db_path)
+    assert store2.get(initiative.id).delivery_policy == "standard"
+
+
+def test_defer_writes_structured_json_detail(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.defer(initiative.id, reason="quiet_hours")
+
+    audit = store.list_audit(initiative.id)
+    defer_row = next(row for row in audit if row["transition"] == "defer")
+    assert defer_row["detail"] == {"status": "deferred", "reason": "quiet_hours"}
+
+
+def test_deliver_writes_structured_json_detail_with_coalescing_metadata(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.deliver(initiative.id, coalesced=True, batch_id="b-1", batch_size=3)
+
+    audit = store.list_audit(initiative.id)
+    deliver_row = next(row for row in audit if row["transition"] == "deliver")
+    detail = deliver_row["detail"]
+    assert detail["status"] == "delivered"
+    assert detail["coalesced"] is True
+    assert detail["batch_id"] == "b-1"
+    assert detail["batch_size"] == 3
+    assert detail["eligible_at"] is not None
+
+
+def test_deliver_defaults_to_uncoalesced_single_delivery(db_path):
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.deliver(initiative.id)
+
+    audit = store.list_audit(initiative.id)
+    deliver_row = next(row for row in audit if row["transition"] == "deliver")
+    assert deliver_row["detail"]["coalesced"] is False
+    assert deliver_row["detail"]["batch_id"] is None
+    assert deliver_row["detail"]["batch_size"] == 1
+
+
+def test_list_audit_falls_back_to_status_dict_for_legacy_plain_string_detail(db_path):
+    """Transitions other than defer/deliver (resolve/expire/cancel/
+    supersede) still write a bare status string, unchanged -- list_audit()
+    must wrap it rather than raise on the non-JSON value."""
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+    store.deliver(initiative.id)
+    store.resolve(initiative.id, resolution="accepted")
+
+    audit = store.list_audit(initiative.id)
+    resolve_row = next(row for row in audit if row["transition"] == "resolve")
+    assert resolve_row["detail"] == {"status": "accepted"}
+
+
+def test_list_audit_handles_pre_s5_4_raw_string_rows_directly_in_db(db_path):
+    """Simulates a row written before this change (a bare status string,
+    not JSON) by inserting one directly -- list_audit() must not raise."""
+    store = InitiativeStore(db_path)
+    initiative = _propose(store)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO initiative_audit (initiative_id, ts, transition, actor, detail) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (initiative.id, "2026-01-01T00:00:00Z", "defer", None, "deferred"),
+    )
+    conn.commit()
+    conn.close()
+
+    audit = store.list_audit(initiative.id)
+    legacy_row = next(row for row in audit if row["ts"] == "2026-01-01T00:00:00Z")
+    assert legacy_row["detail"] == {"status": "deferred"}

@@ -1348,26 +1348,40 @@ async def _record_initiative_reflection(
     await record_action_reflection(getattr(ctx, "mem", None), reflection)
 
 
-async def _deliver_initiative_notification(ctx: Any, initiative: Any) -> None:
+async def _deliver_initiative_notification(
+    ctx: Any,
+    initiative: Any,
+    notify_overrides: dict[str, Any] | None = None,
+) -> None:
     """Delivery delegates to the existing governed NotifySkill path (S5.1
     design doc Sec 7), reused exactly as awaiting_response's remind/
     escalate transitions already do -- no new delivery channel.
     SkillRegistry.execute_action() runs its own independent Governance pass
     on skill_id="notify"; that is additive to, not a substitute for, this
     seam's own gates above. Best-effort: a delivery failure must not undo
-    the state transition that already committed."""
+    the state transition that already committed.
+
+    `notify_overrides` (S5.4 design doc Sec 3) lets the caller merge
+    additional/replacement params -- e.g. `{"priority": "urgent"}` for an
+    `immediate`/`critical_override` delivery policy, `{"sound": False}` for
+    `silent` -- into the params sent to NotifySkill, without this function
+    (or the seam) needing to know what those delivery policies mean. That
+    meaning lives entirely in the caller (drive_initiative_delivery_check)."""
     if initiative is None:
         return
     try:
+        params = {
+            "message": initiative.rationale,
+            "title": f"Bartholomew: {initiative.kind}",
+            "priority": "high" if initiative.priority == "high" else "normal",
+        }
+        if notify_overrides:
+            params.update(notify_overrides)
         await run_skill_through_runtime_contract(
             ctx.skill_registry,
             "notify",
             "send",
-            {
-                "message": initiative.rationale,
-                "title": f"Bartholomew: {initiative.kind}",
-                "priority": "high" if initiative.priority == "high" else "normal",
-            },
+            params,
         )
     except Exception:
         logger.exception(
@@ -1420,6 +1434,12 @@ async def run_initiative_through_runtime_contract(
     resolution: str | None = None,
     reason: str | None = None,
     actor: str | None = None,
+    delivery_policy: str = "standard",
+    suppress_notification: bool = False,
+    notify_overrides: dict[str, Any] | None = None,
+    coalesced: bool = False,
+    batch_id: str | None = None,
+    batch_size: int = 1,
 ) -> InitiativeRuntimeResult:
     """
     Trace one Initiative transition through the Runtime Contract seam.
@@ -1429,6 +1449,21 @@ async def run_initiative_through_runtime_contract(
     initiative_id), "resolve" (requires initiative_id + resolution;
     `due_at` required when resolution="snoozed"), "expire" (requires
     initiative_id).
+
+    S5.4 design doc Sec 2/5/10 -- `delivery_policy` is consulted only by
+    "propose" (forwarded to `store.propose()`; see
+    `initiative_store.VALID_DELIVERY_POLICIES`). `suppress_notification`,
+    `notify_overrides`, `coalesced`, `batch_id`, `batch_size` are consulted
+    only by "deliver": `suppress_notification=True` skips this call's own
+    auto-notify (the caller -- typically `drive_initiative_delivery_check`
+    coalescing several deliveries into one digest -- is responsible for
+    notifying instead); `notify_overrides` merges into the params sent to
+    NotifySkill when the auto-notify does fire (e.g. `{"priority":
+    "urgent"}`, `{"sound": False}`); `coalesced`/`batch_id`/`batch_size` are
+    forwarded to `store.deliver()` for `initiative_audit` only -- they carry
+    no behavioural effect here. The seam itself stays policy-agnostic: it
+    doesn't need to know what any given `delivery_policy` value means, only
+    how to thread these through.
 
     `ctx` needs `.mem.db_path` and `.initiative_store`
     (bartholomew.kernel.initiative_store.InitiativeStore) at minimum --
@@ -1583,6 +1618,7 @@ async def run_initiative_through_runtime_contract(
                 governance_decision=governance_decision,
                 governance_reason=reason_out,
                 actor=actor,
+                delivery_policy=delivery_policy,
                 executor=executor,
             )
         except initiative_store_module.InvalidTransitionError as exc:
@@ -1610,6 +1646,9 @@ async def run_initiative_through_runtime_contract(
                     store.deliver,
                     initiative_id,
                     actor=actor,
+                    coalesced=coalesced,
+                    batch_id=batch_id,
+                    batch_size=batch_size,
                     executor=executor,
                 )
             elif transition == "resolve":
@@ -1656,7 +1695,17 @@ async def run_initiative_through_runtime_contract(
         else:
             outcome = initiative.status
             if transition == "deliver" and getattr(ctx, "skill_registry", None) is not None:
-                await _deliver_initiative_notification(ctx, initiative)
+                # S5.4 design doc Sec 5/10: suppress_notification=True skips
+                # only the actual NotifySkill call -- the coalescing caller
+                # sends one combined notification of its own instead -- but
+                # the Working Memory note is still recorded per-initiative,
+                # since this initiative was genuinely delivered either way.
+                if not suppress_notification:
+                    await _deliver_initiative_notification(
+                        ctx,
+                        initiative,
+                        notify_overrides=notify_overrides,
+                    )
                 _record_initiative_working_memory_note(ctx, initiative)
 
     await _record_initiative_reflection(ctx, candidate_action, outcome, initiative, reason_out)
