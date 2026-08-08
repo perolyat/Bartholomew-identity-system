@@ -16,7 +16,11 @@
 > architecture-review handoff reconciled in `DECISIONS.md`. This is a conceptual extension only,
 > recorded the same way the `awaiting_response` state below was: as a canonical requirement, not
 > yet implemented, and not authorising any code change. The Executive remains the sole decision
-> authority; nothing here adds a second one.)
+> authority; nothing here adds a second one. **Same-day follow-up:** added "Personal, generalisable,
+> and system-level learning classification" — candidate learning must carry a personal /
+> potentially-generalisable / system-level classification; a future, entirely conceptual
+> generalisation pipeline is recorded but not built, and no cross-instance transport mechanism is
+> authorised.)
 >
 > **Previously (2026-07-28):** documentation reconciliation pass 2: reflection ownership section
 > rewritten to distinguish current-implementation concatenation from the approved target
@@ -140,7 +144,7 @@ hoc. Building it is separate, approved work, not authorised by this documentatio
 ## Competency, Training, and Learning (conceptual extension — added 2026-08-08, not yet implemented)
 
 *Per the architecture-review handoff reconciled in `DECISIONS.md`'s "One developing digital
-individual: competency and training architecture" entry. This section conceptually extends the
+individual — competency and training architecture" entry. This section conceptually extends the
 Runtime Contract stages above to describe how Bartholomew is meant to acquire and apply learned
 competence. Nothing in this section is implemented today — `Planner.decide()` (Executive) still
 returns `None` unconditionally, and no competency, training, or candidate-learning data model
@@ -206,6 +210,42 @@ plumbing-contractor heuristic does not transfer to travel booking just because b
 comparing vendor quotes). None of these is optional; indiscriminate transfer is explicitly a
 non-goal.
 
+### Personal, generalisable, and system-level learning classification (added 2026-08-08)
+
+*Extends the "Transfer boundaries" subsection above with a structurally different, larger-scope
+boundary. "Transfer boundaries" concerns evidence moving between competencies **within one
+individual Bartholomew**. This subsection concerns whether learning could ever move **between
+separate individual Bartholomew instances**, or into the product itself — per `CONSTITUTION.md`'s
+"Personal learning vs. potentially generalisable and system-level learning" section, which this
+conceptually implements. Nothing here is implemented; no cross-instance transport mechanism exists.*
+
+Per that principle, candidate learning (produced at the Reflection stage, per the table above) must
+carry a **classification** in addition to its provenance and confidence: **personal** (belongs to
+this individual/instance, stays in its governed Memory, never auto-promoted), **potentially
+generalisable** (a candidate lesson that might improve future Bartholomew versions, but only ever
+a candidate), or **system/product** (an observation about Bartholomew's own behaviour rather than
+the user's world). This classification is structured content the candidate-learning record carries
+— not a new subsystem, store, or decision authority.
+
+The future, conceptually-reserved-but-**not-built** generalisation pipeline this classification
+must remain capable of supporting:
+
+```
+Individual experience -> Reflection -> Candidate learning -> Classification
+  -> (Personal | Potentially generalisable | System-level)
+  -> Privacy and provenance evaluation -> De-identification where genuinely possible
+  -> Consent/Governance as required -> Validation -> Generalised lesson
+  -> possible incorporation into future Bartholomew training, competency definitions,
+     procedures, defaults, or product releases
+```
+
+**Status: entirely conceptual.** No classification field, no de-identification mechanism, no
+cross-instance transport, no validation process, and no product-level incorporation path exist in
+this repository today, and none is authorised by this section. The requirement this section
+records is narrower and purely architectural: S5.1's competency/candidate-learning data model must
+not make this future distinction structurally impossible to add later (e.g., by omitting
+classification/provenance fields entirely) — it does not require building the pipeline now.
+
 ### Non-goals (mirrors `CONSTITUTION.md`)
 
 - No `EstateExecutive`, `EstatePlanner`, `EstateMemory`, `EstateGovernance`, `EstateLLM`, or
@@ -217,6 +257,10 @@ non-goal.
   unconditionally, and it is a distinct mechanism from unrestricted self-modification or a
   standing ability to rewrite policy/user preferences without review.
 - Ordinary operational training is not assumed to mean foundation-model fine-tuning.
+- No cross-user or cross-instance learning-transport mechanism exists or is authorised here.
+  Personal learning never automatically becomes shared, global, or product-level knowledge; a
+  "potentially generalisable" classification marks a candidate for a future governed process, not
+  a transfer that has happened.
 
 ## Ownership table
 
@@ -506,5 +550,5 @@ pytest -q tests/integration/test_parking_brake_integration.py
 - `CONSTITUTION.md` — "One Developing Digital Individual: Competencies and Training" (the
   enduring principle this document's conceptual extension implements)
 - `DECISIONS.md` — "One authority per architectural concept" and related entries, and "One
-  developing digital individual: competency and training architecture"
+  developing digital individual — competency and training architecture"
 - `INTERFACES.md` — subsystem-level interface contracts

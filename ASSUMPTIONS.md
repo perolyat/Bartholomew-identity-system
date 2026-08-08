@@ -6,7 +6,11 @@
 > competency data/contract model can serve structurally different competencies (Estate, Vehicle,
 > Travel/Finance) without redesign or transfer-safety compromise is unverified until S5.1–S5.4 are
 > implemented and the generalisation test in `ROADMAP.md`'s "Estate Management as architecture
-> acceptance test" is actually run.)
+> acceptance test" is actually run; A7 — ordinary training may not require fine-tuning. **Same-day
+> follow-up:** added A8 — whether S5.1's personal/potentially-generalisable/system-level
+> classification will actually suffice for a later, still-undesigned generalisation pipeline is
+> itself unverified, per `DECISIONS.md`'s "Personal, potentially generalisable, and system-level
+> learning are architecturally distinct" entry.)
 >
 > **Previously (2026-07-28):** documentation reconciliation pass 2: A4's scope corrected from
 > "through Stage 2" — now complete — to "pending Phase B"; the cross-device token-auth assumption
@@ -207,3 +211,29 @@
   retrieval; treat a genuine, well-evidenced counterexample as grounds to revisit this assumption
   explicitly in a new `DECISIONS.md` entry rather than silently reaching for fine-tuning.
 - **Status:** unverified
+
+## A8 — S5.1's personal/generalisable/system-level classification will suffice for a later generalisation pipeline
+- **ASSUMPTION (added 2026-08-08):** the personal / potentially-generalisable / system-level
+  classification and provenance fields `ROADMAP.md`'s S5.1/S5.4 exit criteria now require (per
+  `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning"
+  and `DECISIONS.md`'s corresponding entry) will turn out to be the right shape — sufficient detail,
+  the right categories, the right provenance fields — for a still-undesigned future generalisation
+  pipeline (privacy/provenance evaluation, de-identification, consent/Governance, validation,
+  incorporation into future training/competency/defaults/product releases), without requiring the
+  classification scheme itself to be redesigned once that pipeline is actually specified.
+- **Why it matters:** this is a deliberately minimal, forward-compatible requirement adopted
+  *before* the generalisation pipeline exists, precisely so S5.1 doesn't foreclose it — but "doesn't
+  foreclose it" and "is sufficient for it" are different claims, and only the first is currently
+  justified. Building S5.1's data shape around the wrong classification granularity could still
+  require rework later, just less drastic rework than having no classification at all.
+- **Risk if wrong:** a costly schema/classification migration when the generalisation pipeline is
+  eventually designed, or — worse — pressure to ship that pipeline against an ill-fitting
+  classification rather than correct it, re-opening the same re-identification/privacy risk this
+  decision exists to prevent.
+- **How to validate:** cannot be validated until a generalisation pipeline is actually designed
+  (separate, future, explicitly-approved work, likely well beyond S5.1). Whoever designs S5.1 should
+  treat this as a known-open question, not a solved one, and whoever eventually designs the
+  generalisation pipeline should explicitly check S5.1's classification against real candidate
+  learning records before assuming it is adequate.
+- **Status:** unverified — cannot be verified before either S5.1 or the future generalisation
+  pipeline exist.

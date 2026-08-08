@@ -7,8 +7,8 @@
 > pre-existing initiative-engine scope (now S5.5–S5.7, preserved unchanged in substance); "Next 3
 > Moves" updated to insert this work between Stage 1 and live proactivity. See `CONSTITUTION.md`'s
 > "One Developing Digital Individual" section and `DECISIONS.md`'s "One developing digital
-> individual: competency and training architecture" / "Stage 5 restructured..." entries. No
-> implementation authorised by this pass.)
+> individual — competency and training architecture" / "Stage 5 restructured around competency
+> and training before live initiative" entries. No implementation authorised by this pass.)
 >
 > **Previously (2026-07-28):** documentation reconciliation pass 2: this document trimmed from a
 > ~2,200-line engineering chronicle to an executive SSOT — items 11.1–11.22, the four bug-fix

@@ -10,7 +10,11 @@
 > Management as architecture acceptance test" subsection. See `DECISIONS.md`'s "Stage 5
 > restructured around competency and training before live initiative" entry and
 > `CONSTITUTION.md`'s "One Developing Digital Individual" section. No implementation authorised by
-> this pass.)
+> this pass. **Same-day follow-up:** added personal / potentially-generalisable / system-level
+> learning classification and provenance as explicit S5.1–S5.4 exit-criteria requirements, per
+> `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning"
+> section and `DECISIONS.md`'s corresponding entry — a data-shape requirement only, not a
+> cross-instance learning mechanism.)
 >
 > **Previously (2026-08-01):** B9 complete —  Phase B's final stage:
 > `docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md` delivered. Real (not monkeypatched)
@@ -696,7 +700,7 @@ sequence below by inserting competency/training/learning work first, not by repl
 | Sub-stage | Objective | Status |
 |---|---|---|
 | **S5.0** — Runtime prerequisites | Deterministic scheduler-schema readiness at startup (closes issue #24) | ✅ done 2026-07-25 |
-| **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | 📋 not started |
+| **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. **Must also carry the personal / potentially-generalisable / system-level classification and provenance `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning" section requires (added 2026-08-08) — not a cross-instance mechanism, just fields that don't foreclose one later.** See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | 📋 not started |
 | **S5.2** — Training and knowledge acquisition | Define and implement how training material (formal reference material, direct instruction, demonstration, correction, supervised-work outcomes) enters shared Memory with provenance and consent, per `CONSTITUTION.md`'s "Training vs. configuration." | 📋 not started |
 | **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. | 📋 not started |
 | **S5.4** — Experience → learning/consolidation loop | Implement the Experience → Reflection → candidate learning → provenance/confidence → Governance/review (where required) → consolidation loop described in `COGNITIVE_RUNTIME.md`. This is also where the pre-existing reflection-ownership implementation gap (`ReflectionGenerator` authoritative, `NarratorEngine` supplementary — see `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) must be closed, since S5.4 depends on reflection composition having a single authority. | 📋 not started |
@@ -733,6 +737,12 @@ confirmed closed. Proven by `tests/test_scheduler_startup_readiness.py` (10 test
 - Estate Management is implemented as a **competency** — no `EstateExecutive`, `EstateMemory`,
   `EstateGovernance`, `EstateLLM`, or comparable per-competency cognition/runtime exists anywhere in
   the result.
+- Candidate learning and competency-evidence records carry a personal / potentially-generalisable /
+  system-level classification and sufficient provenance to support (not implement) the future
+  generalisation pipeline in `COGNITIVE_RUNTIME.md`'s "Personal, generalisable, and system-level
+  learning classification" section (added 2026-08-08). No cross-instance/cross-user learning
+  transport, de-identification pipeline, or product-level incorporation mechanism is built as part
+  of S5.1–S5.4 — personal learning stays within the individual Bartholomew instance by default.
 
 **Exit criteria (S5.5–S5.7, initiative — preserved from the pre-2026-08-08 scope):**
 - Scheduler runs check-ins (morning/evening) and weekly review in dry-run + live.

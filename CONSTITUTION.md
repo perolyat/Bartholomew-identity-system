@@ -26,7 +26,7 @@
 >
 > **Amended 2026-08-08** (New Direction reconciliation, per an architecture-review handoff
 > reconciled against current repository code — see `DECISIONS.md`'s "One developing digital
-> individual: competency and training architecture" entry for the full rationale): added a new
+> individual — competency and training architecture" entry for the full rationale): added a new
 > "One Developing Digital Individual: Competencies and Training" section formalising that
 > Bartholomew acquires professional/practical competence (e.g. residential estate management,
 > vehicle management, travel planning, finance) the way a human employee does — through training,
@@ -34,9 +34,16 @@
 > available to the one Executive wherever contextually relevant, never as a separate domain brain.
 > Distinguishes skill/capability (an executable tool) from competency (learned judgement) sharply,
 > for the first time in a canonical doc. Extended "Domain Independence" with the same generalisation
-> test applied explicitly to competencies. This amendment does not authorise implementation of any
-> competency runtime, training pipeline, or Estate Management feature — see `ROADMAP.md`'s
-> restructured Stage 5 for the (unapproved-until-separately-approved) staged plan.
+> test applied explicitly to competencies. **Same-day follow-up:** added "Personal learning vs.
+> potentially generalisable and system-level learning" — personal learning stays within an
+> individual Bartholomew's governed memory and is never auto-promoted to shared/global/product-level
+> knowledge; potentially generalisable and system/product learning are distinct candidate
+> categories, never automatically promoted either, subject to a future (not-yet-built) governed
+> generalisation process. See `DECISIONS.md`'s "Personal, potentially generalisable, and
+> system-level learning are architecturally distinct" entry. This amendment does not authorise
+> implementation of any competency runtime, training pipeline, cross-instance/product-level learning
+> infrastructure, or Estate Management feature — see `ROADMAP.md`'s restructured Stage 5 for the
+> (unapproved-until-separately-approved) staged plan.
 
 ---
 
@@ -261,6 +268,63 @@ unrelated context. Transfer must never be indiscriminate: any such generalisatio
 subject to relevance, provenance, confidence, privacy, Governance, and domain-appropriate
 boundaries, the same as any other governed use of memory. A competency is a lens the Executive can
 apply to shared knowledge, not a walled garden that owns a private copy of it.
+
+### Personal learning vs. potentially generalisable and system-level learning
+
+*(Added 2026-08-08, same pass. This is a different, larger-scope boundary than "Shared memory and
+transferable learning" above — that section concerns learning moving *within* one individual
+Bartholomew, across its own competencies. This section concerns whether and how learning could
+ever move *between* separate individual Bartholomew instances, or into the product itself — a
+categorically stronger privacy and governance bar. The two must not be conflated.)*
+
+An individual Bartholomew — including an early or test instance, developed and used before the
+product's eventual customer release — accumulates substantial personal knowledge, experience,
+corrections, procedures, heuristics, preferences, outcomes, and context about its user. Three
+categories of what is learned must remain architecturally distinguishable, from the moment
+candidate learning is produced onward:
+
+- **Personal learning** — belongs to a particular user/individual Bartholomew instance: personal
+  preferences, routines, relationships, household/property information, personal history,
+  user-specific behavioural patterns, trusted contractors, personal thresholds, private documents,
+  and other contextual information about that user's life. This must remain within that
+  individual's governed memory unless an explicit, appropriate mechanism permits otherwise, and
+  **must never automatically become global or shared Bartholomew knowledge.**
+- **Potentially generalisable learning** — a lesson discovered through one individual's experience
+  that *may* be useful beyond that individual: a generally useful reasoning heuristic, an improved
+  procedure, a recurring failure mode, a better way of interpreting a class of documents, a safer
+  workflow, a generally useful competency lesson, a correction to an incorrect assumption, or
+  evidence that a reasoning strategy works or fails under particular conditions. Such a lesson is
+  only ever a **candidate**; it must never be automatically promoted into shared/global Bartholomew
+  knowledge.
+- **System/product learning** — an observation primarily about Bartholomew itself rather than
+  about the user's world: a workflow producing excessive false positives, a reasoning strategy that
+  repeatedly fails, a safety check that needs to occur earlier, a competency missing an important
+  procedure, an interface causing repeated misunderstanding, a default behaviour that is
+  consistently inappropriate. Distinguishable from both personal memory and ordinary competency
+  knowledge.
+
+**Removing a person's name alone does not make information non-personal.** Any future
+generalisation of a candidate lesson — from one individual Bartholomew toward the product or toward
+other instances — must consider whether the lesson is genuinely independent of the individual,
+whether it can be genuinely de-identified, its provenance, consent and user expectations,
+sensitivity, re-identification risk, confidence, validation across cases where appropriate,
+Governance, and auditability. **Where safe generalisation cannot be established, the learning
+remains individual.** This mirrors, and does not weaken, the data-portability and sovereignty
+invariants above: trust in Bartholomew includes trusting that one's own experience does not
+silently become someone else's, or the product's, knowledge.
+
+Early and test Bartholomews are, in this sense, **experienced predecessors** of later Bartholomew
+instances — not sources of shared memory for them. Their private memories do not become the
+memories of future users. Properly validated, appropriately de-personalised lessons discovered
+through their experience may eventually contribute to improving future Bartholomew versions
+(training material, competency definitions, procedures, defaults, or product releases), but only
+through an explicit, governed generalisation process — never automatically, and not by a mechanism
+that exists today. See `COGNITIVE_RUNTIME.md`'s "Personal, generalisable, and system-level learning
+classification" section for how this constrains the candidate-learning data shape, and
+`DECISIONS.md`'s corresponding entry for the full rationale. **This principle does not authorise
+building any cross-user, cross-instance, or product-level learning infrastructure now** — it
+constrains S5.1 onward so that distinction remains representable later, rather than requiring the
+learning model to be redesigned when a governed generalisation mechanism is eventually proposed.
 
 ### Governance is cross-cutting, not a peer
 

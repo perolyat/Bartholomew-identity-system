@@ -2,11 +2,12 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-08 (New Direction reconciliation: two new decisions added — "One
-> developing digital individual: competency and training architecture" and "Stage 5 restructured
-> around competency and training before live initiative." Both are documentation-only; no
-> implementation authorised. See `CONSTITUTION.md`, `COGNITIVE_RUNTIME.md`, and `ROADMAP.md` for
-> the corresponding documentation changes.)
+> **Last updated:** 2026-08-08 (New Direction reconciliation: three new decisions added — "One
+> developing digital individual — competency and training architecture," "Stage 5 restructured
+> around competency and training before live initiative," and (same-day follow-up) "Personal,
+> potentially generalisable, and system-level learning are architecturally distinct." All three are
+> documentation-only; no implementation authorised. See `CONSTITUTION.md`, `COGNITIVE_RUNTIME.md`,
+> `ROADMAP.md`, and `ASSUMPTIONS.md` for the corresponding documentation changes.)
 >
 > **Previously (2026-07-31):** documentation-only Phase B restructuring: one new decision added —
 > Phase B is governed by a concise overview plus separately gated stages B0–B9, not one monolithic
@@ -994,3 +995,69 @@
   pipelines run independently. `MASTER_PLAN.md`'s P3 backlog item and "Next 3 Moves" section are
   updated to match.
 - **Date:** 2026-08-08
+
+## Decision: Personal, potentially generalisable, and system-level learning are architecturally distinct
+- **Decision:** The Bartholomew currently being developed is a predecessor of the Bartholomew
+  system eventually released to customers. During development, testing, and later real-world use,
+  an individual Bartholomew accumulates substantial personal knowledge, experience, corrections,
+  procedures, heuristics, preferences, outcomes, and context. Three categories of what gets learned
+  must remain architecturally distinguishable from the moment candidate learning is produced:
+  **personal learning** (belongs to a particular user/instance — preferences, routines,
+  relationships, household/property information, personal history, trusted contractors, private
+  documents, and similar; stays within that individual's governed memory unless an explicit,
+  appropriate mechanism permits otherwise; never automatically becomes global/shared/product-level
+  knowledge); **potentially generalisable learning** (a candidate lesson that might improve future
+  Bartholomew versions — a heuristic, an improved procedure, a recurring failure mode, a
+  correction to an incorrect assumption, etc. — that must never be automatically promoted); and
+  **system/product learning** (an observation about Bartholomew itself — excessive false positives,
+  a reasoning strategy that repeatedly fails, a safety check needed earlier, a missing procedure, a
+  consistently inappropriate default — distinguishable from both personal memory and ordinary
+  competency knowledge). A future, entirely conceptual generalisation pipeline is recorded (not
+  built): individual experience → reflection → candidate learning → classification → privacy and
+  provenance evaluation → de-identification where genuinely possible → consent/Governance as
+  required → validation → generalised lesson → possible incorporation into future Bartholomew
+  training, competency definitions, procedures, defaults, or product releases. **Removing a
+  person's name alone does not make information non-personal** — genuine de-identification,
+  provenance, consent, sensitivity, re-identification risk, confidence, validation, Governance, and
+  auditability must all be considered before any generalisation, and where safe generalisation
+  cannot be established, the learning remains individual. This is now recorded in
+  `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning"
+  section and `COGNITIVE_RUNTIME.md`'s "Personal, generalisable, and system-level learning
+  classification" section.
+- **Alternatives considered:** (a) Treat all candidate learning as eligible for generalisation once
+  PII is scrubbed — rejected: this document's own text above states plainly that name-removal alone
+  is insufficient, and treating scrubbing as sufficient is exactly the failure mode (re-identification
+  risk, context-based identifiability) this decision exists to prevent. (b) Treat all learning as
+  permanently individual, with no future generalisation path even conceptually reserved — rejected:
+  this would foreclose legitimate future product improvement (a corrected procedure, a safer
+  workflow, a fixed competency gap) that a properly governed process could validly surface, and the
+  requesting instruction was explicit that the future distinction must remain *possible*, not that
+  it must be permanently prevented. (c) Build the cross-instance/product-level generalisation
+  pipeline now, as part of this documentation pass — rejected and explicitly out of scope: S5.1
+  (the first competency-architecture implementation stage) has not started, there is no cross-user
+  infrastructure of any kind in this repository, and building transport/de-identification/validation
+  machinery ahead of the single-instance competency architecture it would eventually feed from
+  would repeat the exact "build the specific thing before the general architecture" mistake the
+  Estate Management acceptance test (`ROADMAP.md`) already exists to avoid, one level up.
+- **Why:** This does not conflict with any existing architectural invariant — it extends ones
+  already established. `CONSTITUTION.md`'s Sovereign Principle ("the user is always the final
+  authority... optimise for maximum trust"), the data-portability invariant ("trust may be a
+  product advantage; lock-in must not be"), and the hybrid-local-first deployment decision (the
+  trusted local runtime is authoritative for sensitive memory, not dependent on cloud availability)
+  already establish that an individual's data belongs to that individual by default. This decision
+  makes explicit a dimension those invariants did not previously name directly: protection against
+  an individual's personal experience silently becoming *another user's* or *the product's*
+  knowledge, not just protection against external/cloud access. It is the direct architectural
+  consequence of treating "one developing digital individual" (the same-day "One developing digital
+  individual — competency and training architecture" decision above) as *this* individual, not an
+  interchangeable instance whose memory is fungible with any other Bartholomew's.
+- **Consequences:** `ROADMAP.md`'s Stage 5 S5.1 (competency architecture) and S5.4 (experience →
+  learning loop) exit criteria now require that competency/candidate-learning records carry this
+  classification and sufficient provenance — a data-shape requirement on the architecture, not an
+  implementation of any cross-instance mechanism. No code, schema, de-identification pipeline,
+  consent flow, or transport mechanism is implemented by this decision. `ASSUMPTIONS.md` gains a
+  new entry (A8) recording that whether S5.1's classification will actually prove sufficient for a
+  later, still-undesigned generalisation pipeline is itself unverified. This decision does **not**
+  authorise designing or implementing cross-user/global learning infrastructure — that remains
+  separate, future, and its own explicitly-approved work, likely well beyond S5.1.
+- **Date:** 2026-08-08 (same-day follow-up to the two entries above)
