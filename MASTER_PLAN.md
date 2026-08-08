@@ -609,7 +609,7 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 > must precede **live** Stage 5 behaviour because Stage 5's live proactivity needs a user-facing
 > governance surface that only Stage 1 provides).
 
-**The actual next moves, as of 2026-07-28 (each step below requires its own separate, explicit
+**The actual next moves, as of 2026-08-08 (each step below requires its own separate, explicit
 approval before work begins — this list records sequencing, not authorisation):**
 
 1. **Documentation reconciliation and the deployment-architecture decision** — this pass. The

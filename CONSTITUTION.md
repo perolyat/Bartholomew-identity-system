@@ -309,8 +309,9 @@ other instances — must consider whether the lesson is genuinely independent of
 whether it can be genuinely de-identified, its provenance, consent and user expectations,
 sensitivity, re-identification risk, confidence, validation across cases where appropriate,
 Governance, and auditability. **Where safe generalisation cannot be established, the learning
-remains individual.** This mirrors, and does not weaken, the data-portability and sovereignty
-invariants above: trust in Bartholomew includes trusting that one's own experience does not
+remains individual.** This mirrors, and does not weaken, this document's Sovereign Principle and
+data-portability invariant (see "Sovereign Principle" and "Safety, Accessibility, and Product
+Invariants" below): trust in Bartholomew includes trusting that one's own experience does not
 silently become someone else's, or the product's, knowledge.
 
 Early and test Bartholomews are, in this sense, **experienced predecessors** of later Bartholomew
