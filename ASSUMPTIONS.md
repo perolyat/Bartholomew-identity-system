@@ -2,7 +2,17 @@
 
 > Living list of uncertainties that matter. Each must have a validation plan.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: A4's scope corrected from
+> **Last updated:** 2026-08-08 (New Direction reconciliation: added A6 — whether a single generic
+> competency data/contract model can serve structurally different competencies (Estate, Vehicle,
+> Travel/Finance) without redesign or transfer-safety compromise is unverified until S5.1–S5.4 are
+> implemented and the generalisation test in `ROADMAP.md`'s "Estate Management as architecture
+> acceptance test" is actually run; A7 — ordinary training may not require fine-tuning. **Same-day
+> follow-up:** added A8 — whether S5.1's personal/potentially-generalisable/system-level
+> classification will actually suffice for a later, still-undesigned generalisation pipeline is
+> itself unverified, per `DECISIONS.md`'s "Personal, potentially generalisable, and system-level
+> learning are architecturally distinct" entry.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: A4's scope corrected from
 > "through Stage 2" — now complete — to "pending Phase B"; the cross-device token-auth assumption
 > rewritten to reflect the hybrid local-first deployment decision, which explicitly rejects
 > "simple token auth is sufficient" rather than merely leaving it unverified.)
@@ -156,3 +166,74 @@
   reviewed *before* any remote-exposure feature ships — not retrofitted after.
 - **Status:** unverified (and, per the correction above, must remain unverified-and-unshipped
   until the threat model exists — this is not merely an open question to track passively)
+
+## A6 — A single generic competency model can serve structurally different competencies
+- **ASSUMPTION (added 2026-08-08):** the generic competency data/contract model built in
+  `ROADMAP.md` Stage 5's S5.1 can represent Residential Estate Management, a second competency
+  (e.g. Vehicle Management), and a structurally different third (e.g. Travel or Finance) without
+  requiring redesign of the core model, and without cross-competency learning transfer
+  (`CONSTITUTION.md`'s "Shared memory and transferable learning") either leaking irrelevant/private
+  evidence across domains or, in the opposite failure mode, being so conservatively scoped that no
+  useful transfer ever actually happens.
+- **Why it matters:** this is the explicit acceptance test `CONSTITUTION.md`'s "Domain
+  Independence" section and `ROADMAP.md`'s "Estate Management as architecture acceptance test"
+  both name: if the third competency requires redesigning the core model or introducing a second
+  brain/memory/Executive, the competency abstraction itself has failed, not just one competency's
+  implementation.
+- **Risk if wrong:** either (a) a costly mid-stream redesign once a second or third competency is
+  attempted, or (b) quiet architectural drift toward per-competency special-casing (the exact
+  outcome `CONSTITUTION.md` prohibits) to avoid that redesign.
+- **How to validate:** implement S5.1–S5.4 generically first (not Estate-specific), train
+  Residential Estate Management into it, then deliberately add a second and a structurally
+  different third competency per `ROADMAP.md`'s acceptance-test sequence, and check whether the
+  core model held without exception-casing.
+- **Status:** unverified — cannot be verified before S5.1 exists; this assumption exists so that
+  whoever plans S5.1 treats "does this generalise" as a design question to be actively tested, not
+  an incidental property to hope for.
+
+## A7 — Ordinary operational training will not require foundation-model fine-tuning
+- **ASSUMPTION (added 2026-08-08):** the training mechanisms described in `CONSTITUTION.md`'s
+  "Training vs. configuration" section (formal material, instruction, demonstration, correction,
+  supervised work, experience, consolidation) can be implemented entirely as structured Memory
+  content plus Executive-time retrieval, without ever requiring fine-tuning or retraining the
+  underlying language model, for the range of competencies currently anticipated (Estate, Vehicle,
+  Travel, Finance).
+- **Why it matters:** if this assumption is wrong for some future competency (i.e. some kind of
+  professional judgement genuinely cannot be captured as retrievable structured knowledge and
+  requires weight-level adaptation), that is a materially different, more expensive, and
+  higher-risk engineering commitment than the one `CONSTITUTION.md` and `COGNITIVE_RUNTIME.md`
+  currently describe, with its own governance and provenance questions this documentation pass has
+  not addressed.
+- **Risk if wrong:** a future competency's design could be blocked, or forced into a poor
+  retrieval-only approximation of judgement that genuinely needed model-level adaptation.
+- **How to validate:** monitor whether S5.1–S5.4's worked Estate Management example, and any
+  subsequent competency, can achieve acceptable proficiency using only structured-knowledge
+  retrieval; treat a genuine, well-evidenced counterexample as grounds to revisit this assumption
+  explicitly in a new `DECISIONS.md` entry rather than silently reaching for fine-tuning.
+- **Status:** unverified
+
+## A8 — S5.1's personal/generalisable/system-level classification will suffice for a later generalisation pipeline
+- **ASSUMPTION (added 2026-08-08):** the personal / potentially-generalisable / system-level
+  classification and provenance fields `ROADMAP.md`'s S5.1/S5.4 exit criteria now require (per
+  `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning"
+  and `DECISIONS.md`'s corresponding entry) will turn out to be the right shape — sufficient detail,
+  the right categories, the right provenance fields — for a still-undesigned future generalisation
+  pipeline (privacy/provenance evaluation, de-identification, consent/Governance, validation,
+  incorporation into future training/competency/defaults/product releases), without requiring the
+  classification scheme itself to be redesigned once that pipeline is actually specified.
+- **Why it matters:** this is a deliberately minimal, forward-compatible requirement adopted
+  *before* the generalisation pipeline exists, precisely so S5.1 doesn't foreclose it — but "doesn't
+  foreclose it" and "is sufficient for it" are different claims, and only the first is currently
+  justified. Building S5.1's data shape around the wrong classification granularity could still
+  require rework later, just less drastic rework than having no classification at all.
+- **Risk if wrong:** a costly schema/classification migration when the generalisation pipeline is
+  eventually designed, or — worse — pressure to ship that pipeline against an ill-fitting
+  classification rather than correct it, re-opening the same re-identification/privacy risk this
+  decision exists to prevent.
+- **How to validate:** cannot be validated until a generalisation pipeline is actually designed
+  (separate, future, explicitly-approved work, likely well beyond S5.1). Whoever designs S5.1 should
+  treat this as a known-open question, not a solved one, and whoever eventually designs the
+  generalisation pipeline should explicitly check S5.1's classification against real candidate
+  learning records before assuming it is adequate.
+- **Status:** unverified — cannot be verified before either S5.1 or the future generalisation
+  pipeline exist.

@@ -2,7 +2,14 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-07-31 (documentation-only Phase B restructuring: one new decision added —
+> **Last updated:** 2026-08-08 (New Direction reconciliation: three new decisions added — "One
+> developing digital individual — competency and training architecture," "Stage 5 restructured
+> around competency and training before live initiative," and (same-day follow-up) "Personal,
+> potentially generalisable, and system-level learning are architecturally distinct." All three are
+> documentation-only; no implementation authorised. See `CONSTITUTION.md`, `COGNITIVE_RUNTIME.md`,
+> `ROADMAP.md`, and `ASSUMPTIONS.md` for the corresponding documentation changes.)
+>
+> **Previously (2026-07-31):** documentation-only Phase B restructuring: one new decision added —
 > Phase B is governed by a concise overview plus separately gated stages B0–B9, not one monolithic
 > specification. See "Decision: Phase B governed by a concise overview plus separately gated
 > stages, not one monolithic specification" below.)
@@ -879,3 +886,178 @@
   checkpoint hook (fires once at interpreter shutdown, not implicated in any observed failure)
   were deliberately left on the frozen constant.
 - **Date:** 2026-08-06 (PR #38 follow-up: scheduler/database test-isolation fix)
+
+## Decision: One developing digital individual — competency and training architecture
+- **Decision:** Adopt the direction recorded in an architecture-review handoff ("Bartholomew
+  Project — New Direction & Repository Handoff") as canonical, after reconciling it against the
+  current repository rather than accepting it uncritically: **Bartholomew is one developing
+  digital individual**, not a collection of independent domain-specific applications or "Manager"
+  brains. Areas of professional or practical responsibility — Estate Management, Finance, Travel,
+  Vehicle Management, and any future one — are **competencies this one Bartholomew learns**,
+  acquired the way a human employee develops competence: through training, instruction,
+  correction, supervised work, experience, reflection, and accumulated judgement. A competency is
+  learned judgement (knowledge, procedures, heuristics, relevant capabilities, experience/evidence,
+  proficiency/confidence, supervision requirements) that informs the one Executive; it is sharply
+  distinct from a skill/capability (a relatively dumb, executable tool), and it must never become a
+  second Executive, Memory authority, or Governance path. This is now recorded in
+  `CONSTITUTION.md`'s "One Developing Digital Individual: Competencies and Training" section and
+  conceptually extended into the Runtime Contract in `COGNITIVE_RUNTIME.md`'s "Competency,
+  Training, and Learning" section.
+- **Alternatives considered:** (a) Build Residential Estate Management first, as a working
+  vertical slice, and generalise into a competency architecture afterward — rejected: the handoff
+  and this reconciliation agree this inverts the correct order and risks locking in Estate-specific
+  shortcuts (an `EstateExecutive`, `EstateMemory`, or similar) that would then need to be
+  unwound, repeating the exact "two brains" mistake `MASTER_PLAN.md`'s 2026-07-21 architectural
+  audit already found and fixed once (Stage 4.5, Runtime Convergence) for chat vs. skills. (b)
+  Model competencies as a new kind of Skill/plugin inside the existing Skill Registry — rejected:
+  a competency is learned judgement, not an executable tool; conflating the two would either weaken
+  the Skill Registry's deliberately simple execution-mechanism contract or smuggle domain judgement
+  into skill implementations, both of which `CONSTITUTION.md`'s Capability pillar already argues
+  against. (c) Give each competency its own memory store/database for isolation and simplicity —
+  rejected: this directly reproduces the "second memory architecture" problem `DECISIONS.md`'s
+  Echo-roadmap-demotion entry already rejected for a different reason, and blocks the
+  transferable-learning requirement (evidence from one competency legitimately informing judgement
+  in another) that a walled-off store cannot support. (d) Accept the handoff's specific S5.1–S5.7
+  numbering and stage content verbatim without checking it against the repository — rejected: this
+  reconciliation independently verified the handoff's specific claims (`Planner.decide()` returns
+  `None`; `SkillManifest` models executable tools with no competency concept;
+  `memory_store.py`'s `memories` table already uses an open-ended `kind` string, not a fixed enum,
+  governed by `memory_rules.yaml`) before adopting them, and adjusted stage numbering to fit
+  existing, already-shipped Stage 5 history (S5.0) rather than renumbering it away.
+- **Why:** `CONSTITUTION.md` already established, before this decision, that there is exactly one
+  Executive, one Memory substrate ("the long-term competitive moat... decades of accumulated
+  understanding of the user"), and cross-cutting Governance above every subsystem — and that
+  "nothing should be designed specifically for bills," with the explicit generalisation test "if
+  adding the third domain requires schema redesign, the architecture has failed." The handoff's
+  "one developing digital individual" principle is not a new architecture; it is the direct,
+  previously-unstated consequence of principles this repository already committed to, made
+  explicit specifically for *learned competence* rather than only for capabilities/tools. Direct
+  repository verification confirmed the underlying gap the handoff names is real: `Planner.decide()`
+  (`bartholomew/kernel/planner.py`) is a stub that always returns `None` — there is no Executive
+  reasoning path today that could apply a competency even if one existed — and `SkillManifest`
+  (`bartholomew/kernel/skill_manifest.py`) models exactly what `CONSTITUTION.md`'s Capability
+  pillar already says a skill should be: an executable action with permissions, not a carrier of
+  domain judgement.
+- **Consequences:** `CONSTITUTION.md` is amended (see its 2026-08-08 entry). `COGNITIVE_RUNTIME.md`
+  gains a conceptual, not-yet-implemented "Competency, Training, and Learning" section. `ROADMAP.md`
+  Stage 5 is restructured (see the paired decision below) around this principle. This decision does
+  **not** authorise implementing any competency runtime, training pipeline, memory-kind change, or
+  Estate Management feature — it is a documentation-only architectural decision that future,
+  separately-approved implementation work (`ROADMAP.md` Stage 5 S5.1 onward) must be consistent
+  with, the same status the hybrid-local-first deployment decision has for Stage 6.
+- **Date:** 2026-08-08
+
+## Decision: Stage 5 restructured around competency and training before live initiative
+- **Decision:** `ROADMAP.md`'s Stage 5 is renamed from "Initiative engine (scheduled check-ins +
+  workflows)" to "Developing Agency (competency, training, learning, then initiative)" and
+  resequenced: **S5.1 — Competency architecture, S5.2 — Training and knowledge acquisition, S5.3 —
+  Executive competency reasoning, S5.4 — Experience → learning/consolidation loop** now precede
+  what was previously S5.1 onward (typed cadence, default-off consent/mute, quiet-hours defer,
+  dry-run, rationale logging, live check-in/weekly-review/next-best-action drives), which is
+  preserved unchanged in substance as **S5.5 — Initiative safety scaffolding, S5.6 — Dry-run
+  proactive reasoning, S5.7 — Controlled live initiative**. S5.0 (deterministic scheduler-schema
+  readiness, already shipped 2026-07-25) is unchanged. Residential Estate Management is recorded as
+  the first competency to be trained into the S5.1 architecture, worked as the "architecture
+  acceptance test" (`ROADMAP.md`'s new subsection of that name) rather than as production
+  functionality to build ahead of the architecture.
+- **Alternatives considered:** (a) Leave Stage 5 as the initiative engine and treat competency
+  architecture as an entirely separate, unnumbered workstream — rejected: `ROADMAP.md`'s own
+  "Sequencing (locked)" principle for Stage 5 already established that safety scaffolding must
+  precede live proactivity; the same reasoning applies one level earlier — competent reasoning must
+  precede scheduling *when* to act on it, so treating them as unrelated tracks would obscure a real
+  dependency. (b) Insert competency work as new sub-stages numbered S5.8+ after the existing
+  initiative-engine sub-stages, leaving S5.1–S5.7's existing content untouched — rejected: this
+  would let live initiative (S5.7 under that numbering) ship before the Executive has any
+  competency machinery to reason with, which is the exact ordering problem this decision exists to
+  fix; numbering competency work *after* initiative in the sequence would misstate the true
+  dependency order even if the labels were technically distinct. (c) Adopt the handoff's suggested
+  S5.0–S5.7 labels without adjustment — rejected as this repository's actual S5.0 already has
+  different, shipped content (scheduler-schema readiness, not "runtime prerequisites" in the
+  handoff's generic sense); the labels are kept but their content is grounded in this repository's
+  real history, not copied verbatim.
+- **Why:** `Planner.decide()` (`bartholomew/kernel/planner.py`) returns `None` unconditionally
+  today — confirmed by direct reading, not assumed from the handoff. There is no Executive
+  reasoning path an initiative/proactivity feature could meaningfully build on without first
+  building the competency-retrieval-and-application machinery S5.1–S5.4 describe. Building
+  proactive scheduling (the old S5.1 onward) ahead of that would produce a scheduler that can
+  decide *when* to speak but still has nothing genuinely competent to say — the reverse of the
+  actual dependency.
+- **Consequences:** No Stage 5 implementation work of any kind has started; this decision changes
+  only sequencing and documentation, matching the "documentation-only, no implementation
+  authorised" status every other Stage 5 planning decision in this document already carries. Live
+  proactive Stage 5 behaviour (S5.7) still additionally requires Stage 1's user-facing governance
+  shell, per the existing 2026-07-28 decision recorded in `ROADMAP.md`'s "Near-term milestone
+  plan" — this decision does not change that requirement, it only inserts S5.1–S5.4 earlier in the
+  overall sequence. The pre-existing reflection-ownership implementation gap
+  (`COGNITIVE_RUNTIME.md`'s "Reflection ownership" section; this document's "Reflection ownership —
+  target architecture" entry above) is now explicitly S5.4's responsibility to close, since the
+  experience→learning loop cannot have a single authoritative composition step while two reflection
+  pipelines run independently. `MASTER_PLAN.md`'s P3 backlog item and "Next 3 Moves" section are
+  updated to match.
+- **Date:** 2026-08-08
+
+## Decision: Personal, potentially generalisable, and system-level learning are architecturally distinct
+- **Decision:** The Bartholomew currently being developed is a predecessor of the Bartholomew
+  system eventually released to customers. During development, testing, and later real-world use,
+  an individual Bartholomew accumulates substantial personal knowledge, experience, corrections,
+  procedures, heuristics, preferences, outcomes, and context. Three categories of what gets learned
+  must remain architecturally distinguishable from the moment candidate learning is produced:
+  **personal learning** (belongs to a particular user/instance — preferences, routines,
+  relationships, household/property information, personal history, trusted contractors, private
+  documents, and similar; stays within that individual's governed memory unless an explicit,
+  appropriate mechanism permits otherwise; never automatically becomes global/shared/product-level
+  knowledge); **potentially generalisable learning** (a candidate lesson that might improve future
+  Bartholomew versions — a heuristic, an improved procedure, a recurring failure mode, a
+  correction to an incorrect assumption, etc. — that must never be automatically promoted); and
+  **system/product learning** (an observation about Bartholomew itself — excessive false positives,
+  a reasoning strategy that repeatedly fails, a safety check needed earlier, a missing procedure, a
+  consistently inappropriate default — distinguishable from both personal memory and ordinary
+  competency knowledge). A future, entirely conceptual generalisation pipeline is recorded (not
+  built): individual experience → reflection → candidate learning → classification → privacy and
+  provenance evaluation → de-identification where genuinely possible → consent/Governance as
+  required → validation → generalised lesson → possible incorporation into future Bartholomew
+  training, competency definitions, procedures, defaults, or product releases. **Removing a
+  person's name alone does not make information non-personal** — genuine de-identification,
+  provenance, consent, sensitivity, re-identification risk, confidence, validation, Governance, and
+  auditability must all be considered before any generalisation, and where safe generalisation
+  cannot be established, the learning remains individual. This is now recorded in
+  `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning"
+  section and `COGNITIVE_RUNTIME.md`'s "Personal, generalisable, and system-level learning
+  classification" section.
+- **Alternatives considered:** (a) Treat all candidate learning as eligible for generalisation once
+  PII is scrubbed — rejected: this document's own text above states plainly that name-removal alone
+  is insufficient, and treating scrubbing as sufficient is exactly the failure mode (re-identification
+  risk, context-based identifiability) this decision exists to prevent. (b) Treat all learning as
+  permanently individual, with no future generalisation path even conceptually reserved — rejected:
+  this would foreclose legitimate future product improvement (a corrected procedure, a safer
+  workflow, a fixed competency gap) that a properly governed process could validly surface, and the
+  requesting instruction was explicit that the future distinction must remain *possible*, not that
+  it must be permanently prevented. (c) Build the cross-instance/product-level generalisation
+  pipeline now, as part of this documentation pass — rejected and explicitly out of scope: S5.1
+  (the first competency-architecture implementation stage) has not started, there is no cross-user
+  infrastructure of any kind in this repository, and building transport/de-identification/validation
+  machinery ahead of the single-instance competency architecture it would eventually feed from
+  would repeat the exact "build the specific thing before the general architecture" mistake the
+  Estate Management acceptance test (`ROADMAP.md`) already exists to avoid, one level up.
+- **Why:** This does not conflict with any existing architectural invariant — it extends ones
+  already established. `CONSTITUTION.md`'s Sovereign Principle ("the user is always the final
+  authority... optimise for maximum trust"), the data-portability invariant ("trust may be a
+  product advantage; lock-in must not be"), and the hybrid-local-first deployment decision (the
+  trusted local runtime is authoritative for sensitive memory, not dependent on cloud availability)
+  already establish that an individual's data belongs to that individual by default. This decision
+  makes explicit a dimension those invariants did not previously name directly: protection against
+  an individual's personal experience silently becoming *another user's* or *the product's*
+  knowledge, not just protection against external/cloud access. It is the direct architectural
+  consequence of treating "one developing digital individual" (the same-day "One developing digital
+  individual — competency and training architecture" decision above) as *this* individual, not an
+  interchangeable instance whose memory is fungible with any other Bartholomew's.
+- **Consequences:** `ROADMAP.md`'s Stage 5 S5.1 (competency architecture) and S5.4 (experience →
+  learning loop) exit criteria now require that competency/candidate-learning records carry this
+  classification and sufficient provenance — a data-shape requirement on the architecture, not an
+  implementation of any cross-instance mechanism. No code, schema, de-identification pipeline,
+  consent flow, or transport mechanism is implemented by this decision. `ASSUMPTIONS.md` gains a
+  new entry (A8) recording that whether S5.1's classification will actually prove sufficient for a
+  later, still-undesigned generalisation pipeline is itself unverified. This decision does **not**
+  authorise designing or implementing cross-user/global learning infrastructure — that remains
+  separate, future, and its own explicitly-approved work, likely well beyond S5.1.
+- **Date:** 2026-08-08 (same-day follow-up to the two entries above)

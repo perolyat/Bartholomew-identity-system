@@ -2,7 +2,15 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: this document trimmed from a
+> **Last updated:** 2026-08-08 (New Direction reconciliation: P3 restructured to cover the
+> competency/training/learning architecture (`ROADMAP.md` Stage 5 S5.1–S5.4) ahead of the
+> pre-existing initiative-engine scope (now S5.5–S5.7, preserved unchanged in substance); "Next 3
+> Moves" updated to insert this work between Stage 1 and live proactivity. See `CONSTITUTION.md`'s
+> "One Developing Digital Individual" section and `DECISIONS.md`'s "One developing digital
+> individual — competency and training architecture" / "Stage 5 restructured around competency
+> and training before live initiative" entries. No implementation authorised by this pass.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: this document trimmed from a
 > ~2,200-line engineering chronicle to an executive SSOT — items 11.1–11.22, the four bug-fix
 > "rounds," and the "Experience Kernel MVP" write-up moved verbatim to
 > [docs/archive/ENGINEERING_LOG_2026.md](docs/archive/ENGINEERING_LOG_2026.md), with a compact
@@ -139,15 +147,14 @@ logs/    (runtime logs)
 | Stage 3 — Unified Persona Core (Experience Kernel) | ✅ largely done, gaps closed 2026-07-20/21 | `ROADMAP.md` Stage 3; items 11.8–11.9 |
 | Stage 4 — Skill registry + starter skills | ✅ 2026-07-21 | `ROADMAP.md` Stage 4 |
 | Stage 4.5 — Runtime Convergence | ✅ 2026-07-24 | `COGNITIVE_RUNTIME.md` Exit Gate table (all 7 satisfied in scope); items 11.12–11.22 |
+| Stage 1 — Console/UI integration (sub-stages S1.0–S1.6) | ✅ 2026-08-05 *(this table corrected 2026-08-08 — it previously listed Stage 1 as "not started" below, stale since S1.1–S1.6 landed 2026-08-01–2026-08-05)* | `ROADMAP.md` Stage 1; `docs/STAGE_1_OVERVIEW.md` |
 
 **Not started**
 
-- **Stage 1 — Console/UI integration.** Stage 1 is a deferred console/UI product slice. It has
-  not started and was never a prerequisite for Stages 2–4.5. No code evidence of work on it.
-  Its historical numbering is retained deliberately; stages were sequenced by architectural
-  dependency, not by number.
-- **Stage 5 — Initiative engine.** Only its prerequisite **S5.0** has landed (see P3 below).
-  **S5.1 has not begun.** No Stage 5 feature code exists.
+- **Stage 5 — Developing Agency (competency, training, learning, then initiative)** *(renamed
+  2026-08-08 from "Initiative engine" — see `ROADMAP.md`'s restructured Stage 5 section)*. Only its
+  prerequisite **S5.0** has landed (see P3 below). **S5.1 (competency architecture) has not begun.**
+  No Stage 5 feature code exists.
 - **Stages 6–7, Echo gates.** Future.
 
 **Engineering workstreams (cross-cutting, not stage gates)**
@@ -474,7 +481,18 @@ satisfied within Stage 4.5's scope; Stage 4.5 is complete.** See `COGNITIVE_RUNT
 Gate table for the live, per-question evidence — that table, not this index, is the
 continuously-updated scorecard.
 
-### P3 — Initiative engine (proactive nudges) and workflows
+### P3 — Developing Agency: competency/training/learning, then initiative engine
+
+**Restructured 2026-08-08** (New Direction reconciliation — see `DECISIONS.md`'s "Stage 5
+restructured around competency and training before live initiative" entry and `ROADMAP.md`'s
+Stage 5 section, the canonical source for this workstream's sub-stage detail going forward). This
+backlog item previously covered only the initiative engine (scheduled check-ins/workflows). It now
+also covers the generic competency/training/learning architecture (`ROADMAP.md` Stage 5's
+S5.1–S5.4) that must exist first, per `CONSTITUTION.md`'s "One Developing Digital Individual"
+section — the Executive (`Planner.decide()`) has no machinery to retrieve or apply competencies
+today, so scheduling proactive behaviour is premature ahead of the Executive having anything
+competent to be proactive about. The pre-existing initiative-engine scope (item 12 below) is
+preserved unchanged in substance as S5.5–S5.7, resequenced after the new S5.1–S5.4 work.
 
 **S5.0 — Deterministic scheduler-schema readiness at startup (prerequisite; closes issue #24).**
 ✅ implemented 2026-07-25 (separate narrow PR, landed before Stage 5 feature work). `KernelDaemon.
@@ -494,13 +512,25 @@ cancellation and later-stage-failure cleanup; successful startup leaves the stor
 `ensure_schema`) — green on the 3.10 + 3.11 matrix; full `pytest -q` clean. Merged 2026-07-25 in
 PR #25, merge commit `3496cfb`; **closes issue #24** (confirmed closed).
 
-**S5.1 onwards — NOT STARTED (as of 2026-07-27).** No Stage 5 feature code exists: no typed
-cadence, no proactive consent/mute, no quiet-hours defer, no dry-run, no rationale logging, no
-`allow_proactive` governance category. S5.0 is a *prerequisite* that landed early; it is not
-Stage 5 in progress. Beginning S5.1 requires separate explicit approval.
+**S5.1 onwards — NOT STARTED (as of 2026-08-08).** No Stage 5 feature code exists: no competency
+data model, no training/knowledge-acquisition path, no Executive competency reasoning, no
+experience→learning loop, no typed cadence, no proactive consent/mute, no quiet-hours defer, no
+dry-run, no rationale logging, no `allow_proactive` governance category. S5.0 is a *prerequisite*
+that landed early; it is not Stage 5 in progress. Beginning S5.1 requires separate explicit
+approval. **Under the restructured numbering (2026-08-08), S5.1 is competency architecture, not
+the initiative engine** — see `ROADMAP.md`'s Stage 5 section for the current S5.1–S5.7 sequence.
 
-12. **Scheduler-driven check-ins + workflows** *(revised Stage 5 sequence — safety scaffolding
-   before live proactivity: typed cadence → default-OFF consent + functional mute → quiet-hours
+11a. **Competency architecture, training, and the experience→learning loop** (`ROADMAP.md` Stage 5
+   S5.1–S5.4, added 2026-08-08) — the generic competency data/contract model, training/knowledge
+   acquisition with provenance and consent, Executive competency reasoning (extending
+   `Planner.decide()`), and the governed Experience → Reflection → candidate learning →
+   consolidation loop. Worked through Residential Estate Management as the first proving ground —
+   see `ROADMAP.md`'s "Estate Management as architecture acceptance test." **Not started; not
+   authorised by this documentation pass.**
+
+12. **Scheduler-driven check-ins + workflows** (`ROADMAP.md` Stage 5 S5.5–S5.7, preserved unchanged
+   in substance, resequenced after item 11a above) *(sequence: safety scaffolding before live
+   proactivity: typed cadence → default-OFF consent + functional mute → quiet-hours
    defer-not-suppress → dry-run → rationale logging → then live check-in/weekly/next-best-action
    drives under a default-deny `allow_proactive` governance category)*
    - Morning/evening check-in; weekly review; “next best action” suggestion engine.
@@ -567,13 +597,19 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 ## Next 3 Moves (always current)
 
-> **Updated:** 2026-07-28 (documentation reconciliation pass 2 — approved sequencing). Supersedes
-> the 2026-07-27 list below, which ordered Phase B, then Stage 5/S5.1, then Stage 1. See
+> **Updated 2026-08-08** (New Direction reconciliation): step 4 below is added — the
+> competency/training/learning architecture (`ROADMAP.md` Stage 5 S5.1–S5.4) now sits between
+> Stage 1 and Stage 5's live-proactivity work. See `ROADMAP.md`'s restructured Stage 5 section and
+> `DECISIONS.md`'s "Stage 5 restructured around competency and training before live initiative"
+> entry.
+>
+> **Previously (2026-07-28, documentation reconciliation pass 2 — approved sequencing):**
+> Supersedes the 2026-07-27 list below, which ordered Phase B, then Stage 5/S5.1, then Stage 1. See
 > `ROADMAP.md`'s "Near-term milestone plan" for the full corrected sequence and rationale (Stage 1
-> must precede Stage 5 because Stage 5's live proactivity needs a user-facing governance surface
-> that only Stage 1 provides).
+> must precede **live** Stage 5 behaviour because Stage 5's live proactivity needs a user-facing
+> governance surface that only Stage 1 provides).
 
-**The actual next moves, as of 2026-07-28 (each step below requires its own separate, explicit
+**The actual next moves, as of 2026-08-08 (each step below requires its own separate, explicit
 approval before work begins — this list records sequencing, not authorisation):**
 
 1. **Documentation reconciliation and the deployment-architecture decision** — this pass. The
@@ -600,11 +636,21 @@ approval before work begins — this list records sequencing, not authorisation)
    consent-handler fix"). **2026-08-04: S1.2 (consent/approval inbox) implemented** — closes the
    separate `memory_rules.yaml`/`should_store()` `ask_before_store` gap, reusing the
    consent-handler fix's `pending_sensitive_writes` inbox rather than a parallel one.
-4. **Stage 5 / S5.1 remains paused**, now sequenced *after* Stage 1 rather than before it, pending
-   its own explicit approval. The locked internal sequence (safety scaffolding before live
-   proactivity) is recorded under P3 above and in `ROADMAP.md`. Live proactive *reflection*
-   behaviour specifically also remains blocked on the reflection-ownership implementation gap
-   (see `COGNITIVE_RUNTIME.md`).
+4. **Build the competency/training/learning architecture (Stage 5 S5.1–S5.4), not gated on Stage
+   1** — added 2026-08-08, pending its own separate, explicit approval. Competency data/contract
+   model, training/knowledge acquisition with provenance/consent, Executive competency reasoning,
+   and the experience→learning/consolidation loop, worked through Residential Estate Management as
+   the first proving ground. See `ROADMAP.md`'s restructured Stage 5 section and `CONSTITUTION.md`'s
+   "One Developing Digital Individual" section. Not started; this documentation pass does not
+   authorise implementation.
+5. **Stage 5 initiative safety scaffolding (S5.5–S5.6) remains paused**, now sequenced after both
+   Stage 1 and the new S5.1–S5.4 competency work, pending its own explicit approval. The locked
+   internal sequence (safety scaffolding before live proactivity) is recorded under P3 above and in
+   `ROADMAP.md`. Live proactive *reflection* behaviour specifically also remains blocked on the
+   reflection-ownership implementation gap (see `COGNITIVE_RUNTIME.md`), which S5.4 is where that
+   gap is now expected to be closed.
+6. **Live proactive Stage 5 behaviour (S5.7)** only once Stage 1, S5.1–S5.4, and S5.5–S5.6 have
+   all shipped, per the sequence above.
 
 Also open but unscheduled (each requiring separate approval): issue #22 (forward `IdentityContext`
 through the voice/sight compat wrappers), open and deferred to Stage 6; Phase A's deferred

@@ -23,6 +23,27 @@
 > Invariants" section (independent emergency shutdown, capture/recording safety, data portability,
 > cognitive accessibility, adaptive notifications, the consumer-value gate) that had no canonical
 > home before this pass.
+>
+> **Amended 2026-08-08** (New Direction reconciliation, per an architecture-review handoff
+> reconciled against current repository code — see `DECISIONS.md`'s "One developing digital
+> individual — competency and training architecture" entry for the full rationale): added a new
+> "One Developing Digital Individual: Competencies and Training" section formalising that
+> Bartholomew acquires professional/practical competence (e.g. residential estate management,
+> vehicle management, travel planning, finance) the way a human employee does — through training,
+> instruction, correction, supervised work, and experience — and that this learning becomes
+> available to the one Executive wherever contextually relevant, never as a separate domain brain.
+> Distinguishes skill/capability (an executable tool) from competency (learned judgement) sharply,
+> for the first time in a canonical doc. Extended "Domain Independence" with the same generalisation
+> test applied explicitly to competencies. **Same-day follow-up:** added "Personal learning vs.
+> potentially generalisable and system-level learning" — personal learning stays within an
+> individual Bartholomew's governed memory and is never auto-promoted to shared/global/product-level
+> knowledge; potentially generalisable and system/product learning are distinct candidate
+> categories, never automatically promoted either, subject to a future (not-yet-built) governed
+> generalisation process. See `DECISIONS.md`'s "Personal, potentially generalisable, and
+> system-level learning are architecturally distinct" entry. This amendment does not authorise
+> implementation of any competency runtime, training pipeline, cross-instance/product-level learning
+> infrastructure, or Estate Management feature — see `ROADMAP.md`'s restructured Stage 5 for the
+> (unapproved-until-separately-approved) staged plan.
 
 ---
 
@@ -103,6 +124,12 @@ Responsibilities:
 - recommendation generation
 - action selection
 
+The Executive is also the **sole place** where relevant memory, retrieved competencies, current
+goals/context, and available capabilities are combined into a decision. Competencies (see "One
+Developing Digital Individual" below) inform what the Executive decides is good judgement; they
+never decide anything themselves. There is exactly one Executive — never one per domain,
+competency, or capability.
+
 ### 3. Memory
 
 Memory exists to create institutional knowledge about one individual. The long-term competitive
@@ -114,11 +141,24 @@ projects, patterns, successful interventions, mistakes.
 
 Memory should not become a dumping ground. Only useful knowledge belongs in long-term memory.
 
+Memory is also the one substrate that holds what Bartholomew has been **trained** on and what it
+has **learned through experience** — domain knowledge, procedures, heuristics, corrections, and
+competency evidence, alongside the preferences and facts above. A competency (estate management,
+finance, travel, vehicle management, or any future one) is a description of what has been learned,
+built from this same shared substrate — never a private memory belonging to that competency alone.
+See "One Developing Digital Individual" below.
+
 ### 4. Capability
 
-Capabilities are interchangeable tools — Email, Calendar, Finance, Health, Shopping, Travel,
-Browser, Coding, Automation, etc. Capabilities should be independently replaceable. No
-capability should be tightly coupled to another.
+Capabilities (also called skills) are interchangeable, relatively simple **executable tools** —
+send an email, read a calendar, search the web, read a document, create a notification, interact
+with a device, eventually prepare or execute a payment. Capabilities should be independently
+replaceable. No capability should be tightly coupled to another.
+
+A capability is not the same thing as a **competency** — see "One Developing Digital Individual"
+below for the distinction. Capabilities stay deliberately simple execution mechanisms; they do not
+carry domain judgement, and high-level judgement about *when* and *how well* to use a capability
+must not be embedded inside the capability's own implementation.
 
 ### 5. Experience
 
@@ -150,6 +190,175 @@ architecture should work identically for subscriptions, appointments, shopping, 
 banking, documents, relationships, etc.
 
 **If adding the third domain requires schema redesign, the architecture has failed.**
+
+The same test applies one level up, to learned competence (added 2026-08-08 — see "One Developing
+Digital Individual" below): nothing should be architected specifically for residential estate
+management. Estate management is the first serious **competency** proving ground, the same role
+bills played for the observation pipeline — not a special case the architecture exists to serve.
+**If adding a second competency (e.g. vehicle management) — and especially a structurally
+different third one (e.g. travel or finance) — requires redesigning the core competency model, or
+introducing another Executive, Memory authority, or Governance path, the abstraction has failed.**
+
+## One Developing Digital Individual: Competencies and Training
+
+*(Added 2026-08-08, per the architecture-review handoff reconciled in `DECISIONS.md`. This section
+formalises a principle the rest of this document already implied — one Executive, one Memory
+substrate, cross-cutting Governance — by making it explicit for how Bartholomew becomes good at
+things over time.)*
+
+**Bartholomew is one developing digital individual.** It is not, and must not become, a collection
+of independent domain-specific applications, "Manager" services, or per-domain brains. Estate
+Management, Finance, Travel, Vehicle Management, and every future professional or practical area of
+responsibility are **competencies that this one Bartholomew has learned**, not separate cognitive
+systems that happen to share a name. This follows directly from the Five Pillars above: there is
+one Executive that decides, one Memory substrate that remembers, one set of capabilities Bartholomew
+can use, and one Governance that constrains all of it — competence in a new area extends what that
+one individual knows and can judge well, it does not fork any of the four.
+
+### Skill/capability vs. competency
+
+These are not the same concept, and must not be conflated:
+
+- A **skill/capability** (Pillar 4, above) is a relatively dumb, executable ability or tool: send
+  an email, read a calendar, search the web, read a document, create a notification, interact with
+  a device, eventually prepare or execute a payment. It performs an authorised action. It carries no
+  domain judgement of its own.
+- A **competency** is learned professional or practical ability — for example residential estate
+  management, financial management, travel planning, vehicle management. A competency can combine
+  domain knowledge, procedures, heuristics, judgement, the relevant capabilities needed to act,
+  user-specific knowledge, prior experience, corrections, observed outcomes, a proficiency/confidence
+  level, known knowledge gaps, and supervision requirements.
+
+The relationship between the two: a competency describes what good judgement looks like in some
+area of responsibility; the Executive decides what should happen, informed by that judgement;
+Governance decides whether it may happen; a capability is how it is physically done. **A competency
+must never become another autonomous agent** — it does not decide, does not execute, and does not
+own memory, planning, or governance of its own. Concretely, this repository must never introduce an
+`EstateExecutive`, `EstatePlanner`, `EstateMemory`, `EstateGovernance`, `EstateLLM`, or any
+comparable per-domain cognition/runtime — for Estate or any other competency — unless the repository
+contains an unavoidable technical reason, in which case the conflict must be surfaced explicitly to
+the Architect/project owner rather than implemented.
+
+### Training vs. configuration
+
+**Training is how Bartholomew develops competence — analogous to training a human employee**, not
+a settings screen. Training may include: formal reference material (manuals, procedures, regulatory
+material); direct user instruction (rules and preferences the user states outright); demonstration
+(the user shows Bartholomew how a task should be handled); correction (the user identifies a
+misunderstanding and explains why); supervised work (Bartholomew proposes, the user approves or
+corrects); independent experience (an action's outcome is observed and reflected on); and continual
+consolidation (evidence strengthens, weakens, or qualifies what was previously learned). **Ordinary
+operational training does not mean foundation-model fine-tuning.** In the overwhelming common case,
+training updates structured knowledge, procedures, examples, preferences, corrections, competency
+evidence, and experience records inside the shared Memory substrate — not model weights. Training
+must never bypass provenance, consent, privacy, Governance, or audit; a "trained" fact or procedure
+is held to the same governance standard as any other memory.
+
+### Shared memory and transferable learning
+
+Estate-related information (or any other competency's information) must never be conceptually
+trapped inside a domain-specific memory. Property information, assets, warranties, manuals,
+contractors, maintenance history, quotes, outcomes, and user preferences are represented through
+Bartholomew's one shared Memory substrate (Pillar 3), with appropriate provenance, privacy
+classification, relationships, and retrieval semantics — the same substrate every other kind of
+knowledge lives in. What Bartholomew learns in service of one competency **may transfer** to improve
+judgement elsewhere when contextually appropriate — for example, experience comparing contractor
+quotes for a home repair may improve Bartholomew's general ability to evaluate quotes in an
+unrelated context. Transfer must never be indiscriminate: any such generalisation must remain
+subject to relevance, provenance, confidence, privacy, Governance, and domain-appropriate
+boundaries, the same as any other governed use of memory. A competency is a lens the Executive can
+apply to shared knowledge, not a walled garden that owns a private copy of it.
+
+### Personal learning vs. potentially generalisable and system-level learning
+
+*(Added 2026-08-08, same pass. This is a different, larger-scope boundary than "Shared memory and
+transferable learning" above — that section concerns learning moving *within* one individual
+Bartholomew, across its own competencies. This section concerns whether and how learning could
+ever move *between* separate individual Bartholomew instances, or into the product itself — a
+categorically stronger privacy and governance bar. The two must not be conflated.)*
+
+An individual Bartholomew — including an early or test instance, developed and used before the
+product's eventual customer release — accumulates substantial personal knowledge, experience,
+corrections, procedures, heuristics, preferences, outcomes, and context about its user. Three
+categories of what is learned must remain architecturally distinguishable, from the moment
+candidate learning is produced onward:
+
+- **Personal learning** — belongs to a particular user/individual Bartholomew instance: personal
+  preferences, routines, relationships, household/property information, personal history,
+  user-specific behavioural patterns, trusted contractors, personal thresholds, private documents,
+  and other contextual information about that user's life. This must remain within that
+  individual's governed memory unless an explicit, appropriate mechanism permits otherwise, and
+  **must never automatically become global or shared Bartholomew knowledge.**
+- **Potentially generalisable learning** — a lesson discovered through one individual's experience
+  that *may* be useful beyond that individual: a generally useful reasoning heuristic, an improved
+  procedure, a recurring failure mode, a better way of interpreting a class of documents, a safer
+  workflow, a generally useful competency lesson, a correction to an incorrect assumption, or
+  evidence that a reasoning strategy works or fails under particular conditions. Such a lesson is
+  only ever a **candidate**; it must never be automatically promoted into shared/global Bartholomew
+  knowledge.
+- **System/product learning** — an observation primarily about Bartholomew itself rather than
+  about the user's world: a workflow producing excessive false positives, a reasoning strategy that
+  repeatedly fails, a safety check that needs to occur earlier, a competency missing an important
+  procedure, an interface causing repeated misunderstanding, a default behaviour that is
+  consistently inappropriate. Distinguishable from both personal memory and ordinary competency
+  knowledge.
+
+**Removing a person's name alone does not make information non-personal.** Any future
+generalisation of a candidate lesson — from one individual Bartholomew toward the product or toward
+other instances — must consider whether the lesson is genuinely independent of the individual,
+whether it can be genuinely de-identified, its provenance, consent and user expectations,
+sensitivity, re-identification risk, confidence, validation across cases where appropriate,
+Governance, and auditability. **Where safe generalisation cannot be established, the learning
+remains individual.** This mirrors, and does not weaken, this document's Sovereign Principle and
+data-portability invariant (see "Sovereign Principle" and "Safety, Accessibility, and Product
+Invariants" below): trust in Bartholomew includes trusting that one's own experience does not
+silently become someone else's, or the product's, knowledge.
+
+Early and test Bartholomews are, in this sense, **experienced predecessors** of later Bartholomew
+instances — not sources of shared memory for them. Their private memories do not become the
+memories of future users. Properly validated, appropriately de-personalised lessons discovered
+through their experience may eventually contribute to improving future Bartholomew versions
+(training material, competency definitions, procedures, defaults, or product releases), but only
+through an explicit, governed generalisation process — never automatically, and not by a mechanism
+that exists today. See `COGNITIVE_RUNTIME.md`'s "Personal, generalisable, and system-level learning
+classification" section for how this constrains the candidate-learning data shape, and
+`DECISIONS.md`'s corresponding entry for the full rationale. **This principle does not authorise
+building any cross-user, cross-instance, or product-level learning infrastructure now** — it
+constrains S5.1 onward so that distinction remains representable later, rather than requiring the
+learning model to be redesigned when a governed generalisation mechanism is eventually proposed.
+
+### Governance is cross-cutting, not a peer
+
+Governance (Pillar 1) constrains the entire system — Memory, Training, Competencies, Capabilities,
+and the Executive alike — not just one runtime checkpoint among several. At runtime, Governance may
+appear as the admission gate between an Executive proposal and execution (this is how the Runtime
+Contract in `COGNITIVE_RUNTIME.md` implements it), but architecturally it sits above every
+subsystem, the same way it already sits above Memory, Executive, Capabilities, and every other
+pillar per the Five Pillars section above. Training and competency acquisition are not exceptions:
+a competency's knowledge, procedures, and evidence are governed data, subject to the same consent,
+privacy, and audit requirements as everything else Memory holds.
+
+### Specialised interfaces are views, not separate applications
+
+A domain-specific UI (an Estate view showing properties, rooms, assets, appliances, warranties,
+documents, maintenance, contractors, jobs, quotes, costs, and upcoming obligations; a future
+Vehicle or Travel view; etc.) is a **lens or control surface over the one Bartholomew** — reading and
+writing the same shared Memory, routed through the same one Executive and the same Governance — not
+a separate application with its own intelligence. Such a UI must never become the authoritative
+source of the domain state it displays; it renders and edits shared Bartholomew state, the same as
+every other interface.
+
+### Acceptance test
+
+Residential Estate Management is the first serious proving ground for this competency architecture,
+not the architecture itself (see "Domain Independence" above for the generalisation test this
+implies). The architecture should be judged partly by whether Estate Management can be implemented
+without creating a second brain, a separate memory authority, a separate Executive, a separate
+Governance path, or duplicated reasoning infrastructure — and whether a second and, especially, a
+structurally different third competency can be added without redesigning the core competency model.
+See `ROADMAP.md`'s Stage 5 for the staged, separately-approved plan this principle governs, and
+`COGNITIVE_RUNTIME.md` for how the Runtime Contract is conceptually extended to retrieve and apply
+competencies without creating a second decision authority.
 
 ## Current Philosophy on Persistence
 

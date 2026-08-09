@@ -2,7 +2,21 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-01 (B9 complete —  Phase B's final stage:
+> **Last updated:** 2026-08-08 (New Direction reconciliation: Stage 5 restructured from
+> "Initiative engine" to "Developing Agency" — competency architecture (S5.1), training/knowledge
+> acquisition (S5.2), Executive competency reasoning (S5.3), and the experience→learning loop
+> (S5.4) now precede the pre-existing initiative safety scaffolding (S5.5), dry-run (S5.6), and
+> live initiative (S5.7) work, which is preserved unchanged in substance. Added an "Estate
+> Management as architecture acceptance test" subsection. See `DECISIONS.md`'s "Stage 5
+> restructured around competency and training before live initiative" entry and
+> `CONSTITUTION.md`'s "One Developing Digital Individual" section. No implementation authorised by
+> this pass. **Same-day follow-up:** added personal / potentially-generalisable / system-level
+> learning classification and provenance as explicit S5.1–S5.4 exit-criteria requirements, per
+> `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning"
+> section and `DECISIONS.md`'s corresponding entry — a data-shape requirement only, not a
+> cross-instance learning mechanism.)
+>
+> **Previously (2026-08-01):** B9 complete —  Phase B's final stage:
 > `docs/B9_RECOVERY_ROLLBACK_ADVERSARIAL_VALIDATION.md` delivered. Real (not monkeypatched)
 > adversarial tests against the integrated B0–B8 result: genuine SQLite file corruption (real bytes
 > overwritten in a real database, not a mocked failure) caught a real bug — `PRAGMA quick_check`
@@ -659,22 +673,48 @@ not itself grant.
 
 ---
 
-### Stage 5 — Initiative engine (scheduled check-ins + workflows) 📋 NOT STARTED
+### Stage 5 — Developing Agency (competency, training, learning, then initiative) 📋 NOT STARTED
 
-**Status as of 2026-07-27:** **S5.1 has not begun.** Only the prerequisite S5.0 has landed. No
-Stage 5 feature code exists — no typed cadence, no proactive consent or mute, no quiet-hours
-defer, no dry-run mode, no structured rationale logging, and no `allow_proactive` governance
-category. Resuming Stage 5 requires separate explicit approval; S5.0 landing early does not
-constitute Stage 5 being in progress. **Sequencing corrected 2026-07-28:** Stage 5 now also
-requires Stage 1's minimal consumer web governance shell (parking-brake access, consent/approval
-inbox, mute/notification controls, awaiting-response queue) to exist and be proven working before
-live proactive delivery is permitted — see "Near-term milestone plan" above. Additionally, live
-proactive *reflection* behaviour specifically remains blocked on the reflection-ownership
-implementation gap tracked in `COGNITIVE_RUNTIME.md` (current concatenation vs. approved
-`ReflectionGenerator`-authoritative target) until that gap is closed by a separately authorised
-code change with verifying tests.
+**Restructured 2026-08-08** (New Direction reconciliation — see `DECISIONS.md`'s "Stage 5
+restructured around competency and training before live initiative" entry for full rationale).
+Stage 5 was previously scoped as an initiative engine only (scheduled check-ins + workflows,
+sub-staged S5.1–onward around proactivity safety scaffolding). That scope is **not discarded** —
+it is preserved below as sub-stages **S5.5–S5.7** — but it is **resequenced to follow**, not
+precede, the generic competency/training/learning architecture described in `CONSTITUTION.md`'s
+"One Developing Digital Individual" section and `COGNITIVE_RUNTIME.md`'s "Competency, Training, and
+Learning" section. Rationale in one sentence: `Planner.decide()` (the Executive's reasoning path)
+returns `None` unconditionally today — there is no machinery yet for the Executive to retrieve and
+apply competencies, so scheduling *when* to be proactive is premature before the Executive has
+anything competent to be proactive *about*. **No sub-stage of Stage 5 has started.** S5.0 is the
+one already-landed prerequisite. Resuming any sub-stage requires its own separate, explicit
+approval — restructuring the sequence does not authorise implementing any of it.
 
-**Goal:** Proactive suggestions and check-ins that are safe, useful, and not naggy.
+**Goal:** Bartholomew develops learned competence in genuine areas of responsibility (proven first
+via Residential Estate Management — see "Estate Management as architecture acceptance test" below)
+and, once that machinery exists and Stage 1's governance shell is proven working, becomes able to
+initiate proactive suggestions and check-ins safely, usefully, and without being naggy.
+
+**Sequencing (locked; supersedes the pre-2026-08-08 "safety scaffolding before live proactivity"
+sequence below by inserting competency/training/learning work first, not by replacing it):**
+
+| Sub-stage | Objective | Status |
+|---|---|---|
+| **S5.0** — Runtime prerequisites | Deterministic scheduler-schema readiness at startup (closes issue #24) | ✅ done 2026-07-25 |
+| **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. **Must also carry the personal / potentially-generalisable / system-level classification and provenance `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning" section requires (added 2026-08-08) — not a cross-instance mechanism, just fields that don't foreclose one later.** See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | 📋 not started |
+| **S5.2** — Training and knowledge acquisition | Define and implement how training material (formal reference material, direct instruction, demonstration, correction, supervised-work outcomes) enters shared Memory with provenance and consent, per `CONSTITUTION.md`'s "Training vs. configuration." | 📋 not started |
+| **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. | 📋 not started |
+| **S5.4** — Experience → learning/consolidation loop | Implement the Experience → Reflection → candidate learning → provenance/confidence → Governance/review (where required) → consolidation loop described in `COGNITIVE_RUNTIME.md`. This is also where the pre-existing reflection-ownership implementation gap (`ReflectionGenerator` authoritative, `NarratorEngine` supplementary — see `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) must be closed, since S5.4 depends on reflection composition having a single authority. | 📋 not started |
+| **S5.5** — Initiative safety scaffolding | Typed cadence (interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** → quiet-hours *defer* (not suppress, with coalescing/expiry). *(This is the beginning of the pre-2026-08-08 Stage 5 scope, preserved unchanged in substance, resequenced after S5.1–S5.4.)* | 📋 not started |
+| **S5.6** — Dry-run proactive reasoning | Dry-run mode; structured rationale logging for every would-be suggestion. | 📋 not started |
+| **S5.7** — Controlled live initiative | Live check-in / weekly-review / next-best-action drives under a default-deny `allow_proactive` governance category (suggestion-only, brake-blocked, excluded from `tool_use`, no self-maintenance exemption). | 📋 not started |
+
+Numbering is not load-bearing; the **dependency order** is: runtime prerequisites, then competency
+architecture, then training/knowledge acquisition, then Executive competency reasoning, then the
+experience/learning loop, then initiative safety scaffolding, then dry-run, then controlled live
+initiative. Stage 5 also still requires Stage 1's minimal consumer web governance shell
+(parking-brake access, consent/approval inbox, mute/notification controls, awaiting-response queue)
+to exist and be proven working before **live** proactive delivery (S5.7) specifically — S5.1–S5.6
+do not themselves deliver live proactive behaviour and are not gated on Stage 1.
 
 **Prerequisite — S5.0 (closes issue #24):** deterministic scheduler-schema readiness at startup —
 `KernelDaemon.start()` ensures the scheduler tables synchronously (fail-closed) before returning,
@@ -683,15 +723,28 @@ scheduler initialization. ✅ merged 2026-07-25, PR #25, merge commit `3496cfb`;
 confirmed closed. Proven by `tests/test_scheduler_startup_readiness.py` (10 tests) on the
 3.10 + 3.11 matrix. See MASTER_PLAN.md's P3 "S5.0" note and DECISIONS.md.
 
-**Sequencing (locked):** safety scaffolding lands before any live proactivity — typed cadence
-(interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** →
-quiet-hours *defer* (not suppress, with coalescing/expiry) → dry-run → structured rationale
-logging → *then* live check-in / weekly-review / next-best-action drives under a default-deny
-`allow_proactive` governance category (suggestion-only, brake-blocked, excluded from `tool_use`,
-no self-maintenance exemption). Default-off consent and working mute are prerequisites for live
-delivery, not later enhancements.
+**Exit criteria (S5.1–S5.4, competency/training/learning):**
+- A generic competency data/contract model exists, expressed as structured Memory content (not a
+  new schema/database), and is demonstrated end-to-end by training one worked competency
+  (Residential Estate Management — see below) into it.
+- Training material can enter shared Memory with provenance and consent, through the existing
+  Observation → Interpretation → Memory path, not a separate ingestion runtime.
+- The Executive (`Planner.decide()` or its successor) retrieves and applies relevant competencies
+  when constructing a `CandidateAction`, still gated by the existing, single Governance path.
+- The Experience → Reflection → candidate learning → consolidation loop is implemented and
+  demonstrably governed (high-impact/low-confidence candidate learning is reviewed, not silently
+  applied).
+- Estate Management is implemented as a **competency** — no `EstateExecutive`, `EstateMemory`,
+  `EstateGovernance`, `EstateLLM`, or comparable per-competency cognition/runtime exists anywhere in
+  the result.
+- Candidate learning and competency-evidence records carry a personal / potentially-generalisable /
+  system-level classification and sufficient provenance to support (not implement) the future
+  generalisation pipeline in `COGNITIVE_RUNTIME.md`'s "Personal, generalisable, and system-level
+  learning classification" section (added 2026-08-08). No cross-instance/cross-user learning
+  transport, de-identification pipeline, or product-level incorporation mechanism is built as part
+  of S5.1–S5.4 — personal learning stays within the individual Bartholomew instance by default.
 
-**Exit criteria:**
+**Exit criteria (S5.5–S5.7, initiative — preserved from the pre-2026-08-08 scope):**
 - Scheduler runs check-ins (morning/evening) and weekly review in dry-run + live.
 - Quiet-hours respected; parking brake scope coverage tested.
 - Suggestions logged with rationale; user can mute/adjust cadence.
@@ -700,6 +753,44 @@ delivery, not later enhancements.
 ```bash
 pytest -q tests/test_scheduler_checkins.py
 ```
+
+### Estate Management as architecture acceptance test
+
+*(Added 2026-08-08.)* Per `CONSTITUTION.md`'s "One Developing Digital Individual" section,
+Residential Estate Management is the **first serious proving ground** for the generic competency
+architecture built in S5.1–S5.4 — not the architecture itself, and not a separate application.
+**Do not build Estate Management production functionality ahead of, or as a substitute for, the
+generic competency architecture.** The intended sequence, once separately approved:
+
+1. Define the generic competency architecture (S5.1).
+2. Implement the smallest generic substrate (S5.1).
+3. Train Residential Estate Management into it (S5.2 onward) — knowledge areas (building systems,
+   maintenance, warranties, contractors, utilities, asset lifecycle), procedures (maintenance
+   triage, quote comparison, repair-vs-replace evaluation, warranty claims, contractor follow-up),
+   relevant capabilities (documents.read, web.search, calendar, email, notifications, and
+   eventually payment), and experience/evidence (prior cases, successful interventions, mistakes
+   and corrections, observed outcomes).
+4. Identify where the generic model fails to serve Estate Management's real needs.
+5. Fix the general architecture — never add Estate-only exceptions to work around a limitation.
+6. Repeat with a second competency, such as Vehicle Management.
+7. Use a structurally different third competency (for example Travel or Finance) as the decisive
+   generalisation test.
+
+An Estate-specific UI may eventually exist (properties, rooms/areas, assets, appliances,
+warranties, documents, maintenance, contractors, jobs, quotes, costs, upcoming obligations) — see
+`CONSTITUTION.md`'s "Specialised interfaces are views, not separate applications." Building that UI
+is separate, unapproved future work; it must render and edit the same shared Bartholomew state, not
+own a private copy of it.
+
+**Acceptance principle:** if adding the third competency requires redesigning the core competency
+schema, or introducing another brain, memory authority, Executive, or Governance path, the
+abstraction has failed and must be reconsidered before any further competency is added.
+
+**Explicitly out of scope for S5.1–S5.4:** any Estate Management production functionality —
+skills/actions that actually read property documents, contact contractors, or take real-world
+action on the user's behalf. S5.1–S5.4 are architecture-and-worked-example passes; production
+Estate features are later, separately-approved work once the architecture they'd run on exists and
+has been proven.
 
 ---
 
@@ -791,14 +882,22 @@ Every individual idea in that document requires independent evaluation against `
 
 ## Near-term milestone plan (recommended)
 
-> **Updated:** 2026-07-28 (planning-document reconciliation, approved sequencing). Supersedes the
-> 2026-07-27 ordering below, which listed Phase B, then Stage 5/S5.1, then Stage 1. That ordering
-> is corrected: Stage 1 (a minimal consumer web governance shell) is sequenced **before** Stage
-> 5/S5.1, because Stage 5's live proactive behaviour requires a user-facing governance surface
-> (parking brake, consent/approval inbox, mute, notification controls, awaiting-response queue)
-> that does not exist until Stage 1 ships. **This is a planning/sequencing decision only — it does
-> not authorise implementation of any step below.** Each step still requires its own separate,
-> explicit approval before work begins.
+> **Updated 2026-08-08** (New Direction reconciliation): step 5 below is rewritten to insert the
+> competency/training/learning architecture (Stage 5's S5.1–S5.4) ahead of initiative safety
+> scaffolding (S5.5–S5.7), per `CONSTITUTION.md`'s "One Developing Digital Individual" section and
+> `ROADMAP.md`'s restructured Stage 5. This does not change step 4's Stage-1-before-Stage-5
+> ordering rationale for **live proactive** delivery specifically — it only clarifies that
+> Stage 5's earlier sub-stages (S5.1–S5.4) are architecture/worked-example work, not live
+> proactivity, and are not themselves gated on Stage 1.
+>
+> **Previously (2026-07-28, planning-document reconciliation, approved sequencing):** Supersedes
+> the 2026-07-27 ordering below, which listed Phase B, then Stage 5/S5.1, then Stage 1. That
+> ordering is corrected: Stage 1 (a minimal consumer web governance shell) is sequenced **before**
+> Stage 5/S5.1, because Stage 5's live proactive behaviour requires a user-facing governance
+> surface (parking brake, consent/approval inbox, mute, notification controls, awaiting-response
+> queue) that does not exist until Stage 1 ships. **This is a planning/sequencing decision only —
+> it does not authorise implementation of any step below.** Each step still requires its own
+> separate, explicit approval before work begins.
 
 **Approved sequence (nothing is in flight; each numbered step requires its own separate approval):**
 
@@ -816,14 +915,20 @@ Every individual idea in that document requires independent evaluation against `
    a consent and approval inbox; notification settings; mute and quiet-hours controls; an
    awaiting-response queue; and relevant audit/provenance visibility (see Stage 1's own section
    above for the full exit-criteria treatment once scoped).
-5. **Add Stage 5 safety scaffolding and dry-run behaviour**, only after separate, explicit
-   approval. The locked internal sequence (typed cadence → default-off consent + functional mute
-   → quiet-hours defer → dry-run → rationale logging) is recorded in the Stage 5 section above and
-   is unchanged by this reordering.
-6. **Permit live proactive Stage 5 behaviour** only after the Stage 1 user-facing governance
+5. **Build the competency/training/learning architecture (Stage 5 S5.1–S5.4)**, only after
+   separate, explicit approval — competency data/contract model, training/knowledge acquisition,
+   Executive competency reasoning, and the experience→learning/consolidation loop, worked through
+   Residential Estate Management as the first proving ground (see `ROADMAP.md`'s Stage 5 section).
+   **Added 2026-08-08; this step did not exist in the pre-2026-08-08 sequence.** Not gated on
+   Stage 1 (step 4) — it does not deliver live proactive behaviour.
+6. **Add Stage 5 initiative safety scaffolding and dry-run behaviour (S5.5–S5.6)**, only after
+   separate, explicit approval. The locked internal sequence (typed cadence → default-off consent
+   + functional mute → quiet-hours defer → dry-run → rationale logging) is recorded in the Stage 5
+   section above and is unchanged in substance by this reordering.
+7. **Permit live proactive Stage 5 behaviour (S5.7)** only after the Stage 1 user-facing governance
    controls above have shipped and are proven working — not merely designed. This is the concrete
-   reason Stage 1 now precedes Stage 5 in this sequence: users need a real governance surface
-   before Bartholomew begins live proactive intervention.
+   reason Stage 1 must precede **live** Stage 5 behaviour in this sequence: users need a real
+   governance surface before Bartholomew begins live proactive intervention.
 
 **Also open but unscheduled** (each requiring separate approval, not part of the sequence above):
 issue #22 (forward `IdentityContext` through the voice/sight compat wrappers, deferred to Stage 6);
@@ -832,12 +937,21 @@ Phase A's deferred findings F9–F11 (`RISKS.md`); jurisdiction-aware capture/re
 work beyond the Stage 1 shell's baseline controls; data-export/portability delivery (see the Stage
 1/6 notes added 2026-07-28); host-device onboarding guidance (Stage 1, see above).
 
-**Historical (2026-07-27 ordering, superseded by the sequence above — kept for record):**
+**Historical (2026-07-28 ordering, superseded by the sequence above for step 5 onward — kept for
+record):** steps 1–4 above are unchanged from the 2026-07-28 pass; the 2026-07-28 pass's steps 5–6
+("Add Stage 5 safety scaffolding and dry-run behaviour" / "Permit live proactive Stage 5 behaviour")
+described what is now S5.5–S5.7 only, without the S5.1–S5.4 competency/training/learning work this
+pass inserts ahead of them.
+
+**Historical (2026-07-27 ordering, superseded by the 2026-07-28 sequence — kept for record):**
 
 1. **Phase B — persistence ownership stabilisation.** Proposed next engineering work; not
    approved. See the workstream section at the top of this document.
 2. **Stage 5 / S5.1 — initiative engine.** Paused. The locked sequence (safety scaffolding
-   before live proactivity) is recorded in the Stage 5 section above.
+   before live proactivity) is recorded in the Stage 5 section above. *(Note added 2026-08-08:
+   "S5.1" in this historical entry refers to the pre-2026-08-08 numbering, where S5.1 began the
+   initiative-engine work; under the restructured numbering S5.1 is competency architecture — see
+   the Stage 5 section above.)*
 3. **Stage 1 — console/UI slice.** A deferred product slice: not started, and never a
    prerequisite for Stages 2–4.5.
 

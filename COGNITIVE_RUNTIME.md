@@ -9,7 +9,20 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: reflection ownership section
+> **Last updated:** 2026-08-08 (New Direction reconciliation: added a new "Competency, Training,
+> and Learning" section conceptually extending the Runtime Contract to cover competency/knowledge
+> retrieval, confidence/proficiency, Executive application of competencies, and the
+> Experience → Reflection → candidate learning → governed consolidation loop — per the
+> architecture-review handoff reconciled in `DECISIONS.md`. This is a conceptual extension only,
+> recorded the same way the `awaiting_response` state below was: as a canonical requirement, not
+> yet implemented, and not authorising any code change. The Executive remains the sole decision
+> authority; nothing here adds a second one. **Same-day follow-up:** added "Personal, generalisable,
+> and system-level learning classification" — candidate learning must carry a personal /
+> potentially-generalisable / system-level classification; a future, entirely conceptual
+> generalisation pipeline is recorded but not built, and no cross-instance transport mechanism is
+> authorised.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: reflection ownership section
 > rewritten to distinguish current-implementation concatenation from the approved target
 > architecture, resolving a contradiction with `ROADMAP.md`/`MASTER_PLAN.md`; added the mapping to
 > `CONSTITUTION.md`'s Observe/Interpret/Recommend/Act pipeline and the Observe/Interpret/Recommend/
@@ -128,6 +141,127 @@ shell, which must expose an awaiting-response queue — see `ROADMAP.md`) and an
 Stage 5 behaviour are built against a single, already-agreed shape rather than inventing one ad
 hoc. Building it is separate, approved work, not authorised by this documentation entry.
 
+## Competency, Training, and Learning (conceptual extension — added 2026-08-08, not yet implemented)
+
+*Per the architecture-review handoff reconciled in `DECISIONS.md`'s "One developing digital
+individual — competency and training architecture" entry. This section conceptually extends the
+Runtime Contract stages above to describe how Bartholomew is meant to acquire and apply learned
+competence. Nothing in this section is implemented today — `Planner.decide()` (Executive) still
+returns `None` unconditionally, and no competency, training, or candidate-learning data model
+exists in the code as of this writing. This is a canonical requirement for future, separately
+authorised work (see `ROADMAP.md`'s Stage 5), the same status the `awaiting_response` state above
+has. Recording it here does not authorise building it.*
+
+### Why this extends the Runtime Contract rather than replacing it
+
+`CONSTITUTION.md`'s "One Developing Digital Individual" section establishes that competencies are
+learned descriptions of good judgement, not a second decision authority. Concretely, that means
+competency/training machinery must slot into the *existing* eight-stage loop
+(`Observation -> Interpretation -> Executive -> Governance -> Capability -> Execution ->
+Reflection -> Memory`) as richer inputs to Interpretation and Executive and richer outputs from
+Reflection — it must not add a competing loop, a competing Executive, or a competing Memory
+authority. The table below extends the existing per-stage description; it does not add new stages.
+
+| Stage | Conceptual extension |
+|---|---|
+| Interpretation | In addition to today's active-goals/active-persona enrichment, Interpretation is where **relevant competency and knowledge retrieval** happens: given the current Observation, retrieve the competencies, domain knowledge, procedures, heuristics, and prior experience/evidence from Memory that are plausibly relevant — the same retrieval machinery (FTS/vector/hybrid, `ConsentGate`-filtered) that already serves other memory reads, not a second retrieval path. |
+| Executive | The Executive's `CandidateAction` construction is where **competencies are applied** — combining retrieved knowledge/procedures/heuristics, each competency's proficiency/confidence for the situation at hand, current goals and context, and available capabilities into a proposed action (or a request for missing information, or an explicit "I'm not confident enough here"). This is the Executive doing more of what it already does (propose, don't execute) with richer inputs — not a new decision-maker. Where a competency's own recorded supervision requirements call for it (e.g. low confidence, high-impact action, explicit "ask first" policy), the `CandidateAction` must reflect that need for review; Governance still makes the actual admission decision. |
+| Governance | Unchanged in kind: the same fail-closed admission gate. A competency's own supervision/confidence metadata can *inform* what Governance is asked to approve (e.g. "requires consent" reflected in the proposal), but Governance's authority to approve, deny, or require consent is not delegated to the competency. |
+| Capability | Unchanged: still a relatively dumb, executable tool. Competency reasoning happens before this stage, never inside a capability's own implementation. |
+| Execution | Unchanged. |
+| Reflection | In addition to today's `ActionReflection` (what happened, what surface, what outcome), Reflection is where **candidate learning** is produced: what Bartholomew believed going in, what it did, the observed outcome, whether the judgement was correct, and what — if anything — should change next time. This is additional structured content carried by the same reflection record, not a second reflection mechanism. |
+| Memory | In addition to today's durable `MemoryStore.reflections` sink, Memory is where **governed consolidation** happens: candidate learning, carrying its own provenance and confidence, is either consolidated into memory/procedure/competency state directly (low-impact, high-confidence, routine cases) or routed through Governance/user review first (high-impact, low-confidence, or policy-flagged cases) before being consolidated — never silently. |
+
+### Training as Memory input, not a separate pipeline
+
+Per `CONSTITUTION.md`'s "Training vs. configuration," training material (formal reference material,
+direct instruction, demonstration, correction, supervised-work outcomes, independent experience)
+enters Bartholomew the same way any other knowledge does: as Observations that flow through
+Interpretation, get judged by the Executive where relevant, and land in the shared Memory substrate
+with provenance and consent — not through a separate training-ingestion runtime. A "trained"
+procedure or piece of domain knowledge is Memory content like any other; it is retrieved,
+Governance-filtered, and confidence-scored the same way retrieved knowledge always is.
+
+### Memory semantics this implies (kinds, not a schema)
+
+`bartholomew/kernel/memory_store.py`'s `memories` table already stores an open-ended `kind` string
+(today's comment lists `fact`, `event`, `preference` as examples, not an enum), governed by
+`memory_rules.yaml`'s kind/content/tag-matching rules rather than a fixed schema. The
+competency/training direction does not require a new memory architecture or a new schema — it
+requires new, well-understood *kinds* of content to exist within the same substrate, each
+carrying provenance and (where applicable) confidence: domain knowledge, procedures, heuristics,
+corrections, outcomes, competency evidence, and candidate learning, alongside the facts, events,
+and preferences already stored today. Defining the exact `kind` values, their governance-rule
+treatment (`memory_rules.yaml`), and any additional structured fields they need is deliberately
+left to a separately authorised implementation pass — this document records the *semantic*
+requirement, not a schema.
+
+### Transfer boundaries
+
+Learning acquired in service of one competency may improve judgement elsewhere (`CONSTITUTION.md`'s
+example: contractor-quote evaluation transferring beyond estate management). This must remain
+bounded by: **relevance** (does the retrieved evidence actually apply to the current situation),
+**provenance** (where did this evidence come from and how much should that be trusted),
+**confidence** (how strong is the evidence), **privacy** (does surfacing this evidence in a new
+context violate the consent/privacy classification it was recorded under), **Governance** (does
+applying it here require the same review a first-time action of this kind would), and **domain
+boundaries** (some evidence is legitimately domain-specific and must not generalise — e.g. a
+plumbing-contractor heuristic does not transfer to travel booking just because both involve
+comparing vendor quotes). None of these is optional; indiscriminate transfer is explicitly a
+non-goal.
+
+### Personal, generalisable, and system-level learning classification (added 2026-08-08)
+
+*Extends the "Transfer boundaries" subsection above with a structurally different, larger-scope
+boundary. "Transfer boundaries" concerns evidence moving between competencies **within one
+individual Bartholomew**. This subsection concerns whether learning could ever move **between
+separate individual Bartholomew instances**, or into the product itself — per `CONSTITUTION.md`'s
+"Personal learning vs. potentially generalisable and system-level learning" section, which this
+conceptually implements. Nothing here is implemented; no cross-instance transport mechanism exists.*
+
+Per that principle, candidate learning (produced at the Reflection stage, per the table above) must
+carry a **classification** in addition to its provenance and confidence: **personal** (belongs to
+this individual/instance, stays in its governed Memory, never auto-promoted), **potentially
+generalisable** (a candidate lesson that might improve future Bartholomew versions, but only ever
+a candidate), or **system/product** (an observation about Bartholomew's own behaviour rather than
+the user's world). This classification is structured content the candidate-learning record carries
+— not a new subsystem, store, or decision authority.
+
+The future, conceptually-reserved-but-**not-built** generalisation pipeline this classification
+must remain capable of supporting:
+
+```
+Individual experience -> Reflection -> Candidate learning -> Classification
+  -> (Personal | Potentially generalisable | System-level)
+  -> Privacy and provenance evaluation -> De-identification where genuinely possible
+  -> Consent/Governance as required -> Validation -> Generalised lesson
+  -> possible incorporation into future Bartholomew training, competency definitions,
+     procedures, defaults, or product releases
+```
+
+**Status: entirely conceptual.** No classification field, no de-identification mechanism, no
+cross-instance transport, no validation process, and no product-level incorporation path exist in
+this repository today, and none is authorised by this section. The requirement this section
+records is narrower and purely architectural: S5.1's competency/candidate-learning data model must
+not make this future distinction structurally impossible to add later (e.g., by omitting
+classification/provenance fields entirely) — it does not require building the pipeline now.
+
+### Non-goals (mirrors `CONSTITUTION.md`)
+
+- No `EstateExecutive`, `EstatePlanner`, `EstateMemory`, `EstateGovernance`, `EstateLLM`, or
+  equivalent per-competency cognition/runtime, for Estate or any other competency.
+- No second Memory authority holding competency data outside `MemoryStore`.
+- No second Executive, and no competency that decides or executes on its own.
+- No unrestricted self-modification: candidate learning is proposed, provenance/confidence-scored,
+  and — where required — governed/reviewed before consolidation; it is never applied silently or
+  unconditionally, and it is a distinct mechanism from unrestricted self-modification or a
+  standing ability to rewrite policy/user preferences without review.
+- Ordinary operational training is not assumed to mean foundation-model fine-tuning.
+- No cross-user or cross-instance learning-transport mechanism exists or is authorised here.
+  Personal learning never automatically becomes shared, global, or product-level knowledge; a
+  "potentially generalisable" classification marks a candidate for a future governed process, not
+  a transfer that has happened.
+
 ## Ownership table
 
 One authoritative owner per architectural concept. Other implementations of the same concept
@@ -144,6 +278,9 @@ concept" entry; this file is the reference copy going forward.)
 | Governance | Governance (`ParkingBrake` + `skill_permissions.py`) | — |
 | Capabilities | Skill Registry | Local skills today; remote services / MCP later |
 | Conversation | Chat Surface | — |
+| Competency (data: knowledge, procedures, evidence, proficiency) | Memory Substrate — competencies are a structured *description* held in the same substrate, not a separate store (added 2026-08-08, conceptual — no implementation exists yet) | — |
+| Competency (application/reasoning) | Kernel Executive — same owner as Planning, above; applying a competency is the Executive doing its existing job with richer inputs, not a second reasoning authority (added 2026-08-08, conceptual) | — |
+| Training (ingestion of trained material) | No new owner — training material is Observation → Interpretation → Memory like any other input (added 2026-08-08, conceptual) | — |
 
 The 2026-07-21 audit named four "duplicate pairs." Three (persona, permission gates,
 kill-switch) are genuine. The fourth, "model routing," was **reclassified in item 11.15 as not
@@ -407,6 +544,11 @@ pytest -q tests/integration/test_parking_brake_integration.py
 
 - `MASTER_PLAN.md` — "P2.5 — Runtime Convergence" (the full narrative and backlog this doc is
   extracted from)
-- `ROADMAP.md` — Stage 4.5 (stage-gate framing, exit criteria)
-- `DECISIONS.md` — "One authority per architectural concept" and related entries
+- `ROADMAP.md` — Stage 4.5 (stage-gate framing, exit criteria) and Stage 5 (the staged,
+  separately-approved competency/training/learning plan this document's "Competency, Training, and
+  Learning" section conceptually underwrites)
+- `CONSTITUTION.md` — "One Developing Digital Individual: Competencies and Training" (the
+  enduring principle this document's conceptual extension implements)
+- `DECISIONS.md` — "One authority per architectural concept" and related entries, and "One
+  developing digital individual — competency and training architecture"
 - `INTERFACES.md` — subsystem-level interface contracts
