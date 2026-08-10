@@ -14,6 +14,7 @@ import re
 import sqlite3
 from typing import Any
 
+import aiosqlite
 import yaml
 
 from bartholomew.kernel.db_ctx import set_wal_pragmas
@@ -125,6 +126,34 @@ def _load_tokenizer_config() -> str:
 
 
 # FTS5 Schema for external-content mode
+#
+# Single-writer architecture (superseding the earlier trigger-plus-manual-
+# override design -- see docs/S5_1_COMPETENCY_ARCHITECTURE_DESIGN.md's
+# review history and RISKS.md's "FTS5 external-content deletion/index-
+# staleness" tech-debt entry for the full incident record). memory_fts is
+# no longer synchronized by AFTER INSERT/UPDATE/DELETE triggers on
+# `memories` -- direct, empirical testing against this repository's own
+# SQLite/FTS5 build proved that design corrupts the database
+# ("database disk image is malformed") the moment any governance-aware
+# code (redaction, summary-preference, an explicit consent/policy denial)
+# makes memory_fts's actual content diverge from the raw memories.value/
+# memories.summary columns the triggers assumed they alone controlled --
+# which is the normal case, not an edge case, for any memory with a
+# summary that gets updated more than once. Rewriting the trigger to fire
+# BEFORE UPDATE (a commonly-recommended pattern for external-content
+# tables) was tested directly and did not resolve it; the incompatibility
+# is structural, not a matter of trigger timing.
+#
+# memory_fts is now written to exclusively by the primitives in this
+# module (reindex_memory_fts[_async]() / remove_memory_fts[_async]()),
+# which every writer -- MemoryStore.upsert_memory()/delete_memory(),
+# FTSClient.upsert()/delete(), and scripts/backfill_fts.py -- calls, so
+# this logic cannot independently diverge again. memory_fts_map is the
+# sole authoritative record of what's actually indexed, tracking the
+# verbatim governed text last written for each memory (last_index_text) --
+# a hash cannot substitute here: FTS5's 'delete' command re-tokenizes
+# whatever text you supply to locate index entries to remove, so nothing
+# short of the original text will do.
 FTS_SCHEMA = """
 -- FTS5 virtual table in external-content mode
 -- References memories table, indexes value and summary columns
@@ -136,66 +165,109 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     tokenize="{tokenizer}"
 );
 
--- Mapping table to track FTS index entries
--- Ensures rowid consistency and supports controlled population
+-- Mapping table: the sole authoritative record of what memory_fts
+-- actually, currently holds for each memory_id. last_index_text is the
+-- verbatim governed text last written via reindex_memory_fts[_async]() --
+-- required (not merely convenient) so a later write can correctly issue
+-- FTS5's 'delete' command for exactly what's indexed, without depending
+-- on (and risking corrupting against) any other table's current state.
 CREATE TABLE IF NOT EXISTS memory_fts_map (
     memory_id INTEGER PRIMARY KEY,
     indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_index_text TEXT,
     FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
-
--- Triggers to keep FTS index synchronized with memories table.
---
--- memory_fts_map tracks which rowids are actually present in the memory_fts
--- shadow index (populated by these triggers and by FTSClient.upsert()).
--- Issuing FTS5's 'delete' special command for a rowid that was never
--- actually indexed (e.g. a memories row written before this schema/these
--- triggers existed) makes SQLite report "database disk image is malformed"
--- -- a confusing error that doesn't mean anything is actually corrupt on
--- disk. The UPDATE/DELETE triggers below are guarded on memory_fts_map so
--- 'delete' is only issued for rows that are really there.
-CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memories
-BEGIN
-    INSERT INTO memory_fts(rowid, value, summary)
-    VALUES (new.id, new.value, new.summary);
-    INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (new.id);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_fts_update AFTER UPDATE ON memories
-WHEN EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
-BEGIN
-    INSERT INTO memory_fts(memory_fts, rowid, value, summary)
-    VALUES ('delete', old.id, old.value, old.summary);
-    INSERT INTO memory_fts(rowid, value, summary)
-    VALUES (new.id, new.value, new.summary);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_fts_update_backfill AFTER UPDATE ON memories
-WHEN NOT EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
-BEGIN
-    INSERT INTO memory_fts(rowid, value, summary)
-    VALUES (new.id, new.value, new.summary);
-    INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (new.id);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memories
-WHEN EXISTS (SELECT 1 FROM memory_fts_map WHERE memory_id = old.id)
-BEGIN
-    INSERT INTO memory_fts(memory_fts, rowid, value, summary)
-    VALUES ('delete', old.id, old.value, old.summary);
-    DELETE FROM memory_fts_map WHERE memory_id = old.id;
-END;
 """
 
-# Names of triggers defined in FTS_SCHEMA / CHUNK_FTS_SCHEMA, dropped and
-# recreated on every init so schema changes reach already-existing databases
-# (see init_schema()/init_chunk_schema()).
+# Legacy trigger names, permanently dropped (not recreated) on every
+# init_schema() call -- the migration path for databases created under the
+# earlier trigger-plus-manual-override architecture (see FTS_SCHEMA's own
+# docstring above). memory_fts is no longer trigger-synchronized at all.
 _MEMORY_FTS_TRIGGERS = (
     "memory_fts_insert",
     "memory_fts_update",
     "memory_fts_update_backfill",
     "memory_fts_delete",
 )
+
+
+# ---------------------------------------------------------------------------
+# Single-writer memory_fts primitives.
+#
+# Every writer of memory_fts -- MemoryStore.upsert_memory()/delete_memory(),
+# FTSClient.upsert()/delete() below, and scripts/backfill_fts.py -- calls
+# exactly these functions, so the delete/insert/track sequence cannot
+# independently diverge across call sites again (that divergence, twice
+# over, was the original defect). The two "_async" variants exist only
+# because MemoryStore's write path uses aiosqlite inside an existing
+# transaction (same-transaction guarantee with the memories row write);
+# the sync variants serve every plain sqlite3.Connection caller. Both
+# pairs share the same SQL text, which is the property that matters.
+FTS_DELETE_TRACKED_SQL = (
+    "INSERT INTO memory_fts(memory_fts, rowid, value, summary) "
+    "SELECT 'delete', ?, last_index_text, NULL FROM memory_fts_map "
+    "WHERE memory_id = ? AND last_index_text IS NOT NULL"
+)
+FTS_INSERT_SQL = "INSERT INTO memory_fts(rowid, value, summary) VALUES (?, ?, NULL)"
+FTS_TRACK_SQL = (
+    "INSERT INTO memory_fts_map(memory_id, last_index_text, indexed_at) "
+    "VALUES (?, ?, CURRENT_TIMESTAMP) "
+    "ON CONFLICT(memory_id) DO UPDATE SET "
+    "last_index_text = excluded.last_index_text, "
+    "indexed_at = excluded.indexed_at"
+)
+FTS_UNTRACK_SQL = "DELETE FROM memory_fts_map WHERE memory_id = ?"
+
+
+def reindex_memory_fts(conn: sqlite3.Connection, memory_id: int, index_text: str) -> None:
+    """
+    Replace whatever this memory_id currently has indexed with
+    `index_text`, and record it as the new authoritative last_index_text.
+
+    Deletes via FTS_DELETE_TRACKED_SQL first: it looks up exactly what
+    THIS primitive itself last wrote for this memory_id (verbatim, from
+    memory_fts_map -- the only thing that could possibly be indexed under
+    the single-writer architecture), which is what makes the delete safe
+    and deterministic. A memory indexed for the first time (or one that
+    predates this architecture, so last_index_text is still NULL) matches
+    zero rows there, so that delete is a correct no-op, not an error.
+
+    Caller is responsible for the surrounding transaction/commit.
+    """
+    conn.execute(FTS_DELETE_TRACKED_SQL, (memory_id, memory_id))
+    conn.execute(FTS_INSERT_SQL, (memory_id, index_text))
+    conn.execute(FTS_TRACK_SQL, (memory_id, index_text))
+
+
+def remove_memory_fts(conn: sqlite3.Connection, memory_id: int) -> None:
+    """
+    Remove a memory from memory_fts entirely (policy denies indexing, or
+    the memory itself is being deleted) -- untracks it from
+    memory_fts_map too, so it is unambiguously "not indexed" rather than
+    indexed-with-nothing.
+    """
+    conn.execute(FTS_DELETE_TRACKED_SQL, (memory_id, memory_id))
+    conn.execute(FTS_UNTRACK_SQL, (memory_id,))
+
+
+async def reindex_memory_fts_async(
+    db: aiosqlite.Connection,
+    memory_id: int,
+    index_text: str,
+) -> None:
+    """aiosqlite counterpart of reindex_memory_fts() -- identical SQL, for
+    MemoryStore.upsert_memory()'s same-transaction write path."""
+    await db.execute(FTS_DELETE_TRACKED_SQL, (memory_id, memory_id))
+    await db.execute(FTS_INSERT_SQL, (memory_id, index_text))
+    await db.execute(FTS_TRACK_SQL, (memory_id, index_text))
+
+
+async def remove_memory_fts_async(db: aiosqlite.Connection, memory_id: int) -> None:
+    """aiosqlite counterpart of remove_memory_fts()."""
+    await db.execute(FTS_DELETE_TRACKED_SQL, (memory_id, memory_id))
+    await db.execute(FTS_UNTRACK_SQL, (memory_id,))
+
+
 _CHUNK_FTS_TRIGGERS = (
     "chunk_fts_insert",
     "chunk_fts_update",
@@ -306,20 +378,34 @@ class FTSClient:
                 "Note: This is unrelated to the vector extension (vss0).",
             )
 
-    def init_schema(self) -> None:
+    def init_schema(self, auto_heal: bool = True) -> None:
         """
-        Initialize FTS5 tables and triggers.
+        Initialize FTS5 tables. Safe to call multiple times (idempotent).
 
-        Creates the memory_fts virtual table, memory_fts_map tracking table,
-        and synchronization triggers. Safe to call multiple times (idempotent).
+        Creates the memory_fts virtual table and memory_fts_map tracking
+        table. Drops the legacy memory_fts_insert/_update/_update_backfill/
+        _delete triggers unconditionally (single-writer architecture --
+        see FTS_SCHEMA's own docstring) so a database created under the
+        earlier architecture migrates cleanly; nothing recreates them.
+        Also migrates memory_fts_map to add last_index_text if an existing
+        database predates that column, following this codebase's existing
+        PRAGMA table_info-based idempotent-column-migration pattern (see
+        MemoryStore.init()'s memories.summary / pending_sensitive_writes
+        migrations for the precedent).
 
-        Trigger bodies are dropped and recreated on every call (rather than
-        left alone via CREATE TRIGGER IF NOT EXISTS) so that a database
-        created by an older version of this schema always picks up the
-        current trigger definitions -- e.g. the memory_fts_map guards added
-        to memory_fts_update/memory_fts_delete. IF NOT EXISTS alone would
-        silently leave a pre-existing database on the old, unguarded
-        trigger bodies forever.
+        Args:
+            auto_heal: If True (default -- preserves this method's
+                long-standing behavior for every caller that doesn't pass
+                this), also runs migrate_schema()'s rowid-consistency check
+                (see its own docstring: it fails closed on unindexed
+                memories -- reports, never repairs them itself -- and only
+                auto-repairs governance-neutral orphaned memory_fts_map
+                rows). MemoryStore.init() passes False here and calls
+                migrate_schema() explicitly itself, once, right after its
+                own governance-aware heal (compute_governed_index_text()
+                per memory) has run -- purely to avoid a "needs backfill"
+                log line for memories that heal is about to fix anyway, not
+                because calling migrate_schema() here would be unsafe.
         """
         schema = FTS_SCHEMA.format(tokenizer=self.tokenizer)
 
@@ -332,6 +418,12 @@ class FTSClient:
             for trigger in _MEMORY_FTS_TRIGGERS:
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
             conn.executescript(schema)
+
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(memory_fts_map)")]
+            if "last_index_text" not in columns:
+                conn.execute("ALTER TABLE memory_fts_map ADD COLUMN last_index_text TEXT")
+                logger.info("Migrated memory_fts_map table: added last_index_text column")
+
             conn.commit()
         finally:
             if conn:
@@ -339,8 +431,9 @@ class FTSClient:
 
         logger.info("FTS5 schema initialized")
 
-        # Run migration to ensure rowid consistency
-        self.migrate_schema()
+        if auto_heal:
+            # Run migration to ensure rowid consistency
+            self.migrate_schema()
 
     def migrate_schema(self) -> None:
         """
@@ -349,7 +442,7 @@ class FTSClient:
         This is a self-healing migration that:
         1. Ensures memory_fts_map exists
         2. Verifies memory_fts_map == memories consistency
-        3. Rebuilds index if mismatches detected
+        3. Repairs what it safely can; reports what it can't
 
         Consistency is checked against memory_fts_map rather than memory_fts
         itself. A bare, non-MATCH SELECT against an external-content FTS5
@@ -360,6 +453,40 @@ class FTSClient:
         is a plain table this class maintains as the authoritative record of
         what's actually indexed, so it's compared against memories in both
         directions instead.
+
+        The two mismatch kinds this detects are NOT equally safe to repair
+        automatically, and are handled differently on purpose:
+
+        - **Orphaned memory_fts_map entries** (tracking a memory_id that no
+          longer exists in `memories`) are repaired automatically -- deleting
+          a tracking row for content that doesn't exist can't make anything
+          searchable that shouldn't be, or vice versa. It's pure bookkeeping
+          cleanup, not a content decision.
+        - **Unindexed memories** (a memory with no memory_fts_map entry at
+          all) are NOT repaired here, and never will be by this method. That
+          state is indistinguishable, from this table alone, from "a
+          bypass write nothing has indexed yet" (repairable, and safe) and
+          "governance correctly excluded this from FTS" (must stay
+          unindexed). This class previously resolved that ambiguity by
+          assuming the former and calling rebuild_index() -- a raw,
+          ungoverned mirror of memories.value/.summary -- which silently
+          re-indexed policy-denied content on every call, confirmed by
+          direct reproduction. FTSClient has no access to the governance
+          pipeline (rule evaluation, redaction, policy) that could
+          correctly resolve which case applies -- that lives in
+          MemoryStore, which is exactly why MemoryStore._heal_unindexed_
+          memories() exists as the governance-aware counterpart. This
+          method fails closed instead: it reports what it found (via a
+          logger.warning naming the count and the fix) and leaves the
+          index as-is, so no caller of this method -- including
+          init_schema()'s auto_heal path -- can be surprised by content
+          silently becoming searchable.
+
+        rebuild_index() is never called from this method. It remains
+        available as an explicit, raw, non-governance-aware API for callers
+        that know they want that (see its own docstring) -- it is not, and
+        must not become, a repair action anything in this class reaches for
+        automatically.
 
         Safe to call multiple times (idempotent).
         """
@@ -381,18 +508,25 @@ class FTSClient:
                 is not None
             )
 
-            unindexed_memories = (
-                conn.execute(
-                    """
-                    SELECT 1
-                    FROM memories m
-                    LEFT JOIN memory_fts_map fm ON m.id = fm.memory_id
-                    WHERE fm.memory_id IS NULL
-                    LIMIT 1
-                """,
-                ).fetchone()
-                is not None
-            )
+            if orphaned_map_entries:
+                cursor = conn.execute(
+                    "DELETE FROM memory_fts_map "
+                    "WHERE memory_id NOT IN (SELECT id FROM memories)",
+                )
+                conn.commit()
+                logger.warning(
+                    f"FTS schema migration: removed {cursor.rowcount} orphaned "
+                    "memory_fts_map entr(y/ies) with no matching memory",
+                )
+
+            unindexed_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM memories m
+                LEFT JOIN memory_fts_map fm ON m.id = fm.memory_id
+                WHERE fm.memory_id IS NULL
+            """,
+            ).fetchone()[0]
         except Exception as e:
             logger.warning(f"FTS schema migration check failed: {e}")
             return
@@ -400,63 +534,41 @@ class FTSClient:
             if conn:
                 conn.close()
 
-        if orphaned_map_entries or unindexed_memories:
-            logger.warning("FTS index mismatch detected, rebuilding index...")
-            self.rebuild_index()
-        else:
+        if unindexed_count:
+            logger.warning(
+                f"FTS schema migration: {unindexed_count} memor(y/ies) have no "
+                "memory_fts_map entry. NOT auto-repairing (cannot distinguish "
+                "an unindexed bypass write from content policy correctly "
+                "excludes from FTS -- see this method's docstring). Run "
+                "governance-aware backfill (bartholomew-backfill-fts) or let "
+                "MemoryStore.init()'s self-heal handle it.",
+            )
+        elif not orphaned_map_entries:
             logger.debug("FTS schema migration: no action needed")
 
     def upsert(self, memory_id: int, value: str, summary: str | None = None) -> None:
         """
-        Insert or update FTS index for a memory.
-
-        This manually updates the FTS index. Note that if triggers are
-        enabled, they will handle synchronization automatically. Use this
-        for manual index management or backfilling.
+        Insert or update FTS index for a memory, via reindex_memory_fts()
+        -- the single primitive every memory_fts writer uses (see that
+        module-level function's docstring). Use this for manual index
+        management or backfilling.
 
         Args:
             memory_id: Memory ID (must exist in memories table)
             value: Memory content text
-            summary: Optional summary text
+            summary: Optional summary text. The single-writer architecture
+                tracks one governed text per memory (there is no longer a
+                separate FTS "summary" column contribution -- see
+                FTS_SCHEMA's docstring); if provided, it's appended to
+                `value` so nothing callers pass is silently dropped. No
+                current caller passes a non-None summary.
         """
+        index_text = f"{value} {summary}" if summary else value
         conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
-
-            # memory_fts_map is this class's own record of which rowids are
-            # actually present in the memory_fts index. Only issue the FTS5
-            # 'delete' command when it's a real update -- issuing 'delete'
-            # for a rowid that was never actually indexed (e.g. a memories
-            # row inserted before init_schema()/triggers existed, so it was
-            # never backfilled) makes SQLite report "database disk image is
-            # malformed", even though nothing on disk is actually corrupt.
-            already_indexed = (
-                conn.execute(
-                    "SELECT 1 FROM memory_fts_map WHERE memory_id = ?",
-                    (memory_id,),
-                ).fetchone()
-                is not None
-            )
-
-            if already_indexed:
-                # Delete old FTS entry before re-inserting
-                conn.execute(
-                    "INSERT INTO memory_fts(memory_fts, rowid, value, summary) "
-                    "SELECT 'delete', ?, value, summary FROM memory_fts "
-                    "WHERE rowid = ?",
-                    (memory_id, memory_id),
-                )
-
-            # Ensure entry in map table
-            conn.execute("INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (?)", (memory_id,))
-
-            # Insert new FTS entry
-            conn.execute(
-                "INSERT INTO memory_fts(rowid, value, summary) VALUES (?, ?, ?)",
-                (memory_id, value, summary),
-            )
-
+            reindex_memory_fts(conn, memory_id, index_text)
             conn.commit()
         finally:
             if conn:
@@ -466,9 +578,7 @@ class FTSClient:
 
     def delete(self, memory_id: int) -> None:
         """
-        Delete FTS index entry for a memory.
-
-        Removes the memory from the FTS index and map table.
+        Delete FTS index entry for a memory, via remove_memory_fts().
 
         Args:
             memory_id: Memory ID to remove from index
@@ -477,12 +587,7 @@ class FTSClient:
         try:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
-            # Delete from FTS index
-            conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (memory_id,))
-
-            # Delete from map table
-            conn.execute("DELETE FROM memory_fts_map WHERE memory_id = ?", (memory_id,))
-
+            remove_memory_fts(conn, memory_id)
             conn.commit()
         finally:
             if conn:
@@ -695,14 +800,89 @@ class FTSClient:
 
         return result
 
+    def _reset_memory_fts_table(self, conn: sqlite3.Connection) -> None:
+        """
+        Drop and recreate memory_fts itself rather than trying to DELETE
+        its contents. An external-content FTS5 table's actual shadow-index
+        state can't be reliably introspected via ordinary SQL (a bare
+        SELECT without MATCH just proxies through to the memories content
+        table, not the real index) -- so there's no safe way to know in
+        advance whether DELETE FROM memory_fts is a no-op or would hit a
+        genuinely inconsistent index ("database disk image is malformed",
+        a confusing SQLite/FTS5 error that doesn't mean the file is
+        actually corrupt). memory_fts_map can't be trusted as a stand-in
+        for that check either -- it can be stale relative to the real
+        index (the entire class of bug this architecture exists to close,
+        see FTS_SCHEMA's docstring) -- so dropping and recreating the
+        table sidesteps the question entirely: guaranteed empty, no stale
+        entries can survive either way. Caller commits.
+        """
+        conn.execute("DROP TABLE IF EXISTS memory_fts")
+        conn.executescript(FTS_SCHEMA.format(tokenizer=self.tokenizer))
+        conn.execute("DELETE FROM memory_fts_map")
+
+    def reset_index(self) -> None:
+        """
+        Drop and recreate memory_fts from scratch, leaving it empty -- the
+        first step of a governance-correct rebuild (see
+        scripts/backfill_fts.py, which repopulates it afterward using
+        compute_governed_index_text() + reindex_memory_fts() per memory).
+
+        Unlike rebuild_index(), does NOT repopulate from raw
+        memories.value/.summary, which bypasses index_text's redaction/
+        summary-preference selection (and would index ciphertext where
+        encryption applies).
+        """
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            set_wal_pragmas(conn)
+            self._reset_memory_fts_table(conn)
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+        logger.info("FTS index reset (emptied) for governance-correct repopulation")
+
     def rebuild_index(self) -> int:
         """
-        Rebuild entire FTS index from memories table.
+        UNGOVERNED RAW REBUILD -- reads every memories.value verbatim into
+        the index, with NO rule evaluation, NO redaction, NO policy gate,
+        and NO summary-preference selection. If policy denies indexing for
+        a memory, or its stored value depends on redaction to be safe to
+        search, this method indexes it anyway. It exists for callers that
+        deliberately have no governance layer to defer to -- direct
+        FTSClient usage in tests and standalone tooling, working with a
+        `memories` table they populated themselves -- not as a repair path
+        for a real, governed database. It is NOT wired into any automatic
+        repair here (migrate_schema() reports drift; it never calls this)
+        and MUST NOT be called automatically as a stand-in for governance-
+        aware indexing.
 
-        Useful for:
-        - Initial index population
-        - Recovering from index corruption
-        - After bulk memory imports
+        For a real MemoryStore-backed database, use scripts/backfill_fts.py
+        instead (via reset_index() + compute_governed_index_text() per
+        memory) -- it re-derives what each memory should show under
+        current governance rather than mirroring raw storage. Useful here
+        only for:
+        - Populating an index with no governance concerns to begin with
+          (e.g. a test fixture's own raw `memories` table)
+        - Recovering from index corruption when governed content isn't the
+          concern (rare; prefer backfill_fts.py otherwise)
+        - After bulk memory imports, if governance doesn't apply to them
+
+        Indexes memories.value only, with the FTS "summary" column always
+        NULL -- matching the single-writer invariant every other writer in
+        this module maintains (see FTS_SCHEMA's docstring): memory_fts_map
+        tracks exactly one governed text per memory, and its deletion
+        primitive (FTS_DELETE_TRACKED_SQL) assumes the FTS "summary"
+        column is always NULL. Indexing memories.summary's raw content
+        into that column here (as an earlier version of this method did)
+        would leave a future single-writer update's delete referencing a
+        NULL summary against an actually-non-NULL one -- reintroducing
+        the exact NULL-vs-non-NULL mismatch this architecture was
+        rewritten to eliminate (see the FTS5 single-writer architecture
+        assessment for the empirical reproduction of that failure mode).
 
         Returns:
             Number of memories indexed
@@ -711,38 +891,22 @@ class FTSClient:
         try:
             conn = sqlite3.connect(self.db_path)
             set_wal_pragmas(conn)
+            self._reset_memory_fts_table(conn)
 
-            # Drop and recreate memory_fts itself rather than trying to
-            # DELETE its contents. An external-content FTS5 table's actual
-            # shadow-index state can't be reliably introspected via ordinary
-            # SQL (a bare SELECT without MATCH just proxies through to the
-            # memories content table, not the real index) -- so there's no
-            # safe way to know in advance whether DELETE FROM memory_fts is
-            # a no-op or would hit a genuinely inconsistent index
-            # ("database disk image is malformed", a confusing SQLite/FTS5
-            # error that doesn't mean the file is actually corrupt).
-            # memory_fts_map can't be trusted as a stand-in for that check
-            # either -- it can be empty while the real index still has
-            # stale entries (e.g. a database from before the map table
-            # existed) -- so dropping and recreating the table sidesteps the
-            # question entirely: guaranteed empty, no stale entries can
-            # survive a rebuild either way.
-            conn.execute("DROP TABLE IF EXISTS memory_fts")
-            conn.executescript(FTS_SCHEMA.format(tokenizer=self.tokenizer))
-            conn.execute("DELETE FROM memory_fts_map")
-
-            # Rebuild from memories table
             conn.execute(
                 """
                 INSERT INTO memory_fts(rowid, value, summary)
-                SELECT id, value, summary FROM memories
+                SELECT id, value, NULL FROM memories
             """,
             )
 
+            # last_index_text must be the verbatim text just indexed (see
+            # reindex_memory_fts()'s docstring for why), so a future
+            # single-writer update can correctly delete it.
             conn.execute(
                 """
-                INSERT INTO memory_fts_map(memory_id)
-                SELECT id FROM memories
+                INSERT INTO memory_fts_map(memory_id, last_index_text)
+                SELECT id, value FROM memories
             """,
             )
 

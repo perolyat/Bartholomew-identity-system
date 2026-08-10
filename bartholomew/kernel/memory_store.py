@@ -11,6 +11,7 @@ import numpy as np
 
 from bartholomew.kernel import encryption_engine as _encryption_module
 from bartholomew.kernel.chunking_engine import get_chunking_engine
+from bartholomew.kernel.fts_client import reindex_memory_fts_async, remove_memory_fts_async
 from bartholomew.kernel.memory.privacy_guard import (
     get_consent_handler,
     is_sensitive,
@@ -46,6 +47,66 @@ def _load_fts_index_mode() -> str:
         logger.debug(f"Could not load FTS index mode config: {e}")
 
     return "summary_preferred"
+
+
+def compute_governed_index_text(
+    kind: str,
+    key: str,
+    plaintext_value: str,
+    plaintext_summary: str | None,
+    ts: str,
+) -> str | None:
+    """
+    Recompute the governed FTS index text for already-stored plaintext.
+
+    Re-runs the same rule evaluation, policy gate, redaction, and
+    summary-preference selection that upsert_memory() applies when it
+    first writes a memory. Used by callers that don't have upsert_memory()'s
+    own in-flight `evaluated`/`redacted_value`/`summary` locals -- self-heal
+    (repairing a memory whose FTS entry is missing or stale) and
+    scripts/backfill_fts.py (rebuilding the whole index from stored,
+    decrypted content) -- so neither one carries its own separate copy of
+    this logic that could quietly drift from upsert_memory()'s.
+
+    Args:
+        kind: Memory kind
+        key: Memory key
+        plaintext_value: Decrypted, already-redacted stored value (this is
+            what upsert_memory() persists as `memories.value` -- redaction
+            has already happened once by the time anything is stored, so
+            it is not reapplied here against the original raw content;
+            redact_strategy is still applied for parity with upsert_memory,
+            which is a no-op unless the redaction pattern was changed since
+            the memory was first written)
+        plaintext_summary: Decrypted stored summary, or None
+        ts: Memory timestamp
+
+    Returns:
+        The text to index, or None if the memory must not be indexed
+        (fts_index/policy denies it, or there is no indexable text).
+    """
+    evaluated = _rules_engine.evaluate(
+        {"kind": kind, "key": key, "value": plaintext_value, "ts": ts},
+    )
+
+    if not evaluated.get("fts_index", True) or not can_index(evaluated):
+        return None
+
+    redacted_value = plaintext_value
+    if evaluated.get("redact_strategy"):
+        redacted_value = apply_redaction(plaintext_value, evaluated)
+
+    fts_index_mode = evaluated.get("fts_index_mode", _load_fts_index_mode())
+    index_text = (
+        plaintext_summary
+        if plaintext_summary and fts_index_mode == "summary_preferred"
+        else redacted_value
+    )
+
+    if not index_text or not index_text.strip():
+        return None
+
+    return index_text
 
 
 @dataclass
@@ -270,7 +331,17 @@ class MemoryStore:
             fts = FTSClient(self.db_path)
 
             def _init_fts_schema() -> bool:
-                fts.init_schema()
+                # auto_heal=False: skip init_schema()'s own internal
+                # migrate_schema() call here -- migrate_schema() never
+                # repairs unindexed memories itself (it fails closed and
+                # only logs; see its docstring), so running it here would
+                # just log a "needs backfill" warning that the governance-
+                # aware heal below immediately resolves anyway. Called
+                # explicitly, once, after that heal (see below) instead,
+                # so its one real repair action -- removing orphaned
+                # memory_fts_map rows, which is governance-neutral -- runs
+                # after the governance-aware heal has had its turn.
+                fts.init_schema(auto_heal=False)
                 # Phase 2f: Initialize chunk FTS schema if chunking is enabled
                 chunking_engine = get_chunking_engine()
                 if chunking_engine.enabled:
@@ -287,6 +358,103 @@ class MemoryStore:
                 logger.info("Chunk FTS5 schema initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize FTS5 schema: {e}")
+
+        # Self-heal: index any memory a bypass write (or a database
+        # migrated from before the last_index_text column existed) left
+        # unindexed. Best-effort/non-fatal on failure, matching the
+        # FTS-schema-init error handling directly above -- a healing
+        # failure must never block startup.
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await self._heal_unindexed_memories(db)
+        except Exception as e:
+            logger.warning(f"Failed to self-heal FTS index: {e}")
+
+        # Safety net: migrate_schema()'s rowid-consistency check, run last
+        # so the governance-aware heal above always gets first crack at
+        # indexing anything it can. Safe to call unconditionally --
+        # migrate_schema() never repairs unindexed memories itself (it
+        # fails closed: reports via a log warning and leaves the index
+        # as-is, since it can't tell a bypass write apart from content
+        # policy correctly excludes from FTS -- see its own docstring for
+        # the full reasoning and the empirical corruption this replaced).
+        # Its only repair action is deleting memory_fts_map rows that
+        # reference a memory_id no longer in `memories`, which is
+        # governance-neutral bookkeeping cleanup, not a content decision.
+        try:
+            from bartholomew.kernel.blocking_executor import run_off_loop
+            from bartholomew.kernel.fts_client import FTSClient
+
+            await run_off_loop(
+                FTSClient(self.db_path).migrate_schema,
+                executor=self._blocking_executor,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to run FTS rowid-consistency migration: {e}")
+
+    async def _heal_unindexed_memories(self, db: aiosqlite.Connection) -> None:
+        """
+        Index every memory with no memory_fts_map entry, or whose
+        last_index_text is NULL -- i.e. anything that bypassed
+        upsert_memory() (a direct SQL write, an older code path, a
+        database migrated from before this architecture existed) and so
+        never went through the single-writer primitive.
+
+        migrate_schema()'s own LEFT JOIN check (unchanged, trigger-
+        independent, called explicitly at the end of init()) detects the
+        same unindexed rows, but deliberately does not repair them itself
+        -- it can't tell a genuine bypass write apart from content policy
+        correctly excludes from FTS, so it only reports (see its
+        docstring). This method is what actually does that repair,
+        governance-aware: real rule evaluation, redaction, and policy
+        gating per memory, via compute_governed_index_text() -- so a
+        bypass write gets properly redacted, policy-gated indexing, and a
+        policy-denied memory is correctly left alone.
+        """
+        cursor = await db.execute(
+            """
+            SELECT m.id, m.kind, m.key, m.value, m.summary, m.ts
+            FROM memories m
+            LEFT JOIN memory_fts_map fm ON fm.memory_id = m.id
+            WHERE fm.memory_id IS NULL OR fm.last_index_text IS NULL
+            """,
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return
+
+        healed = 0
+        for memory_id, kind, key, value, summary, ts in rows:
+            try:
+                plaintext_value = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                    value,
+                )
+                plaintext_summary = None
+                if summary:
+                    plaintext_summary = (
+                        _encryption_module._encryption_engine.try_decrypt_if_envelope(summary)
+                    )
+
+                index_text = compute_governed_index_text(
+                    kind,
+                    key,
+                    plaintext_value,
+                    plaintext_summary,
+                    ts,
+                )
+                if index_text is None:
+                    continue
+
+                await reindex_memory_fts_async(db, memory_id, index_text)
+                healed += 1
+            except Exception as e:
+                logger.warning(
+                    f"Failed to self-heal FTS index for memory {memory_id} ({kind}/{key}): {e}",
+                )
+
+        if healed:
+            await db.commit()
+            logger.info(f"Self-healed FTS index for {healed} memory(ies)")
 
     async def upsert_memory(
         self,
@@ -521,36 +689,17 @@ class MemoryStore:
                     logger.info(f"FTS indexing blocked by policy for memory {result.memory_id}")
 
                 if fts_allowed:
-                    # Ensure entry in map table
-                    await db.execute(
-                        "INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (?)",
-                        (result.memory_id,),
-                    )
-
-                    # Delete prior FTS content for this rowid
-                    await db.execute(
-                        "INSERT INTO memory_fts(memory_fts, rowid, value, "
-                        "summary) VALUES ('delete', ?, '', '')",
-                        (result.memory_id,),
-                    )
-
-                    # Insert sanitized index_text (never raw/unredacted)
-                    await db.execute(
-                        "INSERT INTO memory_fts(rowid, value, summary) VALUES (?, ?, NULL)",
-                        (result.memory_id, index_text),
-                    )
+                    # Single-writer primitive: deletes exactly what
+                    # memory_fts_map recorded as last indexed (not a guess,
+                    # not empty strings), inserts index_text, and updates
+                    # the tracking row -- see reindex_memory_fts_async()'s
+                    # docstring in fts_client.py for why this is the only
+                    # safe way to mutate memory_fts.
+                    await reindex_memory_fts_async(db, result.memory_id, index_text)
                     logger.debug(f"FTS index updated in-Tx for memory {result.memory_id}")
                 else:
                     # Policy denies indexing: remove from FTS in same Tx
-                    await db.execute(
-                        "INSERT INTO memory_fts(memory_fts, rowid, value, "
-                        "summary) VALUES ('delete', ?, '', '')",
-                        (result.memory_id,),
-                    )
-                    await db.execute(
-                        "DELETE FROM memory_fts_map WHERE memory_id = ?",
-                        (result.memory_id,),
-                    )
+                    await remove_memory_fts_async(db, result.memory_id)
                     logger.debug(
                         f"FTS index removed in-Tx for memory {result.memory_id} (policy denied)",
                     )
@@ -1057,11 +1206,15 @@ class MemoryStore:
 
             memory_id = row[0]
 
-            # Delete base row. The memory_fts_delete trigger handles FTS
-            # index + memory_fts_map cleanup (guarded so it's a no-op for
-            # rows that were never actually indexed); doing it again here
-            # manually and unconditionally would risk the same "database
-            # disk image is malformed" FTS5 misuse that guard exists for.
+            # Remove FTS index entry before the base row goes away. No
+            # trigger does this anymore (single-writer architecture -- see
+            # FTS_SCHEMA's docstring in fts_client.py); remove_memory_fts_async()
+            # deletes exactly what memory_fts_map recorded as last indexed
+            # (a no-op if the memory was never indexed) and clears the
+            # tracking row, all in this same transaction.
+            await remove_memory_fts_async(db, memory_id)
+
+            # Delete base row.
             await db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
 
             await db.commit()

@@ -164,5 +164,69 @@ async def test_memory_store_respects_indexing_policy():
             pass
 
 
+@pytest.mark.asyncio
+async def test_policy_denied_content_not_searchable():
+    """
+    Closes the blind spot in test_memory_store_respects_indexing_policy():
+    that test only ever asserted memory_fts_map's row count, never that
+    the content is actually unreachable via FTS MATCH. Under the single-
+    writer architecture there's no trigger silently indexing it anyway, so
+    both must now hold: no memory_fts_map entry, and no MATCH result.
+    """
+    from bartholomew.kernel import memory_store
+    from bartholomew.kernel.fts_client import FTSClient
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+
+    try:
+        store = MemoryStore(db_path)
+        await store.init()
+
+        original_evaluate = memory_store._rules_engine.evaluate
+
+        def deny_fts(memory_dict):
+            evaluated = original_evaluate(memory_dict)
+            evaluated["fts_index"] = False
+            return evaluated
+
+        memory_store._rules_engine.evaluate = deny_fts
+        try:
+            result = await store.upsert_memory(
+                kind="fact",
+                key="policy_denied_target",
+                value="content with distinctive term policydeniedtermxyz",
+                ts="2025-01-01T00:00:00Z",
+            )
+        finally:
+            memory_store._rules_engine.evaluate = original_evaluate
+
+        assert result.stored is True
+        memory_id = result.memory_id
+
+        import aiosqlite
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM memory_fts_map WHERE memory_id = ?",
+                (memory_id,),
+            )
+            count_row = await cursor.fetchone()
+            assert count_row[0] == 0
+
+        fts = FTSClient(db_path)
+        results = fts.search("policydeniedtermxyz", apply_consent_gate=False)
+        assert results == []
+    finally:
+        try:
+            await store.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(db_path)
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
