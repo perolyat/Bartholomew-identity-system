@@ -2,6 +2,11 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
+> **Last updated:** 2026-08-10 (one new tech-debt watchlist item added: an FTS5
+> external-content deletion/index-staleness issue found while writing S5.1 regression tests,
+> confirmed pre-existing and unrelated to S5.1 — no production fix authorised yet.)
+>
+> **Previously (2026-07-28):**
 > **Last updated:** 2026-07-28 (documentation reconciliation pass 2: the legacy-implementation-
 > notes cleanup deferred on 2026-07-27 is done — see the tech-debt watchlist entry below for the
 > full disposition; the FastAPI-lifespan-migration ticket merged in from its own standalone file
@@ -280,6 +285,29 @@
   near-duplicate of `bartholomew/kernel/db_ctx.py` with the same per-call-checkpoint pattern
   still live in `liveness.py`/`db.py`'s hot paths. Same latent hazard class as item 11.18 fixed;
   not yet known to have caused a failure outside the one incident that prompted this fix.
+- **(2026-08-10) FTS5 external-content `'delete'` command uses stale (empty-string) old values —
+  possible stale/searchable content after an update.** Found while writing S5.1's
+  caller-supplied-summary regression tests (`docs/S5_1_COMPETENCY_ARCHITECTURE_DESIGN.md`); not
+  caused by S5.1. `memory_fts` (`bartholomew/kernel/fts_client.py`) is an FTS5
+  **external-content** table (`content='memories', content_rowid='id'`).
+  `MemoryStore.upsert_memory()`'s own FTS management code issues
+  `INSERT INTO memory_fts(memory_fts, rowid, value, summary) VALUES ('delete', ?, '', '')`
+  before re-inserting the new `index_text` — but FTS5's `'delete'` special command on an
+  external-content table needs the *actual previously-indexed* column values to correctly locate
+  and remove the corresponding index entries; passing empty strings instead means this delete is
+  a no-op. **Effect:** whenever an update's new `index_text` differs from what was previously
+  indexed (e.g. redaction, `summary_only` substitution, or any other change to what gets
+  indexed), the old content's terms can remain matchable via FTS `MATCH` alongside the new
+  content — content intended to be replaced or reduced may remain searchable. **Reproduced**
+  against a plain, non-competency memory write with no caller-supplied summary (an ordinary
+  auto-summarised `summary_only` update), confirming this predates and is unrelated to S5.1 — not
+  a regression that stage introduced. **Risk category:** correctness/privacy/governance — the
+  same shape of risk R1 above tracks (content that should be excluded/replaced remaining
+  reachable through a production retrieval surface), via a different mechanism (a stale FTS
+  index, not a consent-gate bypass). **No production fix is authorised yet.** A dedicated fix
+  should include regression tests proving: (a) a stale/replaced token is no longer `MATCH`-able
+  after an update that changes `index_text`, and (b) FTS reflects only the currently
+  governed/indexable representation, not any prior one.
 
 ## Red-team focus areas
 
