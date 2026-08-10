@@ -50,6 +50,12 @@ def test_fts_snippet_functionality():
         conn.commit()
         conn.close()
 
+        # Single-writer architecture: memory_fts is no longer trigger-
+        # synchronized (see FTS_SCHEMA's docstring in fts_client.py), so a
+        # raw INSERT into memories -- as above -- no longer auto-indexes.
+        # Index explicitly via the same primitive every writer uses.
+        fts.upsert(1, "The quick brown fox jumps over the lazy dog", "A sentence about animals")
+
         # Search with snippet
         results = fts.search("fox")
 

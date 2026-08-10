@@ -33,10 +33,10 @@ import sys
 from bartholomew.kernel.encryption_engine import _encryption_engine
 
 # Import Bartholomew components
-from bartholomew.kernel.fts_client import FTSClient
+from bartholomew.kernel.fts_client import FTSClient, reindex_memory_fts, remove_memory_fts
 from bartholomew.kernel.memory_rules import _rules_engine
-from bartholomew.kernel.memory_store import _load_fts_index_mode
-from bartholomew.kernel.redaction_engine import apply_redaction
+from bartholomew.kernel.memory_store import compute_governed_index_text
+from bartholomew.kernel.policy import can_index
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -136,80 +136,49 @@ def backfill_memory(
         if summary:
             plaintext_summary = _encryption_engine.try_decrypt_if_envelope(summary)
 
-        # Step 2: Evaluate rules with plaintext value
-        memory_dict = {
-            "kind": kind,
-            "key": key,
-            "value": plaintext_value,
-            "ts": ts,
-        }
-        evaluated = _rules_engine.evaluate(memory_dict)
-
-        # Step 3: Check if FTS indexing is allowed
-        fts_allowed = evaluated.get("fts_index", True)
-
-        if not fts_allowed:
-            # Policy denies indexing: delete from FTS
-            if not dry_run:
-                conn.execute(
-                    "INSERT INTO memory_fts(memory_fts, rowid, value, "
-                    "summary) VALUES ('delete', ?, '', '')",
-                    (memory_id,),
-                )
-                conn.execute("DELETE FROM memory_fts_map WHERE memory_id = ?", (memory_id,))
-            logger.debug(f"Memory {memory_id} ({kind}/{key}): deleted (policy denied)")
-            return ("deleted", "policy denied")
-
-        # Step 4: Apply redaction to compute redacted_value
-        # CRITICAL: Apply same redaction as ingestion to avoid indexing
-        # raw/unredacted content
-        redacted_value = plaintext_value
-        if evaluated.get("redact_strategy"):
-            redacted_value = apply_redaction(plaintext_value, evaluated)
-
-        # Step 5: Choose index text using EXACT same rule as ingestion
-        # index_text = summary if (summary and fts_index_mode ==  # noqa
-        #              "summary_preferred") else redacted_value
-        fts_index_mode = evaluated.get("fts_index_mode", _load_fts_index_mode())
-
-        index_text = None
-        if plaintext_summary and fts_index_mode == "summary_preferred":
-            index_text = plaintext_summary
-            source = "summary"
-        else:
-            index_text = redacted_value
-            source = "redacted_value"
-
-        # Step 6: Validate we have indexable text
-        if not index_text or not index_text.strip():
-            logger.warning(
-                f"Memory {memory_id} ({kind}/{key}): no indexable text (empty {source})",
-            )
-            return ("skipped", f"empty {source}")
-
-        # Step 7: Upsert to FTS index (using raw SQL for transaction control)
-        if not dry_run:
-            # Ensure entry in map table
-            conn.execute("INSERT OR IGNORE INTO memory_fts_map(memory_id) VALUES (?)", (memory_id,))
-
-            # Delete old FTS entry if exists
-            conn.execute(
-                "INSERT INTO memory_fts(memory_fts, rowid, value, "
-                "summary) VALUES ('delete', ?, '', '')",
-                (memory_id,),
-            )
-
-            # Insert sanitized index_text (never raw/unredacted)
-            conn.execute(
-                "INSERT INTO memory_fts(rowid, value, summary) VALUES (?, ?, NULL)",
-                (memory_id, index_text),
-            )
-
-        logger.debug(
-            f"Memory {memory_id} ({kind}/{key}): indexed "
-            f"({len(index_text)} chars from {source})",
+        # Step 2: Compute governed index text -- rule evaluation, policy
+        # gate (fts_index rule AND can_index() policy), redaction, and
+        # summary-preference selection, via the exact same function
+        # MemoryStore's startup self-heal uses. This is the single place
+        # that logic lives; backfill no longer carries its own copy that
+        # could quietly drift from what ordinary ingestion computes.
+        index_text = compute_governed_index_text(
+            kind,
+            key,
+            plaintext_value,
+            plaintext_summary,
+            ts,
         )
-        return ("indexed", f"{len(index_text)} chars from {source}")
+
+        if index_text is None:
+            # compute_governed_index_text() collapses "policy denies
+            # indexing" and "no indexable text" into the same None result
+            # (both mean: don't index). Recover which one it was only for
+            # the stats/log line below -- this re-evaluation can't diverge
+            # from the None decision itself, since it's the same governance
+            # inputs already folded into that result.
+            memory_dict = {"kind": kind, "key": key, "value": plaintext_value, "ts": ts}
+            evaluated = _rules_engine.evaluate(memory_dict)
+            fts_allowed = evaluated.get("fts_index", True) and can_index(evaluated)
+
+            if not dry_run:
+                remove_memory_fts(conn, memory_id)
+
+            if not fts_allowed:
+                logger.debug(f"Memory {memory_id} ({kind}/{key}): deleted (policy denied)")
+                return ("deleted", "policy denied")
+
+            logger.warning(f"Memory {memory_id} ({kind}/{key}): no indexable text")
+            return ("skipped", "no indexable text")
+
+        # Step 3: Reindex via the single-writer primitive (deletes exactly
+        # what memory_fts_map recorded as last indexed, inserts index_text,
+        # updates tracking) -- same mutation logic upsert_memory() uses.
+        if not dry_run:
+            reindex_memory_fts(conn, memory_id, index_text)
+
+        logger.debug(f"Memory {memory_id} ({kind}/{key}): indexed ({len(index_text)} chars)")
+        return ("indexed", f"{len(index_text)} chars")
 
     except Exception as e:
         logger.error(f"Memory {memory_id} ({kind}/{key}): error - {e}", exc_info=True)
@@ -248,6 +217,14 @@ def backfill_fts(
         if not dry_run:
             logger.info("Initializing FTS schema...")
             fts.init_schema()
+            # Governance-correct rebuild starts from a guaranteed-empty
+            # index (drop+recreate memory_fts, clear memory_fts_map) --
+            # not a raw memories.value/.summary mirror like rebuild_index()
+            # -- so the per-row loop below repopulates it entirely through
+            # compute_governed_index_text()/reindex_memory_fts(), and no
+            # stale entry from before this run can survive.
+            logger.info("Resetting FTS index for clean rebuild...")
+            fts.reset_index()
         else:
             logger.info("DRY RUN MODE - No changes will be written")
 
