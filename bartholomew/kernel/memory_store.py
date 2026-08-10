@@ -297,6 +297,7 @@ class MemoryStore:
         *,
         skip_privacy_guard: bool = False,
         skip_rule_consent: bool = False,
+        summary: str | None = None,
     ) -> StoreResult:
         # Rule evaluation: check governance rules first
         memory_dict = {
@@ -343,17 +344,71 @@ class MemoryStore:
         if evaluated.get("redact_strategy"):
             redacted_value = apply_redaction(value, evaluated)
 
-        # Phase 2c: Generate summary if required (before encryption)
-        summary = None
+        # Phase 2c: Generate summary if required (before encryption).
+        #
+        # S5.1: `summary` may now be caller-supplied (e.g. a competency
+        # record's own plain-text rendering of its structured content --
+        # see bartholomew/kernel/competency.py's `to_summary_text()`).
+        # `_summarization_engine.summarize()` is a naive sentence-extractor
+        # never meant to run over structured (e.g. JSON) content, so a
+        # caller-supplied summary is used as-is instead of being
+        # auto-generated -- but it is NOT exempt from the governance this
+        # method already applies to an auto-generated one; existing callers
+        # (none of which pass this argument) see no behaviour change.
         summary_mode = evaluated.get("summary_mode", "summary_also")
+        caller_supplied_summary = summary is not None
 
-        if _summarization_engine.should_summarize(evaluated, redacted_value, kind):
+        # Authoritative "no summary of this content at all" policy signals
+        # -- full_always is should_summarize()'s own rule (checked below for
+        # the auto-generation case); an explicit summarize:false rule is
+        # honoured the same way here. Both must hold regardless of who
+        # produced the summary text -- a caller-supplied one must not
+        # silently override them.
+        if caller_supplied_summary and (
+            summary_mode == "full_always" or evaluated.get("summarize") is False
+        ):
+            summary = None
+            caller_supplied_summary = False
+
+        if summary is None and _summarization_engine.should_summarize(
+            evaluated,
+            redacted_value,
+            kind,
+        ):
             summary = _summarization_engine.summarize(redacted_value)
 
-            # Handle summary_only mode: replace value with summary
-            if summary_mode == "summary_only":
-                redacted_value = summary
-                summary = None  # Don't store separate summary
+        # A caller-supplied summary isn't guaranteed to derive from
+        # `redacted_value` the way an auto-generated one always does (it's
+        # built from the caller's own pre-redaction representation) --
+        # redact it the same way before it can reach storage or FTS, so
+        # supplying a ready-made summary can never bypass redaction.
+        # Scoped to the caller-supplied case only: an auto-generated
+        # summary is already redaction-safe by construction (summarize()
+        # runs over redacted_value), so this leaves that path byte-for-byte
+        # unchanged.
+        if caller_supplied_summary and summary is not None and evaluated.get("redact_strategy"):
+            summary = apply_redaction(summary, evaluated)
+
+        # Plaintext, fully-governed summary (redacted, policy-gated) --
+        # captured *before* the summary_only substitution below can clear
+        # `summary`, so _handle_embeddings() further down still receives it
+        # even when summary_only moves this same text into `redacted_value`
+        # and nulls the `summary` column. Capturing this after that
+        # substitution (as an earlier revision of this fix did) left
+        # `resolved_summary` None for the summary_only case, so embeddings
+        # fell back to independently re-summarising the original full
+        # value -- inconsistent with what was actually stored and
+        # FTS-indexed, and capable of encoding content summary_only exists
+        # to remove from the embedding, generically for any caller-supplied
+        # summary, not just a competency one.
+        resolved_summary = summary
+
+        # Handle summary_only mode: whichever source produced `summary`
+        # (caller-supplied or just auto-generated above), only the summary
+        # is retained as the stored value -- never a separate summary field.
+        if summary is not None and summary_mode == "summary_only":
+            redacted_value = summary
+            summary = None  # Don't store separate summary
 
         # Phase 2e: Compute FTS index text (before encryption)
         # NEVER index raw/unredacted/blocked content
@@ -520,6 +575,7 @@ class MemoryStore:
             memory_dict=memory_dict,
             evaluated=evaluated,
             kind=kind,
+            resolved_summary=resolved_summary,
         )
 
         return result
@@ -530,6 +586,7 @@ class MemoryStore:
         memory_dict: dict,
         evaluated: dict,
         kind: str,
+        resolved_summary: str | None = None,
     ) -> None:
         """
         Handle embedding generation and persistence OUTSIDE async context.
@@ -543,6 +600,12 @@ class MemoryStore:
             memory_dict: Original memory data (for embedding source text)
             evaluated: Evaluated rules metadata
             kind: Memory kind
+            resolved_summary: The plaintext, already policy-gated and
+                redacted summary upsert_memory() resolved for this write (S5.1;
+                None for existing callers -- unchanged default). Preferred
+                over re-deriving a summary here from scratch when present,
+                generically for any caller-supplied summary, not just a
+                competency one.
         """
         global _summary_fallback_warned
 
@@ -592,10 +655,18 @@ class MemoryStore:
         if evaluated.get("redact_strategy"):
             orig_value = apply_redaction(orig_value, evaluated)
 
-        # Check if we have summary
-        orig_summary = None
-        if _summarization_engine.should_summarize(evaluated, orig_value, kind):
+        # Check if we have summary. A caller-supplied summary (already
+        # policy-gated and redacted by upsert_memory() -- see
+        # `resolved_summary`'s docstring above) is preferred over deriving
+        # one from scratch here, exactly mirroring upsert_memory()'s own
+        # `if summary is None and should_summarize(): ...` precedence so
+        # embedding text and stored/FTS text stay consistent.
+        if resolved_summary is not None:
+            orig_summary = resolved_summary
+        elif _summarization_engine.should_summarize(evaluated, orig_value, kind):
             orig_summary = _summarization_engine.summarize(orig_value)
+        else:
+            orig_summary = None
 
         # Build texts list with fallback for missing summary
         if embed_mode in ("summary", "both"):

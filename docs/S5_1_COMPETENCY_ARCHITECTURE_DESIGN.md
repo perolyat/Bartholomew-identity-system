@@ -10,8 +10,12 @@
 > **Status:** proposed 2026-08-08. Revised same day per reviewer feedback: `competency_procedure`
 > and `competency_heuristic` kept as separate kinds (not consolidated); the `classification` field's
 > `potentially_generalisable` value made explicit as informational-only, never a promotion trigger.
-> **Not yet approved for implementation.** Approving this document does not authorise touching any
-> production code — see §12.
+> **Approved for implementation 2026-08-09**, in the same sequence this document's own process
+> requires: this design approved in principle, then a separate implementation proposal (scope,
+> files, and §4.1's `summary` parameter option) approved, then the revised invariant-test approach
+> (§12) approved, before any production code was touched. Implementation is complete and under
+> final correction/review as of 2026-08-10 — see §12 for the non-negotiable invariants it must
+> hold to.
 
 ## 1. What this closes
 
@@ -113,8 +117,11 @@ Every record shares a common envelope; each `kind` adds its own fields.
     "overall": 0.3,
     "by_area": {"maintenance_triage": 0.5, "quote_comparison": 0.6, "warranty_claims": 0.1}
   },
-  "known_gaps": ["never handled a warranty dispute", "no experience with HOA rules"],
-  "supervision": {"default_requires_review": true, "reason": "low overall proficiency"}
+  "known_gaps": ["never handled a warranty dispute", "no experience with HOA rules"]
+  // ...envelope's own "supervision": {"requires_review": ..., "reason": ...} (§4.1) IS the
+  // competency-level default that child records' "per-record override" language refers to --
+  // there is no separate "default_requires_review" field; the implementation (competency.py)
+  // has exactly one `supervision` per record, always shaped `{requires_review, reason}`.
 }
 ```
 
