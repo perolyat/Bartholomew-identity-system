@@ -8,11 +8,11 @@
 > S5.1's delivered data model (`competency.py`) and S5.2's delivered write path
 > (`training.py` + `run_training_through_runtime_contract()`).
 >
-> **Status: PROPOSED 2026-08-11. Decisions A–D provisionally approved; Decision E revised and
-> awaiting approval. NOT APPROVED overall, and no implementation is authorised by this document.**
+> **Status: design and Decisions A–E APPROVED 2026-08-11. Implementation NOT yet authorised.**
 > Per Stage 5's approval model and the S5.1/S5.2 precedent, the sequence is: this design approved
-> in principle → a separate implementation proposal approved → implementation. S5.2's completion
-> does not authorise S5.3.
+> in principle *(done — 2026-08-11)* → a separate implementation proposal approved *(proposed in
+> §11; awaiting sign-off)* → implementation. S5.2's completion does not authorise S5.3, and
+> approval of this document does not authorise S5.4.
 >
 > **Revision 2026-08-11 (same day), after review:** Decision E was split into E.1 (no *automatic*
 > exposure — a standing position) and E.2 (explicit user-requested decision explanation —
@@ -405,3 +405,109 @@ poorly would foreclose E.2 by omission**, which is exactly what this revision ex
 Designing the explanation surface itself — how it is asked for, how it reads, how much it says,
 and how it respects consent/redaction on the records it cites — remains separate, later,
 Stage 1-shaped work requiring its own approval. S5.3 makes it *possible*, and does not make it.
+
+---
+
+## 11. Proposed implementation plan (PROPOSED 2026-08-11 — NOT AUTHORISED)
+
+Written against Decisions A–E as approved. **No code has been written.** This section is the
+"separate implementation proposal" the status note requires and needs its own sign-off.
+
+### 11.1 Staging — core, then wiring, then boundary verification
+
+| Step | Contents | Why here |
+|---|---|---|
+| **1 — Reasoning core** | `bartholomew/kernel/competency_reasoning.py`: selection, `CompetencyContext`, prompt rendering. Pure data/logic, no I/O, not yet wired to anything | Fully testable in isolation, and reviewable on its selection semantics alone before it can affect a single live request |
+| **2 — Seam integration (chat only)** | Off-loop retrieval in `run_chat_through_runtime_contract`, optional `_build_interpretation` parameter, `CandidateAction.competency_context`, supervision propagation, explanation-grade recording in the Reflection | The substance. Where the governance, consent, and off-loop tests live |
+| **3 — Boundary verification + demonstration** | E.1/E.2 exposure-boundary tests, `decide()`-inertness regression, and an Estate Management end-to-end demonstration: a competency trained via S5.2 actually informs a chat turn | Proves the sub-stage's claims end-to-end, and pins the two boundaries most likely to erode later |
+
+**Note on ordering, since it differs from S5.2 deliberately.** S5.2 put governance first because it
+introduced a *write* path that needed a brake before it could act. S5.3 introduces **no new
+capability, no new governance surface, and no new brake scope** — chat's existing `"skills"` scope
+(`runtime_contract.py:247`) already gates this path, and a read that changes nothing needs no new
+control. So the natural order here is core → wiring → verification. If implementation reveals that
+S5.3 *does* need its own scope, that is a signal the sub-stage has grown beyond a read path and
+should stop for review.
+
+### 11.2 Files
+
+**New:**
+- `bartholomew/kernel/competency_reasoning.py` — pure logic; a structural test asserts it imports
+  no I/O machinery, matching the discipline `competency.py` and `training.py` hold to.
+- The eight test files named in §8.
+
+**Edited — `bartholomew/kernel/runtime_contract.py` only:**
+- `CandidateAction` gains `competency_context: CompetencyContext | None = None`. It is a frozen
+  dataclass; an optional field with a default is additive and changes no existing construction
+  site (chat, skills, drives, sight, voice, awaiting-response all keep working unchanged).
+- `_build_interpretation()` gains an optional pre-rendered competency block parameter (§11.3).
+- `run_chat_through_runtime_contract()` performs the retrieval and records the context.
+
+**Not edited, deliberately:**
+- **`bartholomew/kernel/planner.py`** — Decision A. `decide()` keeps returning `None`, and the
+  tick→bus→nudge path (§2.1) is untouched. The roadmap row names `Planner.decide()`, so this is
+  worth stating plainly: the exit criterion's "**or its successor**" is what makes this correct,
+  and a regression test pins the inertness.
+- `competency.py` — S5.1's model needs no change to be read.
+- `memory_store.py`, `retrieval.py`, `consent_gate.py` — the existing read path is used as-is.
+- `daemon.py` — no lifecycle change.
+
+### 11.3 Concrete mechanics (each grounded in a verified repository fact)
+
+1. **Retrieval must be awaited, but `_build_interpretation()` is synchronous**
+   (`runtime_contract.py:129`, a plain `def`). Rather than make it async — which would touch every
+   surface that calls it — the seam retrieves *first* (awaited, off-loop) and passes the rendered
+   block in as an optional argument. The sync function stays sync; the `await` stays in the async
+   caller.
+2. **Off the event loop.** `Retriever.retrieve()`/`HybridRetriever.retrieve()` are synchronous
+   (`retrieval.py:497`, `:551`), so retrieval goes through
+   `run_off_loop(..., executor=getattr(daemon, "blocking_executor", None))` — the same
+   `getattr` fallback the drive seam already uses for duck-typed contexts.
+3. **Failure isolation.** Competency retrieval must never break a chat turn. `_build_interpretation`
+   already establishes this pattern — each enrichment is individually try/except'd and falls back
+   to the raw observation. Competency enrichment follows it exactly: on any failure, log and
+   proceed with no competency context, never raise.
+4. **Explanation-grade recording** (Decision E.2) extends chat's existing reflection `details`
+   dict (`runtime_contract.py:295–301`), which today carries `{"response_preview": ...}`. The
+   context is added there — per-record `kind`, `key`, provenance, classification, confidence — so
+   it lands in the same single shared reflections sink every surface already writes to. No new
+   store, no new table.
+5. **Supervision propagation is additive-only.** The aggregate `requires_review` is the OR of the
+   applied records'. There is no code path by which a competency record can clear a review
+   requirement or relax a gate (§7).
+
+### 11.4 Implementation-time details, with proposed defaults
+
+These are tuning choices, not governance decisions; recorded so they are chosen deliberately
+rather than by accident:
+
+- **Confidence floor.** Exclude records whose `confidence` is explicitly below a floor (proposed
+  default **0.3**). `confidence is None` means *unknown*, not *low* — include, but rank below
+  evidenced records. A floor of `None`/0 disables filtering.
+- **Hard cap on records folded into the prompt** (proposed default **5**). This is not arbitrary:
+  `RISKS.md` carries a standing operational risk entry for **prompt bloat / provider rate limits**,
+  and competency retrieval is exactly the kind of feature that grows a prompt silently. The cap is
+  enforced in selection, and a test asserts it holds when many records match.
+- **Kinds retrieved.** `competency_knowledge`, `competency_procedure`, `competency_heuristic` for
+  guidance; `competency_evidence` for prior cases; the `competency` index record for proficiency
+  and the supervision default. All five, filtered by relevance — with Decision C's scoping.
+
+### 11.5 Explicitly not included
+
+No model-driven planning or prospective reasoning (§6.1). No deliberation between conflicting
+competencies. No cross-competency transfer (Decision C). No automatic exposure in responses
+(Decision E.1) and no explanation surface (Decision E.2 — preserved, not built). No proactive
+behaviour, and no change to `decide()` (Decision A). No surfaces beyond chat (Decision B). No
+writes, and no learning from outcomes (S5.4). **No fix to the reflection-ownership gap** (§3.1) or
+to any of the four deferred issues (§3.2).
+
+### 11.6 What would signal this plan is wrong
+
+§9's six stop conditions apply in full. Two are most likely to fire during implementation:
+
+- If competency context cannot be carried on `CandidateAction` without rippling into unrelated
+  surfaces (§9.5), the field belongs elsewhere and the design needs revisiting, not a workaround.
+- If explanation-grade recording collides with consent or redaction (§9.6) — e.g. retaining
+  per-record provenance would persist content the consent gate excluded — that is a real
+  privacy/explainability tension to raise for decision, not to resolve unilaterally in either
+  direction.
