@@ -19,6 +19,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from bartholomew.kernel import competency_reasoning as cr
 from bartholomew.kernel.competency import (
     CompetencyEnvelope,
@@ -55,6 +57,57 @@ def _candidate(
         score=score,
         record=record,
     )
+
+
+# ---------------------------------------------------------------------------
+# 0. Query construction.
+#
+# Found by measurement during implementation, not anticipated by the design:
+# SQLite FTS5 applies AND semantics across a MATCH expression's terms, so a
+# raw utterance requires the stored record to contain EVERY word typed. With
+# a heuristic about replacing a boiler stored, "boiler" matched it and
+# "should I replace the boiler?" matched nothing. Passing raw text would have
+# shipped competency retrieval as a silently dead feature, so these tests pin
+# the fix.
+# ---------------------------------------------------------------------------
+def test_query_uses_or_semantics_not_and():
+    query = cr.build_retrieval_query("should I replace the boiler?")
+    assert " OR " in query
+    assert " AND " not in query
+
+
+def test_query_drops_stopwords_and_short_tokens():
+    query = cr.build_retrieval_query("should I replace the boiler?")
+    terms = query.split(" OR ")
+
+    assert "boiler" in terms
+    assert "replace" in terms
+    for noise in ("should", "the", "i"):
+        assert noise not in terms
+
+
+def test_query_strips_fts5_syntax():
+    """A raw message containing FTS5 operators must not reach MATCH as
+    syntax -- it would error or be silently reinterpreted."""
+    query = cr.build_retrieval_query('boiler NEAR/2 "warranty" ^start *')
+    assert '"' not in query
+    assert "^" not in query
+    assert "*" not in query
+    assert "/" not in query
+
+
+def test_query_is_bounded_and_deduplicated():
+    query = cr.build_retrieval_query(" ".join(f"term{i}" for i in range(50)))
+    assert len(query.split(" OR ")) <= cr._QUERY_MAX_TOKENS
+
+    repeated = cr.build_retrieval_query("boiler boiler boiler warranty")
+    assert repeated.split(" OR ").count("boiler") == 1
+
+
+@pytest.mark.parametrize("text", ["", "   ", "a I to", "?! ..."])
+def test_query_is_empty_when_nothing_useful_remains(text):
+    """Empty means "no retrieval", so the request behaves as it does today."""
+    assert cr.build_retrieval_query(text) == ""
 
 
 # ---------------------------------------------------------------------------

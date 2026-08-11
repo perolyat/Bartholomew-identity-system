@@ -43,6 +43,7 @@ Boundaries this module enforces mechanically
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,6 +63,104 @@ DEFAULT_CONFIDENCE_FLOOR: float = 0.3
 #: `RISKS.md`'s standing prompt-bloat / provider-rate-limit entry: competency
 #: retrieval is exactly the kind of feature that grows a prompt silently.
 DEFAULT_MAX_RECORDS: int = 5
+
+
+#: Very common words that carry no retrieval signal. Deliberately tiny --
+#: this is a noise filter, not a linguistic model.
+_QUERY_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "you",
+        "your",
+        "are",
+        "was",
+        "were",
+        "have",
+        "has",
+        "had",
+        "can",
+        "should",
+        "would",
+        "could",
+        "what",
+        "when",
+        "where",
+        "how",
+        "why",
+        "who",
+        "did",
+        "does",
+        "about",
+        "from",
+        "there",
+        "their",
+        "them",
+        "then",
+        "than",
+        "into",
+        "out",
+        "any",
+        "some",
+        "please",
+        "just",
+        "now",
+        "get",
+        "got",
+        "want",
+        "need",
+        "know",
+        "think",
+    },
+)
+
+#: Bound on query size, so an unusually long message cannot produce an
+#: unbounded MATCH expression.
+_QUERY_MAX_TOKENS: int = 12
+
+_QUERY_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def build_retrieval_query(text: str) -> str:
+    """
+    Turn a natural-language message into an FTS-usable query.
+
+    **This is load-bearing, not cosmetic.** SQLite FTS5 applies AND semantics
+    across the terms of a MATCH expression, so passing a raw utterance
+    through would require the stored record to contain *every* word the user
+    typed. Measured during S5.3 implementation: with a stored heuristic about
+    replacing a boiler, `"boiler"` matched it and `"should I replace the
+    boiler?"` matched nothing. Passing raw text would have shipped competency
+    retrieval as a silently dead feature.
+
+    So: extract word tokens, drop very short ones and a small stopword set,
+    cap the count, and join with `OR`. Deterministic, no model call (design
+    Sec.6).
+
+    Tokenising also sanitises: a raw message containing FTS5 syntax (quotes,
+    `NEAR`, `*`, `^`) can otherwise error or be silently reinterpreted as
+    operators. Only `[a-z0-9]+` runs survive.
+
+    Returns "" when nothing useful remains, which the caller treats as "no
+    retrieval" -- the request then behaves exactly as it does today.
+    """
+    if not text:
+        return ""
+
+    tokens: list[str] = []
+    for token in _QUERY_TOKEN_RE.findall(text.lower()):
+        if len(token) < 3 or token in _QUERY_STOPWORDS:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+        if len(tokens) >= _QUERY_MAX_TOKENS:
+            break
+
+    return " OR ".join(tokens)
 
 
 @dataclass(frozen=True)
