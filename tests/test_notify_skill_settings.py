@@ -7,6 +7,9 @@ send/queue/cancel behavior.
 
 from __future__ import annotations
 
+import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -158,3 +161,66 @@ async def test_send_urgent_bypasses_mute(skill):
 
     assert result.status.value == "success"
     assert result.data["status"] == "sent"
+
+
+# -----------------------------------------------------------------------------
+# Regression tests for the "database is locked" defect (root-caused: notify.py's
+# connection had no explicit WAL/busy_timeout configuration, relying only on
+# Python's incidental ~5s default; concurrent scheduler-driven writes to the
+# same shared db file could exceed that window and surface as
+# sqlite3.OperationalError: database is locked on quiet-hours/mute writes).
+# Deterministically reproduce the contention with a background thread holding
+# the SQLite write lock for a known duration, instead of depending on real
+# scheduler timing.
+# -----------------------------------------------------------------------------
+
+
+def _hold_write_lock(db_path: str, hold_seconds: float, ready_evt: threading.Event) -> None:
+    """Open a competing connection and hold the SQLite write lock for hold_seconds."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("BEGIN IMMEDIATE")
+    ready_evt.set()
+    time.sleep(hold_seconds)
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_set_quiet_hours_waits_out_brief_lock_contention(tmp_path):
+    """
+    A competing writer holds the SQLite write lock for 1s -- well inside
+    set_wal_pragmas()'s 5000ms busy_timeout, the range of normal, self-
+    resolving contention (e.g. the scheduler's startup burst) this fix
+    exists to tolerate -- so the quiet-hours write must wait for it and
+    succeed, not raise "database is locked".
+    """
+    db_path = str(tmp_path / "notify.db")
+    context = SkillContext(db_path=db_path, check_permission=lambda _perm: True)
+    skill = NotifySkill()
+    await skill.initialize(context)
+
+    hold_seconds = 1.0
+    ready = threading.Event()
+    holder = threading.Thread(target=_hold_write_lock, args=(db_path, hold_seconds, ready))
+    holder.start()
+    assert ready.wait(timeout=5.0), "competing writer never acquired the lock"
+
+    start = time.monotonic()
+    result = await skill.execute("set_quiet_hours", {"start": "21:00", "end": "08:00"})
+    elapsed = time.monotonic() - start
+
+    holder.join(timeout=5.0)
+
+    assert result.status.value == "success", f"expected success, got error: {result.error}"
+    assert result.data["start"] == "21:00"
+    assert result.data["end"] == "08:00"
+    # Proves it genuinely waited out the competing writer rather than
+    # succeeding by a lucky race that wouldn't exercise real contention.
+    assert elapsed >= hold_seconds * 0.8, (
+        f"write completed too fast ({elapsed:.2f}s) to have waited out the "
+        f"{hold_seconds}s held lock -- test isn't exercising real contention"
+    )
+
+    settings = await skill.execute("get_notification_settings")
+    assert settings.data["quiet_hours"]["start"] == "21:00"
