@@ -2,9 +2,19 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-10 (one new tech-debt watchlist item added: an FTS5
+> **Last updated:** 2026-08-11 (status reconciliation against merged repository state: the FTS5
+> external-content deletion/index-staleness item is updated, **not closed**. PR #40's single-writer
+> `memory_fts` architecture (`bbd920d`) resolves it for the live write path and satisfies both
+> regression criteria the entry asked for — re-verified green. A narrower residual was found and
+> reproduced while verifying that claim: databases migrated from the old trigger architecture have
+> `last_index_text IS NULL`, so the tracked delete is a no-op for exactly those rows and
+> pre-migration index content survives `MemoryStore.init()`'s heal. `scripts/backfill_fts.py`
+> clears it (verified), but only as a manual operator step. No production fix for the residual is
+> authorised.)
+>
+> **Previously (2026-08-10):** one new tech-debt watchlist item added: an FTS5
 > external-content deletion/index-staleness issue found while writing S5.1 regression tests,
-> confirmed pre-existing and unrelated to S5.1 — no production fix authorised yet.)
+> confirmed pre-existing and unrelated to S5.1 — no production fix authorised yet.
 >
 > **Previously (2026-07-28):**
 > **Last updated:** 2026-07-28 (documentation reconciliation pass 2: the legacy-implementation-
@@ -304,10 +314,44 @@
   a regression that stage introduced. **Risk category:** correctness/privacy/governance — the
   same shape of risk R1 above tracks (content that should be excluded/replaced remaining
   reachable through a production retrieval surface), via a different mechanism (a stale FTS
-  index, not a consent-gate bypass). **No production fix is authorised yet.** A dedicated fix
-  should include regression tests proving: (a) a stale/replaced token is no longer `MATCH`-able
-  after an update that changes `index_text`, and (b) FTS reflects only the currently
-  governed/indexable representation, not any prior one.
+  index, not a consent-gate bypass).
+
+  **RESOLVED for the live write path (2026-08-10, `bbd920d`, merged via PR #40) — one narrower
+  residual remains open, see below.** The single-writer `memory_fts` architecture replaced the
+  trigger-plus-manual-override design wholesale. `memory_fts_map.last_index_text` now records the
+  verbatim governed text last indexed for each memory, and every writer
+  (`MemoryStore.upsert_memory()`/`delete_memory()`, `FTSClient.upsert()`/`delete()`,
+  `scripts/backfill_fts.py`) goes through one shared primitive pair
+  (`reindex_memory_fts[_async]()`/`remove_memory_fts[_async]()`) that issues FTS5's `'delete'`
+  with that tracked text rather than the empty strings this entry was raised about
+  (`fts_client.py`'s `FTS_DELETE_TRACKED_SQL`). Both regression criteria this entry asked for are
+  met by `tests/test_fts_single_writer_architecture.py`: (a) `test_stale_tokens_not_matchable` and
+  `test_repeated_updates_with_summary_no_corruption` prove replaced tokens stop being `MATCH`-able
+  after an `index_text`-changing update; (b) `test_raw_value_not_matchable_when_summary_preferred`
+  proves FTS holds only the currently governed representation. Verified green 2026-08-11.
+
+  **Residual, still open — pre-existing databases carrying trigger-era index content.**
+  `FTS_DELETE_TRACKED_SQL` matches zero rows when `last_index_text IS NULL`, which is exactly the
+  state of every row in a database migrated from the old trigger architecture (`init_schema()`
+  adds the column via `ALTER TABLE`, leaving it NULL). `MemoryStore.init()`'s
+  `_heal_unindexed_memories()` does select those rows (`fm.last_index_text IS NULL`) and reindex
+  them, but its delete is a no-op for precisely them — so it **inserts the newly governed text
+  alongside, rather than in place of, whatever the old triggers had indexed**. **Reproduced
+  2026-08-11** against a migrated-state database: a stale token planted as trigger-era index
+  content was still `MATCH`-able after a full `MemoryStore.init()` heal, returning the memory with
+  its current value. This is the same privacy/correctness shape as the original finding, narrowed
+  from "every update" to "content indexed before the migration," and it is **not** covered by the
+  tests above (`test_bypass_write_degrades_safely_and_self_heals` covers a memory with *no* index
+  entry, which is a different starting state).
+
+  **Verified remedy, not yet wired into any automatic path:** `scripts/backfill_fts.py` calls
+  `FTSClient.reset_index()` (drop+recreate `memory_fts`, clear `memory_fts_map`) before
+  repopulating every row through `compute_governed_index_text()`, so no pre-migration entry can
+  survive it — confirmed 2026-08-11 to clear the reproduced stale token. Running it is currently a
+  manual operator step. **No production fix for the residual is authorised yet.** A dedicated fix
+  should decide whether migration should force a full governed rebuild (or otherwise clear
+  untracked entries) rather than relying on an operator remembering to run the backfill, and
+  should add the migration-state regression test the current suite lacks.
 
 ## Red-team focus areas
 

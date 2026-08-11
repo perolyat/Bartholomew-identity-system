@@ -2,7 +2,17 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-08 (New Direction reconciliation: Stage 5 restructured from
+> **Last updated:** 2026-08-11 (status reconciliation against merged repository state, no new
+> direction: **S5.1 is complete** — implemented 2026-08-10 (`e1277b7`, merged via PR #40) per the
+> approved `docs/S5_1_COMPETENCY_ARCHITECTURE_DESIGN.md`, and marked `📋 not started` here until
+> now purely because this document was last written before that merge. Stage 5's preamble sentence
+> "No sub-stage of Stage 5 has started" is corrected for the same reason. S5.1's verify commands
+> added below. **This is a fact-correction pass only:** no sub-stage beyond S5.1 is authorised,
+> started, or reordered, and S5.1's completion does not authorise S5.2. See also `RISKS.md`'s
+> updated FTS5 stale-index entry, which the same merge substantially — but not entirely —
+> resolved.)
+>
+> **Previously (2026-08-08):** New Direction reconciliation: Stage 5 restructured from
 > "Initiative engine" to "Developing Agency" — competency architecture (S5.1), training/knowledge
 > acquisition (S5.2), Executive competency reasoning (S5.3), and the experience→learning loop
 > (S5.4) now precede the pre-existing initiative safety scaffolding (S5.5), dry-run (S5.6), and
@@ -673,7 +683,7 @@ not itself grant.
 
 ---
 
-### Stage 5 — Developing Agency (competency, training, learning, then initiative) 📋 NOT STARTED
+### Stage 5 — Developing Agency (competency, training, learning, then initiative) 🚧 IN PROGRESS (S5.0, S5.1 complete)
 
 **Restructured 2026-08-08** (New Direction reconciliation — see `DECISIONS.md`'s "Stage 5
 restructured around competency and training before live initiative" entry for full rationale).
@@ -685,9 +695,11 @@ precede, the generic competency/training/learning architecture described in `CON
 Learning" section. Rationale in one sentence: `Planner.decide()` (the Executive's reasoning path)
 returns `None` unconditionally today — there is no machinery yet for the Executive to retrieve and
 apply competencies, so scheduling *when* to be proactive is premature before the Executive has
-anything competent to be proactive *about*. **No sub-stage of Stage 5 has started.** S5.0 is the
-one already-landed prerequisite. Resuming any sub-stage requires its own separate, explicit
-approval — restructuring the sequence does not authorise implementing any of it.
+anything competent to be proactive *about*. **S5.0 (prerequisite) and S5.1 (competency
+architecture) are complete; S5.2–S5.7 have not started** *(corrected 2026-08-11 — this paragraph
+previously read "No sub-stage of Stage 5 has started," which predated S5.1's 2026-08-10 merge)*.
+Resuming any sub-stage requires its own separate, explicit approval — neither restructuring the
+sequence nor completing S5.1 authorises implementing any later sub-stage.
 
 **Goal:** Bartholomew develops learned competence in genuine areas of responsibility (proven first
 via Residential Estate Management — see "Estate Management as architecture acceptance test" below)
@@ -700,7 +712,7 @@ sequence below by inserting competency/training/learning work first, not by repl
 | Sub-stage | Objective | Status |
 |---|---|---|
 | **S5.0** — Runtime prerequisites | Deterministic scheduler-schema readiness at startup (closes issue #24) | ✅ done 2026-07-25 |
-| **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. **Must also carry the personal / potentially-generalisable / system-level classification and provenance `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning" section requires (added 2026-08-08) — not a cross-instance mechanism, just fields that don't foreclose one later.** See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | 📋 not started |
+| **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. **Must also carry the personal / potentially-generalisable / system-level classification and provenance `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning" section requires (added 2026-08-08) — not a cross-instance mechanism, just fields that don't foreclose one later.** See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | ✅ done 2026-08-10 |
 | **S5.2** — Training and knowledge acquisition | Define and implement how training material (formal reference material, direct instruction, demonstration, correction, supervised-work outcomes) enters shared Memory with provenance and consent, per `CONSTITUTION.md`'s "Training vs. configuration." | 📋 not started |
 | **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. | 📋 not started |
 | **S5.4** — Experience → learning/consolidation loop | Implement the Experience → Reflection → candidate learning → provenance/confidence → Governance/review (where required) → consolidation loop described in `COGNITIVE_RUNTIME.md`. This is also where the pre-existing reflection-ownership implementation gap (`ReflectionGenerator` authoritative, `NarratorEngine` supplementary — see `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) must be closed, since S5.4 depends on reflection composition having a single authority. | 📋 not started |
@@ -722,6 +734,27 @@ so Stage 5's proactive drives and their user-visible state are not built on nond
 scheduler initialization. ✅ merged 2026-07-25, PR #25, merge commit `3496cfb`; issue #24 is
 confirmed closed. Proven by `tests/test_scheduler_startup_readiness.py` (10 tests) on the
 3.10 + 3.11 matrix. See MASTER_PLAN.md's P3 "S5.0" note and DECISIONS.md.
+
+**S5.1 complete (2026-08-10, `e1277b7`, merged via PR #40).** Exit deliverable:
+`bartholomew/kernel/competency.py`, implementing the explicitly-approved
+`docs/S5_1_COMPETENCY_ARCHITECTURE_DESIGN.md`. Five new `MemoryStore` `kind` values
+(`competency`, `competency_knowledge`, `competency_procedure`, `competency_heuristic`,
+`competency_evidence`) carried as structured JSON in `memories.value`/`summary` — **no new table,
+no new column, no new memory authority, no new Executive or Governance path**, per that design's
+own non-negotiable invariants. Every record carries the classification (`personal` /
+`potentially_generalisable` / `system`) and provenance envelope `CONSTITUTION.md`'s "Personal
+learning vs. potentially generalisable and system-level learning" section requires; the module is
+pure data (no persistence, retrieval, or I/O of any kind) and never branches on `classification`
+to do anything — `tests/test_competency_no_auto_promotion.py` asserts structurally that no
+promotion, export, or transport mechanism was introduced. Proven by **43 tests** across
+`tests/test_competency_model.py` (27), `test_competency_memory_shapes.py` (8),
+`test_competency_retrieval.py` (3), `test_competency_worked_example.py` (2), and
+`test_competency_no_auto_promotion.py` (3), all passing. Estate Management appears only as inert
+worked-example/fixture data, per this stage's scope. Two items the design flagged remain
+deliberately **not** done and are not S5.1 defects: `memory_rules.yaml` carries no explicit
+entries for the five new kinds (design §9, "recommended, not required"), and `upsert_memory()`'s
+`memory_dict` still doesn't pass through `tags` (design §10, flagged-not-fixed). **Approval of
+S5.1 does not authorise S5.2, S5.3, or S5.4.**
 
 **Exit criteria (S5.1–S5.4, competency/training/learning):**
 - A generic competency data/contract model exists, expressed as structured Memory content (not a
@@ -751,6 +784,12 @@ confirmed closed. Proven by `tests/test_scheduler_startup_readiness.py` (10 test
 
 **Verify:**
 ```bash
+# S5.1 competency architecture data model (implemented 2026-08-10)
+pytest -q tests/test_competency_model.py tests/test_competency_memory_shapes.py \
+  tests/test_competency_retrieval.py tests/test_competency_worked_example.py \
+  tests/test_competency_no_auto_promotion.py
+
+# S5.5-S5.7 initiative work -- not implemented; this test file does not exist yet.
 pytest -q tests/test_scheduler_checkins.py
 ```
 
