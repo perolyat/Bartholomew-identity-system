@@ -8,10 +8,20 @@
 > S5.1's delivered data model (`competency.py`) and S5.2's delivered write path
 > (`training.py` + `run_training_through_runtime_contract()`).
 >
-> **Status: PROPOSED 2026-08-11. NOT APPROVED. No implementation is authorised by this document.**
+> **Status: PROPOSED 2026-08-11. Decisions A–D provisionally approved; Decision E revised and
+> awaiting approval. NOT APPROVED overall, and no implementation is authorised by this document.**
 > Per Stage 5's approval model and the S5.1/S5.2 precedent, the sequence is: this design approved
 > in principle → a separate implementation proposal approved → implementation. S5.2's completion
 > does not authorise S5.3.
+>
+> **Revision 2026-08-11 (same day), after review:** Decision E was split into E.1 (no *automatic*
+> exposure — a standing position) and E.2 (explicit user-requested decision explanation —
+> **preserved as a future capability and deliberately not foreclosed**), because the original
+> "audit trail only" wording risked reading as a permanent prohibition and would then have
+> contradicted `CONSTITUTION.md`, which lists **explainability** among the things Governance owns
+> and requires the system to "be explainable." E.2 places a positive obligation on this sub-stage:
+> the recorded context must be explanation-grade. New §6.1 also states explicitly that S5.3 is
+> **not** the final deliberative Executive reasoning architecture.
 >
 > **Reconnaissance basis:** every claim in §3 and §4 was verified by direct reading of the merged
 > repository at `d3b0753`, not inferred from planning documents.
@@ -139,6 +149,13 @@ discipline `competency.py` and `training.py` hold to:
 - `CompetencyContext` — the structured result: which competencies were consulted, their
   confidence, which procedures/heuristics/knowledge were selected, and the aggregate supervision
   requirement.
+
+  **This structure must be explanation-grade** (Decision E.2): per applied record it carries the
+  record's identity (`kind` + `key`), its provenance, its classification, and its confidence — not
+  a flattened summary or a count. S5.3 exposes none of this to the user automatically, but a
+  future "why did you recommend that?" capability can only be built on a record that kept this
+  detail. Storing less would foreclose that capability by omission, since a decision cannot be
+  reconstructed after the fact.
 - `render_for_prompt(context) -> str` — the plain-text rendering folded into the Interpretation
   prompt, in the same labelled-lines style `_build_interpretation()` already uses.
 
@@ -206,6 +223,32 @@ and it would need a review-before-action loop that is structurally S5.4/S5.5 mac
 selection logic in S5.3 is deterministic and testable; making the Executive genuinely deliberative
 is a much larger step that deserves its own approval.
 
+### 6.1 S5.3 is not the final Executive reasoning architecture
+
+**Stated explicitly so this sub-stage's narrowness is never mistaken for a completed design of
+Bartholomew's judgement.** S5.3 delivers exactly three things: competency **retrieval**,
+**selection**, and **supervision propagation**. It is the first step in which the Executive
+consults learned competence at all — not the finished shape of how Bartholomew reasons.
+
+Deliberately **not** decided, foreclosed, or implied by this sub-stage:
+
+- **Model-driven planning and prospective reasoning** — the Executive weighing options, projecting
+  consequences, or composing multi-step plans. `COGNITIVE_RUNTIME.md`'s Executive row anticipates
+  richer construction ("combining retrieved knowledge/procedures/heuristics… current goals and
+  context, and available capabilities into a proposed action"); S5.3 implements the *retrieval and
+  supervision* half of that sentence and leaves the *combining* to later, separately-approved work.
+- **Deliberation over competing competencies or conflicting heuristics** — S5.3 selects by
+  relevance and confidence; it does not adjudicate between records that disagree.
+- **Learning from whether an applied competency helped** — that is S5.4's experience loop.
+- **Any change to where reasoning happens.** A future deliberative Executive may well need a
+  different home than today's split between `Planner` and the seams (§4). S5.3 does not settle
+  that question, and its narrowness must not be cited later as precedent that the split is correct.
+
+The design constraint this places on the implementation: **the seam must remain a place richer
+reasoning can be added, not a hardcoded lookup that a later architecture must tear out.** Selection
+is a named, replaceable function; the context it produces is structured data, not a pre-rendered
+string baked into a prompt.
+
 ## 7. Non-negotiable invariants
 
 - **No new Governance path.** Brake + `evaluate_tool_policy` remain the sole admission authority.
@@ -222,6 +265,12 @@ is a much larger step that deserves its own approval.
 - **`classification` remains inert** — reasoning never branches on
   `potentially_generalisable` to promote, export, or transport anything. S5.1's structural test is
   extended to cover the reasoning module.
+- **No automatic exposure of competency context** in ordinary responses (Decision E.1) — and,
+  equally binding in the other direction, **the recorded context must stay explanation-grade**
+  (Decision E.2) so a future user-requested decision-explanation capability is not foreclosed by
+  omission. Both halves are testable (§8).
+- **No chain-of-thought is produced or stored.** What is recorded is which stored, governed
+  records were retrieved and applied — never a model reasoning trace.
 
 ## 8. Verify plan (once implementation is separately approved)
 
@@ -253,6 +302,12 @@ pytest -q tests/test_competency_reasoning_off_loop.py
 # Regression: decide() still returns None; no proactive nudge is produced.
 pytest -q tests/test_planner_decide_remains_inert.py
 
+# Decision E, both halves: no competency context leaks into an ordinary
+# response (E.1), AND the recorded context is explanation-grade -- per-record
+# identity, provenance, classification and confidence survive, so a future
+# user-requested explanation capability is not foreclosed by omission (E.2).
+pytest -q tests/test_competency_context_exposure_boundary.py
+
 # Extended S5.1 invariant: still no promotion/export/transport mechanism.
 pytest -q tests/test_competency_no_auto_promotion.py
 ```
@@ -273,6 +328,10 @@ If any of these is hit, **stop and return for review** rather than working aroun
    on the read path, which must be raised, not worked around.
 5. **`CandidateAction` cannot carry competency context without changes rippling into unrelated
    surfaces** (voice/sight/awaiting-response), indicating the field belongs somewhere else.
+6. **Explanation-grade recording (Decision E.2) turns out to conflict with consent or redaction** —
+   e.g. retaining per-record provenance in the reflection would persist content the consent gate
+   excluded. That is a genuine privacy/explainability tension and must be raised for decision, not
+   resolved unilaterally in either direction.
 
 ## 10. Decisions required before an implementation proposal
 
@@ -304,7 +363,45 @@ here'", but making Bartholomew *say* that is user-visible behaviour change on th
 Recommend S5.3 stays silent-when-unsure, and that surfacing uncertainty to the user be its own
 decision.
 
-**Decision E — is the competency context user-visible?** *Recommendation: not in S5.3.* The
-context is recorded in the Reflection for auditability, but not rendered to the user as "I used
-these competencies." Explainability UI is a Stage 1-shaped product decision, and Stage 1's scope
-was deliberately fixed.
+**Decision E — exposure of competency context.** *(Revised 2026-08-11 after review. The earlier
+wording — "not user-visible… audit trail only" — was too blunt and risked reading as a permanent
+prohibition on user-facing decision explanation. It is replaced by the two-part boundary below,
+because a flat prohibition would contradict `CONSTITUTION.md`, which lists **explainability** among
+the things Governance owns and requires the system to "**be explainable**".)*
+
+*Recommendation: separate **automatic exposure** from **explicit user-requested explanation**, and
+decide them differently.*
+
+**E.1 — Automatic exposure: NO, and not merely "not yet."** Competency context must not be
+appended to, injected into, or narrated within ordinary responses. Bartholomew does not volunteer
+"I consulted these three competencies" alongside an answer the user simply asked for. This is a
+standing design position, not a sequencing artefact: unsolicited internal detail is noise, it
+degrades the response, and it invites users to treat retrieved records as authority. **S5.3
+implements no automatic exposure.**
+
+**E.2 — Explicit user-requested decision explanation: PRESERVED as a future capability, not built
+in S5.3, and explicitly not foreclosed.** A user asking "why did you recommend that?" and getting
+a concise account of the knowledge, procedure, or heuristic relied upon — with its provenance and
+confidence — is a legitimate and constitutionally-supported capability. Two things make it
+tractable and safe, and both are properties of *this* design:
+
+- **What S5.3 records is not chain-of-thought.** It is a structured list of *which stored, governed
+  competency records were retrieved and applied*, each already carrying provenance
+  (`source_type`/`detail`/`recorded_by`/`recorded_at`), classification, and confidence from S5.1's
+  envelope. That is factual, inspectable, user-owned data — categorically different from a model's
+  internal reasoning trace, which this design neither produces nor stores.
+- **The repository already does this shape of thing.** Stage 1's S1.5 shipped a user-facing
+  governance audit/provenance view ("who/what approved a given action and when"). Decision
+  provenance for competency-informed responses is the same principle extended to a new subsystem,
+  not a new category of disclosure.
+
+**The obligation E.2 places on S5.3 — this is the actionable part.** The competency context S5.3
+records must be **explanation-grade**: structured, per-record, and carrying each applied record's
+identity, provenance, and confidence, rather than a flattened summary string or a bare count. If
+S5.3 recorded only "3 competencies used," a future explanation feature would have nothing to render
+and would have to re-derive the decision — which is impossible after the fact. **Recording it
+poorly would foreclose E.2 by omission**, which is exactly what this revision exists to prevent.
+
+Designing the explanation surface itself — how it is asked for, how it reads, how much it says,
+and how it respects consent/redaction on the records it cites — remains separate, later,
+Stage 1-shaped work requiring its own approval. S5.3 makes it *possible*, and does not make it.
