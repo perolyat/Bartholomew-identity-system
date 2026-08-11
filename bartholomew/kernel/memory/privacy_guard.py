@@ -1,8 +1,46 @@
 # privacy_guard.py
+"""
+Keyword-based sensitivity check gating memory writes.
+
+`is_sensitive()` decides whether content needs human consent before it can
+be stored (`MemoryStore.upsert_memory()`'s privacy_guard gate). It is one of
+two overlapping sensitivity vocabularies in the codebase -- see the
+"privacy_guard vs memory_rules.yaml" entry in `RISKS.md` for the recorded,
+deliberately-unresolved disagreement between them.
+
+Matching semantics (corrected 2026-08-11)
+------------------------------------------
+Two defects were found while integrating S5.2's training seam, both
+pre-existing and neither specific to any one caller:
+
+1. **Lexical.** Matching was an unanchored substring scan, so ordinary
+   English tripped the gate: "memory allocation" matched `location`, "the
+   company went bankrupt" matched `bank`, "accounting" matched `account`,
+   "healthcare" matched `health`, "filename"/"rename" matched `name`.
+   Matching is now word-boundary anchored.
+
+   Boundary anchoring alone would have *weakened* the gate in two ways, so
+   both are explicitly compensated:
+     - plurals ("her addresses", "patient names") would stop matching, so
+       the pattern accepts an optional `s`/`es` suffix;
+     - compound terms substring matching caught incidentally
+       ("username", "surname", "nickname") would stop matching, so they are
+       enumerated in `SENSITIVE_COMPOUND_TERMS`.
+
+2. **Structural.** The gate scans whatever representation the caller stores.
+   For structured (JSON) content that includes the *schema keys*, so a
+   record was flagged on the shape of its schema rather than on anything a
+   user wrote -- e.g. S5.1's competency records carry a `"name"` key, which
+   made every one of them "sensitive" regardless of content. See
+   `register_structural_schema()`.
+"""
+
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+import json
+import re
+from collections.abc import Awaitable, Callable, Iterable
 
 SENSITIVE_KEYWORDS = [
     "name",
@@ -18,12 +56,81 @@ SENSITIVE_KEYWORDS = [
     "account",
 ]
 
+#: Compound terms that the previous unanchored substring match caught
+#: incidentally (each contains a `SENSITIVE_KEYWORDS` entry) and that
+#: word-boundary matching would otherwise lose. Enumerated so the boundary
+#: correction cannot weaken the gate. This is not a general expansion of the
+#: sensitivity vocabulary -- it preserves exactly what was already caught.
+SENSITIVE_COMPOUND_TERMS = [
+    "username",
+    "surname",
+    "nickname",
+]
+
+# One pattern over both lists. `\b` anchoring makes ordering irrelevant:
+# "username" cannot match the `name` alternative, because there is no word
+# boundary before "name" inside it. The optional `(?:s|es)` suffix keeps
+# plurals matching.
+_SENSITIVE_PATTERN = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(term) for term in SENSITIVE_KEYWORDS + SENSITIVE_COMPOUND_TERMS)
+    + r")(?:s|es)?\b",
+)
+
 # Resolves a consent prompt for storing sensitive content. Registered by a
 # UI/CLI at startup via set_consent_handler(); the kernel itself never blocks
 # on stdin. With no handler registered, requests fail closed (denied) instead
 # of hanging headless/API deployments.
 ConsentHandler = Callable[[str], "bool | Awaitable[bool]"]
 _consent_handler: ConsentHandler | None = None
+
+
+# ---------------------------------------------------------------------------
+# Structural schema registry
+# ---------------------------------------------------------------------------
+#
+# Governance rule (approved 2026-08-11): the schema-defined keys of a
+# *registered* structured record kind are structural metadata, not user
+# content, and are excluded from content sensitivity scanning. **All values
+# are always scanned in full**, as are any keys not part of the registered
+# schema (e.g. user-chosen keys inside a nested map).
+#
+# Unknown/unregistered structured data deliberately keeps the conservative
+# key-and-value scan. That matters: a bare `{"password": "hunter2"}` is
+# sensitive *only* by virtue of its key, so a blanket "scan values, not keys"
+# rule would have been a real consent bypass. It was measured and rejected
+# for exactly that reason.
+#
+# Registration is a fail-safe, not a fail-open: if a kind is never
+# registered, its content is scanned conservatively (raw, keys included) and
+# at worst over-triggers consent. Nothing becomes less protected by a
+# missing registration.
+_SCHEMA_KEYS_BY_KIND: dict[str, frozenset[str]] = {}
+
+
+def register_structural_schema(kind: str, keys: Iterable[str]) -> None:
+    """
+    Declare `kind`'s schema-defined key names as structural metadata.
+
+    Callers should register the *complete* set of keys their serialised
+    shape emits, including nested ones. Any key not registered is treated as
+    content and scanned.
+
+    A kind whose schema legitimately contains a sensitivity-indicating key
+    (say a literal `password` field) must NOT be registered -- excluding
+    that key would hide the only signal that the adjacent value is a secret.
+    """
+    _SCHEMA_KEYS_BY_KIND[kind] = frozenset(keys)
+
+
+def registered_schema_keys(kind: str) -> frozenset[str] | None:
+    """The registered schema keys for `kind`, or None if it is unregistered."""
+    return _SCHEMA_KEYS_BY_KIND.get(kind)
+
+
+def registered_structural_kinds() -> frozenset[str]:
+    """Every kind currently registered as structured."""
+    return frozenset(_SCHEMA_KEYS_BY_KIND)
 
 
 def set_consent_handler(handler: ConsentHandler | None) -> None:
@@ -37,8 +144,53 @@ def get_consent_handler() -> ConsentHandler | None:
     return _consent_handler
 
 
-def is_sensitive(text: str) -> bool:
-    return any(keyword in text.lower() for keyword in SENSITIVE_KEYWORDS)
+def _matches(text: str) -> bool:
+    return bool(_SENSITIVE_PATTERN.search(text.lower()))
+
+
+def _collect_scan_parts(node: object, schema_keys: frozenset[str], parts: list[str]) -> None:
+    """
+    Build the content projection of a decoded structure: every value, plus
+    every key that is not part of the registered schema.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key not in schema_keys:
+                parts.append(str(key))
+            _collect_scan_parts(value, schema_keys, parts)
+    elif isinstance(node, (list, tuple)):
+        for item in node:
+            _collect_scan_parts(item, schema_keys, parts)
+    elif node is not None:
+        parts.append(str(node))
+
+
+def is_sensitive(text: str, *, kind: str | None = None) -> bool:
+    """
+    Whether `text` needs consent before storage.
+
+    `kind` is the memory kind being written. When it names a registered
+    structured schema and `text` decodes as JSON, the scan runs over the
+    content projection (values, plus non-schema keys) instead of the raw
+    serialisation. In every other case -- unregistered kind, no kind, or
+    content that does not decode as JSON -- the raw text is scanned exactly
+    as before.
+    """
+    schema_keys = _SCHEMA_KEYS_BY_KIND.get(kind) if kind is not None else None
+    if schema_keys is None:
+        return _matches(text)
+
+    try:
+        decoded = json.loads(text)
+    except (TypeError, ValueError):
+        # Registered kind, but this value is not the structured shape (a
+        # summary substitution, say). Fall back to the conservative scan
+        # rather than assuming anything about it.
+        return _matches(text)
+
+    parts: list[str] = []
+    _collect_scan_parts(decoded, schema_keys, parts)
+    return _matches(" ".join(parts))
 
 
 async def request_permission_to_store(text: str) -> bool:

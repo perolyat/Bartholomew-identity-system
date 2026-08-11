@@ -266,7 +266,7 @@ def brake_on(
     scope: list[str] = typer.Option(
         None,
         "--scope",
-        help="Scopes to block (global, skills, sight, voice, scheduler)",
+        help="Scopes to block (global, skills, sight, voice, scheduler, training)",
     ),
     db: str = typer.Option(
         default="data/bartholomew.db",
@@ -343,6 +343,144 @@ def brake_status(
         console.print(f"Scopes: {', '.join(sorted(state.scopes))}\n")
     else:
         console.print("[green]Status: DISENGAGED (allowing all)[/green]\n")
+
+
+@app.command("train")
+def train(
+    file: str = typer.Argument(
+        ...,
+        help="Path to a JSON training submission "
+        "(competency_id, source_type, source_detail, records[])",
+    ),
+    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+):
+    """
+    Submit structured training material for a competency (S5.2).
+
+    Takes already-structured records -- this command does not extract
+    records from prose. Per the approved S5.2 design that is a scope
+    boundary, not the intended final user experience: conversational and
+    document-based training are expected later, feeding this same governed
+    path rather than a separate one.
+
+    Records that trip a consent rule are queued for review in the consent
+    inbox rather than stored, and are reported separately below: "queued"
+    means Bartholomew does NOT yet know it.
+    """
+    import asyncio
+    import json
+    from pathlib import Path
+
+    from bartholomew.kernel import training as training_mod
+    from bartholomew.kernel.memory_store import MemoryStore
+    from bartholomew.kernel.runtime_contract import run_training_through_runtime_contract
+
+    try:
+        payload = json.loads(Path(file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Could not read submission: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    competency_id = payload.get("competency_id", "")
+
+    try:
+        records = [
+            training_mod.record_from_payload(
+                item["kind"],
+                {**item.get("data", {}), "competency_id": competency_id},
+                slug=item.get("slug"),
+            )
+            for item in payload.get("records", [])
+        ]
+    except (ValueError, KeyError, TypeError) as exc:
+        console.print(f"[red]Invalid record in submission: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    submission = training_mod.TrainingSubmission(
+        competency_id=competency_id,
+        source_type=payload.get("source_type", ""),
+        source_detail=payload.get("source_detail", ""),
+        records=records,
+    )
+
+    class _NoExperience:
+        """The CLI has no running Experience Kernel. These return empties
+        rather than being absent so _build_interpretation() takes its normal
+        'nothing to add' path instead of logging an AttributeError traceback
+        per field -- the enrichment is genuinely unavailable here, which is
+        not an error worth alarming the user with. Governance and consent
+        are unaffected either way."""
+
+        def get_active_goals(self):
+            return []
+
+        def get_active_pack_id(self):
+            return None
+
+        def get_context_string(self):
+            return ""
+
+    class _CliDaemon:
+        """Minimal context for the seam: MemoryStore plus empty Experience
+        Kernel state."""
+
+        def __init__(self, mem):
+            self.mem = mem
+            self.experience = _NoExperience()
+            self.persona_manager = _NoExperience()
+            self.working_memory = _NoExperience()
+
+    async def _run():
+        mem = MemoryStore(db)
+        await mem.init()
+        try:
+            return await run_training_through_runtime_contract(
+                _CliDaemon(mem),
+                submission,
+                recorded_by="user",
+            )
+        finally:
+            await mem.close()
+
+    result = asyncio.run(_run())
+
+    if result.errors:
+        console.print("[red]Submission rejected:[/red]")
+        for error in result.errors:
+            console.print(f"  - {error}")
+        raise typer.Exit(code=1)
+
+    if not result.governance_allowed:
+        console.print(f"[red]Blocked by governance: {result.governance_reason}[/red]")
+        raise typer.Exit(code=1)
+
+    table = Table(title=f"Training: {competency_id}")
+    table.add_column("Kind")
+    table.add_column("Key")
+    table.add_column("Outcome")
+    table.add_column("Detail")
+    for outcome in result.outcomes:
+        colour = "green" if outcome.outcome == training_mod.OUTCOME_STORED else "yellow"
+        table.add_row(
+            outcome.kind,
+            outcome.key,
+            f"[{colour}]{outcome.outcome}[/{colour}]",
+            outcome.detail or "",
+        )
+    console.print(table)
+
+    summary = result.to_dict()["summary"]
+    console.print(
+        f"\nstored: {summary['stored']} · "
+        f"queued for consent: {summary['queued_for_consent']} · "
+        f"rejected: {summary['rejected_by_policy']} · "
+        f"invalid: {summary['invalid']}",
+    )
+    if summary["queued_for_consent"]:
+        console.print(
+            "[yellow]Queued records are awaiting your approval in the consent inbox "
+            "and are NOT yet part of what Bartholomew knows.[/yellow]",
+        )
 
 
 def main():

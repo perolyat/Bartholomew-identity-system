@@ -638,7 +638,13 @@ class MemoryStore:
         # handler explicitly declining, which must never be second-guessed
         # or re-queued), the content is preserved in pending_sensitive_writes
         # for later human review instead of being dropped.
-        if not skip_privacy_guard and is_sensitive(value):
+        # `kind` lets the guard skip schema key names for kinds registered as
+        # structured, so a record is not flagged on the shape of its schema
+        # rather than its content (see privacy_guard's module docstring).
+        # Values are always scanned in full, and an unregistered kind keeps
+        # the conservative raw scan -- passing `kind` can only ever narrow
+        # false positives, never open a bypass.
+        if not skip_privacy_guard and is_sensitive(value, kind=kind):
             if get_consent_handler() is None:
                 pending_id = await self.record_pending_sensitive_write(
                     kind,
@@ -1179,6 +1185,48 @@ class MemoryStore:
                 raise ValueError(
                     f"No pending sensitive write with id {pending_id} in 'pending' status",
                 )
+
+    async def get_memory(self, kind: str, key: str) -> dict[str, Any] | None:
+        """
+        Read one memory by its `(kind, key)` identity, or None if absent.
+
+        Read-only, and deliberately *not* a retrieval/relevance path: it is
+        an exact-identity lookup on the existing unique `(kind, key)` index,
+        for callers that already know precisely which record they mean.
+
+        Added for S5.2's training seam, which must read a record's current
+        `revision` before overwriting it so the supersession can be recorded
+        (see `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` Sec.13.4).
+        That read belongs here rather than in the seam: `MemoryStore` is the
+        single memory authority, so the alternative -- the seam opening its
+        own connection -- would put a second persistence access point next to
+        it. This adds no write path and applies no consent gating, so it must
+        not be used to surface memories to a user or a model; use the
+        `ConsentGate`-filtered retrieval layer for that.
+
+        Values encrypted at rest are decrypted here, matching
+        `list_pending_sensitive_writes()`.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, kind, key, value, summary, ts FROM memories "
+                "WHERE kind = ? AND key = ?",
+                (kind, key),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+
+            entry = dict(row)
+            entry["value"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                entry["value"],
+            )
+            if entry.get("summary"):
+                entry["summary"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                    entry["summary"],
+                )
+            return entry
 
     async def delete_memory(self, kind: str, key: str) -> bool:
         """

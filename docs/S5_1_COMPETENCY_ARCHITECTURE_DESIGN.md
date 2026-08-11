@@ -13,9 +13,11 @@
 > **Approved for implementation 2026-08-09**, in the same sequence this document's own process
 > requires: this design approved in principle, then a separate implementation proposal (scope,
 > files, and §4.1's `summary` parameter option) approved, then the revised invariant-test approach
-> (§12) approved, before any production code was touched. Implementation is complete and under
-> final correction/review as of 2026-08-10 — see §12 for the non-negotiable invariants it must
-> hold to.
+> (§12) approved, before any production code was touched. **Implementation complete and merged
+> 2026-08-10** (`e1277b7`, PR #40) as `bartholomew/kernel/competency.py`, with 43 tests across the
+> five files §13 anticipated; `ROADMAP.md`'s S5.1 row and Stage 5 completion note record the
+> delivered result. See §12 for the non-negotiable invariants it holds to. *(Status line corrected
+> 2026-08-11; it previously read "under final correction/review as of 2026-08-10.")*
 
 ## 1. What this closes
 

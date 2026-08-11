@@ -1,7 +1,8 @@
 """
 Parking Brake: Runtime wiring for fail-closed safety gate.
 
-One global brake with optional scopes: global, skills, sight, voice, scheduler.
+One global brake with optional scopes: global, skills, sight, voice, scheduler,
+training.
 Fail-closed: when engaged, gated components refuse to start/execute.
 """
 

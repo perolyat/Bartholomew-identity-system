@@ -141,16 +141,21 @@ shell, which must expose an awaiting-response queue — see `ROADMAP.md`) and an
 Stage 5 behaviour are built against a single, already-agreed shape rather than inventing one ad
 hoc. Building it is separate, approved work, not authorised by this documentation entry.
 
-## Competency, Training, and Learning (conceptual extension — added 2026-08-08, not yet implemented)
+## Competency, Training, and Learning (conceptual extension — added 2026-08-08; data model implemented S5.1, the rest not yet)
 
 *Per the architecture-review handoff reconciled in `DECISIONS.md`'s "One developing digital
 individual — competency and training architecture" entry. This section conceptually extends the
 Runtime Contract stages above to describe how Bartholomew is meant to acquire and apply learned
-competence. Nothing in this section is implemented today — `Planner.decide()` (Executive) still
-returns `None` unconditionally, and no competency, training, or candidate-learning data model
-exists in the code as of this writing. This is a canonical requirement for future, separately
-authorised work (see `ROADMAP.md`'s Stage 5), the same status the `awaiting_response` state above
-has. Recording it here does not authorise building it.*
+competence. **Status corrected 2026-08-11** (this paragraph previously read "Nothing in this
+section is implemented today... no competency, training, or candidate-learning data model exists
+in the code," which predated S5.1's 2026-08-10 merge): the **competency data model now exists** —
+`bartholomew/kernel/competency.py`, five `MemoryStore` `kind` values, pure data with no
+persistence or retrieval of its own (`ROADMAP.md`'s S5.1). Everything else in this section remains
+unimplemented: `Planner.decide()` (Executive) still returns `None` unconditionally (S5.3), no
+training-ingestion path exists (S5.2), and no candidate-learning/consolidation loop exists (S5.4).
+Those remain canonical requirements for future, separately authorised work (see `ROADMAP.md`'s
+Stage 5), the same status the `awaiting_response` state above has. Recording them here does not
+authorise building them.*
 
 ### Why this extends the Runtime Contract rather than replacing it
 

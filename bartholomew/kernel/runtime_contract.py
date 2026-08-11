@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from . import policy_engine
+from . import policy_engine, training
 from .blocking_executor import run_off_loop
 from .memory.privacy_guard import get_consent_handler
 from .reflection import ActionReflection, record_action_reflection
@@ -1185,3 +1185,323 @@ async def _maybe_auto_resolve_awaiting_response(
         )
     except Exception:
         logger.exception("Failed to auto-resolve awaiting_response from a chat reply")
+
+
+# =============================================================================
+# Training surface (Stage 5, S5.2) -- the governed write path by which training
+# material becomes stored competency records.
+#
+# Per docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md (design and Decisions
+# A-E approved 2026-08-11). Training enters as an Observation through this
+# same seam every other surface uses, and lands in Memory through the existing
+# MemoryStore.upsert_memory() chain -- no separate ingestion runtime, no second
+# Memory authority, no second Governance path (COGNITIVE_RUNTIME.md: "Training
+# as Memory input, not a separate pipeline").
+#
+# Constraint 1 (design Sec.5.5/9.1): this seam consumes structured,
+# provenance-bearing records -- never keystrokes. It must not acquire any
+# structural assumption that a human authored the submission. That is what
+# lets future conversational / model-assisted / document-extraction paths
+# ("Layer 0") feed this same governed write later. Structured manual
+# submission is the first client of this seam, not the intended final user
+# experience.
+# =============================================================================
+
+
+async def _record_training_reflection(
+    daemon: KernelDaemon,
+    candidate_action: CandidateAction,
+    outcome: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Reflection -> Memory tail for one training submission (Exit Gate #4's
+    shared sink, extended to the training surface).
+
+    This is also where supersession history lives: `reflections` is a
+    separate, append-only table, so overwriting a competency record's
+    current state in `memories` does not lose the superseded claim's
+    provenance (design Sec.13.4). No new store, no second write authority.
+    """
+    reflection = ActionReflection(
+        surface="training",
+        action=candidate_action.kind,
+        outcome=outcome,
+        summary=f"Training ingestion ({candidate_action.kind}): {outcome}",
+        details=details or {},
+    )
+    await record_action_reflection(getattr(daemon, "mem", None), reflection)
+
+
+async def _classify_not_stored(
+    mem: Any,
+    kind: str,
+    key: str,
+    allow_store: bool,
+) -> tuple[str, str | None]:
+    """
+    Explain a `stored=False` result, by observing resulting state rather than
+    re-deriving `upsert_memory()`'s internal branching.
+
+    `StoreResult` does not distinguish its four not-stored paths, and the
+    difference matters to the user: content queued for consent is waiting in
+    the inbox and will land once approved, whereas a policy rejection or an
+    explicitly declined consent prompt never will. Telling someone "trained"
+    (or even just "not stored") without that distinction would misinform them
+    about what Bartholomew actually knows.
+
+    `allow_store` comes from a read-only rules evaluation and identifies the
+    hard `never_store` block. For everything else this checks whether a row
+    actually appeared in the pending inbox -- an observation of state, not an
+    inference about control flow, so it stays correct if upsert_memory()'s
+    internals change.
+    """
+    if not allow_store:
+        return (
+            training.OUTCOME_REJECTED_BY_POLICY,
+            "blocked by a never_store governance rule",
+        )
+
+    try:
+        pending = await mem.list_pending_sensitive_writes(limit=50)
+    except Exception:
+        logger.exception("Failed to read pending consent queue while classifying training outcome")
+        return (
+            training.OUTCOME_QUEUED_FOR_CONSENT,
+            "not stored; pending-queue state could not be confirmed",
+        )
+
+    for entry in pending:
+        if entry.get("kind") == kind and entry.get("key") == key:
+            return (
+                training.OUTCOME_QUEUED_FOR_CONSENT,
+                f"awaiting consent in the review inbox (pending_id={entry.get('id')}, "
+                f"reason={entry.get('reason')})",
+            )
+
+    return (
+        training.OUTCOME_DECLINED_BY_CONSENT_HANDLER,
+        "a registered consent handler declined this write; it was not queued",
+    )
+
+
+async def run_training_through_runtime_contract(
+    daemon: KernelDaemon,
+    submission: training.TrainingSubmission,
+    *,
+    recorded_by: str = "user",
+) -> training.TrainingRuntimeResult:
+    """
+    Trace one training submission through the Runtime Contract seam.
+
+    Stages, in order:
+      1. Observation  -- source="training", the submitted material
+      2. Interpretation -- enriched with the same Experience Kernel state
+         every other surface sees
+      3. CandidateAction -- kind="training_ingest": a proposal to write
+      4. Governance -- fail-closed brake check on the "training" scope,
+         BEFORE any record is processed, so a blocked brake yields zero
+         writes and zero consent-queue entries
+      5. Memory -- each record written via the existing
+         MemoryStore.upsert_memory(), per-record independent (Decision C)
+      6. Reflection -- one per submission, including any supersession
+
+    `recorded_by` is supplied by the ingestion route, never read from the
+    submission or a request body (design Sec.5.3): a caller must not be able
+    to claim material came from the user when it came from elsewhere. Its
+    companion `recorded_at` is the server clock, for the same reason.
+    """
+    import json as _json
+
+    from .competency import PROVENANCE_RECORDED_BY_VALUES
+    from .memory_rules import MemoryRulesEngine
+
+    result = training.TrainingRuntimeResult(
+        competency_id=submission.competency_id,
+        governance_allowed=False,
+    )
+
+    if recorded_by not in PROVENANCE_RECORDED_BY_VALUES:
+        result.errors.append(
+            f"recorded_by must be one of {sorted(PROVENANCE_RECORDED_BY_VALUES)}, "
+            f"got {recorded_by!r}",
+        )
+        return result
+
+    submission_errors = submission.validate()
+    if submission_errors:
+        result.errors.extend(submission_errors)
+        return result
+
+    observation = Observation(
+        source=training.TRAINING_OBSERVATION_SOURCE,
+        raw_content=submission.source_detail,
+    )
+    interpretation = _build_interpretation(daemon, observation)
+    candidate_action = CandidateAction(
+        kind=training.TRAINING_ACTION_KIND,
+        interpretation=interpretation,
+    )
+
+    # --- Governance: fail-closed, before any record is processed ---------
+    # Same authority every other surface's seam uses (chat, scheduler): the
+    # B6 GovernanceStore path, not the retired legacy ParkingBrake writer.
+    from bartholomew.orchestrator.safety.governance_store import (
+        is_blocked_fail_closed_off_loop,
+    )
+
+    blocked = await is_blocked_fail_closed_off_loop(
+        training.TRAINING_BRAKE_SCOPE,
+        daemon.mem.db_path,
+        governance_store=getattr(daemon, "governance_store", None),
+        executor=getattr(daemon, "blocking_executor", None),
+    )
+    if blocked:
+        result.governance_allowed = False
+        result.governance_reason = "parking brake engaged for scope 'training'"
+        for record in submission.records:
+            result.outcomes.append(
+                training.TrainingRecordOutcome(
+                    kind=record.KIND,
+                    key=record.key(),
+                    outcome=training.OUTCOME_BLOCKED_BY_GOVERNANCE,
+                    detail=result.governance_reason,
+                ),
+            )
+        await _record_training_reflection(
+            daemon,
+            candidate_action,
+            "blocked_by_governance",
+            {"competency_id": submission.competency_id, "reason": result.governance_reason},
+        )
+        return result
+
+    result.governance_allowed = True
+
+    # --- Memory: per-record independence (Decision C) --------------------
+    provenance = training.stamp_provenance(submission, recorded_by=recorded_by)
+    rules_engine = MemoryRulesEngine(watch_file=False)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    supersessions: list[dict[str, Any]] = []
+
+    for record in submission.records:
+        kind = record.KIND
+        key = record.key()
+
+        record_errors = record.validate()
+        if record_errors:
+            result.outcomes.append(
+                training.TrainingRecordOutcome(
+                    kind=kind,
+                    key=key,
+                    outcome=training.OUTCOME_INVALID,
+                    detail="; ".join(record_errors),
+                ),
+            )
+            continue
+
+        # Seam-derived provenance overwrites whatever the caller supplied
+        # (design Sec.5.3) -- source_type/detail from the submission,
+        # recorded_by/recorded_at from the route and the server clock.
+        record.envelope.provenance = provenance
+        record.envelope.updated_at = now_iso
+
+        # Supersession: read current state, bump revision, remember the
+        # superseded claim for the Reflection (design Sec.13.4).
+        superseded_revision: int | None = None
+        try:
+            existing = await daemon.mem.get_memory(kind, key)
+        except Exception:
+            logger.exception("Failed to read existing competency record %s/%s", kind, key)
+            existing = None
+
+        if existing:
+            try:
+                prior = _json.loads(existing["value"])
+                superseded_revision = int(prior.get("revision", 1))
+                record.envelope.revision = superseded_revision + 1
+                supersessions.append(
+                    {
+                        "kind": kind,
+                        "key": key,
+                        "superseded_revision": superseded_revision,
+                        "new_revision": record.envelope.revision,
+                        "superseded_provenance": prior.get("provenance"),
+                    },
+                )
+            except (ValueError, TypeError, KeyError):
+                # Stored value isn't parseable competency JSON (e.g. a
+                # summary substitution). Don't guess a revision -- record
+                # the fact instead of inventing history.
+                supersessions.append(
+                    {
+                        "kind": kind,
+                        "key": key,
+                        "superseded_revision": None,
+                        "new_revision": record.envelope.revision,
+                        "note": "prior value was not parseable competency JSON",
+                    },
+                )
+
+        value_json = _json.dumps(record.to_dict())
+        evaluated = rules_engine.evaluate({"kind": kind, "key": key, "value": value_json})
+        allow_store = bool(evaluated.get("allow_store", True))
+
+        try:
+            store_result = await daemon.mem.upsert_memory(
+                kind,
+                key,
+                value_json,
+                now_iso,
+                summary=record.to_summary_text(),
+            )
+        except Exception as exc:
+            logger.exception("Training write failed for %s/%s", kind, key)
+            result.outcomes.append(
+                training.TrainingRecordOutcome(
+                    kind=kind,
+                    key=key,
+                    outcome=training.OUTCOME_INVALID,
+                    detail=f"write failed: {exc}",
+                ),
+            )
+            continue
+
+        if store_result.stored:
+            result.outcomes.append(
+                training.TrainingRecordOutcome(
+                    kind=kind,
+                    key=key,
+                    outcome=training.OUTCOME_STORED,
+                    memory_id=store_result.memory_id,
+                    revision=record.envelope.revision,
+                    superseded_revision=superseded_revision,
+                ),
+            )
+        else:
+            outcome, detail = await _classify_not_stored(daemon.mem, kind, key, allow_store)
+            result.outcomes.append(
+                training.TrainingRecordOutcome(
+                    kind=kind,
+                    key=key,
+                    outcome=outcome,
+                    detail=detail,
+                    revision=record.envelope.revision,
+                    superseded_revision=superseded_revision,
+                ),
+            )
+
+    await _record_training_reflection(
+        daemon,
+        candidate_action,
+        "ingested",
+        {
+            "competency_id": submission.competency_id,
+            "source_type": submission.source_type,
+            "source_detail": submission.source_detail,
+            "recorded_by": recorded_by,
+            "outcomes": [item.to_dict() for item in result.outcomes],
+            "supersessions": supersessions,
+        },
+    )
+
+    return result
