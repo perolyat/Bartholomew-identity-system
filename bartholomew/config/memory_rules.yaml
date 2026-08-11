@@ -61,6 +61,55 @@ always_keep:
       encrypt: standard
       recall_policy: always
 
+  # Competency kinds (S5.1 data model; written by S5.2's training seam).
+  # Purpose is governance LEGIBILITY: without these, competency records rely
+  # on an unset/default recall_policy and are invisible to anyone auditing
+  # this file. Deliberately minimal -- privacy_class and recall_policy only.
+  #
+  # These do NOT weaken consent. This engine applies categories in PRIORITY
+  # order (never_store, ask_before_store, always_keep, ...) and merges
+  # metadata without clobbering fields a higher-priority rule already set, so
+  # a competency record whose CONTENT matches an ask_before_store rule below
+  # (password/bank/health/personal-data patterns) still gets
+  # requires_consent=true -- these always_keep entries cannot override it.
+  # Verified by tests/test_training_memory_rules.py.
+  #
+  # Encryption is deliberately NOT set here: sensitive content inside a
+  # competency record is already routed to encryption by the content-pattern
+  # rules below, which apply regardless of kind. Blanket-encrypting all
+  # competency content would be a scope expansion beyond S5.2's approved
+  # design (Sec.7.2) and would change retrieval behaviour for ordinary,
+  # non-sensitive procedures.
+  - match:
+      kind: competency
+    metadata:
+      privacy_class: user.competency
+      recall_policy: always
+
+  - match:
+      kind: competency_knowledge
+    metadata:
+      privacy_class: user.competency
+      recall_policy: always
+
+  - match:
+      kind: competency_procedure
+    metadata:
+      privacy_class: user.competency
+      recall_policy: always
+
+  - match:
+      kind: competency_heuristic
+    metadata:
+      privacy_class: user.competency
+      recall_policy: always
+
+  - match:
+      kind: competency_evidence
+    metadata:
+      privacy_class: user.competency
+      recall_policy: always
+
 ask_before_store:
   - match:
       content: "(?i)(password|bank|account number|two-factor|auth code)"

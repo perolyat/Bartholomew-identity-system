@@ -266,7 +266,7 @@ def brake_on(
     scope: list[str] = typer.Option(
         None,
         "--scope",
-        help="Scopes to block (global, skills, sight, voice, scheduler)",
+        help="Scopes to block (global, skills, sight, voice, scheduler, training)",
     ),
     db: str = typer.Option(
         default="data/bartholomew.db",

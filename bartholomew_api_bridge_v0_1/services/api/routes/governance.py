@@ -32,7 +32,14 @@ from bartholomew.orchestrator.safety.governance_store import (
 
 router = APIRouter(prefix="/api/governance", tags=["governance"])
 
-VALID_SCOPES = frozenset({"global", "skills", "sight", "voice", "scheduler"})
+# "training" (S5.2): gates the training-ingestion seam
+# (runtime_contract.run_training_through_runtime_contract). Deliberately its
+# own scope rather than reusing "skills": executing a tool and changing what
+# Bartholomew knows are different powers, and stopping one should not require
+# stopping the other. Registration here is load-bearing, not cosmetic -- this
+# allowlist rejects unknown scopes, so an unregistered scope would be
+# enforceable inside the kernel yet impossible to engage from the API or UI.
+VALID_SCOPES = frozenset({"global", "skills", "sight", "voice", "scheduler", "training"})
 
 
 class BrakeEngageRequest(BaseModel):
