@@ -1180,6 +1180,48 @@ class MemoryStore:
                     f"No pending sensitive write with id {pending_id} in 'pending' status",
                 )
 
+    async def get_memory(self, kind: str, key: str) -> dict[str, Any] | None:
+        """
+        Read one memory by its `(kind, key)` identity, or None if absent.
+
+        Read-only, and deliberately *not* a retrieval/relevance path: it is
+        an exact-identity lookup on the existing unique `(kind, key)` index,
+        for callers that already know precisely which record they mean.
+
+        Added for S5.2's training seam, which must read a record's current
+        `revision` before overwriting it so the supersession can be recorded
+        (see `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` Sec.13.4).
+        That read belongs here rather than in the seam: `MemoryStore` is the
+        single memory authority, so the alternative -- the seam opening its
+        own connection -- would put a second persistence access point next to
+        it. This adds no write path and applies no consent gating, so it must
+        not be used to surface memories to a user or a model; use the
+        `ConsentGate`-filtered retrieval layer for that.
+
+        Values encrypted at rest are decrypted here, matching
+        `list_pending_sensitive_writes()`.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, kind, key, value, summary, ts FROM memories "
+                "WHERE kind = ? AND key = ?",
+                (kind, key),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+
+            entry = dict(row)
+            entry["value"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                entry["value"],
+            )
+            if entry.get("summary"):
+                entry["summary"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                    entry["summary"],
+                )
+            return entry
+
     async def delete_memory(self, kind: str, key: str) -> bool:
         """
         Delete a memory and its FTS index in a single transaction.
