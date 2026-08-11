@@ -124,6 +124,49 @@ _QUERY_MAX_TOKENS: int = 12
 
 _QUERY_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+#: Minimum number of meaningful terms a record's own text must share with the
+#: request before that record may be treated as applicable.
+#:
+#: **This is the relevance criterion, and it is deliberately not a score
+#: threshold.** Chosen by measuring the real retrieval behaviour across
+#: clearly-relevant, paraphrased, partially-related, unrelated, multi-
+#: competency and sparse-corpus cases (see this constant's rationale in
+#: `docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md` Sec.12):
+#:
+#: - Retriever scores are **not comparable across modes**. The same corpus and
+#:   queries produced top scores of 1.000 (FTS, normalised), 0.009-0.128
+#:   (vector) and 0.25-0.94 (hybrid). No single numeric floor can hold across
+#:   the three supported modes.
+#: - Vector scores were measured **anti-correlated** with relevance under the
+#:   deterministic fallback embedder used when `sentence-transformers` is
+#:   absent: "play some music" scored 0.128 against an estate-management
+#:   corpus while "how should I handle the boiler quotes?" scored 0.009. A
+#:   threshold derived from those numbers would encode noise.
+#: - Lexical overlap separated every measured category cleanly and does so
+#:   **identically in every mode**, because it is computed from the request
+#:   and the record's own text rather than from the retriever's ranking.
+#:
+#: Set to 0 to disable the filter. Tunable, not a permanent constant.
+DEFAULT_MIN_SHARED_TERMS: int = 1
+
+
+def _tokenise(text: str) -> list[str]:
+    """Meaningful lowercase word tokens, in order, deduplicated by the caller.
+
+    One tokeniser for both query construction and relevance measurement, so a
+    term can never count for one and not the other.
+    """
+    return [
+        token
+        for token in _QUERY_TOKEN_RE.findall((text or "").lower())
+        if len(token) >= 3 and token not in _QUERY_STOPWORDS
+    ]
+
+
+def query_terms(text: str) -> frozenset[str]:
+    """The set of meaningful terms in a request, for relevance measurement."""
+    return frozenset(_tokenise(text))
+
 
 def build_retrieval_query(text: str) -> str:
     """
@@ -152,9 +195,7 @@ def build_retrieval_query(text: str) -> str:
         return ""
 
     tokens: list[str] = []
-    for token in _QUERY_TOKEN_RE.findall(text.lower()):
-        if len(token) < 3 or token in _QUERY_STOPWORDS:
-            continue
+    for token in _tokenise(text):
         if token not in tokens:
             tokens.append(token)
         if len(tokens) >= _QUERY_MAX_TOKENS:
@@ -204,6 +245,11 @@ class AppliedRecord:
     review_reason: str | None
     summary: str
     score: float
+    #: The request terms this record actually shares -- the evidence that it
+    #: was applicable at all. Recorded because a future explanation should be
+    #: able to say *why* a record was considered relevant, not merely that it
+    #: was used (Decision E.2).
+    matched_terms: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -216,6 +262,7 @@ class AppliedRecord:
             "requires_review": self.requires_review,
             "review_reason": self.review_reason,
             "score": self.score,
+            "matched_terms": list(self.matched_terms),
         }
 
 
@@ -233,6 +280,7 @@ class CompetencyContext:
     requires_review: bool = False
     review_reasons: tuple[str, ...] = ()
     considered: int = 0
+    excluded_not_relevant: int = 0
     excluded_low_confidence: int = 0
     excluded_other_competencies: int = 0
     truncated: int = 0
@@ -250,6 +298,7 @@ class CompetencyContext:
             "selection": {
                 "considered": self.considered,
                 "applied": len(self.applied),
+                "excluded_not_relevant": self.excluded_not_relevant,
                 "excluded_low_confidence": self.excluded_low_confidence,
                 "excluded_other_competencies": self.excluded_other_competencies,
                 "truncated": self.truncated,
@@ -284,7 +333,10 @@ def _competency_id_of(candidate: CompetencyCandidate) -> str:
     return getattr(envelope, "competency_id", "") or ""
 
 
-def _dominant_competency(candidates: list[CompetencyCandidate]) -> str | None:
+def _dominant_competency(
+    candidates: list[CompetencyCandidate],
+    matched: dict[int, tuple[str, ...]] | None = None,
+) -> str | None:
     """
     Pick the single competency this request is about (Decision C).
 
@@ -293,32 +345,50 @@ def _dominant_competency(candidates: list[CompetencyCandidate]) -> str | None:
     to hold ("a plumbing-contractor heuristic does not transfer to travel
     booking just because both involve comparing vendor quotes"), and the
     machinery for judging domain-appropriateness does not exist yet. Rather
-    than implement a weak version of transfer, selection commits to the
-    best-scoring competency and drops the rest.
+    than implement a weak version of transfer, selection commits to one
+    competency and drops the rest.
 
-    "Best-scoring" is by the highest single relevance score, with total score
-    as the tie-break -- so one strongly-matching record wins over several
-    weak ones, which is the behaviour a specific question deserves.
+    **Which one is decided by lexical overlap, not by retriever score.** The
+    characterisation behind the relevance gate showed retriever scores are
+    not comparable across modes and are anti-correlated with relevance under
+    the fallback embedder, so using them here would let an irrelevant
+    competency win a domain contest on the strength of a meaningless number
+    -- e.g. a three-record estate corpus outranking a travel record that
+    shares four terms with "compare airline fares for the flight". Ranking
+    is therefore: strongest single overlap, then total overlap, then
+    retriever score only as a final tie-break.
     """
     if not candidates:
         return None
 
-    best: dict[str, tuple[float, float]] = {}
+    matched = matched or {}
+
+    best: dict[str, tuple[int, int, float]] = {}
     for candidate in candidates:
         competency_id = _competency_id_of(candidate)
         if not competency_id:
             continue
-        top, total = best.get(competency_id, (float("-inf"), 0.0))
-        best[competency_id] = (max(top, candidate.score), total + candidate.score)
+        overlap = len(matched.get(id(candidate), ()))
+        top_overlap, total_overlap, top_score = best.get(
+            competency_id,
+            (0, 0, float("-inf")),
+        )
+        best[competency_id] = (
+            max(top_overlap, overlap),
+            total_overlap + overlap,
+            max(top_score, candidate.score),
+        )
 
     if not best:
         return None
-    return max(best.items(), key=lambda item: (item[1][0], item[1][1]))[0]
+    return max(best.items(), key=lambda item: item[1])[0]
 
 
 def select_relevant(
     candidates: list[CompetencyCandidate],
     *,
+    request_terms: frozenset[str] | None = None,
+    min_shared_terms: int = DEFAULT_MIN_SHARED_TERMS,
     confidence_floor: float | None = DEFAULT_CONFIDENCE_FLOOR,
     max_records: int = DEFAULT_MAX_RECORDS,
 ) -> CompetencyContext:
@@ -326,11 +396,26 @@ def select_relevant(
     Choose which retrieved competency records inform this request.
 
     Order of operations, each deliberate:
-      1. drop records whose confidence is explicitly below the floor
+      1. **drop records with no lexical connection to the request** -- the
+         relevance gate;
+      2. drop records whose confidence is explicitly below the floor
          (`None` is unknown, not low -- kept);
-      2. commit to one competency (Decision C: no cross-competency transfer);
-      3. rank by relevance, preferring evidenced records;
-      4. cap at `max_records` (prompt-bloat guard).
+      3. commit to one competency (Decision C: no cross-competency transfer);
+      4. rank by relevance, preferring evidenced records;
+      5. cap at `max_records` (prompt-bloat guard).
+
+    Step 1 comes first on purpose, and enforces the governing invariant:
+    **being the best available retrieval result is not sufficient to make a
+    competency applicable.** A retriever always returns a nearest neighbour,
+    so without this gate an unrelated request applies whatever competency
+    happens to exist -- and that irrelevant record would then be cited in the
+    explanation-grade attribution (Decision E.2) as the basis of a decision it
+    had nothing to do with. Ranking cannot fix this: it only orders what it is
+    given, and something is always ranked first.
+
+    `request_terms` comes from `query_terms()` and is supplied by the seam.
+    When it is None the gate cannot be evaluated and is skipped, so direct
+    callers that have already established relevance are unaffected.
 
     Supervision is aggregated across whatever survives, and can only ever
     become stricter.
@@ -339,9 +424,28 @@ def select_relevant(
     if not candidates:
         return EMPTY_CONTEXT
 
+    # --- 1. Relevance gate -------------------------------------------------
+    matched: dict[int, tuple[str, ...]] = {}
+    relevant: list[CompetencyCandidate] = []
+    excluded_not_relevant = 0
+    for candidate in candidates:
+        shared = _shared_terms(candidate, request_terms)
+        if request_terms is not None and min_shared_terms > 0 and len(shared) < min_shared_terms:
+            excluded_not_relevant += 1
+            continue
+        matched[id(candidate)] = shared
+        relevant.append(candidate)
+
+    if not relevant:
+        return CompetencyContext(
+            considered=considered,
+            excluded_not_relevant=excluded_not_relevant,
+        )
+
+    # --- 2. Confidence floor ----------------------------------------------
     surviving: list[CompetencyCandidate] = []
     excluded_low_confidence = 0
-    for candidate in candidates:
+    for candidate in relevant:
         confidence = _confidence_of(candidate)
         if (
             confidence_floor is not None
@@ -355,10 +459,11 @@ def select_relevant(
     if not surviving:
         return CompetencyContext(
             considered=considered,
+            excluded_not_relevant=excluded_not_relevant,
             excluded_low_confidence=excluded_low_confidence,
         )
 
-    competency_id = _dominant_competency(surviving)
+    competency_id = _dominant_competency(surviving, matched)
     in_domain = [c for c in surviving if _competency_id_of(c) == competency_id]
     excluded_other_competencies = len(surviving) - len(in_domain)
 
@@ -366,7 +471,9 @@ def select_relevant(
     selected = ranked[: max(0, max_records)]
     truncated = len(ranked) - len(selected)
 
-    applied = tuple(_to_applied(candidate) for candidate in selected)
+    applied = tuple(
+        _to_applied(candidate, matched.get(id(candidate), ())) for candidate in selected
+    )
     review_reasons = tuple(
         item.review_reason for item in applied if item.requires_review and item.review_reason
     )
@@ -379,13 +486,38 @@ def select_relevant(
         requires_review=any(item.requires_review for item in applied),
         review_reasons=review_reasons,
         considered=considered,
+        excluded_not_relevant=excluded_not_relevant,
         excluded_low_confidence=excluded_low_confidence,
         excluded_other_competencies=excluded_other_competencies,
         truncated=truncated,
     )
 
 
-def _to_applied(candidate: CompetencyCandidate) -> AppliedRecord:
+def _shared_terms(
+    candidate: CompetencyCandidate,
+    request_terms: frozenset[str] | None,
+) -> tuple[str, ...]:
+    """
+    Terms the request and this record's own text have in common.
+
+    Measured against `to_summary_text()` -- the record's human-meaningful
+    rendering, and the same text the retrieval layer indexes -- rather than
+    the raw serialised record, whose schema keys ("name", "steps") would
+    produce spurious overlaps.
+    """
+    if not request_terms:
+        return ()
+    try:
+        text = candidate.record.to_summary_text()
+    except Exception:
+        return ()
+    return tuple(sorted(request_terms.intersection(_tokenise(text))))
+
+
+def _to_applied(
+    candidate: CompetencyCandidate,
+    matched_terms: tuple[str, ...] = (),
+) -> AppliedRecord:
     envelope = getattr(candidate.record, "envelope", None)
     supervision = getattr(envelope, "supervision", None)
     provenance = getattr(envelope, "provenance", None)
@@ -406,6 +538,7 @@ def _to_applied(candidate: CompetencyCandidate) -> AppliedRecord:
         review_reason=getattr(supervision, "reason", None),
         summary=summary,
         score=candidate.score,
+        matched_terms=matched_terms,
     )
 
 

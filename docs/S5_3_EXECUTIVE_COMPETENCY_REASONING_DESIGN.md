@@ -511,3 +511,95 @@ to any of the four deferred issues (§3.2).
   per-record provenance would persist content the consent gate excluded — that is a real
   privacy/explainability tension to raise for decision, not to resolve unilaterally in either
   direction.
+
+---
+
+## 12. Relevance floor (added 2026-08-11, after implementation review)
+
+### 12.1 Why this exists
+
+S5.3 as first implemented filtered candidates by **confidence** and by **count**. Neither is a
+filter on **relevance**. Retrievers always return a nearest neighbour, so an unrelated request
+applied whatever competency happened to exist — measured: *"remind me tomorrow"* retrieved a boiler
+quote-comparison procedure.
+
+The damaging consequence is not prompt noise. It is **false attribution**: the explanation-grade
+record (Decision E.2) would confidently cite a competency that had nothing to do with the decision,
+corrupting the exact capability E.2 exists to preserve.
+
+**Governing invariant, as approved:** *being the best available retrieval result is not sufficient
+to make a competency applicable.*
+
+### 12.2 Characterisation before choosing anything
+
+Measured against the real retrieval path (`build_retrieval_query()` → `get_retriever()` →
+`retrieve(kinds=COMPETENCY_KINDS)`), across three corpora (single competency; three competing
+competencies; a sparse corpus containing only one *unrelated* competency) and all three retrieval
+modes. Top-hit scores:
+
+| Query category | FTS | Vector | Hybrid |
+|---|---|---|---|
+| Clearly relevant | 1.000 (hits) | 0.009–0.072 | 0.70–0.76 |
+| Paraphrased relevant | 1.000 (hits) | 0.000–0.064 | 0.68–0.94 |
+| Partially related | 1.000 / no hits | 0.020–0.068 | 0.31–0.74 |
+| Completely unrelated | **no hits at all** | **0.000–0.128** | 0.25–0.38 |
+
+Three findings decided the mechanism:
+
+1. **Scores are not comparable across modes.** The same corpus and queries produce top scores of
+   1.000 (FTS normalises), ~0.01–0.13 (vector) and 0.25–0.94 (hybrid). No single numeric floor
+   holds across the three supported modes.
+2. **Vector scores were anti-correlated with relevance** under the deterministic fallback embedder
+   used when `sentence-transformers` is absent: *"play some music"* scored **0.128** against an
+   estate-management corpus while *"how should I handle the boiler quotes?"* scored **0.009**. A
+   threshold derived from those numbers would encode noise, and would silently change meaning if
+   the embedder were ever installed.
+3. **FTS already excludes unrelated queries** — it returns *nothing* for all three. The spurious
+   hybrid hits come entirely from the vector side scoring records FTS never matched. The signal
+   that actually tracks relevance here is **lexical**, not numeric.
+
+### 12.3 The criterion chosen — smallest defensible
+
+**A minimum count of meaningful terms shared between the request and the record's own text.**
+Default `DEFAULT_MIN_SHARED_TERMS = 1`; `0` disables it.
+
+Why 1 and not a larger number: the measurement showed one shared term already separates every
+category — all clearly-relevant and paraphrased queries share at least one, and all three
+completely-unrelated queries share **none**. Requiring two would have excluded genuine paraphrases
+(*"how do I choose between tradespeople for the heating job?"* shares only `heating`). The smallest
+value that achieves the invariant is therefore 1, and anything larger costs recall without evidence.
+
+Properties, all of which a score threshold lacks:
+
+- **Mode-independent** — computed from the request and the record, never from the retriever's
+  ranking, so it behaves identically in FTS, vector and hybrid.
+- **Deterministic and tunable**, with no model call (§6 boundary intact).
+- **Explainable** — the shared terms *are* the evidence of relevance, so they are recorded on each
+  applied record (`matched_terms`) and a future explanation can say *why* a record applied, not
+  merely that it did.
+
+Measured against the record's `to_summary_text()` — its human-meaningful rendering, and the same
+text the retrieval layer indexes — rather than the raw serialised record, whose schema keys
+(`name`, `steps`) would produce spurious overlaps.
+
+### 12.4 Consequential change: domain selection no longer uses retriever score
+
+The same characterisation invalidated the original tie-break for Decision C. `_dominant_competency`
+ranked by retriever score, which let an irrelevant competency win a domain contest on a meaningless
+number — a three-record estate corpus outranking a travel record that shared four terms with
+*"compare airline fares for the flight"*. Ranking is now **strongest single overlap → total overlap
+→ retriever score only as a final tie-break**.
+
+### 12.5 Accepted cost
+
+A vague but genuinely on-topic request that shares no term with any record is excluded — measured
+example: *"who should I call about the house?"*. This is the honest outcome rather than a
+regression: nothing is recorded claiming a competency informed an answer it did not inform. Raising
+recall for this case needs a relevance signal the repository does not have today (real embeddings,
+or synonym/stemming support), and would be its own decision.
+
+### 12.6 Deliberately not done
+
+No model-based relevance judging, no cross-competency reasoning, no proactive behaviour, and no
+broader retrieval redesign. The retrieval layer is unchanged; the criterion is a post-retrieval
+filter in the pure selection module.

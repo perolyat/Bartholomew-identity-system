@@ -173,11 +173,35 @@ class TestEstateManagementEndToEnd:
 
     async def test_no_estate_specific_reasoning_path_exists(self):
         """The acceptance principle: Estate Management is a competency, not a
-        special case in the Executive."""
+        special case in the Executive.
+
+        AST-based (identifiers and string literals, not raw source) for the
+        same reason `tests/test_competency_no_auto_promotion.py` is: the
+        module's own prose legitimately discusses the estate-management
+        corpus used to characterise retrieval, and a substring check would
+        false-positive on that.
+        """
         from bartholomew.kernel import competency_reasoning as cr
 
-        source = Path(cr.__file__).read_text(encoding="utf-8")
-        assert "estate" not in source.lower()
+        tree = ast.parse(Path(cr.__file__).read_text(encoding="utf-8"))
+
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                # String literals are behaviour (labels, keys, comparisons);
+                # docstrings are the module's own prose and are excluded by
+                # only considering short literals.
+                if len(node.value) < 80:
+                    names.add(node.value)
+
+        offending = {name for name in names if "estate" in name.lower()}
+        assert not offending, f"competency_reasoning.py special-cases estate: {offending}"
 
 
 async def _noop(prompt: str) -> str:

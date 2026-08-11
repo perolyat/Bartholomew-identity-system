@@ -42,6 +42,7 @@ from .competency_reasoning import (
     CompetencyCandidate,
     CompetencyContext,
     build_retrieval_query,
+    query_terms,
     render_for_prompt,
     select_relevant,
 )
@@ -299,7 +300,15 @@ async def _retrieve_competency_context(
                 ),
             )
 
-        return select_relevant(candidates)
+        # The relevance gate: a record must share meaningful terms with the
+        # request to be applicable at all. Being the retriever's best result
+        # is not sufficient -- a retriever always returns a nearest
+        # neighbour, and an irrelevant record would otherwise be cited in the
+        # explanation-grade attribution as the basis of the decision.
+        return select_relevant(
+            candidates,
+            request_terms=query_terms(observation.raw_content or ""),
+        )
     except Exception:
         logger.exception("Competency retrieval failed; proceeding without competency context")
         return EMPTY_CONTEXT
