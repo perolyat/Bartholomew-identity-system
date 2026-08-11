@@ -89,9 +89,10 @@ def _envelope() -> CompetencyEnvelope:
 
 
 def _heuristic(rule: str = "Check warranty before recommending replacement") -> CompetencyHeuristic:
-    """Default happy-path record. A heuristic is used rather than a procedure
-    because procedures currently trip privacy_guard on their own JSON key
-    name -- see TestPrivacyGuardNameKeyFalsePositive."""
+    """Default happy-path record. (A heuristic was originally chosen here
+    because procedures tripped privacy_guard on their own `"name"` schema
+    key; that defect is fixed -- see TestNameKeyFalsePositiveFixed -- and
+    either kind works now.)"""
     return CompetencyHeuristic(
         envelope=_envelope(),
         slug="check_warranty_before_replace",
@@ -413,22 +414,18 @@ class TestSupersession:
 # ---------------------------------------------------------------------------
 # 6. Pre-existing defect, deliberately NOT worked around.
 # ---------------------------------------------------------------------------
-class TestPrivacyGuardNameKeyFalsePositive:
+class TestNameKeyFalsePositiveFixed:
     """
-    `privacy_guard.is_sensitive()` substring-scans the entire serialised
-    value with no structural awareness, and `SENSITIVE_KEYWORDS` contains
-    "name". The `competency` and `competency_procedure` JSON shapes both have
-    a `"name"` key, so **every** record of those two kinds is treated as
-    sensitive regardless of content, and is queued for consent rather than
-    stored.
+    `competency` and `competency_procedure` were previously flagged sensitive
+    on their `"name"` schema key alone -- never on content -- and so queued
+    for consent instead of storing.
 
-    Pre-existing (found and documented during S5.1, which used
-    `skip_privacy_guard=True` in its *tests* and explicitly did not address
-    it). S5.2 does NOT work around it: passing `skip_privacy_guard=True` from
-    the production seam would be a consent bypass, which the approved design
-    forbids outright. These tests pin the real current behaviour so it is
-    visible rather than surprising, and will need updating when the
-    underlying defect is fixed under its own authorisation.
+    Fixed 2026-08-11 (see tests/test_privacy_guard_structural_scanning.py for
+    the full correction): `privacy_guard` now excludes the schema keys of
+    registered structured kinds, while scanning every value in full. S5.2
+    never worked around it -- passing `skip_privacy_guard=True` from the
+    production seam would have been a consent bypass the approved design
+    forbids, and TestStructuralInvariants still asserts the seam does not.
     """
 
     @pytest.mark.parametrize(
@@ -442,40 +439,28 @@ class TestPrivacyGuardNameKeyFalsePositive:
             ),
         ],
     )
-    async def test_name_bearing_kinds_are_queued_not_stored(
-        self,
-        daemon,
-        record_factory,
-        kind,
-        key,
-    ):
+    async def test_name_bearing_kinds_now_store(self, daemon, record_factory, kind, key):
         result = await run_training_through_runtime_contract(
             daemon,
             _submission([record_factory()]),
         )
 
+        assert result.stored_count == 1, result.to_dict()
+        assert result.queued_count == 0
+        assert await daemon.mem.get_memory(kind, key) is not None
+        assert await daemon.mem.list_pending_sensitive_writes() == []
+
+    async def test_sensitive_content_in_those_kinds_is_still_queued(self, daemon):
+        """The fix removed a false positive, not the gate: real sensitive
+        content in a name-bearing kind must still require consent."""
+        record = _procedure(
+            slug="utility",
+            steps=["The account number is 12345678 and the password is hunter2"],
+        )
+        result = await run_training_through_runtime_contract(daemon, _submission([record]))
+
         assert result.stored_count == 0
         assert result.queued_count == 1
-        assert await daemon.mem.get_memory(kind, key) is None
-
-        pending = await daemon.mem.list_pending_sensitive_writes()
-        entry = next(e for e in pending if e["key"] == key)
-        assert entry["reason"] == "privacy_guard"
-
-    def test_the_trigger_really_is_the_json_key_not_the_content(self):
-        """Pins the cause, so a future fix can be verified against the right
-        thing: it is the literal `"name"` JSON key, not user content."""
-        from bartholomew.kernel.memory.privacy_guard import SENSITIVE_KEYWORDS, is_sensitive
-
-        assert "name" in SENSITIVE_KEYWORDS
-
-        benign = _procedure(steps=["Get three quotes"])
-        serialised = json.dumps(benign.to_dict())
-        assert '"name"' in serialised
-        assert is_sensitive(serialised) is True
-
-        # The same record's actual human-meaningful content is not sensitive.
-        assert is_sensitive("Quote comparison Get three quotes") is False
 
 
 # ---------------------------------------------------------------------------

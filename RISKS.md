@@ -2,7 +2,13 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-11 (status reconciliation against merged repository state: the FTS5
+> **Last updated:** 2026-08-11 (second pass, same day: one new tech-debt watchlist item — the
+> disagreement between `privacy_guard.SENSITIVE_KEYWORDS` and `memory_rules.yaml`'s
+> `ask_before_store` vocabulary, found while fixing the `is_sensitive()` false positives and
+> deliberately left unresolved by that fix. Both mechanisms fail closed, so the disagreement
+> over-triggers consent rather than under-triggering it; no reconciliation is authorised.)
+>
+> **Previously (2026-08-11):** status reconciliation against merged repository state: the FTS5
 > external-content deletion/index-staleness item is updated, **not closed**. PR #40's single-writer
 > `memory_fts` architecture (`bbd920d`) resolves it for the live write path and satisfies both
 > regression criteria the entry asked for — re-verified green. A narrower residual was found and
@@ -352,6 +358,35 @@
   should decide whether migration should force a full governed rebuild (or otherwise clear
   untracked entries) rather than relying on an operator remembering to run the backfill, and
   should add the migration-state regression test the current suite lacks.
+- **(2026-08-11) Two overlapping sensitivity vocabularies disagree —
+  `privacy_guard.SENSITIVE_KEYWORDS` vs. `memory_rules.yaml`'s `ask_before_store`.** Recorded as a
+  separate architectural/governance issue while fixing the `is_sensitive()` false positives (see
+  `tests/test_privacy_guard_structural_scanning.py`); **deliberately not resolved as part of that
+  fix.** Two independent mechanisms decide whether a memory write needs consent, and they do not
+  agree on what is sensitive:
+  - `bartholomew/kernel/memory/privacy_guard.py`'s `SENSITIVE_KEYWORDS` — a hardcoded Python list
+    (`name`, `address`, `location`, `phone`, `email`, `bank`, `password`, `routine`, `health`,
+    `private`, `account`), matched against the write's value, queuing to `pending_sensitive_writes`
+    with `reason='privacy_guard'`.
+  - `bartholomew/config/memory_rules.yaml`'s `ask_before_store` category — governed, reviewable
+    config with regex patterns (`password|bank|account number|two-factor|auth code`,
+    `bank|medical|address|phone|email`, `personal data|personal information`, plus tag/speaker
+    rules), queuing with `reason='rule_consent'`.
+
+  They overlap heavily but are not consistent. The clearest divergence: **`name` is treated as
+  consent-requiring by `privacy_guard` and not by `memory_rules.yaml`**, so whether a bare personal
+  name gates a write depends on which mechanism happens to see it. `routine`, `location` and
+  `private` are likewise privacy_guard-only. The practical consequences are that the stricter,
+  cruder list is the hardcoded one rather than the governed one; that a policy change made in the
+  reviewable config can be silently overridden by the Python list; and that the two produce
+  different `reason` values for what a user experiences as the same decision.
+
+  **Risk category:** governance legibility and policy consistency — not a known live leak (both
+  mechanisms fail *closed*, so the disagreement over-triggers consent rather than under-triggering
+  it). **No reconciliation is authorised.** A dedicated pass should decide which vocabulary is
+  authoritative, whether `privacy_guard`'s list should move into `memory_rules.yaml` (making it
+  reviewable and reloadable like every other rule), and what the migration means for content
+  already queued under either `reason`.
 
 ## Red-team focus areas
 

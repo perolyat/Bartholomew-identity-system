@@ -638,7 +638,13 @@ class MemoryStore:
         # handler explicitly declining, which must never be second-guessed
         # or re-queued), the content is preserved in pending_sensitive_writes
         # for later human review instead of being dropped.
-        if not skip_privacy_guard and is_sensitive(value):
+        # `kind` lets the guard skip schema key names for kinds registered as
+        # structured, so a record is not flagged on the shape of its schema
+        # rather than its content (see privacy_guard's module docstring).
+        # Values are always scanned in full, and an unregistered kind keeps
+        # the conservative raw scan -- passing `kind` can only ever narrow
+        # false positives, never open a bypass.
+        if not skip_privacy_guard and is_sensitive(value, kind=kind):
             if get_consent_handler() is None:
                 pending_id = await self.record_pending_sensitive_write(
                     kind,

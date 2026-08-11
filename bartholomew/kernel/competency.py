@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
+from bartholomew.kernel.memory.privacy_guard import register_structural_schema
+
 # ---------------------------------------------------------------------------
 # Shared vocabulary
 # ---------------------------------------------------------------------------
@@ -470,3 +472,61 @@ COMPETENCY_KINDS: tuple[str, ...] = (
     CompetencyHeuristic.KIND,
     CompetencyEvidence.KIND,
 )
+
+
+# ---------------------------------------------------------------------------
+# Structural schema registration (privacy_guard)
+# ---------------------------------------------------------------------------
+#
+# These kinds serialise as JSON, so the raw stored value contains this
+# module's own schema key names. `privacy_guard.is_sensitive()` scans the
+# stored representation, which previously meant a competency record was
+# flagged sensitive because the schema has a `"name"` key -- never because
+# of anything a user wrote. Registering the schema keys tells the guard
+# which names are structure rather than content; **every value is still
+# scanned in full**, as is any key not listed here (e.g. the user-chosen
+# area names inside `proficiency.by_area`).
+#
+# Derived from the dataclasses rather than hand-listed, so the registration
+# cannot drift from the real serialised shape as the model evolves.
+# `tests/test_privacy_guard_structural_scanning.py` additionally pins which
+# of these keys collide with the sensitivity vocabulary, so a future schema
+# change that added, say, a `password` field would fail that test rather
+# than silently hide a signal.
+#
+# This is a registry write, not I/O: the module remains pure data, holds no
+# connection, and still never writes a memory itself.
+
+
+def _schema_keys() -> frozenset[str]:
+    """Every key name the five kinds' `to_dict()` output can contain."""
+    envelope = CompetencyEnvelope(competency_id="_")
+    samples = [
+        CompetencyRecord(envelope=envelope, name="_"),
+        CompetencyKnowledge(envelope=envelope, slug="_", topic="_", content="_"),
+        CompetencyProcedure(envelope=envelope, slug="_", name="_", steps=["_"]),
+        CompetencyHeuristic(envelope=envelope, slug="_", rule="_"),
+        CompetencyEvidence(envelope=envelope, slug="_", situation="_"),
+    ]
+
+    keys: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                keys.add(key)
+                walk(value)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
+
+    for sample in samples:
+        walk(sample.to_dict())
+    return frozenset(keys)
+
+
+COMPETENCY_SCHEMA_KEYS: frozenset[str] = _schema_keys()
+
+for _kind in COMPETENCY_KINDS:
+    register_structural_schema(_kind, COMPETENCY_SCHEMA_KEYS)
+del _kind
