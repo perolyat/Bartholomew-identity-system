@@ -2,7 +2,17 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-11 (status reconciliation against merged repository state, no new
+> **Last updated:** 2026-08-11 (second pass, same day: **S5.2 — Training and knowledge
+> acquisition — is complete and merged.** PR #43, merge commit `5dacb52`; CI run #61 green on all
+> six jobs. Delivered per the explicitly approved
+> `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` in three separately reviewed steps, plus an
+> approved correction to two pre-existing `privacy_guard.is_sensitive()` defects the integration
+> surfaced. **No sub-stage beyond S5.2 is authorised, started, or reordered — S5.3 explicitly
+> remains not started**, and the deferred items recorded in `RISKS.md` (FTS5 migration residual,
+> the privacy_guard/`memory_rules.yaml` sensitivity-vocabulary disagreement) remain separate and
+> unauthorised.)
+>
+> **Previously (2026-08-11):** status reconciliation against merged repository state, no new
 > direction: **S5.1 is complete** — implemented 2026-08-10 (`e1277b7`, merged via PR #40) per the
 > approved `docs/S5_1_COMPETENCY_ARCHITECTURE_DESIGN.md`, and marked `📋 not started` here until
 > now purely because this document was last written before that merge. Stage 5's preamble sentence
@@ -683,7 +693,7 @@ not itself grant.
 
 ---
 
-### Stage 5 — Developing Agency (competency, training, learning, then initiative) 🚧 IN PROGRESS (S5.0, S5.1 complete)
+### Stage 5 — Developing Agency (competency, training, learning, then initiative) 🚧 IN PROGRESS (S5.0, S5.1, S5.2 complete)
 
 **Restructured 2026-08-08** (New Direction reconciliation — see `DECISIONS.md`'s "Stage 5
 restructured around competency and training before live initiative" entry for full rationale).
@@ -695,11 +705,11 @@ precede, the generic competency/training/learning architecture described in `CON
 Learning" section. Rationale in one sentence: `Planner.decide()` (the Executive's reasoning path)
 returns `None` unconditionally today — there is no machinery yet for the Executive to retrieve and
 apply competencies, so scheduling *when* to be proactive is premature before the Executive has
-anything competent to be proactive *about*. **S5.0 (prerequisite) and S5.1 (competency
-architecture) are complete; S5.2–S5.7 have not started** *(corrected 2026-08-11 — this paragraph
-previously read "No sub-stage of Stage 5 has started," which predated S5.1's 2026-08-10 merge)*.
+anything competent to be proactive *about*. **S5.0 (prerequisite), S5.1 (competency architecture)
+and S5.2 (training and knowledge acquisition) are complete; S5.3–S5.7 have not started.**
 Resuming any sub-stage requires its own separate, explicit approval — neither restructuring the
-sequence nor completing S5.1 authorises implementing any later sub-stage.
+sequence nor completing an earlier sub-stage authorises implementing any later one. In particular,
+**S5.2's completion does not authorise S5.3.**
 
 **Goal:** Bartholomew develops learned competence in genuine areas of responsibility (proven first
 via Residential Estate Management — see "Estate Management as architecture acceptance test" below)
@@ -713,7 +723,7 @@ sequence below by inserting competency/training/learning work first, not by repl
 |---|---|---|
 | **S5.0** — Runtime prerequisites | Deterministic scheduler-schema readiness at startup (closes issue #24) | ✅ done 2026-07-25 |
 | **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. **Must also carry the personal / potentially-generalisable / system-level classification and provenance `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning" section requires (added 2026-08-08) — not a cross-instance mechanism, just fields that don't foreclose one later.** See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | ✅ done 2026-08-10 |
-| **S5.2** — Training and knowledge acquisition | Define and implement how training material (formal reference material, direct instruction, demonstration, correction, supervised-work outcomes) enters shared Memory with provenance and consent, per `CONSTITUTION.md`'s "Training vs. configuration." Design and its five decisions (§9) **approved 2026-08-11** in `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md`, with two future-facing constraints (§9.1: structured submission is not the intended final UX, and citation-only provenance is scoped to S5.2). **Implementation is not yet authorised** — the plan in §13 awaits its own sign-off. | 📋 not started (design approved) |
+| **S5.2** — Training and knowledge acquisition | Define and implement how training material (formal reference material, direct instruction, demonstration, correction, supervised-work outcomes) enters shared Memory with provenance and consent, per `CONSTITUTION.md`'s "Training vs. configuration." Delivered per `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` (design + Decisions A–E approved 2026-08-11, with the two future-facing constraints in §9.1). | ✅ done 2026-08-11 |
 | **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. | 📋 not started |
 | **S5.4** — Experience → learning/consolidation loop | Implement the Experience → Reflection → candidate learning → provenance/confidence → Governance/review (where required) → consolidation loop described in `COGNITIVE_RUNTIME.md`. This is also where the pre-existing reflection-ownership implementation gap (`ReflectionGenerator` authoritative, `NarratorEngine` supplementary — see `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) must be closed, since S5.4 depends on reflection composition having a single authority. | 📋 not started |
 | **S5.5** — Initiative safety scaffolding | Typed cadence (interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** → quiet-hours *defer* (not suppress, with coalescing/expiry). *(This is the beginning of the pre-2026-08-08 Stage 5 scope, preserved unchanged in substance, resequenced after S5.1–S5.4.)* | 📋 not started |
@@ -752,9 +762,52 @@ promotion, export, or transport mechanism was introduced. Proven by **43 tests**
 `test_competency_no_auto_promotion.py` (3), all passing. Estate Management appears only as inert
 worked-example/fixture data, per this stage's scope. Two items the design flagged remain
 deliberately **not** done and are not S5.1 defects: `memory_rules.yaml` carries no explicit
-entries for the five new kinds (design §9, "recommended, not required"), and `upsert_memory()`'s
-`memory_dict` still doesn't pass through `tags` (design §10, flagged-not-fixed). **Approval of
-S5.1 does not authorise S5.2, S5.3, or S5.4.**
+entries for the five new kinds (design §9, "recommended, not required" — **closed by S5.2**), and
+`upsert_memory()`'s `memory_dict` still doesn't pass through `tags` (design §10,
+flagged-not-fixed). **Approval of S5.1 does not authorise S5.2, S5.3, or S5.4.**
+
+**S5.2 complete (2026-08-11) — PR #43, merge commit `5dacb52`.** CI run #61 green on all six jobs
+(Quality/lint/format/packaging contract; Tests + coverage on Ubuntu 3.10 and 3.11; Critical
+integration + lifecycle on 3.10 and 3.11; Windows 3.11). Exit deliverable:
+`docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` plus its implementation, delivered in three
+separately reviewed and separately approved steps:
+
+- **Step 1 (`8dfbd74`) — governance foundation.** Registers the `training` parking-brake scope in
+  all four places it must appear (the Stage 1 governance API allowlist rejects unknown scopes, so
+  an unregistered scope would be enforceable in the kernel yet impossible to engage from the API or
+  UI). Adds explicit `memory_rules.yaml` entries for S5.1's five competency kinds, closing S5.1
+  design §9. Deliberately sequenced **before** the write seam: the control that stops training must
+  exist before the path that performs it.
+- **Step 2 (`fb67156`) — the governed write seam.** `bartholomew/kernel/training.py` (pure
+  data/validation, no I/O) plus `run_training_through_runtime_contract()`, writing S5.1's kinds
+  through the existing `MemoryStore.upsert_memory()` chain — no separate ingestion runtime, no
+  second Memory authority, no second Governance path, per `COGNITIVE_RUNTIME.md`'s "Training as
+  Memory input, not a separate pipeline."
+- **Step 3 (`e51e47f`) — surfaces and demonstration.** `POST /api/training/submit`,
+  `GET /api/training/source-types`, and a `bartholomew train` CLI command (Decision B: API + CLI,
+  no new UI). Includes the Estate Management end-to-end demonstration this document's own
+  acceptance-test sequence calls for at S5.2 — trained *as a competency*, with a test asserting no
+  Estate-specific kind was introduced.
+
+**Properties enforced in code, not merely documented:** provenance integrity (`recorded_by`/
+`recorded_at` are seam-derived, so a caller cannot forge attribution or backdate a write); the
+S5.2/S5.4 boundary (`experience`/`system_observation` source types rejected by the seam — a
+sub-stage marker S5.4 may deliberately lift, not a permanent property); per-record independence
+with `queued_for_consent` reported distinctly from `stored`; supersession recorded in the
+append-only `reflections` table so `memories` stays current-state-only; and the seam consuming
+structured records rather than keystrokes, so future extraction paths can feed this same governed
+write (design §9.1 Constraint 1).
+
+**Included correction (`7bfab09`), separately approved:** two pre-existing
+`privacy_guard.is_sensitive()` defects the integration surfaced — unanchored substring matching
+(which flagged ordinary English such as "memory allocation" and "bankrupt") and scanning of JSON
+schema keys (which flagged every `competency`/`competency_procedure` record on its `"name"` key
+rather than its content). Fixed rather than bypassed: using `skip_privacy_guard=True` from the
+production seam would have been a consent bypass the design forbids, and a test asserts the seam
+never passes it. The approved governance rule is that **schema-defined keys of registered
+structured kinds are structural metadata, while all values remain fully scanned and
+unknown/unregistered structured data keeps conservative key-and-value scanning** — see
+`DECISIONS.md`. **Approval of S5.2 does not authorise S5.3 or S5.4.**
 
 **Exit criteria (S5.1–S5.4, competency/training/learning):**
 - A generic competency data/contract model exists, expressed as structured Memory content (not a
@@ -788,6 +841,12 @@ S5.1 does not authorise S5.2, S5.3, or S5.4.**
 pytest -q tests/test_competency_model.py tests/test_competency_memory_shapes.py \
   tests/test_competency_retrieval.py tests/test_competency_worked_example.py \
   tests/test_competency_no_auto_promotion.py
+
+# S5.2 training and knowledge acquisition (implemented 2026-08-11)
+pytest -q tests/test_training_memory_rules.py tests/test_training_runtime_contract_seam.py \
+  tests/test_training_api_and_demonstration.py
+# S5.2's privacy_guard correction (lexical + structural false positives)
+pytest -q tests/test_privacy_guard_structural_scanning.py
 
 # S5.5-S5.7 initiative work -- not implemented; this test file does not exist yet.
 pytest -q tests/test_scheduler_checkins.py

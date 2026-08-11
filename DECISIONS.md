@@ -2,7 +2,14 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-08 (New Direction reconciliation: three new decisions added — "One
+> **Last updated:** 2026-08-11 (one new decision added — "Schema keys of registered structured
+> kinds are structural metadata, not user content," approved as part of S5.2's final implementation
+> review and implemented in `7bfab09`, merged via PR #43 / `5dacb52`. Records the measured
+> rejection of the values-only-scanning alternative, which would have been a real consent bypass.
+> The separate `privacy_guard` vs `memory_rules.yaml` sensitivity-vocabulary disagreement is
+> recorded in `RISKS.md` and deliberately **not** resolved.)
+>
+> **Previously (2026-08-08):** New Direction reconciliation: three new decisions added — "One
 > developing digital individual — competency and training architecture," "Stage 5 restructured
 > around competency and training before live initiative," and (same-day follow-up) "Personal,
 > potentially generalisable, and system-level learning are architecturally distinct." All three are
@@ -59,6 +66,42 @@
 - **Why:** Defense-in-depth. Prevents accidental bypass by downstream callers.
 - **Consequences:** Retrieval callers must support “context_only” flags and filtered result sets.
 - **Date:** 2025-11-01 (documented in `CONSENT_GATES_IMPLEMENTATION.md`)
+
+## Decision: Schema keys of registered structured kinds are structural metadata, not user content
+- **Decision:** `privacy_guard.is_sensitive()` may exclude the *schema-defined key names* of
+  explicitly **registered** structured record kinds from content sensitivity scanning. **All values
+  are always scanned in full**, as are any keys not part of the registered schema. Unknown or
+  unregistered structured data retains conservative key-and-value scanning. Registration is opt-in
+  per kind, and a kind whose schema legitimately contains a sensitivity-indicating key (a literal
+  `password` field, say) must not be registered at all.
+- **Alternatives considered:**
+  - *Scan JSON values only, never keys.* **Rejected on measured evidence:** `{"password":
+    "hunter2"}` and `{"email": "bob@example.com"}` are sensitive solely by virtue of their key, so
+    this would have been a real consent bypass. `tests/test_privacy_guard_structural_scanning.py`
+    pins that failure mode so the approach cannot be reintroduced by accident.
+  - *Special-case competency records.* Rejected: the defect is generic to any caller storing
+    schema-structured JSON, so a per-caller exemption would leave the same trap for the next one.
+  - *Narrow the sensitivity vocabulary (e.g. drop `name`).* Rejected here: that changes what the
+    gate catches globally and is a policy question, not a correctness fix.
+  - *Accept the behaviour.* Rejected: every `competency`/`competency_procedure` record was being
+    queued for consent on its schema shape rather than its content, which both degrades the
+    training experience and dilutes the consent inbox's signal.
+- **Why:** The gate exists to catch sensitive *content*. A field *named* `name` is schema; the
+  person's name that might sit in a value is content. Conflating them flags records on their shape.
+  The rule is deliberately opt-in and fail-safe: a missing registration degrades to conservative
+  scanning, never to permissive, so forgetting to register can only over-trigger consent.
+- **Consequences:** A registered kind's schema must contain no key that is itself the only signal
+  that its value is sensitive — enforced by a schema-key inventory guard asserting exactly which
+  registered keys collide with the sensitivity vocabulary (today: `name` alone, reviewed and
+  approved). **If a future schema change adds such a key, the correct response is to de-register
+  that kind or treat the key as content — not to extend the allowlist to make the test pass.**
+  Registration lives with the module owning the schema (`competency.py` registers its own five
+  kinds, deriving the key set from the dataclasses so it cannot drift), because an existing S5.1
+  invariant forbids the shared Memory path from importing the competency module.
+- **Date:** 2026-08-11 (approved as part of S5.2's final implementation review; implemented in
+  `7bfab09`, merged via PR #43, merge commit `5dacb52`. See
+  `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` and `RISKS.md`'s separately-recorded,
+  deliberately-unresolved `privacy_guard` vs `memory_rules.yaml` vocabulary disagreement.)
 
 ## Decision: Single SQLite DB as shared persistence backbone
 - **Decision:** Use a single SQLite database file for kernel + API (default `data/barth.db`).
