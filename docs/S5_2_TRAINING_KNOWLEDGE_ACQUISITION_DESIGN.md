@@ -8,11 +8,17 @@
 > requirements this design implements. It builds directly on S5.1's delivered data model
 > (`bartholomew/kernel/competency.py`, `docs/S5_1_COMPETENCY_ARCHITECTURE_DESIGN.md`).
 >
-> **Status: PROPOSED 2026-08-11. NOT APPROVED. No implementation is authorised by this document.**
+> **Status: design and Decisions A–E APPROVED 2026-08-11. Implementation NOT yet authorised.**
 > Per `ROADMAP.md`'s Stage 5 approval model and S5.1's own precedent, the sequence is: this design
-> approved in principle → a separate implementation proposal (scope, files, decisions in §9)
-> approved → implementation. S5.1's completion does not authorise S5.2, and approving this
-> document would not authorise S5.3 or S5.4.
+> approved in principle *(done — 2026-08-11)* → a separate implementation proposal approved
+> *(proposed in §13; awaiting sign-off)* → implementation. Decisions A–E were approved as
+> recommended, with **two future-facing constraints recorded in §9.1** that bind how this design
+> may be read later. S5.1's completion does not authorise S5.2, and approval of this document does
+> not authorise S5.3 or S5.4.
+>
+> **Explicitly excluded from S5.2:** the FTS5 migration/self-healing residual recorded in
+> `RISKS.md` (2026-08-11) stays open and separate. No fix for it is authorised as part of this
+> sub-stage, and §10 records only the (nil) interaction, not a remedy.
 
 ## 1. What this closes
 
@@ -169,6 +175,39 @@ Of S5.1's six `PROVENANCE_SOURCE_TYPES`, S5.2 accepts exactly the four user-orig
 and `system_observation`, which are S5.4's to write (§4). Enforcing this in the seam is what keeps
 the sub-stage boundary real rather than documentary.
 
+**This restriction is a sub-stage boundary marker, not a permanent property of the seam.** When
+S5.4's candidate-learning/consolidation path is designed and approved, it may deliberately lift the
+restriction so Bartholomew-originated learning flows through this same governed write rather than a
+second one — which is the outcome `COGNITIVE_RUNTIME.md`'s "no second Memory authority" rule wants.
+What must never happen is the restriction being lifted *incidentally*, as a side effect of some
+other change, rather than by an explicit S5.4 decision.
+
+### 5.5 Layering: why this seam is extension-ready (per §9.1, Constraint 1)
+
+The seam's input is **structured, provenance-bearing records — not keystrokes.** Nothing in it
+assumes a human at a keyboard; it assumes records that validate and carry provenance. That single
+property is what makes the layering below possible, and it is a requirement of this design, not an
+incidental consequence:
+
+| Layer | Responsibility | Status |
+|---|---|---|
+| **Layer 0 — Interpretation/extraction** | Turn prose, conversation, or a document into *candidate* structured records | **Not built. Out of S5.2.** Future conversational / model-assisted / document extraction lives here. |
+| **Layer 1 — Governed write seam** (`run_training_through_runtime_contract`) | Validate, govern (brake + consent + redaction), persist, report per-record outcomes | **S5.2 builds this.** |
+
+Any future Layer 0 feeds Layer 1; it never writes to Memory itself, and it never gets its own
+governance path. Structured manual submission is therefore **the first client of this seam, not the
+intended final user experience** — natural-language training remains an intended future capability
+(§9.1).
+
+**Forward-compatibility note (recorded, not resolved here).** S5.1's envelope has one
+`recorded_by` field (`user` / `executive` / `reflection`), which conflates *who supplied the
+material* with *who authored the structured claim*. For S5.2 these are always the same (the user
+does both), so nothing is lost. Under a future Layer 0 they diverge: a model extracting a procedure
+from a user-supplied manual means material-from-`user`, claim-from-`executive`. Whoever designs
+extraction must resolve this — most likely by adding a field, which is a change to S5.1's approved
+model and therefore its own decision. Recording it here so the ambiguity is a known, deliberate
+open question rather than something discovered mid-implementation.
+
 ## 6. Scope: what "formal reference material" means in S5.2
 
 `CONSTITUTION.md` lists "manuals, procedures, regulatory material" as training material, which
@@ -183,6 +222,11 @@ Memory with provenance and consent"). Document ingestion (file upload, PDF/DOCX 
 storage, citation back to a source document) is deferred as separate, later, separately-approved
 work that should be sequenced *after* the `chunk_fts` trigger hazard is addressed. Recorded here so
 the deferral is a decision, not an omission.
+
+**When that work is designed it must also settle Constraint 2 (§9.1):** whether sufficient source
+material is retained or otherwise recoverable so provenance can be **independently re-evaluated**,
+not merely asserted through a citation. Decision E's citation-only answer is scoped to S5.2 and is
+explicitly not the permanent position.
 
 ## 7. Provenance, consent, governance, privacy — how each is preserved
 
@@ -232,54 +276,70 @@ ingested" trail.
 - **No fixes to the deferred tech-debt items** named in §3 (tags pass-through, `chunk_fts`
   triggers). They are recorded as constraints and dependencies only.
 
-## 9. Decisions required before an implementation proposal
+## 9. Decisions — APPROVED 2026-08-11
 
-**Decision A — structured-only ingestion, or model-assisted extraction?**
-*Recommendation: structured-only for S5.2.* The caller supplies already-shaped S5.1 records; S5.2
-governs and persists them. Model-assisted extraction (paste a manual, have Bartholomew propose
-`competency_procedure` records from it) is genuinely useful and probably wanted eventually, but it
-concentrates the governance risk: a model inventing procedures *and their provenance* is precisely
-what `CONSTITUTION.md`'s "training must never bypass provenance" guards against, and it needs a
-review-before-consolidation step that is structurally S5.4's machinery. Recommend deferring it and
-keeping the seam shaped so extraction can later feed the same governed write.
+All five were approved as recommended. Recorded here as decided, not proposed.
 
-**Decision B — what surfaces the training path?**
-*Recommendation: an API endpoint plus CLI, no new UI in S5.2.* Stage 1's governance shell is
-complete and already owns consent/audit surfaces; a training authoring UI is a Stage 1-shaped
-product decision that should be taken on its own merits, not smuggled in through a Stage 5
-sub-stage.
+| | Decision | Approved outcome |
+|---|---|---|
+| **A** | Who shapes raw material into structured records | **Structured-only ingestion.** The caller supplies already-shaped S5.1 records; S5.2 governs and persists them. Model-assisted extraction is **not** built here. Bound by Constraint 1 (§9.1). |
+| **B** | What surfaces the training path | **API + CLI. No new UI in S5.2.** A training-authoring UI is a Stage 1-shaped product decision to be taken on its own merits. |
+| **C** | Partial-submission semantics | **Per-record independence.** Each record is stored, queued for consent, or rejected on its own; `TrainingRuntimeResult` reports per-record outcomes. All-or-nothing would need a new write authority spanning Memory and the consent queue, which this sub-stage may not add. |
+| **D** | Brake scope | **A dedicated `"training"` governance scope**, so training can be halted without halting chat or skills. Requires registering it in the Stage 1 governance API's `VALID_SCOPES` allowlist — see §10. |
+| **E** | Retaining raw source material | **Citation-only for S5.2.** `Provenance.detail` carries the citation; no sixth `competency_source` kind is introduced. Bound by Constraint 2 (§9.1). |
 
-**Decision C — partial-submission semantics.**
-A submission of five records where one trips `ask_before_store` cannot be atomic without a new
-transaction authority spanning the consent queue. *Recommendation: per-record independence* — each
-record is stored, queued for consent, or rejected on its own, and `TrainingRuntimeResult` reports
-per-record outcomes. All-or-nothing would require exactly the kind of new write authority this
-sub-stage is forbidden to add.
+### 9.1 Future-facing constraints on Decisions A and E (recorded 2026-08-11)
 
-**Decision D — brake scope name.** *Recommendation: a new `"training"` scope*, so training can be
-halted without halting chat or skills. The alternative (reusing `"skills"`) would couple two
-unrelated capabilities.
+These two constraints were attached to the approval and bind how this design may be read later.
+Neither expands S5.2's scope; both prevent a scope decision hardening into a permanent
+architectural position.
 
-**Decision E — does raw source material need retaining?**
-When a procedure is distilled from a manual, is the manual's text kept? *Recommendation: no new
-kind in S5.2* — `Provenance.detail` carries the citation, which is enough to satisfy "with
-provenance." Introducing a `competency_source` kind is a real data-model change and should be its
-own decision if §6's document ingestion is ever built.
+**Constraint 1 — Decision A must not establish structured manual submission as the intended final
+user experience.** S5.2's job is to provide the **governed canonical ingestion seam** that future
+conversational, model-assisted, and document-extraction paths feed into. Natural-language training
+remains an intended future capability of Bartholomew; extraction and interpretation are simply
+outside this sub-stage. §5.5 records the layering this requires and the concrete property that
+makes it real — the seam consumes *structured, provenance-bearing records*, never keystrokes, so
+any future producer of such records can feed it without a second write path or a second governance
+path. **Anything that would make this seam assume a human author is a violation of this
+constraint**, not merely a stylistic preference.
+
+**Constraint 2 — Decision E is an S5.2 scope decision, not a permanent rejection of retained or
+verifiable source material.** When document ingestion is designed (§6), it must revisit whether
+sufficient source material has to be retained, or otherwise recoverable, so that **provenance can
+be independently re-evaluated** rather than merely asserted. This matters most for the
+generalisation pipeline `CONSTITUTION.md` describes: that process is required to re-evaluate
+privacy, provenance, and de-identifiability before anything could ever leave the instance, and it
+cannot re-evaluate source text that was never kept. A citation alone is sufficient for S5.2's
+scope and insufficient as a permanent answer.
 
 ## 10. Risks and dependencies
 
 - **`chunk_fts` trigger hazard** (§3) — not triggered by S5.2 as scoped, but the reason §6's
   deferral exists. If Decision A or §6 is overridden, this becomes a live dependency.
-- **FTS migration residual** (`RISKS.md`, 2026-08-11) — competency records written by S5.2 are
-  indexed through the corrected single-writer path, so new writes are unaffected; the residual
-  concerns pre-migration content only. Noted so the interaction is checked, not assumed.
+- **FTS migration residual** (`RISKS.md`, 2026-08-11) — **explicitly out of S5.2's scope and
+  remains open; no fix is authorised as part of this sub-stage.** The interaction is nil by
+  construction, not by luck: competency records written by S5.2 go through the corrected
+  single-writer path, and the residual concerns only content indexed *before* that migration.
+  Recorded so the interaction is verified rather than assumed, and so this sub-stage is never
+  mistaken for having addressed it.
 - **Unreachable tag rules** (§3) — if governance for training content ever *needs* tag matching,
   that deferred gap becomes blocking. It does not for this design.
+- **Brake scope registration is a real, three-place change** (Decision D). Verified 2026-08-11:
+  `parking_brake.py:193` matches scopes as free strings, but the Stage 1 governance API holds a
+  hardcoded allowlist — `VALID_SCOPES = frozenset({"global", "skills", "sight", "voice",
+  "scheduler"})` in `bartholomew_api_bridge_v0_1/services/api/routes/governance.py:35` — and
+  **rejects unknown scopes**. Registering `"training"` there (plus `cli.py`'s help text and
+  `parking_brake.py`'s module docstring) is required, or the scope would be enforceable internally
+  yet impossible to engage from the UI or API — a governance control that exists but cannot be
+  operated. This corrects an earlier statement in this design that no registration was needed.
 - **`upsert_memory()`'s `(kind, key)` upsert semantics are current-state-only** — re-training the
-  same `competency_id.slug` overwrites rather than versions it. S5.1's envelope carries `revision`,
-  but nothing increments it automatically. Whether re-training should preserve history is an S5.4
-  consolidation question; S5.2 should at minimum increment `revision` and not silently lose the
-  prior claim's provenance. Flagged for the implementation proposal.
+  same `competency_id.slug` overwrites rather than versions it. **Resolved for S5.2** (§13.4): the
+  seam reads the existing record, increments `revision`, and records the supersession — including
+  the superseded claim's provenance — in the per-submission Reflection. `reflections` is a
+  separate, append-only table, so history exists there without inventing a new store or a second
+  write authority. Whether superseded competency state should additionally be *retrievable* as
+  memory (rather than only auditable via reflections) stays an S5.4 consolidation question.
 
 ## 11. Non-negotiable invariants
 
@@ -295,6 +355,12 @@ own decision if §6's document ingestion is ever built.
 - **`potentially_generalisable` remains inert** — no promotion, export, or transport mechanism is
   introduced, enforced by extending S5.1's structural test (§7.3).
 - **No bypass of redaction/encryption/consent/audit**, for any training source type.
+- **The seam consumes structured records, never keystrokes** (§5.5, Constraint 1). It must not
+  acquire any structural assumption that a human authored the submission — that is what keeps it
+  the canonical seam future conversational/model-assisted/document extraction feeds into, rather
+  than a manual-entry path that would have to be replaced.
+- **No fix to the FTS5 migration/self-healing residual** is made or implied by this sub-stage
+  (§10). It stays open and separately tracked in `RISKS.md`.
 
 ## 12. Verify plan (once implementation is separately approved)
 
@@ -326,3 +392,99 @@ pytest -q tests/test_competency_no_auto_promotion.py
 
 Exact file names and counts are implementation-time detail. The six verification *categories* are
 the commitment.
+
+---
+
+## 13. Proposed implementation plan (PROPOSED 2026-08-11 — NOT AUTHORISED)
+
+Written against Decisions A–E as approved (§9) and Constraints 1–2 (§9.1). **No code has been
+written.** This section is the "separate implementation proposal" the status note requires; it
+needs its own sign-off before any production file is touched.
+
+### 13.1 Staging — governance controls land before the thing they govern
+
+Three separately reviewable steps. The ordering is deliberate and is the one safety-relevant
+sequencing choice in this plan:
+
+| Step | Contents | Why here |
+|---|---|---|
+| **1 — Governance foundation** | Register the `"training"` brake scope (§10's three places); add `memory_rules.yaml` entries for the five competency kinds (§7.2) | The control that stops training must exist **before** the path that performs it. Landing the seam first would leave a window where training is enforceable only via `global`, and not engageable per-scope from the UI/API at all. |
+| **2 — The governed write seam** | `bartholomew/kernel/training.py` + `run_training_through_runtime_contract()` in `runtime_contract.py` | The substance of S5.2. Kernel-only; no external surface yet, so it can be reviewed on its governance properties alone. |
+| **3 — Surfaces** | API route + CLI command (Decision B), plus the Estate Management end-to-end demonstration | Exposure comes last, once the governed path underneath it is reviewed and tested. |
+
+Each step is independently mergeable and independently testable. Approving one does not approve
+the next.
+
+### 13.2 Files
+
+**New:**
+- `bartholomew/kernel/training.py` — `TrainingSubmission`, `TrainingRecordOutcome`,
+  `TrainingRuntimeResult`, `ALLOWED_TRAINING_SOURCE_TYPES` (the four of §5.4), submission
+  validation, and provenance stamping (§5.3). **Pure data and validation: no persistence, no
+  retrieval, no I/O** — the same discipline `competency.py` holds to, and enforced the same way, by
+  a structural test asserting the module imports no database machinery.
+- `bartholomew_api_bridge_v0_1/services/api/routes/training.py` — the submission endpoint (Step 3).
+- Six test files per §12, plus the Estate demonstration test.
+
+**Edited:**
+- `bartholomew/kernel/runtime_contract.py` — the seam function, `_TRAINING_KIND = "training_ingest"`,
+  brake scope `"training"`. Additive; no existing surface changes.
+- `bartholomew/config/memory_rules.yaml` — explicit entries for the five competency kinds.
+- `bartholomew_api_bridge_v0_1/services/api/routes/governance.py` — `VALID_SCOPES` gains
+  `"training"`.
+- `bartholomew/cli.py` — brake scope help text; new `train` command (Step 3).
+- `bartholomew/orchestrator/safety/parking_brake.py` — module docstring's scope list.
+
+**Not edited, deliberately:** `bartholomew/kernel/competency.py` (S5.1's approved model stands
+unchanged), `bartholomew/kernel/memory_store.py` (no new write path — the seam calls the existing
+`upsert_memory()`), `bartholomew/kernel/planner.py` (S5.3).
+
+### 13.3 The seam, concretely
+
+```
+TrainingSubmission
+  -> validate submission (competency_id, source_type in the S5.4 subset, records non-empty)
+  -> Observation(source="training", raw_content=<submitted material>)
+  -> Interpretation (via existing _build_interpretation enrichment)
+  -> CandidateAction(kind="training_ingest")
+  -> GOVERNANCE: is_blocked_fail_closed_off_loop("training", ...)   # fail-closed, before any write
+  -> for each record (per-record independence, Decision C):
+       validate() -> stamp provenance (recorded_by/recorded_at seam-derived, §5.3)
+       -> revision handling (§13.4)
+       -> MemoryStore.upsert_memory(kind, key, json, ts, summary=record.to_summary_text())
+       -> outcome: stored | queued_for_consent | rejected(reason)
+  -> Reflection: one per submission, recording per-record outcomes and any supersession
+  -> TrainingRuntimeResult(per-record outcomes)
+```
+
+### 13.4 Resolved implementation details
+
+- **Revision/supersession (§10).** Before writing a record whose `(kind, key)` already exists, the
+  seam reads the current record, sets `revision = prior.revision + 1`, and records the supersession
+  — including the superseded claim's provenance — in the per-submission Reflection. `reflections`
+  is separate and append-only, so prior claims remain auditable without a new store, a new table,
+  or a second write authority. The `memories` row itself remains current-state-only, unchanged.
+- **Consent outcomes.** A record routed to `pending_sensitive_writes` reports
+  `queued_for_consent`, not `stored`. The distinction must be visible in the result and in the CLI
+  output, or a user will believe training landed when it is awaiting their approval.
+- **Fail-closed ordering.** The brake check precedes all record processing, so a blocked brake
+  results in zero writes and zero consent-queue entries.
+
+### 13.5 Explicitly not included
+
+No extraction or interpretation of prose (Constraint 1 — Layer 0, §5.5). No document/file
+ingestion (§6). No UI (Decision B). No sixth record kind (Decision E). No Executive integration
+(S5.3). No candidate-learning or consolidation loop, and no Bartholomew-originated competency
+writes (S5.4). No Estate Management production functionality — the Step 3 demonstration trains the
+worked example through the real seam and stops there. **No fix to the FTS5 migration/self-healing
+residual** (§10) — it stays open in `RISKS.md`.
+
+### 13.6 What would signal this plan is wrong
+
+Recorded so the implementation can fail honestly rather than be forced through:
+- If the seam cannot be written without assuming a human author, Constraint 1 is being violated and
+  the design needs revisiting, not a workaround.
+- If per-record independence (Decision C) turns out to require a transaction spanning Memory and
+  the consent queue, that is a new write authority and must stop for re-approval.
+- If `memory_rules.yaml` cannot express the needed governance for competency kinds without tag
+  matching, the deferred tags gap (§3) has become blocking and must be raised, not worked around.
