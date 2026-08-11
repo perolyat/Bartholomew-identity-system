@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from bartholomew.kernel.db_ctx import set_wal_pragmas
 from bartholomew.kernel.skill_base import (
     SkillBase,
     SkillContext,
@@ -187,11 +188,33 @@ class NotifySkill(SkillBase):
             conn.close()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get database connection."""
+        """
+        Get database connection.
+
+        Previously a bare sqlite3.connect() with no explicit WAL/busy_timeout
+        configuration -- relying only on Python's incidental ~5s default
+        connect timeout. Under concurrent writers to the same shared db file
+        (the scheduler's autonomy loop writes to `reflections`/
+        `scheduled_tasks` on every drive tick, most heavily right at
+        startup when every drive becomes immediately due), that was
+        confirmed to raise sqlite3.OperationalError: database is locked --
+        reproduced directly against this exact connection pattern.
+
+        set_wal_pragmas() brings this in line with the rest of the kernel's
+        connections (WAL mode, synchronous=NORMAL, foreign_keys=ON,
+        busy_timeout=5000) -- the codebase's one existing standard for this,
+        applied here rather than left implicit/undocumented. No shorter
+        override: there's no UX/runtime requirement calling for this
+        connection to fail faster than that standard, and narrowing it would
+        only make this path more likely to lose exactly the kind of brief,
+        self-resolving contention (the scheduler's startup burst) this fix
+        exists to tolerate.
+        """
         if not self._db_path:
             raise RuntimeError("No database configured")
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
+        set_wal_pragmas(conn)
         return conn
 
     def _load_settings(self) -> None:
