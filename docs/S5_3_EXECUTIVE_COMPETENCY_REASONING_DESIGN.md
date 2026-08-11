@@ -1,0 +1,310 @@
+# S5.3 Design — Executive Competency Reasoning
+
+> **Authority note:** this document is the design `ROADMAP.md`'s S5.3 sub-stage would be
+> implemented against. It is subordinate to `ROADMAP.md` (Stage 5's canonical exit criteria),
+> `CONSTITUTION.md`'s "One Developing Digital Individual" section, and `COGNITIVE_RUNTIME.md`'s
+> "Competency, Training, and Learning" section — in particular its Executive row and its "Transfer
+> boundaries" subsection, which are the canonical requirements this design implements. It builds on
+> S5.1's delivered data model (`competency.py`) and S5.2's delivered write path
+> (`training.py` + `run_training_through_runtime_contract()`).
+>
+> **Status: PROPOSED 2026-08-11. NOT APPROVED. No implementation is authorised by this document.**
+> Per Stage 5's approval model and the S5.1/S5.2 precedent, the sequence is: this design approved
+> in principle → a separate implementation proposal approved → implementation. S5.2's completion
+> does not authorise S5.3.
+>
+> **Reconnaissance basis:** every claim in §3 and §4 was verified by direct reading of the merged
+> repository at `d3b0753`, not inferred from planning documents.
+
+## 1. What this closes
+
+`ROADMAP.md`'s S5.3 row requires: *"Extend `Planner.decide()` (today a stub returning `None`) so
+the Executive retrieves relevant competencies/knowledge/procedures for a given situation and
+constructs a `CandidateAction` informed by them and their confidence — through the existing
+Governance path, not a new one."* Its exit criterion: *"The Executive (`Planner.decide()` **or its
+successor**) retrieves and applies relevant competencies when constructing a `CandidateAction`,
+still gated by the existing, single Governance path."*
+
+S5.1 gave competencies a shape. S5.2 gave them a governed way to exist. **Nothing reads them
+back for reasoning.** Competency records are, today, inert data that only a retrieval test touches.
+
+## 2. Reconnaissance: what the repository actually looks like
+
+Verified at `d3b0753`:
+
+| Fact | Evidence |
+|---|---|
+| `Planner.decide()` is a stub returning `None` unconditionally | `planner.py:25–29` |
+| **Its only caller is the periodic tick loop** | `daemon.py:860` — `action = await self.planner.decide(self.state)` inside `_tick_loop`, every `self.interval` seconds |
+| That call site publishes straight to the event bus | `daemon.py:861–862` — `if action: await self.bus.publish("system", action)` |
+| **The bus path is ungoverned** | `_system_consumer` (`daemon.py:870–886`) calls `self.mem.create_nudge(...)` directly. No brake check, no Runtime Contract, no `evaluate_tool_policy` — verified by direct read of the whole consumer |
+| **Nudges created that way are user-visible** | `GET /api/nudges/pending` (`app.py:406`), plus the minimal UI's nudge panel (`index.html:1123`) |
+| `WorldState` carries almost nothing | `state_model.py` — `now`, `last_water_ts`, `user_activity` |
+| `CandidateAction` is where surfaces model a proposal | `runtime_contract.py:108–113`, frozen dataclass `(kind, interpretation)` |
+| `_build_interpretation()` is the existing enrichment point | `runtime_contract.py:129` — folds active goals, active persona, and Working Memory context into the prompt |
+| Competency retrieval already works unmodified | `RetrievalFilters(kinds=[...])` + `ConsentGate`; proven by S5.1's `tests/test_competency_retrieval.py` |
+| **Retrieval is synchronous** | `Retriever.retrieve()` / `HybridRetriever.retrieve()` are `def`, not `async def` (`retrieval.py:497`, `:551`) |
+| Governance is a single function | `policy_engine.evaluate_tool_policy(context, tool_name) -> PolicyDecision` |
+
+### 2.1 The finding that shapes this whole design
+
+**Implementing S5.3 by the literal instruction — "make `Planner.decide()` return actions" — would
+ship ungoverned proactive behaviour.**
+
+`decide()` is called on a timer, and anything it returns is published to a bus whose consumer
+writes a user-visible nudge with **no governance whatsoever**. Today that path is inert only
+because `decide()` always returns `None`. The stub *is* the safety mechanism.
+
+Making it return a `CandidateAction` would therefore, in one change:
+- create unsolicited proactive suggestions (S5.5–S5.7 scope, gated behind a default-deny
+  `allow_proactive` category that does not exist yet, and behind Stage 1's shell being proven);
+- deliver them through a path that answers "no" to Exit Gate questions #2 and #3 (does every
+  proposed action pass through the Executive / the same Governance path);
+- do so *before* the initiative safety scaffolding (typed cadence, default-OFF consent, functional
+  mute, quiet-hours deferral) that S5.5 exists to build.
+
+This is not a reason to stop. It is the reason S5.3 must attach competency reasoning to the
+**request-driven** Executive path and leave `decide()`'s tick-loop return value alone (§5,
+Decision A).
+
+## 3. Dependency findings
+
+### 3.1 The S5.4 reflection-ownership gap — **does not block S5.3**
+
+Assessed specifically, as instructed. **There are two distinct reflection mechanisms in this
+codebase, and the gap is in only one of them:**
+
+| Mechanism | Where | Status |
+|---|---|---|
+| **Per-action reflection** — `ActionReflection` / `record_action_reflection()`, `REFLECTION_KIND = "action_reflection"` | `reflection.py:49–100`; written by every Runtime Contract surface including S5.2's training seam | **No ownership dispute.** Single function, single sink. |
+| **Daily/weekly narrative reflection** — `ReflectionGenerator` (LLM, from `identity_interpreter`) **plus** `narrator.generate_daily_reflection_narrative()`, string-concatenated | `daemon.py:948` and `:1059`; concatenation at `daemon.py:1036` (`content = f"{content}\n\n---\n\n{episodic_narrative}"`) | **This is the gap.** Two pipelines run independently; neither is the enforced authority. |
+
+`COGNITIVE_RUNTIME.md`'s "Reflection ownership" section states the binding consequence precisely:
+*"live proactive **reflection** behaviour (`ROADMAP.md` Stage 5) remains blocked until this gap is
+closed."* The blocked thing is **live proactive reflection behaviour** — S5.7, and the S5.4
+consolidation loop that reads reflection output as its input.
+
+**S5.3 as designed here touches neither mechanism.** It reads competency records from Memory and
+enriches a `CandidateAction`; it composes no reflections, changes no reflection authority, and
+reads no reflection output. The per-action reflection the Runtime Contract already writes at the
+end of a request is the *first* mechanism, which has no ownership dispute.
+
+**Conclusion: S5.3 can be designed and implemented cleanly while leaving the gap for S5.4.** No
+prerequisite decision or work is required before S5.3 — **provided** Decision A holds. If S5.3 were
+instead scoped to make `decide()` drive proactive behaviour, the gap *would* become relevant,
+because that is the "live proactive" behaviour the consequence names. Recorded as a stop condition
+(§9).
+
+**This design does not touch, fix, or propose fixing the reflection gap.** It remains S5.4's.
+
+### 3.2 The four deferred issues — none blocks S5.3
+
+Checked against repository evidence rather than assumed:
+
+| Deferred issue | Blocks S5.3? |
+|---|---|
+| FTS5 migration residual | **No.** It concerns pre-migration index content. S5.3 reads competency records written by S5.2 through the corrected single-writer path. Worth one verification test that competency retrieval returns what was written (§8), not a fix. |
+| `data/memory.db` test mutation | **No.** Test hygiene only; no runtime coupling. |
+| Stale `chunk_fts` documentation | **No.** S5.3 uses `memory_fts`/vector retrieval over `memories`, not the chunk path. |
+| `privacy_guard` vs `memory_rules.yaml` vocabulary disagreement | **No.** Both fail closed, and both sit on the *write* path. S5.3 is a read path, gated by `ConsentGate` — a third, separate mechanism. |
+
+One genuine adjacency worth stating and **not** acting on: S5.1 design §10's `tags` pass-through
+gap means competency retrieval cannot be filtered by tag. This design uses `kind` and key-prefix
+filtering, which is sufficient, so the gap stays deferred.
+
+## 4. Proposed ownership
+
+No new owner. Per `COGNITIVE_RUNTIME.md`'s ownership table, applying competency data is the
+**Kernel Executive**'s job. In this codebase the Executive is split across two places, which the
+design must respect rather than unify:
+
+- `Planner` — the class named Executive, today doing routing/validation (`handle_skill_request`)
+  and nothing else;
+- `runtime_contract.py`'s per-surface seams — where `Interpretation` and `CandidateAction` are
+  actually constructed.
+
+Competency **retrieval** belongs in Interpretation (per `COGNITIVE_RUNTIME.md`'s table row:
+*"Interpretation is where relevant competency and knowledge retrieval happens"*). Competency
+**application** belongs in `CandidateAction` construction. Both already exist; S5.3 enriches them.
+
+## 5. Proposed design
+
+### 5.1 A competency reasoning module
+
+New `bartholomew/kernel/competency_reasoning.py` — pure logic, no I/O of its own, mirroring the
+discipline `competency.py` and `training.py` hold to:
+
+- `select_relevant(records, situation, *, limit, min_confidence) -> CompetencySelection` — ranks
+  and filters already-retrieved records.
+- `CompetencyContext` — the structured result: which competencies were consulted, their
+  confidence, which procedures/heuristics/knowledge were selected, and the aggregate supervision
+  requirement.
+- `render_for_prompt(context) -> str` — the plain-text rendering folded into the Interpretation
+  prompt, in the same labelled-lines style `_build_interpretation()` already uses.
+
+Retrieval itself (the I/O) stays with the existing retrieval layer, called from the seam.
+
+### 5.2 Retrieval, off the event loop
+
+`Retriever.retrieve()` is synchronous. Per the B2/B8 discipline this repository already enforces,
+competency retrieval must be routed through `run_off_loop()` with the daemon's
+`blocking_executor` — not called directly from the async seam. Getting this wrong would put a
+per-request blocking DB read on the event loop, which is exactly the class of defect Phase B spent
+nine stages removing.
+
+### 5.3 Where it attaches
+
+```
+Observation
+  -> Interpretation           <-- competency retrieval + selection happens here
+       (existing goals/persona/working-memory enrichment, PLUS a rendered
+        competency context block)
+  -> CandidateAction          <-- carries the CompetencyContext, including any
+       supervision requirement, so Governance can be asked the right question
+  -> Governance               <-- unchanged authority: brake + evaluate_tool_policy
+  -> Capability / Execution   <-- unchanged
+  -> Reflection               <-- unchanged mechanism; records which competencies
+                                  were consulted, for auditability
+```
+
+`CandidateAction` gains one optional field (`competency_context`). It is a frozen dataclass; adding
+an optional field is additive and breaks no existing construction site.
+
+### 5.4 Supervision propagation
+
+`COGNITIVE_RUNTIME.md` requires: *"Where a competency's own recorded supervision requirements call
+for it… the `CandidateAction` must reflect that need for review; Governance still makes the actual
+admission decision."*
+
+S5.1's envelope already carries `supervision.requires_review` + `reason`. S5.3 propagates it: if
+any applied record requires review, the `CandidateAction` says so. **Governance's authority is not
+delegated** — the competency cannot approve anything, and a competency saying "no review needed"
+never relaxes a gate. It can only ever *add* a review requirement, never remove one. This
+asymmetry is a non-negotiable invariant (§7).
+
+### 5.5 Transfer boundaries
+
+`COGNITIVE_RUNTIME.md`'s "Transfer boundaries" section requires relevance, provenance, confidence,
+privacy, Governance, and **domain boundaries** — with the explicit example that *"a plumbing-
+contractor heuristic does not transfer to travel booking just because both involve comparing vendor
+quotes."* Indiscriminate transfer is an explicit non-goal.
+
+Concretely for S5.3: retrieval is `ConsentGate`-filtered (privacy), records below a confidence
+floor are excluded (confidence), each applied record's provenance is carried into the context
+(provenance), and **cross-competency application is off by default** (domain boundaries) — see
+Decision C.
+
+## 6. Scope: what "reasoning" means in S5.3
+
+Deliberately narrow. S5.3 **retrieves, selects, renders, and propagates supervision**. It does
+**not** introduce model-driven planning — the Executive does not gain an LLM call that invents
+courses of action.
+
+Rationale, in the same spirit as S5.2's Decision A: a model inventing a plan *and* citing
+competencies as its justification concentrates exactly the risk the Constitution guards against,
+and it would need a review-before-action loop that is structurally S5.4/S5.5 machinery. The
+selection logic in S5.3 is deterministic and testable; making the Executive genuinely deliberative
+is a much larger step that deserves its own approval.
+
+## 7. Non-negotiable invariants
+
+- **No new Governance path.** Brake + `evaluate_tool_policy` remain the sole admission authority.
+- **Competency data never approves anything.** Supervision can only *add* a review requirement,
+  never remove or relax one.
+- **No second Memory authority and no new retrieval path** — the existing
+  `ConsentGate`-filtered retrieval layer, unchanged.
+- **No proactive behaviour.** S5.3 introduces no unsolicited output; `decide()`'s tick-loop return
+  contract is unchanged (Decision A).
+- **No blocking I/O on the event loop** — retrieval routed through `run_off_loop()`.
+- **No writes.** S5.3 is a read path; it creates and modifies no competency records. Learning from
+  outcomes is S5.4.
+- **No reflection-ownership change** — the S5.4 gap is untouched (§3.1).
+- **`classification` remains inert** — reasoning never branches on
+  `potentially_generalisable` to promote, export, or transport anything. S5.1's structural test is
+  extended to cover the reasoning module.
+
+## 8. Verify plan (once implementation is separately approved)
+
+```bash
+# Selection logic: relevance, confidence floor, domain scoping, ordering.
+pytest -q tests/test_competency_reasoning_selection.py
+
+# The seam: retrieved competencies genuinely reach the CandidateAction and the
+# prompt -- with a non-vacuity control proving the enrichment is consumed, not
+# constructed and discarded (the precedent this repo already sets).
+pytest -q tests/test_competency_reasoning_seam.py
+
+# Supervision propagation, including the asymmetry: a competency can add a
+# review requirement but can never relax one.
+pytest -q tests/test_competency_supervision_propagation.py
+
+# Governance unchanged: brake engaged still denies; competency context never
+# widens what Identity policy permits.
+pytest -q tests/test_competency_reasoning_governance.py
+
+# Consent: never-consented competency content is not retrievable into a
+# CandidateAction (ConsentGate still applies on the read path).
+pytest -q tests/test_competency_reasoning_consent.py
+
+# Off-loop discipline: retrieval does not run on the event-loop thread
+# (thread-identity spy, matching the B8 precedent).
+pytest -q tests/test_competency_reasoning_off_loop.py
+
+# Regression: decide() still returns None; no proactive nudge is produced.
+pytest -q tests/test_planner_decide_remains_inert.py
+
+# Extended S5.1 invariant: still no promotion/export/transport mechanism.
+pytest -q tests/test_competency_no_auto_promotion.py
+```
+
+## 9. Stop conditions
+
+If any of these is hit, **stop and return for review** rather than working around it:
+
+1. **Competency reasoning cannot be attached without changing `decide()`'s tick-loop return
+   contract.** That would mean shipping proactive behaviour, which is S5.5–S5.7 and unauthorised —
+   and at that point the reflection-ownership gap (§3.1) becomes a live blocker rather than a
+   deferred one.
+2. **Supervision propagation turns out to require Governance to consult competency data to decide.**
+   That would be delegating admission authority to competency records, which §7 forbids.
+3. **The selection logic cannot be made deterministic** without a model call — that is §6's
+   boundary, and crossing it needs its own approval.
+4. **Retrieval cannot be made `ConsentGate`-correct for competency kinds** — a privacy regression
+   on the read path, which must be raised, not worked around.
+5. **`CandidateAction` cannot carry competency context without changes rippling into unrelated
+   surfaces** (voice/sight/awaiting-response), indicating the field belongs somewhere else.
+
+## 10. Decisions required before an implementation proposal
+
+**Decision A — where competency reasoning attaches.** *Recommendation: the request-driven path
+(Interpretation + `CandidateAction`), leaving `Planner.decide()` returning `None`.* This satisfies
+the exit criterion as written ("`Planner.decide()` **or its successor**") without shipping the
+ungoverned proactivity §2.1 documents. The alternative — implementing `decide()` for the tick loop
+— requires first bringing the tick→bus→nudge path through the Runtime Contract, which is S5.5–S5.7
+work and is not authorised. *(A third option, implementing `decide()` but logging instead of
+publishing, is dry-run proactive reasoning, i.e. S5.6 — also not authorised.)*
+
+**Decision B — which surfaces get competency reasoning in S5.3.** *Recommendation: chat only.*
+Chat is the surface where a user actually asks something a competency could inform. Skill execution
+already has its own governed path and no natural "what should I do here" moment; drives are
+proactive. Starting with one surface keeps the blast radius small and the non-vacuity test
+meaningful. Extending to other surfaces later is additive.
+
+**Decision C — cross-competency transfer.** *Recommendation: off by default in S5.3 — retrieve
+within the competencies relevant to the situation, not across all of them.* `CONSTITUTION.md`
+explicitly wants transfer to be possible eventually (the contractor-quote example), but
+`COGNITIVE_RUNTIME.md` equally explicitly forbids it being indiscriminate, and the machinery for
+judging domain-appropriateness does not exist. Recommend recording transfer as a deliberate S5.3
+non-goal with the boundary stated, rather than implementing a weak version of it.
+
+**Decision D — what happens when confidence is low or no competency matches.** *Recommendation:
+the Executive proposes nothing extra and the request proceeds exactly as it does today.*
+`COGNITIVE_RUNTIME.md` allows the Executive to construct "an explicit 'I'm not confident enough
+here'", but making Bartholomew *say* that is user-visible behaviour change on the chat surface.
+Recommend S5.3 stays silent-when-unsure, and that surfacing uncertainty to the user be its own
+decision.
+
+**Decision E — is the competency context user-visible?** *Recommendation: not in S5.3.* The
+context is recorded in the Reflection for auditability, but not rendered to the user as "I used
+these competencies." Explainability UI is a Stage 1-shaped product decision, and Stage 1's scope
+was deliberately fixed.
