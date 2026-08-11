@@ -213,9 +213,7 @@ class TrainingRuntimeResult:
 
     @property
     def all_stored(self) -> bool:
-        return bool(self.outcomes) and all(
-            item.outcome == OUTCOME_STORED for item in self.outcomes
-        )
+        return bool(self.outcomes) and all(item.outcome == OUTCOME_STORED for item in self.outcomes)
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -254,8 +254,8 @@ class TestProvenanceIntegrity:
         record.envelope.provenance = Provenance(
             source_type="user_instruction",
             detail="caller's own claim",
-            recorded_by="reflection",             # a lie: not from reflection
-            recorded_at="1999-01-01T00:00:00Z",   # backdated
+            recorded_by="reflection",  # a lie: not from reflection
+            recorded_at="1999-01-01T00:00:00Z",  # backdated
         )
 
         await run_training_through_runtime_contract(
@@ -268,9 +268,9 @@ class TestProvenanceIntegrity:
         provenance = json.loads(row["value"])["provenance"]
 
         assert provenance["recorded_by"] == "user", "caller was able to forge recorded_by"
-        assert not provenance["recorded_at"].startswith("1999"), (
-            "caller was able to backdate recorded_at"
-        )
+        assert not provenance["recorded_at"].startswith(
+            "1999",
+        ), "caller was able to backdate recorded_at"
         # Caller-owned fields survive, as designed.
         assert provenance["source_type"] == "user_instruction"
         assert provenance["detail"] == "user stated this in conversation"
@@ -509,9 +509,7 @@ class TestStructuralInvariants:
         assert set(fields) == {"competency_id", "source_type", "source_detail", "records"}
 
     def test_reserved_source_types_are_disjoint_from_allowed(self):
-        assert not (
-            training.ALLOWED_TRAINING_SOURCE_TYPES & training.S5_4_RESERVED_SOURCE_TYPES
-        )
+        assert not (training.ALLOWED_TRAINING_SOURCE_TYPES & training.S5_4_RESERVED_SOURCE_TYPES)
 
     def test_seam_never_passes_skip_privacy_guard(self):
         """The production seam must not bypass the consent gate -- an

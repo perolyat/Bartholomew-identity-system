@@ -44,9 +44,9 @@ def test_every_competency_kind_has_explicit_recall_policy():
             f"{kind} has no explicit recall_policy -- it is relying on an unset default, "
             "which is exactly what these rules exist to prevent"
         )
-        assert result.get("privacy_class") == "user.competency", (
-            f"{kind} has no explicit privacy_class"
-        )
+        assert (
+            result.get("privacy_class") == "user.competency"
+        ), f"{kind} has no explicit privacy_class"
         assert "always_keep" in result["matched_categories"]
 
 
@@ -125,6 +125,6 @@ def test_training_scope_offered_by_cli_and_ui():
     ui_source = (
         repo_root / "bartholomew_api_bridge_v0_1" / "ui" / "minimal" / "index.html"
     ).read_text(encoding="utf-8")
-    assert 'class="brake-scope" value="training"' in ui_source, (
-        "the minimal UI's brake scope checkboxes are hardcoded and do not offer training"
-    )
+    assert (
+        'class="brake-scope" value="training"' in ui_source
+    ), "the minimal UI's brake scope checkboxes are hardcoded and do not offer training"
