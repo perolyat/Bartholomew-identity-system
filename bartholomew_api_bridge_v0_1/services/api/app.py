@@ -40,6 +40,7 @@ from .routes import (
     notifications,
     onboarding,
     self_state,
+    training,
 )
 from .routes.metrics import BARTHOLOMEW_TICKS_TOTAL, KERNEL_TICKS_TOTAL, REGISTRY
 
@@ -75,6 +76,7 @@ app.include_router(notifications.router)
 app.include_router(consent.router)
 app.include_router(awaiting_response.router)
 app.include_router(onboarding.router)
+app.include_router(training.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)

@@ -11,9 +11,10 @@ ingestion runtime of its own (`COGNITIVE_RUNTIME.md`: "Training as Memory
 input, not a separate pipeline").
 
 Deliberately pure data and validation: no persistence, no retrieval, no I/O
-of any kind -- the same discipline `competency.py` holds to, and asserted by
-`tests/test_training_contract.py`. `MemoryStore.upsert_memory()` remains the
-sole authority that writes memories.
+of any kind -- the same discipline `competency.py` holds to, and asserted
+structurally by `tests/test_training_runtime_contract_seam.py`'s
+`TestStructuralInvariants`. `MemoryStore.upsert_memory()` remains the sole
+authority that writes memories.
 
 The seam consumes structured records, never keystrokes (Constraint 1)
 -------------------------------------------------------------------------
@@ -40,7 +41,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Union
+from typing import Any
 
 from bartholomew.kernel.competency import (
     CompetencyEvidence,
@@ -57,13 +58,13 @@ from bartholomew.kernel.competency import (
 
 #: Any of S5.1's five record types. A submission carries these already-shaped
 #: (Decision A: structured-only ingestion).
-TrainingRecord = Union[
-    CompetencyRecord,
-    CompetencyKnowledge,
-    CompetencyProcedure,
-    CompetencyHeuristic,
-    CompetencyEvidence,
-]
+TrainingRecord = (
+    CompetencyRecord
+    | CompetencyKnowledge
+    | CompetencyProcedure
+    | CompetencyHeuristic
+    | CompetencyEvidence
+)
 
 #: The four user-originated provenance source types S5.2 accepts (design
 #: Sec.5.4). `formal_material` here means text supplied directly -- pasted or
@@ -237,6 +238,51 @@ class TrainingRuntimeResult:
 # ---------------------------------------------------------------------------
 # Provenance stamping (design Sec.5.3)
 # ---------------------------------------------------------------------------
+
+
+#: `kind` -> S5.1 record class. The five S5.1 kinds and nothing else; an
+#: unknown kind is an error, never a silently-skipped record.
+RECORD_CLASSES: dict[str, Any] = {
+    CompetencyRecord.KIND: CompetencyRecord,
+    CompetencyKnowledge.KIND: CompetencyKnowledge,
+    CompetencyProcedure.KIND: CompetencyProcedure,
+    CompetencyHeuristic.KIND: CompetencyHeuristic,
+    CompetencyEvidence.KIND: CompetencyEvidence,
+}
+
+
+def record_from_payload(kind: str, data: dict[str, Any], *, slug: str | None = None):
+    """
+    Build an S5.1 record from a decoded payload (an API body, a CLI JSON
+    file, or -- later -- a Layer 0 extractor's output; see this module's
+    docstring on Constraint 1).
+
+    Pure deserialisation: it constructs and returns a record, and performs
+    no I/O and no governance. Validation is the caller's to run via the
+    record's own `validate()`, and governance is the seam's.
+
+    `slug` is required for the four keyed kinds and must be absent for
+    `competency`, which has exactly one record per competency and derives
+    its key from `competency_id` alone.
+    """
+    if kind not in RECORD_CLASSES:
+        raise ValueError(
+            f"unknown competency kind {kind!r}; expected one of {sorted(RECORD_CLASSES)}",
+        )
+
+    record_class = RECORD_CLASSES[kind]
+
+    if record_class is CompetencyRecord:
+        if slug:
+            raise ValueError(
+                "kind 'competency' takes no slug -- there is exactly one such record "
+                "per competency and its key is the competency_id",
+            )
+        return record_class.from_dict(data)
+
+    if not slug:
+        raise ValueError(f"kind {kind!r} requires a slug")
+    return record_class.from_dict(data, slug=slug)
 
 
 def stamp_provenance(
