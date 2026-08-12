@@ -205,13 +205,15 @@ Smoke tests verify core functionality and can run in seconds.
 ## Documentation
 
 **Start with [MASTER_PLAN.md](MASTER_PLAN.md)** — it is the Single Source of Truth for what
-exists, where the project is, and what is authorised next. It lists the 13 canonical documents.
-Everything else in this repository, including this README and `docs/`, is a reference and is
-**not** an authority on project status.
+exists, where the project is, and what is authorised next. It lists the 14 canonical documents.
+Everything else in this repository, including this README and most of `docs/`, is a reference and
+is **not** an authority on project status — the one deliberate exception is `docs/TILT.md`, listed
+below, which is itself canonical.
 
 Most useful entry points:
 
 - [MASTER_PLAN.md](MASTER_PLAN.md) — SSOT: stage status, backlog, approval ledger
+- [docs/TILT.md](docs/TILT.md) — current execution priority: Usable POC / time-to-real-use
 - [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md) — how Bartholomew actually thinks (the runtime loop)
 - [ROADMAP.md](ROADMAP.md) — stage gates and engineering workstreams with exit criteria
 - [CI.md](CI.md) — what CI runs and how to reproduce it locally

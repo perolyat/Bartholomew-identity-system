@@ -2,7 +2,20 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-08-08 (New Direction reconciliation: P3 restructured to cover the
+> **Last updated:** 2026-08-12 (Usable POC / time-to-real-use prioritisation approved: a
+> repository-grounded assessment found that persistence, governance, and competency-retrieval
+> machinery are well-built and well-tested, but ordinary use of Bartholomew has not yet generated
+> real feedback — most notably, ordinary conversation writes nothing durable and retrievable. New
+> canonical document `docs/TILT.md` formalises the resulting execution-sequencing principle:
+> real-world testing of a sufficiently-functional vertical slice now takes priority over further
+> polish/hardening of that slice, except where safety, governance, privacy, data integrity,
+> architectural validity, or experiment validity are at stake. "Next 3 Moves" below is rewritten
+> accordingly. This is a **documentation-only** pass — no code, tests, or configuration changed.
+> See `DECISIONS.md`'s "Usable POC / time-to-real-use prioritisation" entry for full rationale,
+> alternatives considered, and the conflict this resolves with `CONSTITUTION.md`'s "Development
+> Philosophy" section.)
+>
+> **Previously (2026-08-08):** New Direction reconciliation: P3 restructured to cover the
 > competency/training/learning architecture (`ROADMAP.md` Stage 5 S5.1–S5.4) ahead of the
 > pre-existing initiative-engine scope (now S5.5–S5.7, preserved unchanged in substance); "Next 3
 > Moves" updated to insert this work between Stage 1 and live proactivity. See `CONSTITUTION.md`'s
@@ -66,15 +79,20 @@ See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHEC
 
 ## Canonical docs
 
-**13 documents.** This list is the registry; `DECISIONS.md`'s "Canonical SSOT docs" entry and
+**14 documents.** This list is the registry; `DECISIONS.md`'s "Canonical SSOT docs" entry and
 `CONSTITUTION.md`'s handover note describe the same set. (Corrected 2026-07-27: this list
 previously omitted `CONSTITUTION.md`, contradicting `DECISIONS.md`'s "Adopt `CONSTITUTION.md`
-as a canonical SSOT doc" entry, which explicitly puts the count at 13.)
+as a canonical SSOT doc" entry, which explicitly puts the count at 13. **Amended 2026-08-12:**
+`docs/TILT.md` added as the 14th — a deliberate, narrow exception to the "everything under
+`docs/` is a reference" rule below, since it governs binding near-term execution sequencing the
+same way `ROADMAP.md` and `DECISIONS.md` do. See `DECISIONS.md`'s "Usable POC / time-to-real-use
+prioritisation" entry.)
 
 - **MASTER_PLAN.md** (this doc)
 - [CONSTITUTION.md](CONSTITUTION.md)
 - [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md)
 - [ROADMAP.md](ROADMAP.md)
+- [docs/TILT.md](docs/TILT.md) — current execution-sequencing priority (Usable POC / time-to-real-use)
 - [DECISIONS.md](DECISIONS.md)
 - [RISKS.md](RISKS.md)
 - [ASSUMPTIONS.md](ASSUMPTIONS.md)
@@ -85,13 +103,13 @@ as a canonical SSOT doc" entry, which explicitly puts the count at 13.)
 - [TEST_MATRIX.md](TEST_MATRIX.md)
 - [PERF_BUDGETS.md](PERF_BUDGETS.md)
 
-Every other `*.md` in the repository (implementation notes, `docs/*`, `STATUS_*`, `README`s)
-is a **reference**, not an authority on project status. Where one contradicts a canonical doc,
-the canonical doc wins. Two locations are explicitly and permanently non-authoritative by
-design, not merely by omission: `docs/incubator/` (unapproved, individually-evaluated-only
-ideas — see `docs/incubator/ECHO_IDEAS.md`) and `docs/archive/` (superseded historical material,
-kept for record — see `docs/archive/ENGINEERING_LOG_2026.md` and the other archived files listed
-in `RISKS.md`'s tech-debt watchlist).
+Every other `*.md` in the repository (implementation notes, the rest of `docs/*`, `STATUS_*`,
+`README`s) is a **reference**, not an authority on project status. Where one contradicts a
+canonical doc, the canonical doc wins. Two locations are explicitly and permanently
+non-authoritative by design, not merely by omission: `docs/incubator/` (unapproved,
+individually-evaluated-only ideas — see `docs/incubator/ECHO_IDEAS.md`) and `docs/archive/`
+(superseded historical material, kept for record — see `docs/archive/ENGINEERING_LOG_2026.md` and
+the other archived files listed in `RISKS.md`'s tech-debt watchlist).
 
 ## Current architecture
 
@@ -597,60 +615,51 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 
 ## Next 3 Moves (always current)
 
-> **Updated 2026-08-08** (New Direction reconciliation): step 4 below is added — the
-> competency/training/learning architecture (`ROADMAP.md` Stage 5 S5.1–S5.4) now sits between
-> Stage 1 and Stage 5's live-proactivity work. See `ROADMAP.md`'s restructured Stage 5 section and
-> `DECISIONS.md`'s "Stage 5 restructured around competency and training before live initiative"
-> entry.
+> **Updated 2026-08-12** (Usable POC / time-to-real-use prioritisation — see `docs/TILT.md` and
+> `DECISIONS.md`'s "Usable POC / time-to-real-use prioritisation" entry): the list below is
+> rewritten around the new priority. Items 1–5 of the prior (2026-08-08) list are now complete —
+> Phase B (all of B0–B9), Stage 1 (all of S1.0–S1.6), and Stage 5 S5.1–S5.3 all shipped between
+> 2026-08-01 and 2026-08-12; see `ROADMAP.md` for each stage's exit evidence. The next move is no
+> longer "continue down the pre-existing Stage 5 sequence" — it is the first Usable POC vertical
+> slice, per `docs/TILT.md`.
 >
-> **Previously (2026-07-28, documentation reconciliation pass 2 — approved sequencing):**
-> Supersedes the 2026-07-27 list below, which ordered Phase B, then Stage 5/S5.1, then Stage 1. See
-> `ROADMAP.md`'s "Near-term milestone plan" for the full corrected sequence and rationale (Stage 1
-> must precede **live** Stage 5 behaviour because Stage 5's live proactivity needs a user-facing
-> governance surface that only Stage 1 provides).
+> **Previously (2026-08-08, New Direction reconciliation):** step 4 inserted the competency/
+> training/learning architecture between Stage 1 and Stage 5's live-proactivity work — see
+> `ROADMAP.md`'s restructured Stage 5 section and `DECISIONS.md`'s "Stage 5 restructured around
+> competency and training before live initiative" entry. Superseded above, not reversed: that
+> sequencing is why S5.1–S5.3 were the right things to build before this pivot, and S5.4–S5.7
+> remain real, deferred (not abandoned) work — see `docs/TILT.md`'s "What is deferred" section.
 
-**The actual next moves, as of 2026-08-08 (each step below requires its own separate, explicit
+**The actual next moves, as of 2026-08-12 (each step below requires its own separate, explicit
 approval before work begins — this list records sequencing, not authorisation):**
 
-1. **Documentation reconciliation and the deployment-architecture decision** — this pass. The
-   deployment decision (hybrid local-first) is now recorded in `DECISIONS.md`. The noncanonical-
-   document cleanup pass (previously listed below as unscheduled) is substantially complete as of
-   this pass — see the changed-file list presented alongside this update for what was
-   updated/archived/merged/deleted.
-2. **Design Phase B** — persistence-ownership stabilisation — against the approved hybrid
-   local-first architecture. Design only; not started; not approved for implementation. Evidence
-   base preserved in `RISKS.md`'s tech-debt watchlist (mixed `aiosqlite`/sync-`sqlite3`/
-   scheduler-thread ownership of one file, two near-duplicate `db_ctx` modules, the unresolved
-   `TRUNCATE`-outlasts-its-busy-timeout question, and the intermittent
-   `test_wal_cleanup_concurrent_processes` failure under full-suite load).
-3. **Build a minimal Stage 1 consumer web governance shell**, after separate approval of both
-   this sequencing and the Stage 1 scope itself (parking-brake access, consent/approval inbox,
-   notification/mute controls, awaiting-response queue, audit/provenance visibility, host-device
-   onboarding — see `ROADMAP.md`'s Stage 1 section). **In progress as of 2026-08-01:** Phase B
-   merged (PR #33); Stage 1 is now staged as sub-stages S1.0–S1.6 (`docs/STAGE_1_OVERVIEW.md`),
-   with **S1.1 (Parking Brake API + UI), S1.3 (notification settings + mute/quiet-hours), and S1.5
-   (governance audit/provenance view) implemented** — S1.4 and S1.6 remain scoped-only, each
-   requiring its own separate approval. **2026-08-03:** a standalone, adjacent-but-not-S1.2 fix
-   landed — sensitive-content memory writes are now queued for review instead of silently
-   discarded when no consent handler is registered (see `docs/STAGE_1_OVERVIEW.md`'s "Standalone:
-   consent-handler fix"). **2026-08-04: S1.2 (consent/approval inbox) implemented** — closes the
-   separate `memory_rules.yaml`/`should_store()` `ask_before_store` gap, reusing the
-   consent-handler fix's `pending_sensitive_writes` inbox rather than a parallel one.
-4. **Build the competency/training/learning architecture (Stage 5 S5.1–S5.4), not gated on Stage
-   1** — added 2026-08-08, pending its own separate, explicit approval. Competency data/contract
-   model, training/knowledge acquisition with provenance/consent, Executive competency reasoning,
-   and the experience→learning/consolidation loop, worked through Residential Estate Management as
-   the first proving ground. See `ROADMAP.md`'s restructured Stage 5 section and `CONSTITUTION.md`'s
-   "One Developing Digital Individual" section. Not started; this documentation pass does not
-   authorise implementation.
-5. **Stage 5 initiative safety scaffolding (S5.5–S5.6) remains paused**, now sequenced after both
-   Stage 1 and the new S5.1–S5.4 competency work, pending its own explicit approval. The locked
-   internal sequence (safety scaffolding before live proactivity) is recorded under P3 above and in
-   `ROADMAP.md`. Live proactive *reflection* behaviour specifically also remains blocked on the
-   reflection-ownership implementation gap (see `COGNITIVE_RUNTIME.md`), which S5.4 is where that
-   gap is now expected to be closed.
-6. **Live proactive Stage 5 behaviour (S5.7)** only once Stage 1, S5.1–S5.4, and S5.5–S5.6 have
-   all shipped, per the sequence above.
+1. ✅ **Done.** Documentation reconciliation, the hybrid local-first deployment decision, Phase B
+   (persistence-ownership stabilisation, B0–B9), and Stage 1 (the consumer web governance shell,
+   S1.0–S1.6: parking-brake access, consent/approval inbox, notification/mute controls,
+   awaiting-response queue, audit/provenance visibility, host-device onboarding). See `ROADMAP.md`
+   for exit evidence and merge commits.
+2. ✅ **Done.** Stage 5 S5.1–S5.3: the competency data/contract model, training/knowledge
+   acquisition with provenance/consent, and Executive competency reasoning (relevance-gated
+   retrieval and selection, wired into chat via `run_chat_through_runtime_contract`). See
+   `ROADMAP.md`'s Stage 5 section for exit evidence and merge commits.
+3. **Plan and implement the first Usable POC vertical slice: Personal Memory Capture and
+   Recall** — added 2026-08-12, pending its own separate, explicit approval (this documentation
+   pass authorises planning discipline and documentation only, per `docs/TILT.md`). Extends the
+   existing consent-gated write path and the existing competency-retrieval seam to ordinary
+   conversational facts, plus one real notification delivery channel. See `docs/TILT.md`'s "First
+   vertical slice" section for the concrete scope and acceptance bar. **This is the first slice of
+   the Usable POC, not its full boundary** — see item 5 below.
+4. **Subsequent Usable POC vertical slices** (scope deliberately not fixed yet — see
+   `docs/TILT.md`'s "Direction for later slices"): progressing toward proactive surfacing of
+   something Bartholomew noticed, and at least one genuine governed action with a visible
+   real-world result. Draws on the real, already-considered material in `ROADMAP.md`'s S5.4
+   (experience → learning/consolidation loop) and S5.5–S5.7 (initiative safety scaffolding,
+   dry-run, controlled live initiative) — deferred, not discarded, and to be scoped from slice 1's
+   real feedback rather than designed ahead of it.
+5. **Everything else previously sequenced here** — the pre-2026-08-08 Stage 5 initiative-engine
+   work (now S5.5–S5.7) and the reflection-ownership implementation gap S5.4 was to close — remains
+   real and remains on the roadmap. It follows the Usable POC slices above rather than preceding
+   them; see `docs/TILT.md`'s "What is deferred" section for the full list and reasons.
 
 Also open but unscheduled (each requiring separate approval): issue #22 (forward `IdentityContext`
 through the voice/sight compat wrappers), open and deferred to Stage 6; Phase A's deferred

@@ -2,7 +2,15 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-11 (one new decision added — "Schema keys of registered structured
+> **Last updated:** 2026-08-12 (one new decision added — "Usable POC / time-to-real-use
+> prioritisation" — approving a repository-grounded assessment's finding that development had
+> drifted toward polish/hardening ahead of real use, and formalising the resulting
+> execution-sequencing principle in new canonical document `docs/TILT.md`. Personal Memory Capture
+> and Recall is approved as the Usable POC's first vertical slice, explicitly not its boundary.
+> The "Canonical SSOT docs" entry below is amended (membership only) to add `docs/TILT.md` as the
+> 14th canonical document. Documentation-only: no code, tests, or configuration changed.)
+>
+> **Previously (2026-08-11):** one new decision added — "Schema keys of registered structured
 > kinds are structural metadata, not user content," approved as part of S5.2's final implementation
 > review and implemented in `7bfab09`, merged via PR #43 / `5dacb52`. Records the measured
 > rejection of the values-only-scanning alternative, which would have been a real consent bypass.
@@ -52,6 +60,13 @@
   `MASTER_PLAN.md`'s "Canonical docs" section is the registry and now lists all 13; it had been
   listing 12, omitting `CONSTITUTION.md`, which contradicted both this document and
   `CONSTITUTION.md`'s own handover note. That contradiction is resolved in favour of 13.
+- **Amended 2026-08-12 (membership only, not the decision):** the set is now **14** documents —
+  the 13 above plus `docs/TILT.md`, the current Usable POC / time-to-real-use execution-priority
+  document (see the "Usable POC / time-to-real-use prioritisation" entry below). This is a
+  deliberate, narrow exception to the general rule that everything under `docs/` is a
+  non-authoritative reference: `docs/TILT.md` governs binding near-term sequencing the same way
+  `ROADMAP.md` does, so reference status would misstate its authority. `MASTER_PLAN.md`'s
+  "Canonical docs" section and `README.md`'s doc-count reference are both updated to match.
 
 ## Decision: Fail-closed safety controls (parking brake)
 - **Decision:** Maintain a persistent, scoped “parking brake” that can block subsystems at runtime.
@@ -1104,3 +1119,111 @@
   authorise designing or implementing cross-user/global learning infrastructure — that remains
   separate, future, and its own explicitly-approved work, likely well beyond S5.1.
 - **Date:** 2026-08-08 (same-day follow-up to the two entries above)
+
+## Decision: Usable POC / time-to-real-use prioritisation
+- **Decision:** A repository-grounded assessment (2026-08-12) is approved in principle, with one
+  modification. The assessment found: Bartholomew's persistence (Phase B), governance (Stage 1),
+  and competency-retrieval (Stage 5 S5.1–S5.3) machinery are real, well-built, and well-tested, but
+  none of it has generated real-world usage feedback, because ordinary conversation writes nothing
+  durable and retrievable — chat only touches short-term Working Memory and an audit-shaped
+  `action_reflection` record. S5.3's relevance-gated retrieval seam (`competency_reasoning.py`,
+  merged the same day as this decision) is reachable only through S5.2's formal training-ingestion
+  API, not through anything an ordinary conversation would trigger. The `notify` skill has no
+  delivery channel outside the browser tab. `sentence-transformers` is commented out in
+  `requirements.txt`, so retrieval runs on a deterministic fallback embedder whose scores S5.3's
+  own design doc found anti-correlated with relevance. **Root cause identified as sequencing, not
+  architecture**: the five-pillar architecture appears capable of the intended end-to-end loop;
+  what actually produced this outcome is `CONSTITUTION.md`'s "Development Philosophy" section,
+  followed faithfully, which states the project deliberately spends more time designing than
+  coding and that correct architecture outweighs rapid feature delivery.
+
+  The requested modification: **Personal Memory Capture and Recall is approved as the Usable POC's
+  first vertical slice, not as the definition or boundary of the Usable POC.** The broader Usable
+  POC objective is a progressive, multi-slice demonstration of: real-world input → Observation/
+  Interpretation → persistent memory → retrieval/reasoning → Recommendation/proactive surfacing →
+  user approval where required → at least one real governed Action → visible real-world result.
+  Later slices are expected to expand toward proactive surfacing and at least one genuine governed
+  action, not stop at memory/retrieval.
+
+  The following principle is formalised as binding for near-term work, recorded in new canonical
+  document `docs/TILT.md` (see the "Canonical SSOT docs" amendment above):
+
+  > Once a vertical slice is sufficiently functional to generate meaningful real-user feedback,
+  > real-world testing takes priority over additional polish or hardening — unless a defect
+  > threatens safety, governance, privacy, data integrity, architectural validity, or the validity
+  > of the experiment itself.
+
+  And the prioritisation test: **"What real Bartholomew capability does this unlock for the
+  tester?"** — infrastructure work without a strong answer is generally deferred until real usage
+  demonstrates the need for it.
+
+- **Alternatives considered:**
+  (a) Continue the pre-existing Stage 5 sequence (S5.4 → S5.5 → S5.6 → S5.7) to completion before
+  any real-world testing begins — rejected: this is the exact pattern the assessment identified as
+  the problem, and would produce a fully-built initiative/proactivity system with nothing real yet
+  proven to be proactive *about*, since S5.4–S5.7 as previously scoped still assume competency
+  material enters via formal training, not organic use.
+  (b) Adopt Personal Memory Capture and Recall as the complete definition of the Usable POC —
+  explicitly rejected by the requesting instruction: memory/retrieval alone would leave the loop's
+  Recommendation/Action/visible-result stages undemonstrated, and the architecture would still be
+  unproven on the harder half of the loop (governed real-world action).
+  (c) Rewrite `CONSTITUTION.md`'s "Development Philosophy" section directly, in this same pass —
+  initially rejected in favour of a new, narrower canonical document (`docs/TILT.md`) taking
+  explicit, temporary precedence over that one section for sequencing only, on the reasoning that
+  the requesting instruction's document list did not include `CONSTITUTION.md`. **Superseded the
+  same day, on explicit user request, by the amendment below:** `CONSTITUTION.md`'s "Development
+  Philosophy" section is reconciled directly rather than left as a standing, if bounded,
+  contradiction — see the "Amended 2026-08-12 (same day, reconciliation)" entry below.
+  (d) Treat this as a full architecture reassessment or redesign — explicitly out of scope per the
+  requesting instruction ("we are correcting the project's execution priorities, not redesigning
+  Bartholomew"); no five-pillar architecture change is made or proposed by this decision.
+  (e) Create `docs/CURRENT_STATE.md` as a new current-state document, as tentatively listed in the
+  requesting instruction ("if necessary") — evaluated and **not created**: `MASTER_PLAN.md`
+  already serves as the current-state SSOT per its own "Single Source of Truth" framing and
+  README's description of it, and this pass corrects the one material staleness found (Stage 5
+  S5.3's status, which read "not started" after implementation had already merged) directly in
+  `MASTER_PLAN.md` and `ROADMAP.md`. A second, competing current-state document would itself be
+  the kind of infrastructure-without-demonstrated-need this decision exists to discourage, and
+  would conflict with `MASTER_PLAN.md`'s own "No doc sprawl" non-negotiable.
+
+- **Why:** The five-pillar architecture (Governance, Executive, Memory, Capability, Experience) is
+  not the bottleneck — extending S5.3's already-generic retrieval/selection seam to a new memory
+  kind is additive, not a redesign. The bottleneck is that engineering effort has been driven by
+  hypothetical future requirements and internal correctness rather than by observed real-world
+  need, exactly as `CONSTITUTION.md`'s own pre-existing "Consumer-value gate" (§6) warns against
+  but has not, in practice, been applied as an actual gate to recent Stage 5 sequencing. Making
+  real-world testing the default once a slice is minimally functional — rather than the reward for
+  finishing a fully-hardened stage — directly targets that.
+
+- **Consequences:**
+  - `ROADMAP.md` gains a new "Usable POC — progressive vertical slices" section, ahead of the
+    Stage gates, and its Stage 5 table/preamble/"Near-term milestone plan" are updated: S5.3 is
+    corrected from a stale "not started" to "done" (merged `a4f094b`), and S5.4–S5.7 are marked
+    **deferred, not abandoned** — expected to be informed by Usable POC slice feedback rather than
+    built ahead of it.
+  - `MASTER_PLAN.md`'s "Canonical docs" list grows to 14 (adds `docs/TILT.md`) and its "Next 3
+    Moves" section is rewritten around the new sequence; `README.md`'s "13 canonical documents"
+    reference is corrected to 14.
+  - This decision authorises planning/documentation only. It does not authorise implementation of
+    Personal Memory Capture and Recall or any other vertical slice — each still requires its own
+    separate, explicit approval, per `MASTER_PLAN.md`'s Doc Governance section and the User
+    Approval Gate below.
+  - No code, tests, or configuration are changed by this decision.
+- **Date:** 2026-08-12
+- **Amended 2026-08-12 (same day, reconciliation — not a new substantive decision):** the initial
+  version of this decision resolved the conflict with `CONSTITUTION.md`'s "Development Philosophy"
+  section via alternative (c) above — `docs/TILT.md` taking explicit, temporary precedence over
+  that one section, with `CONSTITUTION.md`'s own text left unedited and a sunset condition
+  requiring later reconciliation. On review, that was corrected in favour of reconciling
+  immediately rather than leaving a documented, if bounded, contradiction in place: `CONSTITUTION.md`'s
+  "Development Philosophy" section is now **amended directly** (2026-08-12, per that document's own
+  governance rule — see its amendment log) so that its architecture-first default no longer implies
+  holding back a vertical slice that is already sufficiently safe and functional to generate
+  meaningful real-world feedback, while every other engineering standard in that section and
+  document is preserved unchanged. `docs/TILT.md` is correspondingly reworded from "temporarily
+  supersedes `CONSTITUTION.md`" to "is the tactical detail underneath a principle `CONSTITUTION.md`
+  now states directly" — its "What this does NOT change" and "Sunset condition" sections no longer
+  describe an unresolved precedence conflict, because none remains. This amendment changes no
+  substantive decision beyond the already-approved time-to-real-use principle; it only removes a
+  self-imposed, no-longer-necessary temporary contradiction between two canonical documents.
+- **Date (amendment):** 2026-08-12

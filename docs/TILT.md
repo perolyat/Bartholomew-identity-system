@@ -1,0 +1,196 @@
+# TILT — Time-to-Real-Use Priority (Usable POC)
+
+> **Status:** Canonical. Added 2026-08-12 as the **14th** canonical SSOT document (see
+> `MASTER_PLAN.md`'s "Canonical docs" section and `DECISIONS.md`'s "Canonical SSOT docs" entry).
+> This is a deliberate, narrow exception to the general rule that everything under `docs/` is a
+> non-authoritative reference — this specific document governs near-term execution sequencing and
+> is binding, the same way `ROADMAP.md` and `DECISIONS.md` are.
+>
+> **Last updated:** 2026-08-12 (reconciled into `CONSTITUTION.md`, same day as creation).
+> `CONSTITUTION.md`'s "Development Philosophy" section now states this document's principle
+> directly (amended 2026-08-12) — this document is no longer a temporary supersession of a
+> contradictory Constitution; it is the current operational application of a principle
+> `CONSTITUTION.md` itself now states. See `DECISIONS.md`'s "Usable POC / time-to-real-use
+> prioritisation" entry for the full rationale and alternatives considered.
+
+## Why this document exists
+
+A repository-grounded assessment (2026-08-12) found that Bartholomew's persistence, governance,
+and competency-retrieval machinery are genuinely well-built and well-tested, but that almost none
+of it has yet been put in front of real use. Specifically: ordinary conversation writes nothing
+durable and retrievable (chat only touches short-term Working Memory and an audit-shaped
+Reflection record); the one retrieval-and-selection mechanism that does exist (S5.1–S5.3's
+competency architecture) is reachable only through a formal training-ingestion API, not through
+anything a real day-to-day conversation would trigger; and the one notification mechanism
+(`notify` skill) has no delivery channel outside the browser tab. `CONSTITUTION.md`'s "Development
+Philosophy" section, as it read before 2026-08-12, stated the project deliberately spends more
+time designing than coding and that correct architecture outweighs rapid feature delivery — a
+philosophy that, followed faithfully, produced exactly this outcome.
+
+This document does not repudiate that philosophy's engineering standards. It corrects sequencing:
+architecture is proven by putting real things through it, not by hardening it further before
+anything real has gone through it. `CONSTITUTION.md`'s "Development Philosophy" section has been
+amended (2026-08-12) to state this directly and durably — this document is the tactical detail
+underneath that constitutional principle, not a document straining against it.
+
+## The principle (binding for near-term work)
+
+> **Once a vertical slice is sufficiently functional to generate meaningful real-user feedback,
+> real-world testing takes priority over additional polish or hardening — unless a defect
+> threatens safety, governance, privacy, data integrity, architectural validity, or the validity
+> of the experiment itself.**
+
+Those six exceptions are the only legitimate reasons to hold a shippable slice back. "It could be
+cleaner," "it doesn't yet handle a case that hasn't occurred," "a future stage might need it
+differently," and "the design isn't fully written up" are not on that list.
+
+## The prioritisation test (apply to all near-term work)
+
+> **What real Bartholomew capability does this unlock for the tester?**
+
+If the honest answer is primarily "cleaner architecture," "more complete documentation,"
+"additional abstraction," "future-proofing," "better theoretical correctness," or "polish,"
+that work is deferred until real usage demonstrates the need for it. This does not mean ignoring
+genuine blockers, data-corruption risks, security/privacy boundaries, Governance, the Parking
+Brake, or defects that would invalidate a test — those remain legitimate reasons to stop and fix
+something, per the six exceptions above.
+
+## What this does NOT change
+
+- **Governance remains fully authoritative.** Parking Brake, consent gates, fail-closed defaults,
+  audit trails, and the single Governance path are unchanged and unaffected by this document. No
+  slice under this track may bypass them.
+- **The five-pillar architecture (Governance, Executive, Memory, Capability, Experience) is
+  unchanged.** This document is about what gets built next and in what order, not about rebuilding
+  or working around the architecture. The repository-grounded assessment behind this document
+  specifically found the architecture itself is not the bottleneck — the process wrapped around it
+  is.
+- **`CONSTITUTION.md`'s engineering standards** (fail-closed safety, privacy-first handling,
+  verification-first engineering, one authority per concept, testability, explainability) remain
+  in force. This document does not lower them.
+- **`CONSTITUTION.md`'s "Development Philosophy" section already states this document's principle
+  directly** (amended 2026-08-12) — architecture-first discipline still governs *how* a slice is
+  built, narrowed so it no longer holds a slice back from real use once that slice is already
+  sufficiently safe and functional to generate meaningful feedback. This document is not a
+  competing or overriding document; it is where that constitutional principle's tactical detail
+  lives — which slice is next, what real-world testing has priority over, what is deferred — kept
+  separate because that content changes with every slice, while the constitutional principle does
+  not.
+
+## What "Usable POC" actually means
+
+`docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` and the S5.1–S5.3 competency work already
+proved the retrieval/governance seam works. **The Usable POC is not Personal Memory Capture and
+Recall.** That is its *first vertical slice* — chosen because it is the smallest slice that closes
+the biggest real gap (no organic memory loop) and is achievable without new architecture. The POC
+itself is the progressive demonstration, across slices, of the full loop:
+
+```
+real-world information/input
+  -> Observation/Interpretation as appropriate
+  -> persistent useful understanding/memory
+  -> retrieval and reasoning
+  -> useful Recommendation/proactive surfacing
+  -> user interaction/approval where required
+  -> at least one real governed Action
+  -> visible real-world result
+```
+
+A slice is not required to cover the whole loop. The POC as a whole is not complete, and should
+not be treated as complete, until later slices have demonstrated the right-hand side of that
+diagram too: proactive surfacing of something noticed, and at least one genuine governed action
+with a visible real-world result — not just memory and retrieval. See "Direction for later slices"
+below.
+
+## Vertical-slice discipline (applies to every slice, starting with the first)
+
+This is the mechanism that stops the next slice from becoming another S5.3: a real capability
+(~600 lines of logic) that shipped behind a ~600-line approved design doc, a decision-log entry,
+a roadmap gate, and four separately-reviewed implementation steps.
+
+For each slice:
+
+1. **One right-sized planning note, not a full design-doc-and-decision-ledger cycle.** A slice
+   gets exactly one concise note covering what it writes, what it retrieves, what governance/
+   consent gate applies, and what "done enough to test" looks like — approved as a single unit.
+   The full design-doc/multi-step-approval process remains available for genuinely large or
+   safety-sensitive changes, but is not the default for a slice sized to fit this track.
+2. **"Done enough to test" is the bar, not "done."** A slice ships once it clears the
+   prioritisation test and the six non-negotiable exceptions above are satisfied. It does not need
+   to handle every edge case, support every input shape, or be tuned — S5.3's own constants were
+   explicitly left provisional pending real usage, which is the right posture and should be the
+   default, not the exception.
+3. **Ship it, then let real use — not further internal review — decide what's next.** Once a
+   slice is in your hands and generating real feedback, further hardening of that slice competes
+   with starting the next slice, and generally loses, per the principle above.
+4. **This discipline applies to this document too.** If a future amendment to `docs/TILT.md`
+   starts accumulating design-doc-level ceremony, that is itself a violation of what this document
+   is for.
+
+## First vertical slice: Personal Memory Capture and Recall
+
+Not yet approved for implementation as of this document's creation — approval of this planning
+pass authorises planning discipline and documentation only, per `DECISIONS.md`'s entry.
+
+**What it adds**, all flowing through the existing Runtime Contract seam, no new architecture:
+
+1. A governed write path so ordinary chat content that looks like a durable personal fact (a
+   person, a date, a preference, a commitment) can be proposed as a memory write — reusing the
+   existing `pending_sensitive_writes` consent flow and `memory_rules.yaml`'s already-defined
+   `user_profile`/`birthday`/`user_schedule` categories, not new ones.
+2. A retrieval widening so chat's existing competency-retrieval call
+   (`_retrieve_competency_context` in `bartholomew/kernel/runtime_contract.py`) also queries this
+   new memory kind, reusing `competency_reasoning.py`'s relevance gate as-is.
+3. One real notification delivery channel, so a "noticed something" nudge can reach the tester
+   outside the browser tab.
+
+**Acceptance bar** (see `DECISIONS.md` and the assessment this document formalises for the full
+list): a fact stated in one conversation is correctly recalled, unprompted, in a later unrelated
+conversation, without bypassing consent/governance.
+
+Implementation planning for this slice is the proposed next step after this documentation pass —
+see the summary accompanying this change for the concrete first step.
+
+## Direction for later slices (deliberately not specified yet)
+
+Per the principle above, slice 2+ scope is **not** designed now — designing it ahead of real
+feedback from slice 1 would repeat the exact mistake this document exists to correct. What is
+fixed is direction, not content: subsequent slices progress toward proactive surfacing of
+something Bartholomew noticed, and at least one genuine governed action with a visible real-world
+result — not indefinitely more memory/retrieval refinement. `ROADMAP.md`'s existing S5.4
+(experience -> learning/consolidation loop) and S5.5–S5.7 (initiative safety scaffolding, dry-run,
+controlled live initiative) already contain real, considered raw material for this — cadence,
+consent-to-be-proactive, quiet hours, dry-run rationale logging, a default-deny `allow_proactive`
+governance category. That work is **deferred, not discarded**: once slice 1 is in real use and has
+generated genuine feedback, the next slice should draw on this existing material, right-sized the
+same way slice 1 is, rather than either rebuilding it from scratch or implementing it wholesale
+ahead of need.
+
+## What is deferred (not abandoned)
+
+- `ROADMAP.md` Stage 5 **S5.4** (experience -> learning/consolidation loop, as originally scoped),
+  **S5.5–S5.7** (initiative safety scaffolding, dry-run, controlled live initiative) — real,
+  approved-in-direction work; resequenced to follow slice 1 and be informed by its feedback rather
+  than preceding it. Not abandoned; see "Direction for later slices" above.
+- Activating a real embeddings model (`sentence-transformers` is currently commented out in
+  `requirements.txt`; retrieval runs on a deterministic fallback embedder today) — worth doing
+  once there is real content to retrieve; not blocking a first slice that can run on FTS-only
+  retrieval.
+- A second competency domain (e.g. Vehicle Management) per `ROADMAP.md`'s "Estate Management as
+  architecture acceptance test" sequence — correct plan, too early until domain-general personal
+  memory (this track) is proven.
+- Stage 6 (cross-device, auth, voice) and further persistence/concurrency hardening beyond the
+  completed B0–B9 — no evidence yet that either is a real blocker to a single-user, single-device
+  real-life test.
+- Further competency-selection tuning beyond what S5.3 shipped — its constants are explicitly
+  provisional pending real usage; tune later, from real usage, not now.
+
+## Sunset condition
+
+The principle itself is now reconciled into `CONSTITUTION.md` directly (2026-08-12) and is not on
+a timer. What should be revisited, once the Usable POC has demonstrated the full loop end-to-end —
+memory, retrieval, proactive surfacing, and at least one genuine governed action, all in real use —
+is this document's *tactical* content: whether standing slice-by-slice guidance is still needed as
+a separate canonical document, or whether ordinary `ROADMAP.md`/`DECISIONS.md` practice can carry
+it from that point on. This document should not become a permanent home for detail that has
+stopped changing.

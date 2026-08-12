@@ -2,7 +2,20 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-11 (second pass, same day: **S5.2 — Training and knowledge
+> **Last updated:** 2026-08-12 (two changes, same pass: **(1)** a stale-status correction — **S5.3,
+> Executive competency reasoning, is complete**, merged via PR #45 (merge commit `a4f094b`, CI run
+> #65 green on all six jobs); this document had not been updated since S5.3's design approval and
+> still read "not started" after implementation landed. See the corrected Stage 5 table and
+> narrative below. **(2)** the **Usable POC / time-to-real-use prioritisation** is approved — see
+> the new "Usable POC — progressive vertical slices" section below and the canonical
+> `docs/TILT.md`. A repository-grounded assessment found that, despite S5.1–S5.3 being genuinely
+> well-built, ordinary conversation still writes nothing durable and retrievable, so none of it has
+> yet generated real usage feedback. **Stage 5 S5.4–S5.7 are deferred, not abandoned** — resequenced
+> to follow the Usable POC's first vertical slice (Personal Memory Capture and Recall) rather than
+> precede it. This is a **documentation-only** pass; no implementation is authorised by it beyond
+> the planning/documentation work itself.)
+>
+> **Previously (2026-08-11, second pass, same day): S5.2 — Training and knowledge
 > acquisition — is complete and merged.** PR #43, merge commit `5dacb52`; CI run #61 green on all
 > six jobs. Delivered per the explicitly approved
 > `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` in three separately reviewed steps, plus an
@@ -367,6 +380,60 @@ approved to be planned — not in advance for later stages.
 - verification commands
 - rollback notes
 
+**Current execution priority (added 2026-08-12):** the stage gates below remain the architectural
+record of what exists and why, but near-term sequencing is currently governed by
+**[docs/TILT.md](docs/TILT.md)** — the canonical Usable POC / time-to-real-use priority. See the
+"Usable POC — progressive vertical slices" section immediately below for how that priority applies
+to this roadmap specifically.
+
+## Usable POC — progressive vertical slices (established 2026-08-12)
+
+> See `docs/TILT.md` for the full principle, the prioritisation test, and vertical-slice
+> discipline; see `DECISIONS.md`'s "Usable POC / time-to-real-use prioritisation" entry for the
+> assessment and rationale. This section is the roadmap-level summary and the interface between
+> that priority and the stage gates below.
+
+**Why this section exists.** A 2026-08-12 repository-grounded assessment found Bartholomew's
+persistence, governance, and competency-retrieval machinery (Phase B, Stage 1, Stage 5 S5.1–S5.3)
+genuinely well-built, but essentially unused in practice: ordinary conversation writes nothing
+durable and retrievable, the one working retrieval seam (S5.3) only ever sees formally-trained
+competency records, and the one notification mechanism has no delivery channel outside the browser
+tab. Continuing down the pre-existing Stage 5 sequence (S5.4 → S5.5 → S5.6 → S5.7) would have kept
+building architecture without putting real functionality in front of real use. This section
+corrects that.
+
+**The Usable POC is a progressive, end-to-end demonstration**, not a single deliverable:
+
+```
+real-world information/input
+  -> Observation/Interpretation as appropriate
+  -> persistent useful understanding/memory
+  -> retrieval and reasoning
+  -> useful Recommendation/proactive surfacing
+  -> user interaction/approval where required
+  -> at least one real governed Action
+  -> visible real-world result
+```
+
+It is reached through small vertical slices, each shipped and tested in real use before the next
+is scoped — not built end-to-end before any real-world testing begins.
+
+**Slice 1 — Personal Memory Capture and Recall.** Scope, acceptance bar, and the vertical-slice
+discipline that governs it are in `docs/TILT.md`. In one sentence: extend the existing consent-
+gated write path and the existing S5.3 competency-retrieval seam so ordinary conversational facts
+(not just formally-trained competency material) become durable, retrievable memory, plus one real
+notification delivery channel. **Not yet approved for implementation** — this roadmap update
+authorises planning discipline and documentation only.
+
+**Slice 1 is the first slice, not the POC's boundary.** Later slices are expected to progress
+toward proactive surfacing of something noticed and at least one genuine governed action with a
+visible real-world result, drawing on the real material already scoped in S5.4–S5.7 below —
+right-sized the same way slice 1 is, and scoped from slice 1's real feedback rather than designed
+ahead of it. See `docs/TILT.md`'s "Direction for later slices."
+
+**Effect on Stage 5 S5.4–S5.7:** deferred, not abandoned. See each sub-stage's row in the Stage 5
+table below and `docs/TILT.md`'s "What is deferred" section for the complete list and reasons.
+
 ## Stage gates
 
 ### Stage 0 — Kernel alive, stable, dreaming ✅ (Complete)
@@ -693,7 +760,7 @@ not itself grant.
 
 ---
 
-### Stage 5 — Developing Agency (competency, training, learning, then initiative) 🚧 IN PROGRESS (S5.0, S5.1, S5.2 complete)
+### Stage 5 — Developing Agency (competency, training, learning, then initiative) 🚧 IN PROGRESS (S5.0–S5.3 complete; S5.4–S5.7 deferred, see Usable POC section)
 
 **Restructured 2026-08-08** (New Direction reconciliation — see `DECISIONS.md`'s "Stage 5
 restructured around competency and training before live initiative" entry for full rationale).
@@ -705,11 +772,19 @@ precede, the generic competency/training/learning architecture described in `CON
 Learning" section. Rationale in one sentence: `Planner.decide()` (the Executive's reasoning path)
 returns `None` unconditionally today — there is no machinery yet for the Executive to retrieve and
 apply competencies, so scheduling *when* to be proactive is premature before the Executive has
-anything competent to be proactive *about*. **S5.0 (prerequisite), S5.1 (competency architecture)
-and S5.2 (training and knowledge acquisition) are complete; S5.3–S5.7 have not started.**
-Resuming any sub-stage requires its own separate, explicit approval — neither restructuring the
-sequence nor completing an earlier sub-stage authorises implementing any later one. In particular,
-**S5.2's completion does not authorise S5.3.**
+anything competent to be proactive *about*. **S5.0–S5.3 (runtime prerequisites, competency
+architecture, training/knowledge acquisition, Executive competency reasoning) are complete.**
+
+**S5.4–S5.7 are deferred as of 2026-08-12 — not started, and not next.** Per the Usable POC /
+time-to-real-use prioritisation (`docs/TILT.md`, `DECISIONS.md`), the next work is the Usable
+POC's first vertical slice (Personal Memory Capture and Recall — see the "Usable POC — progressive
+vertical slices" section below), not a continuation of this sub-stage sequence. S5.4–S5.7 remain
+real, approved-in-direction work and are **not abandoned**: later Usable POC slices are expected to
+draw on this material (experience → learning loop, initiative safety scaffolding, dry-run, live
+initiative) once real usage from the first slice informs what they should actually look like. See
+`docs/TILT.md`'s "Direction for later slices" and "What is deferred" sections. Resuming any
+sub-stage below still requires its own separate, explicit approval — neither restructuring the
+sequence nor completing an earlier sub-stage authorises implementing any later one.
 
 **Goal:** Bartholomew develops learned competence in genuine areas of responsibility (proven first
 via Residential Estate Management — see "Estate Management as architecture acceptance test" below)
@@ -724,11 +799,11 @@ sequence below by inserting competency/training/learning work first, not by repl
 | **S5.0** — Runtime prerequisites | Deterministic scheduler-schema readiness at startup (closes issue #24) | ✅ done 2026-07-25 |
 | **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. **Must also carry the personal / potentially-generalisable / system-level classification and provenance `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning" section requires (added 2026-08-08) — not a cross-instance mechanism, just fields that don't foreclose one later.** See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | ✅ done 2026-08-10 |
 | **S5.2** — Training and knowledge acquisition | Define and implement how training material (formal reference material, direct instruction, demonstration, correction, supervised-work outcomes) enters shared Memory with provenance and consent, per `CONSTITUTION.md`'s "Training vs. configuration." Delivered per `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` (design + Decisions A–E approved 2026-08-11, with the two future-facing constraints in §9.1). | ✅ done 2026-08-11 |
-| **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. Design and its five decisions (§10) **approved 2026-08-11** in `docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md`. Per Decision A, competency reasoning attaches to the **request-driven** path and `Planner.decide()` deliberately stays inert — reconnaissance found its only caller is an **ungoverned** proactive tick→bus→nudge path (§2.1). **Implementation is not yet authorised** — the plan in §11 awaits its own sign-off. | 📋 not started (design approved) |
-| **S5.4** — Experience → learning/consolidation loop | Implement the Experience → Reflection → candidate learning → provenance/confidence → Governance/review (where required) → consolidation loop described in `COGNITIVE_RUNTIME.md`. This is also where the pre-existing reflection-ownership implementation gap (`ReflectionGenerator` authoritative, `NarratorEngine` supplementary — see `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) must be closed, since S5.4 depends on reflection composition having a single authority. | 📋 not started |
-| **S5.5** — Initiative safety scaffolding | Typed cadence (interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** → quiet-hours *defer* (not suppress, with coalescing/expiry). *(This is the beginning of the pre-2026-08-08 Stage 5 scope, preserved unchanged in substance, resequenced after S5.1–S5.4.)* | 📋 not started |
-| **S5.6** — Dry-run proactive reasoning | Dry-run mode; structured rationale logging for every would-be suggestion. | 📋 not started |
-| **S5.7** — Controlled live initiative | Live check-in / weekly-review / next-best-action drives under a default-deny `allow_proactive` governance category (suggestion-only, brake-blocked, excluded from `tool_use`, no self-maintenance exemption). | 📋 not started |
+| **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. Delivered per `docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md` (design and Decisions A–E approved 2026-08-11, including a same-day-added deterministic relevance floor, Decision E.2). Per Decision A, competency reasoning attaches to the **request-driven** (chat) path; `Planner.decide()` deliberately stays inert — reconnaissance found its only caller is an **ungoverned** proactive tick→bus→nudge path (§2.1). | ✅ done 2026-08-12 |
+| **S5.4** — Experience → learning/consolidation loop | Implement the Experience → Reflection → candidate learning → provenance/confidence → Governance/review (where required) → consolidation loop described in `COGNITIVE_RUNTIME.md`. This is also where the pre-existing reflection-ownership implementation gap (`ReflectionGenerator` authoritative, `NarratorEngine` supplementary — see `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) must be closed, since S5.4 depends on reflection composition having a single authority. | 📋 **deferred** — see "Usable POC" section; expected to be informed by Usable POC slice feedback, not built ahead of it |
+| **S5.5** — Initiative safety scaffolding | Typed cadence (interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** → quiet-hours *defer* (not suppress, with coalescing/expiry). *(This is the beginning of the pre-2026-08-08 Stage 5 scope, preserved unchanged in substance, resequenced after S5.1–S5.4.)* | 📋 **deferred** — see "Usable POC" section |
+| **S5.6** — Dry-run proactive reasoning | Dry-run mode; structured rationale logging for every would-be suggestion. | 📋 **deferred** — see "Usable POC" section |
+| **S5.7** — Controlled live initiative | Live check-in / weekly-review / next-best-action drives under a default-deny `allow_proactive` governance category (suggestion-only, brake-blocked, excluded from `tool_use`, no self-maintenance exemption). | 📋 **deferred** — see "Usable POC" section |
 
 Numbering is not load-bearing; the **dependency order** is: runtime prerequisites, then competency
 architecture, then training/knowledge acquisition, then Executive competency reasoning, then the
@@ -808,6 +883,33 @@ never passes it. The approved governance rule is that **schema-defined keys of r
 structured kinds are structural metadata, while all values remain fully scanned and
 unknown/unregistered structured data keeps conservative key-and-value scanning** — see
 `DECISIONS.md`. **Approval of S5.2 does not authorise S5.3 or S5.4.**
+
+**S5.3 complete (2026-08-12) — PR #45, merge commit `a4f094b`, CI run #65 green on all six jobs.**
+Exit deliverable: `bartholomew/kernel/competency_reasoning.py` (the selection core — relevance
+gate, confidence floor, single-competency commitment, supervision propagation, explanation-grade
+`AppliedRecord`s) plus its wiring into `bartholomew/kernel/runtime_contract.py`'s
+`run_chat_through_runtime_contract()`. Delivered in four commits: competency reasoning core
+(`c912ddd`), the chat-only retrieval seam (`32fa344`), exposure-boundary verification and an
+end-to-end demonstration (`ee446c2`), and a same-day-added deterministic relevance floor
+(`e7bbc31`) — measured, not guessed: retriever scores were found not comparable across FTS/vector/
+hybrid modes and, under the deterministic fallback embedder used when `sentence-transformers` is
+absent, anti-correlated with relevance, so relevance is gated on lexical term overlap between the
+request and each record's own text rather than on retriever score. Chat is the only surface wired
+to this seam (Decision B); `Planner.decide()` remains deliberately inert. Supervision can only ever
+become stricter (an OR across applied records); competency guidance is never surfaced to the user
+automatically (Decision E.1) but is recorded at explanation-grade detail in the per-turn Reflection
+(Decision E.2). Proven by five new test files (~1,600 lines): `test_competency_reasoning_selection.py`,
+`test_competency_reasoning_seam.py`, `test_competency_reasoning_demonstration.py`,
+`test_competency_context_exposure_boundary.py`, `test_competency_relevance_floor.py`.
+**Approval of S5.3 does not authorise S5.4.**
+
+**Note on S5.3's real reach (2026-08-12, recorded as part of the Usable POC assessment, not a
+defect in S5.3 itself):** this retrieval/selection machinery only ever sees records of the five
+`competency_*` kinds, written exclusively through S5.2's formal training-ingestion API/CLI.
+Ordinary chat conversation does not write anything through that path, so in real day-to-day use
+this seam has nothing to retrieve until something is deliberately trained in. This is precisely the
+gap the Usable POC's first vertical slice (Personal Memory Capture and Recall, see the "Usable
+POC" section below) closes — by extending, not replacing, this same seam.
 
 **Exit criteria (S5.1–S5.4, competency/training/learning):**
 - A generic competency data/contract model exists, expressed as structured Memory content (not a
@@ -980,13 +1082,21 @@ Every individual idea in that document requires independent evaluation against `
 
 ## Near-term milestone plan (recommended)
 
-> **Updated 2026-08-08** (New Direction reconciliation): step 5 below is rewritten to insert the
+> **Updated 2026-08-12** (Usable POC / time-to-real-use prioritisation — see `docs/TILT.md` and
+> `DECISIONS.md`'s "Usable POC / time-to-real-use prioritisation" entry): steps 1–4 below are now
+> complete (Phase B, Stage 1, and Stage 5 S5.1–S5.3 all shipped 2026-08-01 through 2026-08-12).
+> Steps 5–7 of the 2026-08-08 ordering (build S5.1–S5.4, then S5.5–S5.6, then S5.7) are **rewritten
+> below**: the next step is the Usable POC's first vertical slice, not a continuation of the
+> pre-existing Stage 5 sequence. S5.4–S5.7 are deferred, not abandoned — see the new step 6 below.
+>
+> **Previously (2026-08-08, New Direction reconciliation):** step 5 was rewritten to insert the
 > competency/training/learning architecture (Stage 5's S5.1–S5.4) ahead of initiative safety
 > scaffolding (S5.5–S5.7), per `CONSTITUTION.md`'s "One Developing Digital Individual" section and
-> `ROADMAP.md`'s restructured Stage 5. This does not change step 4's Stage-1-before-Stage-5
-> ordering rationale for **live proactive** delivery specifically — it only clarifies that
-> Stage 5's earlier sub-stages (S5.1–S5.4) are architecture/worked-example work, not live
-> proactivity, and are not themselves gated on Stage 1.
+> `ROADMAP.md`'s restructured Stage 5. That did not change step 4's Stage-1-before-Stage-5 ordering
+> rationale for **live proactive** delivery specifically — it only clarified that Stage 5's earlier
+> sub-stages (S5.1–S5.4) are architecture/worked-example work, not live proactivity, and are not
+> themselves gated on Stage 1. Superseded above for what comes after S5.1–S5.3, not reversed: that
+> sequencing is exactly why S5.1–S5.3 were the right things to build before this pivot.
 >
 > **Previously (2026-07-28, planning-document reconciliation, approved sequencing):** Supersedes
 > the 2026-07-27 ordering below, which listed Phase B, then Stage 5/S5.1, then Stage 1. That
@@ -997,43 +1107,45 @@ Every individual idea in that document requires independent evaluation against `
 > it does not authorise implementation of any step below.** Each step still requires its own
 > separate, explicit approval before work begins.
 
-**Approved sequence (nothing is in flight; each numbered step requires its own separate approval):**
+**Approved sequence (each numbered step requires its own separate approval):**
 
-1. **Documentation reconciliation and the deployment-architecture decision** (this pass). See
+1. ✅ **Done.** Documentation reconciliation and the deployment-architecture decision. See
    `DECISIONS.md`'s "Deployment architecture: hybrid local-first" entry.
-2. **Plan Phase B one stage at a time**, beginning with B0 only after separate, explicit approval
-   to plan it — persistence-ownership stabilisation, against the approved hybrid local-first
-   architecture. See the Phase B workstream section above, `docs/PHASE_B_OVERVIEW.md`, and
-   `docs/PHASE_B_RISK_MAP.md`. No stage's plan approval authorises any other stage's plan or
-   implementation.
-3. **Implement each Phase B stage**, only after separate, explicit approval of that stage's own
-   plan.
-4. **Build a minimal Stage 1 consumer web governance shell**, only after separate, explicit
-   approval. At minimum this shell must eventually provide: parking-brake access; system status;
-   a consent and approval inbox; notification settings; mute and quiet-hours controls; an
-   awaiting-response queue; and relevant audit/provenance visibility (see Stage 1's own section
-   above for the full exit-criteria treatment once scoped).
-5. **Build the competency/training/learning architecture (Stage 5 S5.1–S5.4)**, only after
-   separate, explicit approval — competency data/contract model, training/knowledge acquisition,
-   Executive competency reasoning, and the experience→learning/consolidation loop, worked through
-   Residential Estate Management as the first proving ground (see `ROADMAP.md`'s Stage 5 section).
-   **Added 2026-08-08; this step did not exist in the pre-2026-08-08 sequence.** Not gated on
-   Stage 1 (step 4) — it does not deliver live proactive behaviour.
-6. **Add Stage 5 initiative safety scaffolding and dry-run behaviour (S5.5–S5.6)**, only after
-   separate, explicit approval. The locked internal sequence (typed cadence → default-off consent
-   + functional mute → quiet-hours defer → dry-run → rationale logging) is recorded in the Stage 5
-   section above and is unchanged in substance by this reordering.
-7. **Permit live proactive Stage 5 behaviour (S5.7)** only after the Stage 1 user-facing governance
-   controls above have shipped and are proven working — not merely designed. This is the concrete
-   reason Stage 1 must precede **live** Stage 5 behaviour in this sequence: users need a real
-   governance surface before Bartholomew begins live proactive intervention.
+2. ✅ **Done.** Phase B (B0–B9) — persistence-ownership stabilisation, against the approved hybrid
+   local-first architecture. See the Phase B workstream section above, `docs/PHASE_B_OVERVIEW.md`,
+   and `docs/PHASE_B_RISK_MAP.md`.
+3. ✅ **Done.** Stage 1 (S1.0–S1.6) — the minimal consumer web governance shell: parking-brake
+   access; system status; consent and approval inbox; notification settings; mute and quiet-hours
+   controls; awaiting-response queue; audit/provenance visibility; host-device onboarding.
+4. ✅ **Done.** Stage 5 S5.1–S5.3 — competency data/contract model, training/knowledge acquisition,
+   and Executive competency reasoning, worked through Residential Estate Management as the first
+   proving ground (see `ROADMAP.md`'s Stage 5 section).
+5. **Plan and implement the Usable POC's first vertical slice: Personal Memory Capture and
+   Recall**, only after separate, explicit approval. **Added 2026-08-12; supersedes the
+   pre-existing "S5.4 next" ordering.** Extends the existing consent-gated write path and the
+   existing S5.3 competency-retrieval seam to ordinary conversational facts, plus one real
+   notification delivery channel. See `docs/TILT.md`'s "First vertical slice" section and the
+   "Usable POC — progressive vertical slices" section above. Not gated on anything below.
+6. **Subsequent Usable POC vertical slices**, each requiring its own separate approval and each
+   scoped only after the slice before it has generated real feedback — progressing toward
+   proactive surfacing of something noticed and at least one genuine governed action with a
+   visible real-world result. Draws on the real material already scoped in Stage 5 **S5.4**
+   (experience→learning/consolidation loop) and **S5.5–S5.7** (initiative safety scaffolding,
+   dry-run, controlled live initiative) — **deferred, not discarded**; see `docs/TILT.md`'s
+   "Direction for later slices" and "What is deferred" sections. The locked internal ordering
+   within that material (typed cadence → default-off consent + functional mute → quiet-hours
+   defer → dry-run → rationale logging → live, brake-blocked initiative under a default-deny
+   `allow_proactive` category) is unchanged in substance — only its position in the overall
+   sequence (after Usable POC slices generate real feedback, not before) has moved.
 
 **Also open but unscheduled** (each requiring separate approval, not part of the sequence above):
 issue #22 (forward `IdentityContext` through the voice/sight compat wrappers, deferred to Stage 6);
 Phase A's deferred findings F9–F11 (`RISKS.md`); jurisdiction-aware capture/recording work (Stage
 6/7, see `ROADMAP.md`'s Stage 6/7 sections); adaptive-notification and awaiting-response delivery
 work beyond the Stage 1 shell's baseline controls; data-export/portability delivery (see the Stage
-1/6 notes added 2026-07-28); host-device onboarding guidance (Stage 1, see above).
+1/6 notes added 2026-07-28); host-device onboarding guidance (Stage 1, see above); activating a
+real embeddings model (`sentence-transformers`) in place of the deterministic fallback embedder;
+a second competency domain per the Estate Management acceptance-test sequence.
 
 **Historical (2026-07-28 ordering, superseded by the sequence above for step 5 onward — kept for
 record):** steps 1–4 above are unchanged from the 2026-07-28 pass; the 2026-07-28 pass's steps 5–6
