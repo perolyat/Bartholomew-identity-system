@@ -44,6 +44,22 @@
 > implementation of any competency runtime, training pipeline, cross-instance/product-level learning
 > infrastructure, or Estate Management feature — see `ROADMAP.md`'s restructured Stage 5 for the
 > (unapproved-until-separately-approved) staged plan.
+>
+> **Amended 2026-08-12** (Usable POC / time-to-real-use prioritisation, per this document's own
+> governance rule — resolved explicitly with rationale, not silently overridden or left as an
+> unreconciled conflict): a repository-grounded assessment found that this document's "Development
+> Philosophy" section, followed faithfully, had produced genuinely well-built, well-tested
+> machinery (persistence, governance, competency retrieval) that had not yet been put in front of
+> real use — most concretely, ordinary conversation wrote nothing durable and retrievable. The
+> "Development Philosophy" section below is revised so that its architecture-first default no
+> longer implies holding back a vertical slice that is already sufficiently safe and functional to
+> generate meaningful real-world feedback. This is a **narrowing of when the default applies, not
+> a repeal of it**: architecture-first discipline still governs how a slice is built, and every
+> other engineering standard in this document (fail-closed governance, privacy-first handling,
+> verification-first engineering, one authority per concept, testability, explainability) is
+> unchanged. See `DECISIONS.md`'s "Usable POC / time-to-real-use prioritisation" entry and
+> `docs/TILT.md` (the current operational application of the revised principle — which vertical
+> slice is next, what is deferred, and why).
 
 ---
 
@@ -505,9 +521,26 @@ exceptionally competent executive assistant who has known them for decades.
 
 ## Development Philosophy
 
-Architecture first. Implementation second. The project deliberately spends more time designing
-than coding. Large refactors early are encouraged; large refactors late are failures. Correct
-architecture outweighs rapid feature delivery.
+Architecture first, by default. Before a capability is built, its design should be understood, not
+discovered by accident in production. Large refactors early are encouraged; large refactors late
+are failures — a late refactor is a sign the design was wrong earlier, not evidence that skipping
+design was fine. Correctness, safety, and one-authority-per-concept are never traded away for
+speed.
+
+**That default stops applying, specifically, once a vertical slice is already sufficiently safe
+and functional to generate meaningful real-world feedback.** At that point:
+
+> Real-world testing of that slice takes priority over additional polish or hardening of it —
+> unless a defect threatens safety, governance, privacy, data integrity, architectural validity, or
+> the validity of the experiment itself.
+
+Architecture-first discipline governs *how* a slice is designed and built. It does not justify
+holding a working, safe slice back from real use so it can be refined further against hypothetical
+future requirements — real usage is itself part of how correct architecture is validated, not a
+reward for finishing it. `docs/TILT.md` is the current, actively-maintained operational
+application of this principle: which vertical slice is next, what real-world testing has priority
+over, and what is deliberately deferred. It is kept separate from this document because that
+content changes with every slice; this principle does not.
 
 ## Documentation Philosophy
 
