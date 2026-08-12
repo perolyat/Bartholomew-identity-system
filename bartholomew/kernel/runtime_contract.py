@@ -37,6 +37,15 @@ from typing import TYPE_CHECKING, Any
 
 from . import policy_engine, training
 from .blocking_executor import run_off_loop
+from .competency_reasoning import (
+    EMPTY_CONTEXT,
+    CompetencyCandidate,
+    CompetencyContext,
+    build_retrieval_query,
+    query_terms,
+    render_for_prompt,
+    select_relevant,
+)
 from .memory.privacy_guard import get_consent_handler
 from .reflection import ActionReflection, record_action_reflection
 
@@ -112,6 +121,14 @@ class CandidateAction:
     kind: str
     interpretation: Interpretation
 
+    # S5.3: the competency records that informed this proposal, if any.
+    # Optional with a default, so every existing construction site (skills,
+    # drives, sight, voice, awaiting-response, training) is unaffected.
+    # Never surfaced automatically to the user (design Decision E.1); recorded
+    # in the Reflection so a future user-requested explanation capability is
+    # possible (E.2).
+    competency_context: CompetencyContext | None = None
+
 
 @dataclass
 class RuntimeContractResult:
@@ -126,7 +143,11 @@ class RuntimeContractResult:
     working_memory_item_id: str | None
 
 
-def _build_interpretation(daemon: KernelDaemon, observation: Observation) -> Interpretation:
+def _build_interpretation(
+    daemon: KernelDaemon,
+    observation: Observation,
+    competency_block: str = "",
+) -> Interpretation:
     """
     Stage 2: give the raw observation structure/context -- specifically,
     persisted Experience Kernel state (active goals, active persona) that
@@ -183,6 +204,13 @@ def _build_interpretation(daemon: KernelDaemon, observation: Observation) -> Int
     except Exception:
         logger.exception("Failed to read working memory context for chat interpretation")
 
+    # S5.3: competency guidance, already retrieved and rendered by the caller.
+    # Passed in rather than fetched here because retrieval is asynchronous and
+    # must run off the event loop, while this function is deliberately
+    # synchronous and called by every surface.
+    if competency_block:
+        context_lines.append(competency_block)
+
     if not context_lines:
         return Interpretation(observation=observation, prompt=observation.raw_content)
 
@@ -193,6 +221,123 @@ def _build_interpretation(daemon: KernelDaemon, observation: Observation) -> Int
     # response, caught during this change's own live-smoke verification.
     prompt = "\n".join(context_lines) + f"\n\n{observation.raw_content}"
     return Interpretation(observation=observation, prompt=prompt)
+
+
+#: How many candidates to pull before selection narrows them. Deliberately
+#: larger than competency_reasoning.DEFAULT_MAX_RECORDS so selection has real
+#: choices to rank, rather than the retriever silently deciding the outcome.
+_COMPETENCY_RETRIEVAL_TOP_K = 20
+
+
+async def _retrieve_competency_context(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> CompetencyContext:
+    """
+    S5.3: retrieve competency records relevant to this observation and select
+    which of them inform the CandidateAction.
+
+    Uses the existing `ConsentGate`-filtered retrieval layer unchanged -- that
+    is what decides which records this request may see at all. Bodies are then
+    loaded for exactly those permitted ids, because `RetrievedItem` carries a
+    snippet rather than the stored value and selection needs each record's
+    provenance/classification/confidence (design Decision E.2).
+
+    Retrieval is synchronous (`Retriever.retrieve()` is a plain `def`), so it
+    runs through `run_off_loop()` -- the B2/B8 discipline. Putting a
+    per-request blocking database read on the event loop is exactly the defect
+    class Phase B spent nine stages removing.
+
+    Never raises: competency enrichment must not be able to break a chat turn,
+    matching `_build_interpretation()`'s own best-effort pattern. On any
+    failure this returns an empty context and the request proceeds exactly as
+    it does today.
+    """
+    try:
+        from .competency import COMPETENCY_KINDS
+        from .retrieval import RetrievalFilters, get_retriever
+
+        db_path = daemon.mem.db_path
+        # Raw utterances cannot be used as FTS queries -- see
+        # competency_reasoning.build_retrieval_query()'s docstring for the
+        # measured reason (FTS5's AND semantics would match nothing).
+        query = build_retrieval_query(observation.raw_content or "")
+        if not query:
+            return EMPTY_CONTEXT
+
+        def _search():
+            retriever = get_retriever(db_path=db_path, memory_store=daemon.mem)
+            return retriever.retrieve(
+                query,
+                top_k=_COMPETENCY_RETRIEVAL_TOP_K,
+                filters=RetrievalFilters(kinds=list(COMPETENCY_KINDS)),
+            )
+
+        items = await run_off_loop(
+            _search,
+            executor=getattr(daemon, "blocking_executor", None),
+        )
+        if not items:
+            return EMPTY_CONTEXT
+
+        rows = await daemon.mem.get_memories_by_ids([item.memory_id for item in items])
+        by_id = {row["id"]: row for row in rows}
+
+        candidates: list[CompetencyCandidate] = []
+        for item in items:
+            row = by_id.get(item.memory_id)
+            if row is None:
+                continue
+            record = _parse_competency_row(row)
+            if record is None:
+                continue
+            candidates.append(
+                CompetencyCandidate(
+                    kind=row["kind"],
+                    key=row["key"],
+                    score=float(getattr(item, "score", 0.0) or 0.0),
+                    record=record,
+                ),
+            )
+
+        # The relevance gate: a record must share meaningful terms with the
+        # request to be applicable at all. Being the retriever's best result
+        # is not sufficient -- a retriever always returns a nearest
+        # neighbour, and an irrelevant record would otherwise be cited in the
+        # explanation-grade attribution as the basis of the decision.
+        return select_relevant(
+            candidates,
+            request_terms=query_terms(observation.raw_content or ""),
+        )
+    except Exception:
+        logger.exception("Competency retrieval failed; proceeding without competency context")
+        return EMPTY_CONTEXT
+
+
+def _parse_competency_row(row: dict[str, Any]) -> Any | None:
+    """Rebuild an S5.1 record from a stored row, or None if it isn't one.
+
+    Reuses `training.record_from_payload()` rather than duplicating the
+    kind->class mapping, so the read path cannot drift from the write path.
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(row["value"])
+    except (TypeError, ValueError):
+        # Not structured competency JSON (e.g. a summary substitution).
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    key = row.get("key") or ""
+    slug = key.split(".", 1)[1] if "." in key else None
+
+    try:
+        return training.record_from_payload(row["kind"], data, slug=slug)
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 async def run_chat_through_runtime_contract(
@@ -224,10 +369,26 @@ async def run_chat_through_runtime_contract(
     # Stage 2: Interpretation -- enriched with persisted Experience Kernel
     # state (active goals, active persona), so it can genuinely be
     # referenced by the response, not just theoretically available.
-    interpretation = _build_interpretation(daemon, observation)
+    #
+    # S5.3: this is also where relevant competency retrieval happens, per
+    # COGNITIVE_RUNTIME.md's Executive/Interpretation rows. Chat is the only
+    # surface that gets it (design Decision B).
+    competency_context = await _retrieve_competency_context(daemon, observation)
+    interpretation = _build_interpretation(
+        daemon,
+        observation,
+        competency_block=render_for_prompt(competency_context),
+    )
 
-    # Stage 3: Executive -- propose a candidate action
-    candidate_action = CandidateAction(kind="chat_response", interpretation=interpretation)
+    # Stage 3: Executive -- propose a candidate action, now carrying whichever
+    # competencies informed it (S5.3). Governance still decides admission;
+    # a competency's recorded supervision can only ever ADD a review
+    # requirement, never relax one.
+    candidate_action = CandidateAction(
+        kind="chat_response",
+        interpretation=interpretation,
+        competency_context=competency_context,
+    )
 
     # Stage 4: Governance -- fail-closed Parking Brake "skills" check, same
     # gate skill-execution uses. Reads through the daemon's shared
@@ -292,12 +453,22 @@ async def run_chat_through_runtime_contract(
             tags=["chat", candidate_action.kind],
         )
         working_memory_item_id = item.item_id
+        # S5.3 Decision E.2: record the applied competency context here, in
+        # the existing shared reflections sink, at explanation grade --
+        # per-record identity, provenance, classification and confidence. A
+        # decision cannot be reconstructed after the fact, so recording only
+        # a count would foreclose a future user-requested explanation
+        # capability by omission. This is not exposed to the user (E.1).
+        details: dict[str, Any] = {"response_preview": (response or "")[:200]}
+        if not competency_context.is_empty():
+            details["competency_context"] = competency_context.to_dict()
+
         reflection = ActionReflection(
             surface="chat",
             action=candidate_action.kind,
             outcome="responded",
             summary=f"Chat turn ({candidate_action.kind}): responded",
-            details={"response_preview": (response or "")[:200]},
+            details=details,
         )
 
         # Stage 1, S1.4 (design doc Sec 7): a chat reply is one of the two

@@ -1228,6 +1228,51 @@ class MemoryStore:
                 )
             return entry
 
+    async def get_memories_by_ids(self, memory_ids: list[int]) -> list[dict[str, Any]]:
+        """
+        Read several memories by row id, in one query. Read-only.
+
+        Added for S5.3's competency reasoning, which needs the *bodies* of
+        records the retrieval layer selected: `RetrievedItem` carries a
+        snippet, not the stored value, and S5.3 must record each applied
+        record's provenance, classification and confidence
+        (`docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md` Decision E.2).
+
+        **This applies no consent gating of its own and must not be used to
+        choose what to surface.** It is a body-loader for ids some
+        `ConsentGate`-filtered path already decided are permitted — the
+        S5.3 seam calls it only with ids the retriever returned. Use the
+        retrieval layer for anything that decides *which* memories a caller
+        may see.
+
+        Values encrypted at rest are decrypted here, matching
+        `get_memory()` and `list_pending_sensitive_writes()`.
+        """
+        if not memory_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in memory_ids)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT id, kind, key, value, summary, ts FROM memories WHERE id IN ({placeholders})",  # noqa: S608 - placeholders are generated, not interpolated user input
+                tuple(memory_ids),
+            )
+            rows = await cursor.fetchall()
+
+        entries: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            entry["value"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                entry["value"],
+            )
+            if entry.get("summary"):
+                entry["summary"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                    entry["summary"],
+                )
+            entries.append(entry)
+        return entries
+
     async def delete_memory(self, kind: str, key: str) -> bool:
         """
         Delete a memory and its FTS index in a single transaction.
