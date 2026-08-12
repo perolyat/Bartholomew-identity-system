@@ -2,7 +2,14 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-11 (second pass, same day: **S5.2 — Training and knowledge
+> **Last updated:** 2026-08-12 (**S5.3 — Executive competency reasoning — is complete and
+> merged.** PR #45, merge commit `a4f094b`; CI run #65 green on all six jobs. Delivered per the
+> explicitly approved `docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md` in three separately
+> reviewed steps, plus a separately authorised deterministic relevance floor. **No sub-stage beyond
+> S5.3 is authorised, started, or reordered — S5.4 explicitly remains not started**, and the
+> deferred items recorded in `RISKS.md` remain separate and unauthorised.)
+>
+> **Previously (2026-08-11):** second pass, same day: **S5.2 — Training and knowledge
 > acquisition — is complete and merged.** PR #43, merge commit `5dacb52`; CI run #61 green on all
 > six jobs. Delivered per the explicitly approved
 > `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` in three separately reviewed steps, plus an
@@ -693,7 +700,7 @@ not itself grant.
 
 ---
 
-### Stage 5 — Developing Agency (competency, training, learning, then initiative) 🚧 IN PROGRESS (S5.0, S5.1, S5.2 complete)
+### Stage 5 — Developing Agency (competency, training, learning, then initiative) 🚧 IN PROGRESS (S5.0, S5.1, S5.2, S5.3 complete)
 
 **Restructured 2026-08-08** (New Direction reconciliation — see `DECISIONS.md`'s "Stage 5
 restructured around competency and training before live initiative" entry for full rationale).
@@ -705,11 +712,11 @@ precede, the generic competency/training/learning architecture described in `CON
 Learning" section. Rationale in one sentence: `Planner.decide()` (the Executive's reasoning path)
 returns `None` unconditionally today — there is no machinery yet for the Executive to retrieve and
 apply competencies, so scheduling *when* to be proactive is premature before the Executive has
-anything competent to be proactive *about*. **S5.0 (prerequisite), S5.1 (competency architecture)
-and S5.2 (training and knowledge acquisition) are complete; S5.3–S5.7 have not started.**
-Resuming any sub-stage requires its own separate, explicit approval — neither restructuring the
-sequence nor completing an earlier sub-stage authorises implementing any later one. In particular,
-**S5.2's completion does not authorise S5.3.**
+anything competent to be proactive *about*. **S5.0 (prerequisite), S5.1 (competency architecture),
+S5.2 (training and knowledge acquisition) and S5.3 (Executive competency reasoning) are complete;
+S5.4–S5.7 have not started.** Resuming any sub-stage requires its own separate, explicit approval —
+neither restructuring the sequence nor completing an earlier sub-stage authorises implementing any
+later one. In particular, **S5.3's completion does not authorise S5.4.**
 
 **Goal:** Bartholomew develops learned competence in genuine areas of responsibility (proven first
 via Residential Estate Management — see "Estate Management as architecture acceptance test" below)
@@ -724,7 +731,7 @@ sequence below by inserting competency/training/learning work first, not by repl
 | **S5.0** — Runtime prerequisites | Deterministic scheduler-schema readiness at startup (closes issue #24) | ✅ done 2026-07-25 |
 | **S5.1** — Competency architecture | Define and implement the smallest generic competency data/contract model — knowledge areas, procedures, relevant capabilities, experience/evidence, proficiency/confidence, supervision requirements — as structured content in the existing shared Memory substrate, with no new memory authority, Executive, or Governance path. **Must also carry the personal / potentially-generalisable / system-level classification and provenance `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and system-level learning" section requires (added 2026-08-08) — not a cross-instance mechanism, just fields that don't foreclose one later.** See `CONSTITUTION.md`/`COGNITIVE_RUNTIME.md` for the shape this must take. | ✅ done 2026-08-10 |
 | **S5.2** — Training and knowledge acquisition | Define and implement how training material (formal reference material, direct instruction, demonstration, correction, supervised-work outcomes) enters shared Memory with provenance and consent, per `CONSTITUTION.md`'s "Training vs. configuration." Delivered per `docs/S5_2_TRAINING_KNOWLEDGE_ACQUISITION_DESIGN.md` (design + Decisions A–E approved 2026-08-11, with the two future-facing constraints in §9.1). | ✅ done 2026-08-11 |
-| **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. Design and its five decisions (§10) **approved 2026-08-11** in `docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md`. Per Decision A, competency reasoning attaches to the **request-driven** path and `Planner.decide()` deliberately stays inert — reconnaissance found its only caller is an **ungoverned** proactive tick→bus→nudge path (§2.1). **Implementation is not yet authorised** — the plan in §11 awaits its own sign-off. | 📋 not started (design approved) |
+| **S5.3** — Executive competency reasoning | Extend `Planner.decide()` (today a stub returning `None`) so the Executive retrieves relevant competencies/knowledge/procedures for a given situation and constructs a `CandidateAction` informed by them and their confidence — through the existing Governance path, not a new one. Delivered per `docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md` (design + Decisions A–E approved 2026-08-11). Per Decision A, competency reasoning attaches to the **request-driven** path and `Planner.decide()` deliberately stays inert — reconnaissance found its only caller is an **ungoverned** proactive tick→bus→nudge path (§2.1). | ✅ done 2026-08-12 |
 | **S5.4** — Experience → learning/consolidation loop | Implement the Experience → Reflection → candidate learning → provenance/confidence → Governance/review (where required) → consolidation loop described in `COGNITIVE_RUNTIME.md`. This is also where the pre-existing reflection-ownership implementation gap (`ReflectionGenerator` authoritative, `NarratorEngine` supplementary — see `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) must be closed, since S5.4 depends on reflection composition having a single authority. | 📋 not started |
 | **S5.5** — Initiative safety scaffolding | Typed cadence (interval / daily / weekly wall-clock) → **default-OFF** consent + **functional mute** → quiet-hours *defer* (not suppress, with coalescing/expiry). *(This is the beginning of the pre-2026-08-08 Stage 5 scope, preserved unchanged in substance, resequenced after S5.1–S5.4.)* | 📋 not started |
 | **S5.6** — Dry-run proactive reasoning | Dry-run mode; structured rationale logging for every would-be suggestion. | 📋 not started |
@@ -809,6 +816,35 @@ structured kinds are structural metadata, while all values remain fully scanned 
 unknown/unregistered structured data keeps conservative key-and-value scanning** — see
 `DECISIONS.md`. **Approval of S5.2 does not authorise S5.3 or S5.4.**
 
+**S5.3 complete (2026-08-12) — PR #45, merge commit `a4f094b`.** CI run #65 green on all six jobs.
+Exit deliverable: `bartholomew/kernel/competency_reasoning.py` plus the chat-surface seam, per
+`docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md`, in three separately approved steps —
+`c912ddd` (reasoning core), `32fa344` (chat-only seam), `e51e47f`→`ee446c2` (boundary verification
+and the end-to-end demonstration) — plus `e7bbc31`, a separately authorised deterministic relevance
+floor.
+
+**The reconnaissance finding that shaped the sub-stage:** implementing S5.3 literally — making
+`Planner.decide()` return actions — would have shipped **ungoverned proactive behaviour**.
+`decide()`'s only caller is the periodic tick loop (`daemon.py:860`), which publishes to a bus
+whose consumer writes a **user-visible nudge with no brake check, no Runtime Contract and no policy
+evaluation**. That path is inert today only because `decide()` returns `None` — the stub *is* the
+safety mechanism. Competency reasoning therefore attaches to the request-driven path (Decision A),
+which the exit criterion permits ("`Planner.decide()` **or its successor**"). **The ungoverned
+tick→bus→nudge path remains, unchanged and unaddressed — it is pre-existing, is now recorded in
+`RISKS.md`, and must be dealt with before any S5.5–S5.7 initiative work.**
+
+**Two defects found by measurement rather than review**, both fixed here: raw chat text is unusable
+as an FTS query (FTS5's AND semantics meant `"should I replace the boiler?"` matched nothing while
+`"boiler"` matched — the obvious implementation would have shipped competency retrieval as a
+silently dead feature); and selection had no relevance criterion, so an unrelated request applied
+whatever competency existed and would have cited it in explanation-grade attribution.
+
+**Properties enforced in code, each test-pinned:** `Planner.decide()` inert and no nudge produced;
+chat only; deterministic selection with no model call; no cross-competency transfer; supervision
+may only become stricter; explanation-grade recording that is never automatically exposed
+(Decision E.1/E.2); synchronous retrieval routed off the event loop; and a replaceable seam
+preserved for a future deliberative Executive (§6.1). **Approval of S5.3 does not authorise S5.4.**
+
 **Exit criteria (S5.1–S5.4, competency/training/learning):**
 - A generic competency data/contract model exists, expressed as structured Memory content (not a
   new schema/database), and is demonstrated end-to-end by training one worked competency
@@ -847,6 +883,13 @@ pytest -q tests/test_training_memory_rules.py tests/test_training_runtime_contra
   tests/test_training_api_and_demonstration.py
 # S5.2's privacy_guard correction (lexical + structural false positives)
 pytest -q tests/test_privacy_guard_structural_scanning.py
+
+# S5.3 Executive competency reasoning (implemented 2026-08-12)
+pytest -q tests/test_competency_reasoning_selection.py tests/test_competency_reasoning_seam.py \
+  tests/test_competency_context_exposure_boundary.py \
+  tests/test_competency_reasoning_demonstration.py
+# S5.3's relevance floor (the correction; all six characterised query categories)
+pytest -q tests/test_competency_relevance_floor.py
 
 # S5.5-S5.7 initiative work -- not implemented; this test file does not exist yet.
 pytest -q tests/test_scheduler_checkins.py

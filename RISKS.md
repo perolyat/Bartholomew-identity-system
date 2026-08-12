@@ -2,7 +2,14 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-11 (second pass, same day: one new tech-debt watchlist item — the
+> **Last updated:** 2026-08-12 (one new tech-debt watchlist item, found during S5.3's
+> reconnaissance and deliberately not fixed by it: the scheduler tick → event bus → nudge path is
+> **ungoverned** — no brake check, no Runtime Contract, no policy evaluation — and produces
+> user-visible nudges. It is inert today only because `Planner.decide()` returns `None`, so the
+> stub is doing the work of a safety control. It gates S5.5–S5.7 and must be brought through the
+> Runtime Contract before any proactive output is enabled. No fix authorised.)
+>
+> **Previously (2026-08-11):** second pass, same day: one new tech-debt watchlist item — the
 > disagreement between `privacy_guard.SENSITIVE_KEYWORDS` and `memory_rules.yaml`'s
 > `ask_before_store` vocabulary, found while fixing the `is_sensitive()` false positives and
 > deliberately left unresolved by that fix. Both mechanisms fail closed, so the disagreement
@@ -358,6 +365,27 @@
   should decide whether migration should force a full governed rebuild (or otherwise clear
   untracked entries) rather than relying on an operator remembering to run the backfill, and
   should add the migration-state regression test the current suite lacks.
+- **(2026-08-12) The scheduler tick → event bus → nudge path is ungoverned, and gates S5.5–S5.7.**
+  Found during S5.3's reconnaissance (`docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md` §2.1);
+  **pre-existing, not introduced by S5.3, and deliberately not changed by it.**
+  `KernelDaemon._tick_loop` calls `Planner.decide(self.state)` every `interval` seconds
+  (`daemon.py:860`) and publishes any result to the `"system"` bus; `_system_consumer`
+  (`daemon.py:870–886`) then calls `MemoryStore.create_nudge()` **directly — no parking-brake
+  check, no Runtime Contract, no `evaluate_tool_policy`** — and those nudges are user-visible via
+  `GET /api/nudges/pending` and the minimal UI.
+  **Currently inert, and only by accident of implementation:** `Planner.decide()` returns `None`
+  unconditionally, so nothing is ever published. The stub is doing the work of a safety control.
+  **Effect:** the moment anything makes `decide()` return an action, Bartholomew emits unsolicited,
+  user-visible suggestions through a path that answers "no" to Exit Gate questions #2 and #3 (does
+  every proposed action pass through the Executive / the same Governance path), bypassing the
+  default-deny `allow_proactive` category, quiet hours, mute and cadence controls that S5.5 exists
+  to build. **Risk category:** governance bypass / unauthorised proactivity.
+  **No fix is authorised.** S5.3 avoided it by attaching competency reasoning to the request-driven
+  path and leaving `decide()` inert, pinned by regression tests
+  (`tests/test_competency_reasoning_demonstration.py::TestDecisionABoundary`). Any S5.5–S5.7 work
+  must bring this path through the Runtime Contract **before** enabling proactive output; a
+  dedicated fix should also decide whether the bus consumer is the right place for nudge creation
+  at all.
 - **(2026-08-11) Two overlapping sensitivity vocabularies disagree —
   `privacy_guard.SENSITIVE_KEYWORDS` vs. `memory_rules.yaml`'s `ask_before_store`.** Recorded as a
   separate architectural/governance issue while fixing the `is_sensitive()` false positives (see

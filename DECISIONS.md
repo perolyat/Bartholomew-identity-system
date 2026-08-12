@@ -2,7 +2,14 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-11 (one new decision added — "Schema keys of registered structured
+> **Last updated:** 2026-08-12 (one new decision added — "Competency relevance is decided
+> lexically, and the mechanism is explicitly replaceable," approved as part of S5.3's final review
+> and implemented in `e7bbc31`, merged via PR #45 / `a4f094b`. Records that a retriever-score
+> threshold was rejected on measured evidence, that false negatives are explicitly preferred over
+> unrelated competencies entering explanation-grade attribution, and — binding on later work — that
+> this is a tunable S5.3 mechanism rather than the final semantic relevance architecture.)
+>
+> **Previously (2026-08-11):** one new decision added — "Schema keys of registered structured
 > kinds are structural metadata, not user content," approved as part of S5.2's final implementation
 > review and implemented in `7bfab09`, merged via PR #43 / `5dacb52`. Records the measured
 > rejection of the values-only-scanning alternative, which would have been a real consent bypass.
@@ -66,6 +73,46 @@
 - **Why:** Defense-in-depth. Prevents accidental bypass by downstream callers.
 - **Consequences:** Retrieval callers must support “context_only” flags and filtered result sets.
 - **Date:** 2025-11-01 (documented in `CONSENT_GATES_IMPLEMENTATION.md`)
+
+## Decision: Competency relevance is decided lexically, and the mechanism is explicitly replaceable
+- **Decision:** A competency record may inform a request only if it shares at least one meaningful
+  term with that request (`DEFAULT_MIN_SHARED_TERMS = 1`, tunable; `0` disables). The governing
+  invariant: **being the best available retrieval result is not sufficient to make a competency
+  applicable.** The criterion is **not** a retriever-score threshold.
+  **This is an explicitly replaceable, tunable S5.3 mechanism — not the final semantic relevance
+  architecture.** Future richer Executive reasoning or genuine semantic relevance may supersede it
+  through the seam S5.3 preserved (`docs/S5_3_EXECUTIVE_COMPETENCY_REASONING_DESIGN.md` §6.1); it
+  must not be treated as settled architecture merely because it is in place.
+- **Alternatives considered**, all measured before choosing rather than argued:
+  - *A retriever-score threshold.* **Rejected on evidence.** Scores are not comparable across the
+    three supported modes — the same corpus and queries produced top scores of 1.000 (FTS,
+    normalised), 0.009–0.128 (vector) and 0.25–0.94 (hybrid). Worse, vector scores were measured
+    *anti-correlated* with relevance under the deterministic fallback embedder used when
+    `sentence-transformers` is absent: "play some music" scored 0.128 against an estate-management
+    corpus while "how should I handle the boiler quotes?" scored 0.009. Any threshold derived from
+    those numbers would encode noise and would silently change meaning if the embedder were
+    installed.
+  - *Requiring two or more shared terms.* Rejected: it excludes genuine paraphrases ("how do I
+    choose between tradespeople for the heating job?" shares only `heating`). One is the smallest
+    value that achieves the invariant.
+  - *Model-based relevance judging.* Out of scope and not authorised; it would also break the
+    determinism S5.3 relies on.
+  - *Accepting the behaviour.* Rejected: the damaging consequence is not prompt noise but **false
+    attribution** — the explanation-grade record (Decision E.2) would confidently cite a competency
+    that had nothing to do with the decision, corrupting the capability E.2 exists to preserve.
+- **Why:** lexical overlap separated every measured category cleanly and does so **identically in
+  every retrieval mode**, because it is computed from the request and the record's own text rather
+  than from the retriever's ranking. It is also self-explaining: the shared terms *are* the evidence
+  of relevance, so they are recorded per applied record (`matched_terms`).
+- **Consequences:** a vague but genuinely on-topic request sharing no term with any record is
+  excluded ("who should I call about the house?"). **False negatives are explicitly preferred over
+  unrelated competencies influencing a request or entering attribution.** Raising recall needs a
+  relevance signal this repository does not have today (real embeddings, stemming, synonyms) and is
+  its own decision. The same characterisation also invalidated the original Decision C tie-break:
+  domain selection now ranks by overlap strength, with retriever score only as a final tie-break.
+- **Date:** 2026-08-12 (authorised and approved as part of S5.3's final review; implemented in
+  `e7bbc31`, merged via PR #45, merge commit `a4f094b`. Characterisation recorded in the S5.3
+  design's §12.)
 
 ## Decision: Schema keys of registered structured kinds are structural metadata, not user content
 - **Decision:** `privacy_guard.is_sensitive()` may exclude the *schema-defined key names* of
