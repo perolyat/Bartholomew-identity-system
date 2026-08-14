@@ -2,10 +2,18 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-14 (one new decision added — "Usable POC slice 1 implementation
-> approved" — recording the separate, explicit implementation approval the prior entry required,
-> the one design deviation accepted at review, and the acceptance-bar wording clarification. Slice
-> 1 is implemented in `2d443a9`.)
+> **Last updated:** 2026-08-14, second pass (one new decision added — "AI-assisted development is
+> governed by the existing Architect/User-Approval framework — provenance, IP, and third-party-
+> licensing risk made explicit." Prompted by Anthropic's introduction of machine-readable
+> provenance/watermarking for Claude-generated content; a repository-grounded governance review,
+> not legal advice. Documentation-only — no implementation, dependency, workflow, or CI change
+> authorised. See `RISKS.md`'s three new tech-debt watchlist entries and `CHECKLISTS.md`'s one new
+> PR-checklist line, added in the same pass.)
+>
+> **Previously (2026-08-14, first pass):** one new decision added — "Usable POC slice 1
+> implementation approved" — recording the separate, explicit implementation approval the prior
+> entry required, the one design deviation accepted at review, and the acceptance-bar wording
+> clarification. Slice 1 is implemented in `2d443a9`.)
 >
 > **Previously (2026-08-12):** one new decision added — "Usable POC / time-to-real-use
 > prioritisation" — approving a repository-grounded assessment's finding that development had
@@ -224,6 +232,101 @@
 - **Why:** `MASTER_PLAN.md` is explicitly a living, frequently-updated SSOT for current state and next moves; mixing rarely-changing foundational principles into it risks them being edited incidentally alongside routine status updates. A separate doc with an explicit "changes rarely" norm protects the principles from that drift.
 - **Consequences:** `REVIEWS.md`'s canonical-doc count and any future doc-currency audit must account for 13 canonical docs, not 12. Edits to `CONSTITUTION.md` should be treated as a governance-level change (same bar as the "User Approval Gate" decision above), not routine documentation upkeep.
 - **Date:** 2026-07-22 (project owner handover)
+
+## Decision: AI-assisted development is governed by the existing Architect/User-Approval framework — provenance, IP, and third-party-licensing risk made explicit
+- **Decision:** Bartholomew's development process, including work performed by Claude (Lead
+  Architect, per the 2026-07-22 handover decision above) and any other AI coding tool used on this
+  repository (historically including Cline — see "Decision: Prompt-size discipline for agent
+  execution (Cline)" above, 2026-01-19 — and GitHub Copilot, per `.github/copilot-instructions.md`),
+  is governed by the existing `DECISIONS.md`/`CHECKLISTS.md` framework, not a separate AI-specific
+  approval process. This entry makes explicit six things that were already true in practice but
+  not previously stated as policy:
+  1. AI coding assistance is permitted and is already this repository's primary development
+     mechanism; nothing about that changes.
+  2. An AI-generated proposal, plan, or code change carries no special trust merely because a
+     model produced it. The existing User Approval Gate ("Decision: User Approval Gate for all
+     doc/code commits," above), the Commit authorization checklist, and the PR checklist's
+     testing/review requirements (`CHECKLISTS.md`) apply identically regardless of whether a human
+     or an AI agent authored the diff.
+  3. Git, PR, decision, and approval history must remain a truthful and commercially
+     reconstructable record of material authorship, AI assistance, review, and human approval.
+     Existing Claude-authored/Co-Authored-By attribution and historical records are retained and
+     must not be rewritten merely to conceal AI involvement. Future workflows may legitimately use
+     human commits, AI-agent commits, co-authorship trailers, reviewed AI-generated patches, or
+     other mechanisms, provided they do not fabricate or deliberately misrepresent material
+     provenance. No particular AI provider, Git author identity, or attribution mechanism is
+     permanently required.
+  4. Bartholomew (the product) must not become architecturally dependent on Anthropic, Claude,
+     Claude-specific APIs, or Claude-specific provenance/watermarking mechanisms. This restates
+     `CONSTITUTION.md`'s "one architectural authority per concept" and this project's own prior
+     tool/architect transitions (Cline → Claude Code as coding tool; the Lead Architect role
+     itself moving from a persona to Claude without loss of continuity, per `CONSTITUTION.md`'s
+     "Documentation Philosophy") — applied here specifically to development tooling, alongside the
+     runtime model-routing abstraction already in `ORCHESTRATION_INTEGRATION.md`. Claude Code is a
+     development tool, not part of Bartholomew's runtime architecture.
+  5. A known machine-readable AI provenance/watermark signal (e.g. Anthropic's provenance
+     mechanism for Claude-generated content) must not be intentionally stripped, defeated,
+     obfuscated, or laundered through another model for the purpose of concealing AI involvement.
+     Conversely: the signal's presence is not itself evidence of defective, non-original, or
+     infringing code; its absence is not itself evidence of human authorship; and normal code
+     review, testing, and the third-party-licence diligence in item 6 remain the actual engineering
+     controls — not watermark presence or absence. No mass rewrite or paraphrase of existing
+     AI-assisted code or documentation is required or authorised by this entry.
+  6. AI-generated code is not assumed original or licence-clean merely because a model produced
+     it. Ordinary third-party dependency/licence compliance (already governed by
+     `pyproject.toml`/`requirements*.txt`) remains mandatory for anything a contributor — human or
+     AI — adds. A substantial, suspiciously close match between generated code and a known
+     third-party implementation is treated as requiring investigation before merge, not automatic
+     acceptance — this restates ordinary code-review diligence for a generated-code failure mode,
+     not a new mechanism.
+- **Alternatives considered:**
+  - *Do nothing; rely on existing unstated practice.* Rejected: the practice is sound (truthful
+    git authorship, a real User Approval Gate, a provider-agnostic architecture), but a future
+    investor/acquirer/customer diligence process should not have to reverse-engineer this
+    project's AI-governance posture from `git log` and scattered decisions. Recording it once
+    costs nothing and closes that gap.
+  - *Create a new standalone canonical document (e.g. `AI_GOVERNANCE.md`).* Rejected under this
+    repository's own "one authority per concept, no doc sprawl" principle: this is a single
+    decision, of a kind `DECISIONS.md` already exists to hold — it extends the "Lead Architect
+    role transitions from Bartholomew to Claude" entry above rather than duplicating it — and the
+    specific open risks it identifies belong in `RISKS.md`'s existing tech-debt watchlist, not a
+    new document.
+  - *Build technical controls now (SBOM, dependency-licence scanning, provenance/attestation
+    tooling) as part of this pass.* Rejected for now, not permanently: per `docs/TILT.md`'s
+    time-to-real-use principle, these are external-beta/commercial-release-maturity controls, not
+    blockers for a single-developer Usable POC with no external distribution yet. Recorded in
+    `RISKS.md` so they are not lost, not implemented ahead of need.
+  - *Mandate per-line or per-commit AI-authorship labelling as a permanently required mechanism.*
+    Rejected: today's mix of mechanisms — git commit authorship where used, PR descriptions,
+    decision-log entries, and the review/merge trail — already reconstructs requirement → design →
+    AI-assisted implementation → review → human approval → merge without new bureaucracy; per-line
+    labelling would be exactly the kind of useless per-line provenance bureaucracy this review was
+    asked to avoid. Fixing one specific mechanism (e.g. always attributing commits to a particular
+    AI-agent Git identity) as a *permanent* requirement would also contradict item 3's own
+    principle that no particular attribution mechanism is permanently required — future workflows
+    must remain free to use whichever truthful mechanism fits, provided material provenance is
+    never fabricated or misrepresented.
+- **Why:** A commercially defensible, diligence-ready development process needs "how was AI used,
+  under what controls, and is the IP/licensing position clean" to be reconstructable from the
+  repository, not institutional memory. This repository's actual practice already produces most of
+  that evidence; the gap was that none of it had been stated as a decision a diligence reviewer,
+  new contributor, or future coding agent could find. Two genuinely open risks surfaced during this
+  review — an unresolved LICENSE inconsistency, and the complete absence of dependency-licence/SBOM
+  tooling — are real and are recorded in `RISKS.md`, not silently accepted.
+- **Consequences:** No change to how development is done — this entry describes and extends
+  existing practice. The only new obligations on future work are: (i) don't defeat/strip
+  provenance signals to conceal AI involvement, (ii) don't fabricate human authorship or rewrite
+  history to remove AI evidence, (iii) treat a suspicious generated-code match as an investigation
+  trigger, and (iv) keep the architecture provider-agnostic — all four of which current practice
+  already satisfies. Three items move into `RISKS.md`'s tech-debt watchlist (LICENSE
+  inconsistency; no dependency-licence/SBOM tooling; no AI-provider-terms record), explicitly
+  framed as not blocking the Usable POC, per `docs/TILT.md`. `CHECKLISTS.md` gains one line
+  extending the existing secrets/confidential-data discipline explicitly to AI coding-agent
+  sessions (already true in practice; now stated). `MASTER_PLAN.md`'s Approval Ledger records this
+  entry once committed, per that document's own "never mark anything as committed without a commit
+  hash" rule — see `MASTER_PLAN.md`'s corresponding update, below. No implementation, dependency,
+  workflow, or CI change is authorised by this entry.
+- **Date:** 2026-08-14
 
 ## Decision: Scheduler drives get Identity-derived gating via a category exemption, not a `tool_use.allowlist` reuse
 - **Decision:** Resolves the "different, drive-appropriate policy source" this document's "`tool_use.allowlist` gates skill/capability execution, not scheduler drives" entry (above) called for. `run_drive_through_runtime_contract()` (`bartholomew/kernel/runtime_contract.py`) now does consult `evaluate_tool_policy()` for scheduler drives — but exempts a `_SELF_MAINTENANCE_DRIVES` set (`self_check`, `curiosity_probe`, `reflection_micro`, `fts_optimize` — today's full `scheduler/drives.py` `REGISTRY`) from that check, the same shape as `_CONVERSATIONAL_KINDS`' exemption for chat (the "also does not gate plain conversational chat replies" entry above). A future scheduler-originated action outside that set is genuinely evaluated.
