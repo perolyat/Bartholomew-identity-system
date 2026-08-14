@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -18,6 +19,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import requests
+
+from bartholomew.kernel.blocking_executor import run_off_loop
 from bartholomew.kernel.db_ctx import set_wal_pragmas
 from bartholomew.kernel.skill_base import (
     SkillBase,
@@ -26,6 +30,25 @@ from bartholomew.kernel.skill_base import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Usable POC slice 1: the one real notification delivery channel, so a
+#: notification can reach the tester outside the browser tab.
+#:
+#: **Provider-agnostic by approval clarification (2026-08-14).** This is a
+#: plain configurable-URL HTTP POST with a JSON body. There is deliberately no
+#: provider SDK, no provider-specific payload shape, and no provider-specific
+#: branch anywhere below: any endpoint that accepts a POST works. `ntfy` is
+#: the intended first real-world test endpoint, supplied as a configuration
+#: value -- it must not become an architectural dependency.
+#:
+#: Unset (the default) keeps the pre-existing log-only behaviour exactly, so
+#: this is additive rather than a new failure mode.
+WEBHOOK_URL_ENV = "BARTHOLOMEW_NOTIFY_WEBHOOK_URL"
+
+#: Bounded so a slow or black-holed endpoint cannot stall notification
+#: delivery indefinitely. Delivery already runs off the event loop, but an
+#: unbounded socket read would still pin the worker thread.
+WEBHOOK_TIMEOUT_SECONDS = 10.0
 
 
 class NotificationPriority(Enum):
@@ -144,6 +167,11 @@ class NotifySkill(SkillBase):
     DEFAULT_QUIET_HOURS_START = "22:00"
     DEFAULT_QUIET_HOURS_END = "07:00"
 
+    #: Resolved in initialize() from WEBHOOK_URL_ENV. Declared here so an
+    #: uninitialised instance degrades to the log-only path rather than
+    #: raising AttributeError.
+    _webhook_url: str = ""
+
     @property
     def skill_id(self) -> str:
         return "notify"
@@ -166,6 +194,15 @@ class NotifySkill(SkillBase):
         self._muted_until: str | None = None
         if self._db_path:
             self._load_settings()
+
+        # Usable POC slice 1: the outbound webhook delivery channel. Read from
+        # the environment rather than persisted, so no credential-bearing
+        # value is written to the database -- a topic-style endpoint needs no
+        # secret at all, and even a URL-as-secret webhook stays in process
+        # configuration where the operator already manages it.
+        self._webhook_url = (os.getenv(WEBHOOK_URL_ENV) or "").strip()
+        if self._webhook_url:
+            logger.info("Notification webhook delivery enabled")
 
         # Subscribe to events
         if context.workspace:
@@ -348,8 +385,9 @@ class NotifySkill(SkillBase):
         # Emit event
         self._emit_event("alerts", "notification_sent", notification.to_dict())
 
-        # Actually send (would integrate with system notifications)
-        self._deliver_notification(notification)
+        # Actually send -- real outbound delivery when a webhook is configured
+        # (Usable POC slice 1), log-only otherwise.
+        await self._deliver_notification(notification)
 
         logger.info("Sent notification: %s", notification.id)
         return SkillResult.ok(
@@ -601,16 +639,56 @@ class NotifySkill(SkillBase):
     # Delivery
     # -------------------------------------------------------------------------
 
-    def _deliver_notification(self, notification: Notification) -> None:
+    @staticmethod
+    def _post_webhook(url: str, payload: dict[str, Any]) -> bool:
+        """
+        POST one notification to the configured webhook endpoint.
+
+        Synchronous by design -- `requests` is already a declared dependency
+        and is a blocking client, so this is called through `run_off_loop()`
+        rather than being made async with a new async HTTP dependency.
+
+        Returns True only for a 2xx response. Never raises: a delivery
+        failure is logged and reported, never propagated into the caller,
+        because notification delivery must not be able to break the action
+        that triggered it.
+        """
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=WEBHOOK_TIMEOUT_SECONDS,
+                headers={"Content-Type": "application/json"},
+            )
+            if 200 <= response.status_code < 300:
+                return True
+            logger.warning(
+                "Notification webhook returned HTTP %s for notification %s",
+                response.status_code,
+                payload.get("id"),
+            )
+            return False
+        except Exception:
+            logger.exception("Notification webhook delivery failed for %s", payload.get("id"))
+            return False
+
+    async def _deliver_notification(self, notification: Notification) -> bool:
         """
         Actually deliver a notification.
 
-        This would integrate with:
-        - Desktop notifications (toast)
-        - Sound alerts
-        - Mobile push (future)
+        Usable POC slice 1 replaced this method's log-only stub with a real
+        outbound HTTP POST to a configured webhook URL (see
+        `WEBHOOK_URL_ENV`), so a notification can reach the tester outside the
+        browser tab. The log line is kept -- it is the local record of every
+        delivery attempt, and the whole behaviour when no URL is configured.
+
+        Returns True when a webhook delivery succeeded. False covers both "no
+        webhook configured" (the unchanged log-only path) and "delivery
+        attempted and failed", which is why the caller treats the return value
+        as reporting only, never as a reason to alter notification state: a
+        notification that was sent is sent regardless of whether an external
+        endpoint happened to be reachable.
         """
-        # For now, just log
         logger.info(
             "Delivering notification: [%s] %s - %s",
             notification.priority.value,
@@ -618,10 +696,30 @@ class NotifySkill(SkillBase):
             notification.message,
         )
 
-        # TODO: Integrate with system notification APIs
-        # - Windows: win10toast or plyer
-        # - macOS: osascript
-        # - Linux: notify-send
+        url = self._webhook_url
+        if not url:
+            return False
+
+        # Provider-agnostic body: the notification's own fields, as JSON.
+        # No provider-specific shaping -- see WEBHOOK_URL_ENV's note.
+        payload = notification.to_dict()
+        payload["source"] = "bartholomew"
+
+        try:
+            return bool(
+                await run_off_loop(
+                    self._post_webhook,
+                    url,
+                    payload,
+                    executor=getattr(self._context, "blocking_executor", None),
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Notification webhook dispatch failed for %s",
+                notification.id,
+            )
+            return False
 
     async def _process_queue(self) -> int:
         """
@@ -656,7 +754,7 @@ class NotifySkill(SkillBase):
                 notification.status = NotificationStatus.SENT
                 notification.sent_at = now
                 self._save_notification(notification)
-                self._deliver_notification(notification)
+                await self._deliver_notification(notification)
 
                 self._emit_event(
                     "alerts",
