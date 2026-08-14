@@ -2,7 +2,17 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-12 (two changes, same pass: **(1)** a stale-status correction — **S5.3,
+> **Last updated:** 2026-08-14 — **Usable POC slice 1 (Personal Memory Capture and Recall) is
+> implemented**, commit `2d443a9`, approved on review. Ordinary conversation now produces durable,
+> retrievable memory through the existing governed write path, chat retrieval sees it, and the
+> `notify` skill has a real outbound delivery channel — closing the three gaps the 2026-08-12
+> assessment identified. See the "Usable POC — progressive vertical slices" section below for the
+> completion record, and `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` for the as-implemented detail
+> and known limitations. **Slice 1's completion does not authorise slice 2** — per `docs/TILT.md`
+> the next step is real-world use of this slice, and slice 2 is scoped from that feedback.
+> Stage 5 S5.4–S5.7 remain deferred, unchanged by this pass.
+>
+> **Previously (2026-08-12, two changes, same pass): (1)** a stale-status correction — **S5.3,
 > Executive competency reasoning, is complete**, merged via PR #45 (merge commit `a4f094b`, CI run
 > #65 green on all six jobs); this document had not been updated since S5.3's design approval and
 > still read "not started" after implementation landed. See the corrected Stage 5 table and
@@ -418,12 +428,43 @@ real-world information/input
 It is reached through small vertical slices, each shipped and tested in real use before the next
 is scoped — not built end-to-end before any real-world testing begins.
 
-**Slice 1 — Personal Memory Capture and Recall.** Scope, acceptance bar, and the vertical-slice
-discipline that governs it are in `docs/TILT.md`. In one sentence: extend the existing consent-
-gated write path and the existing S5.3 competency-retrieval seam so ordinary conversational facts
-(not just formally-trained competency material) become durable, retrievable memory, plus one real
-notification delivery channel. **Not yet approved for implementation** — this roadmap update
-authorises planning discipline and documentation only.
+**Slice 1 — Personal Memory Capture and Recall.** ✅ **done 2026-08-14** — commit `2d443a9`.
+Scope, acceptance bar, and the vertical-slice discipline that governs it are in `docs/TILT.md`;
+the planning note and the as-implemented record are in
+`docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md`. In one sentence: extend the existing consent-gated
+write path and the existing S5.3 competency-retrieval seam so ordinary conversational facts (not
+just formally-trained competency material) become durable, retrievable memory, plus one real
+notification delivery channel.
+
+**Slice 1 completion record.** Planning note approved 2026-08-14 (`4de2962`); implementation
+approved separately and explicitly, then delivered in `2d443a9`. What shipped:
+
+- **Capture** — a new pure-logic module (`bartholomew/kernel/personal_facts.py`) proposes durable
+  personal facts found in a chat turn onto the **existing** `user_profile`/`user_schedule` kinds.
+  Every proposal goes through `MemoryStore.upsert_memory()` unchanged: same rules engine, same
+  `never_store` hard block, same `ask_before_store` → `pending_sensitive_writes` consent queue,
+  same privacy guard. No new memory kind, no new write path, no bypass flags.
+- **Recall** — the chat seam's retrieval filter widened to those kinds; S5.3's `select_relevant()`
+  relevance gate reused unmodified. Facts and competencies are selected in two independent passes
+  over the same retrieved candidates (the gate commits to one domain per selection, so a merged
+  call would let a recalled fact evict an applicable competency) and render as separate prompt
+  blocks.
+- **Notification** — `NotifySkill._deliver_notification()`'s log-only stub replaced with a real
+  provider-agnostic outbound HTTP POST to `BARTHOLOMEW_NOTIFY_WEBHOOK_URL`, run off the event loop
+  per the B2/B8 discipline. Unset keeps the previous log-only behaviour exactly.
+- **Governance preserved** — capture runs only inside the governance-allowed branch, so an engaged
+  parking brake yields zero writes and zero consent-queue entries; consent-gated content is never
+  stored, never recalled, and never quoted in an outbound notification or a Reflection; S5.3's
+  Decision E exposure boundary and explanation-grade recording are inherited, not relaxed.
+- **Tests** — 40 new across three files, including the acceptance bar (fact stated in one turn,
+  relevantly recalled in a later separate turn without restating it) and a full
+  chat → governed write → notify skill → real outbound HTTP chain against a loopback server.
+
+Known limitations are recorded in the planning note's "As implemented" section and are accepted as
+POC scaffolding per `docs/TILT.md` — tuned from real usage, not ahead of it.
+
+**Slice 1's completion does not authorise slice 2.** Per `docs/TILT.md`, the next step is real-world
+use of this slice; slice 2 is scoped from that feedback and requires its own explicit approval.
 
 **Slice 1 is the first slice, not the POC's boundary.** Later slices are expected to progress
 toward proactive surfacing of something noticed and at least one genuine governed action with a

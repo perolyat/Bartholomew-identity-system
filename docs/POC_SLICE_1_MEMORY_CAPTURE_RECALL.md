@@ -1,10 +1,14 @@
 # Usable POC — Slice 1 Planning Note: Personal Memory Capture and Recall
 
-**Status: approved as planning/documentation, 2026-08-14.** Per `docs/TILT.md`'s vertical-slice
-discipline ("one right-sized planning note, not a full design-doc-and-decision-ledger cycle") and
-`MASTER_PLAN.md`'s Doc Governance rule, this approval covers this note only — it authorises
-planning documentation, not implementation. Slice 1 implementation still requires its own
-separate, explicit approval before any code is written.
+**Status: implemented, 2026-08-14 — commit `2d443a9`, approved on review.** This note was first
+approved as planning/documentation only (2026-08-14); implementation was then approved separately
+and explicitly, per `docs/TILT.md`'s vertical-slice discipline ("one right-sized planning note,
+not a full design-doc-and-decision-ledger cycle") and `MASTER_PLAN.md`'s Doc Governance rule. See
+`ROADMAP.md`'s "Usable POC — progressive vertical slices" section for the completion record and
+`DECISIONS.md`'s "Usable POC slice 1 implementation approved" entry.
+
+**Slice 1's completion does not authorise slice 2.** Per `docs/TILT.md`, slice 2 is scoped from
+slice 1's *real usage feedback*, not designed ahead of it, and requires its own approval.
 
 Scope is exactly `docs/TILT.md`'s "First vertical slice: Personal Memory Capture and Recall"
 section — this note makes that section's three additions concrete enough to implement, decides
@@ -85,15 +89,26 @@ event-loop-isolation discipline the rest of the kernel follows for blocking I/O)
 
 ## 4. Acceptance bar
 
-Matches `docs/TILT.md` verbatim: **a fact stated in one conversation is correctly recalled,
-unprompted, in a later unrelated conversation, without bypassing consent/governance** — plus,
-concretely for this note:
+**A fact stated in one conversation can be relevantly recalled in a later separate conversation
+without the user restating the fact** — and without bypassing consent/governance.
+
+> **Wording clarified 2026-08-14** (independent review of the implementation; wording only, no
+> behaviour change). This bar previously read "correctly recalled, unprompted, in a later
+> *unrelated* conversation." Taken literally that asks for a memory to surface in a conversation
+> it has nothing to do with, which would be the opposite of correct behaviour — and is exactly
+> what S5.3's relevance gate exists to prevent. The intent was always "a *separate later*
+> conversation, without the user restating it", which is what the implementation does and what
+> the wording above now says. `docs/TILT.md` carries the same clarification.
+
+Concretely for this note:
 
 - A recognized fact typed in chat is either stored (visible via existing memory inspection) or
   correctly queued to the consent inbox when it matches an `ask_before_store` pattern — never
   silently dropped, never stored bypassing a `never_store`/consent rule.
-- In a later, unrelated conversation, the stored fact is retrieved and influences the response
-  (visible in the rendered personal-fact prompt block) without the user restating it.
+- In a later, separate conversation where the fact is relevant, it is retrieved and influences the
+  response (visible in the rendered personal-fact prompt block) without the user restating it.
+- Conversely, a stored fact does **not** surface in a genuinely unrelated conversation — the
+  relevance gate holding is part of the bar, not a limitation of it.
 - The webhook fires at least once end-to-end (a real HTTP delivery reaches the configured
   endpoint), confirming the channel works outside the browser tab — not just that the code path
   was exercised.
@@ -129,10 +144,37 @@ Both questions this note originally left open are now resolved by the approval c
 Nothing is open — the write path, retrieval widening, and notification mechanism above are final
 for this slice as approved.
 
-## 7. Next step if approved
+## 7. As implemented (commit `2d443a9`)
 
-Approval of this note authorises **implementation planning discipline for this slice only** — it
-does not itself authorise writing code. Per `MASTER_PLAN.md`'s Doc Governance and
-`docs/TILT.md`'s vertical-slice discipline, the concrete implementation (extractor, retrieval
-widening, webhook delivery) would follow as its own explicit, separately-authorized step after
-this note is approved.
+Delivered as planned. Three files changed, three test files added (40 tests):
+
+- `bartholomew/kernel/personal_facts.py` (new) — the deterministic extractor and the retrieval
+  adapter, pure data/logic with no I/O, matching `competency_reasoning.py`'s discipline.
+- `bartholomew/kernel/runtime_contract.py` — retrieval widened to the personal-fact kinds; capture
+  runs inside the governance-allowed branch through `MemoryStore.upsert_memory()` unchanged.
+- `bartholomew/skills/notify.py` — `_deliver_notification()`'s log-only stub replaced with a
+  provider-agnostic outbound HTTP POST to `BARTHOLOMEW_NOTIFY_WEBHOOK_URL`, run off the event loop.
+
+**One deviation from this note, recorded at review.** §2 said "widens that filter"; the
+implementation does widen the single retrieval filter, but then runs **two independent
+`select_relevant()` passes** over the retrieved candidates — one for competencies, one for
+personal facts — rather than one merged call. Reason: `select_relevant()` commits to a single
+domain per selection (S5.3 Decision C), so a merged call would let a recalled fact evict an
+applicable competency, or vice versa — a silent S5.3 regression. The relevance gate itself is
+reused byte-for-byte in both passes. Pinned by
+`tests/test_personal_memory_capture_recall.py::TestCompetencyReasoningUnaffected`.
+
+**Known limitations, accepted as POC scaffolding** (per `docs/TILT.md`: tune from real usage, not
+ahead of it):
+
+- The extractor's pattern set is narrow and deliberately provisional (§1).
+- The relevance gate does no stemming (inherited from S5.3): "seat" does not match a stored
+  "seats". Recall works on content-word overlap.
+- `_COMPETENCY_RETRIEVAL_TOP_K` (20) is now shared across both record families; left unchanged so
+  S5.3's behaviour stays byte-identical rather than retuned ahead of evidence.
+- Facts whose text contains a `privacy_guard` keyword (`name`, `bank`, `account`, …) are
+  consent-gated by design, so e.g. "my partner's name is Jo" queues rather than stores.
+
+**Next step is real use, not more slice-1 work.** Per `docs/TILT.md`'s prioritisation principle,
+further hardening of this slice now competes with starting slice 2 and generally loses. Slice 2 is
+scoped from real feedback and requires its own approval.

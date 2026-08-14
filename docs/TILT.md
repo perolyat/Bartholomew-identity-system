@@ -6,7 +6,10 @@
 > non-authoritative reference — this specific document governs near-term execution sequencing and
 > is binding, the same way `ROADMAP.md` and `DECISIONS.md` are.
 >
-> **Last updated:** 2026-08-12 (reconciled into `CONSTITUTION.md`, same day as creation).
+> **Last updated:** 2026-08-14 (slice 1 implemented — see "First vertical slice" below; its
+> acceptance-bar wording clarified in the same pass, wording only, no behaviour change).
+>
+> **Previously (2026-08-12):** reconciled into `CONSTITUTION.md`, same day as creation.
 > `CONSTITUTION.md`'s "Development Philosophy" section now states this document's principle
 > directly (amended 2026-08-12) — this document is no longer a temporary supersession of a
 > contradictory Constitution; it is the current operational application of a principle
@@ -129,8 +132,10 @@ For each slice:
 
 ## First vertical slice: Personal Memory Capture and Recall
 
-Not yet approved for implementation as of this document's creation — approval of this planning
-pass authorises planning discipline and documentation only, per `DECISIONS.md`'s entry.
+**Implemented 2026-08-14** (commit `2d443a9`), per the approved planning note
+`docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md`. This section describes the slice as scoped; the note
+is the detailed record, including what was delivered and its known limitations. Slice 1's
+completion does **not** authorise slice 2 — see "Direction for later slices" below.
 
 **What it adds**, all flowing through the existing Runtime Contract seam, no new architecture:
 
@@ -138,18 +143,24 @@ pass authorises planning discipline and documentation only, per `DECISIONS.md`'s
    person, a date, a preference, a commitment) can be proposed as a memory write — reusing the
    existing `pending_sensitive_writes` consent flow and `memory_rules.yaml`'s already-defined
    `user_profile`/`birthday`/`user_schedule` categories, not new ones.
-2. A retrieval widening so chat's existing competency-retrieval call
-   (`_retrieve_competency_context` in `bartholomew/kernel/runtime_contract.py`) also queries this
-   new memory kind, reusing `competency_reasoning.py`'s relevance gate as-is.
+2. A retrieval widening so chat's existing competency-retrieval call (in
+   `bartholomew/kernel/runtime_contract.py` — `_retrieve_competency_context` as scoped, renamed
+   `_retrieve_memory_context` on implementation) also queries those personal-fact kinds, reusing
+   `competency_reasoning.py`'s relevance gate as-is.
 3. One real notification delivery channel, so a "noticed something" nudge can reach the tester
    outside the browser tab.
 
 **Acceptance bar** (see `DECISIONS.md` and the assessment this document formalises for the full
-list): a fact stated in one conversation is correctly recalled, unprompted, in a later unrelated
-conversation, without bypassing consent/governance.
+list): a fact stated in one conversation can be relevantly recalled in a later separate
+conversation without the user restating the fact, and without bypassing consent/governance.
 
-Implementation planning for this slice is the proposed next step after this documentation pass —
-see the summary accompanying this change for the concrete first step.
+> **Wording clarified 2026-08-14** (independent review of the implementation; wording only, no
+> behaviour change). This bar previously read "correctly recalled, unprompted, in a later
+> *unrelated* conversation." Read literally that asks for a memory to surface in a conversation it
+> has nothing to do with — the opposite of correct behaviour, and precisely what S5.3's relevance
+> gate exists to prevent. The intent was always a *separate later* conversation in which the fact
+> is relevant, without the user restating it. The implementation behaves that way; only the
+> wording changed.
 
 ## Direction for later slices (deliberately not specified yet)
 
