@@ -2,7 +2,12 @@
 
 > Operational and engineering checklists. If it’s not checked, it’s not real.
 >
-> **Last updated:** 2026-07-31 (Phase B governance restructuring: added a "Staged workstream
+> **Last updated:** 2026-08-14 (added one line to the PR checklist making explicit that the
+> existing secrets/confidential-data discipline applies equally to AI coding-agent sessions —
+> restates existing `.gitignore`/`detect-private-key` control scope; no new mechanism. See
+> `DECISIONS.md`'s new "AI-assisted development is governed by..." entry.)
+>
+> **Previously (2026-07-31):** Phase B governance restructuring: added a "Staged workstream
 > approval" checklist — overview approval does not authorise a stage; stage N approval does not
 > authorise stage N+1; a stage must not silently expand into the next. Existing general checklists
 > did not unambiguously cover this relationship.)
@@ -44,6 +49,9 @@ Mark each as **PASS** or **BLOCKED**.
 - [ ] Docs updated (canonical docs if behavior/interface changed)
 - [ ] Rollback note included for risky changes
 - [ ] No new bypass paths introduced (consent gate / parking brake)
+- [ ] No secrets, credentials, API keys, or confidential/customer data exposed to or committed by
+      any coding-agent session (human-directed or AI) — existing `.gitignore`/`detect-private-key`
+      controls apply equally regardless of who or what staged the change
 - [ ] User approval obtained for all doc/code changes before commit
 - [ ] Changes presented with clear diff/summary for review
 

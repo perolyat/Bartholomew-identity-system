@@ -734,6 +734,11 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
 ### Approval Ledger
 Record of approved changes with commit tracking (most recent 5):
 
+- 2026-08-14 — AI-assisted development provenance & IP governance (`DECISIONS.md` new decision
+  entry; `RISKS.md` three new tech-debt watchlist entries; `CHECKLISTS.md` one new PR-checklist
+  line; documentation-only, no production code/tests/dependencies/workflows/configuration/schema
+  touched) — Approved by project owner — Commit: `5a5e08eeb49ecc4f88fd7231dde4e37500b54bff`
+
 > Populated 2026-07-27. This ledger read "*No entries yet*" (dated 2026-01-19) while five
 > approved changes had in fact been merged to `main` — the ledger was unused, not empty by
 > fact. Each entry below cites a real merge commit verified with `git log`; nothing here is

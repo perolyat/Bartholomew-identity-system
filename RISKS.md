@@ -2,7 +2,20 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-11 (second pass, same day: one new tech-debt watchlist item — the
+> **Last updated:** 2026-08-14 (three new tech-debt watchlist items added — LICENSE declaration
+> inconsistency (MIT vs CC-BY-NC-4.0, no LICENSE file); absence of dependency-licence/SBOM/SCA
+> tooling; absence of a record of which AI coding tools/services this repository's development
+> relies on. Found during a repository-grounded AI-development-provenance and IP-governance review
+> prompted by Anthropic's introduction of machine-readable provenance/watermarking for Claude
+> output — see `DECISIONS.md`'s new "AI-assisted development is governed by..." entry.
+> Documentation-only; none of the three items is resolved by this pass.)
+>
+> **Corrected 2026-08-14** (same day, following an automated review comment): the AI-provider-tools
+> tech-debt entry is corrected to distinguish Cline/Claude Code (repository-evidenced actual use)
+> from GitHub Copilot (configured via `.github/copilot-instructions.md`, no proven usage record).
+> Wording-only; the risk's category and priority are unchanged.
+>
+> **Previously (2026-08-11, second pass, same day):** one new tech-debt watchlist item — the
 > disagreement between `privacy_guard.SENSITIVE_KEYWORDS` and `memory_rules.yaml`'s
 > `ask_before_store` vocabulary, found while fixing the `is_sensitive()` false positives and
 > deliberately left unresolved by that fix. Both mechanisms fail closed, so the disagreement
@@ -387,6 +400,39 @@
   authoritative, whether `privacy_guard`'s list should move into `memory_rules.yaml` (making it
   reviewable and reloadable like every other rule), and what the migration means for content
   already queued under either `reason`.
+- **(2026-08-14) LICENSE declaration is inconsistent and no LICENSE file exists.** `README.md`'s
+  "License" section states `CC-BY-NC-4.0`; `pyproject.toml`'s `[project].license` field states
+  `{text = "MIT"}`; no `LICENSE`/`LICENSE.md`/`LICENSE.txt` file exists anywhere in the repository
+  (confirmed by direct search). These are materially different licences (one Creative Commons
+  licence containing a non-commercial restriction, one permissive software licence), and this
+  ambiguity is exactly the kind of thing that stalls investor/acquirer/customer diligence. **Risk
+  category:** legal/IP, commercial-readiness. **Not resolved by this pass** — which licence is
+  correct is a business decision for the project owner, not something a documentation review
+  should decide unilaterally. **Before external beta at the latest**, the project owner should
+  choose one licence, add a real `LICENSE` file, and make `pyproject.toml`/`README.md` agree.
+- **(2026-08-14) No dependency-licence scanning, SBOM generation, or software-composition-analysis
+  (SCA) tooling exists.** `pyproject.toml`/`requirements*.txt`/`requirements.lock` pin
+  dependencies, and `tests/smoke/test_packaging_contract.py` catches undeclared runtime imports
+  (Phase A), but nothing checks licence compatibility of declared dependencies, scans for known
+  vulnerabilities (no `pip-audit`/`safety`/Dependabot/equivalent — confirmed absent by direct
+  search), or can produce an SBOM. **Risk category:** legal/IP, security, commercial-readiness.
+  **Not required for the current single-developer Usable POC** (see `docs/TILT.md`); basic
+  dependency-vulnerability scanning is **recommended before external beta** (other people's
+  data/devices become involved); licence-compatibility scanning and SBOM generation are
+  **required before commercial release**. See `DECISIONS.md`'s AI-governance entry.
+- **(2026-08-14) No lightweight record of which AI coding tools/services this repository's
+  development relies on, or their output-ownership/terms posture.** Git history shows two tools
+  with actual authorship evidence over this project's life (Cline — see `DECISIONS.md`'s
+  "Prompt-size discipline for agent execution (Cline)" entry, 2026-01-19; Claude Code — the
+  majority of commits since the 2026-07-22 Architect handover). `.github/copilot-instructions.md`
+  additionally configures this repository to support GitHub Copilot, but no Copilot-attributed
+  commit, trailer, or other usage record exists today — that file demonstrates configuration, not
+  proven use, and should not be read as a third data point of actual usage. No document records
+  even the two tools with proven use, or notes that each tool's terms (output ownership, indemnity,
+  training/data-use settings) are provider-controlled and should be verified against current terms
+  before being relied on commercially, rather than assumed stable. **Risk category:**
+  legal/IP. **Recommended before external beta** — cheap to produce (a short table, not a legal
+  opinion) and closes a real commercial-diligence question.
 
 ## Red-team focus areas
 
