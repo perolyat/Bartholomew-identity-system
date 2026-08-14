@@ -10,6 +10,12 @@
 > authorised. See `RISKS.md`'s three new tech-debt watchlist entries and `CHECKLISTS.md`'s one new
 > PR-checklist line, added in the same pass.)
 >
+> **Corrected 2026-08-14** (same day, following an automated review comment): the "AI-assisted
+> development is governed by..." entry's introductory paragraph is corrected to distinguish AI
+> tools with actual repository-evidenced use (Claude, Cline) from GitHub Copilot, which this
+> repository is configured to support (`.github/copilot-instructions.md`) but has no proven
+> authorship record for. Wording-only; the decision's substance is unchanged.
+>
 > **Previously (2026-08-14, first pass):** one new decision added — "Usable POC slice 1
 > implementation approved" — recording the separate, explicit implementation approval the prior
 > entry required, the one design deviation accepted at review, and the acceptance-bar wording
@@ -235,12 +241,15 @@
 
 ## Decision: AI-assisted development is governed by the existing Architect/User-Approval framework — provenance, IP, and third-party-licensing risk made explicit
 - **Decision:** Bartholomew's development process, including work performed by Claude (Lead
-  Architect, per the 2026-07-22 handover decision above) and any other AI coding tool used on this
-  repository (historically including Cline — see "Decision: Prompt-size discipline for agent
-  execution (Cline)" above, 2026-01-19 — and GitHub Copilot, per `.github/copilot-instructions.md`),
-  is governed by the existing `DECISIONS.md`/`CHECKLISTS.md` framework, not a separate AI-specific
-  approval process. This entry makes explicit six things that were already true in practice but
-  not previously stated as policy:
+  Architect, per the 2026-07-22 handover decision above) and Cline (repository evidence of actual
+  use — see "Decision: Prompt-size discipline for agent execution (Cline)" above, 2026-01-19), is
+  governed by the existing `DECISIONS.md`/`CHECKLISTS.md` framework, not a separate AI-specific
+  approval process. `.github/copilot-instructions.md` configures this repository to support GitHub
+  Copilot; that file demonstrates configuration, not proof that Copilot has produced any repository
+  contribution — no Copilot-attributed commit or trailer exists in git history today. Should that
+  change, this same framework governs Copilot's use too, without requiring a separate decision.
+  This entry makes explicit six things that were already true in practice but not previously
+  stated as policy:
   1. AI coding assistance is permitted and is already this repository's primary development
      mechanism; nothing about that changes.
   2. An AI-generated proposal, plan, or code change carries no special trust merely because a

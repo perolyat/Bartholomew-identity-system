@@ -10,6 +10,11 @@
 > output — see `DECISIONS.md`'s new "AI-assisted development is governed by..." entry.
 > Documentation-only; none of the three items is resolved by this pass.)
 >
+> **Corrected 2026-08-14** (same day, following an automated review comment): the AI-provider-tools
+> tech-debt entry is corrected to distinguish Cline/Claude Code (repository-evidenced actual use)
+> from GitHub Copilot (configured via `.github/copilot-instructions.md`, no proven usage record).
+> Wording-only; the risk's category and priority are unchanged.
+>
 > **Previously (2026-08-11, second pass, same day):** one new tech-debt watchlist item — the
 > disagreement between `privacy_guard.SENSITIVE_KEYWORDS` and `memory_rules.yaml`'s
 > `ask_before_store` vocabulary, found while fixing the `is_sensitive()` false positives and
@@ -416,12 +421,16 @@
   data/devices become involved); licence-compatibility scanning and SBOM generation are
   **required before commercial release**. See `DECISIONS.md`'s AI-governance entry.
 - **(2026-08-14) No lightweight record of which AI coding tools/services this repository's
-  development relies on, or their output-ownership/terms posture.** Git history and
-  `.github/copilot-instructions.md` show at least three tools have been used over this project's
-  life (Cline; GitHub Copilot; Claude Code — the majority of commits since the 2026-07-22 Architect
-  handover), but no document records this, or notes that each tool's terms (output ownership,
-  indemnity, training/data-use settings) are provider-controlled and should be verified against
-  current terms before being relied on commercially, rather than assumed stable. **Risk category:**
+  development relies on, or their output-ownership/terms posture.** Git history shows two tools
+  with actual authorship evidence over this project's life (Cline — see `DECISIONS.md`'s
+  "Prompt-size discipline for agent execution (Cline)" entry, 2026-01-19; Claude Code — the
+  majority of commits since the 2026-07-22 Architect handover). `.github/copilot-instructions.md`
+  additionally configures this repository to support GitHub Copilot, but no Copilot-attributed
+  commit, trailer, or other usage record exists today — that file demonstrates configuration, not
+  proven use, and should not be read as a third data point of actual usage. No document records
+  even the two tools with proven use, or notes that each tool's terms (output ownership, indemnity,
+  training/data-use settings) are provider-controlled and should be verified against current terms
+  before being relied on commercially, rather than assumed stable. **Risk category:**
   legal/IP. **Recommended before external beta** — cheap to produce (a short table, not a legal
   opinion) and closes a real commercial-diligence question.
 
