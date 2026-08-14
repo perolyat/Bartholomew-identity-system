@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from . import policy_engine, training
+from . import personal_facts, policy_engine, training
 from .blocking_executor import run_off_loop
 from .competency_reasoning import (
     EMPTY_CONTEXT,
@@ -129,6 +129,11 @@ class CandidateAction:
     # possible (E.2).
     competency_context: CompetencyContext | None = None
 
+    # Usable POC slice 1: the remembered personal facts recalled for this
+    # proposal, if any. Same shape and same posture as `competency_context`
+    # above -- optional, never auto-exposed, recorded at explanation grade.
+    personal_fact_context: CompetencyContext | None = None
+
 
 @dataclass
 class RuntimeContractResult:
@@ -142,11 +147,18 @@ class RuntimeContractResult:
     response: str | None
     working_memory_item_id: str | None
 
+    #: Usable POC slice 1: what the governed write path did with each durable
+    #: personal fact this turn proposed (see `_capture_personal_facts`).
+    #: Empty when the turn proposed none, or when governance denied the turn.
+    #: Defaulted so existing construction sites are unaffected.
+    personal_facts_captured: list[dict[str, Any]] = field(default_factory=list)
+
 
 def _build_interpretation(
     daemon: KernelDaemon,
     observation: Observation,
     competency_block: str = "",
+    personal_facts_block: str = "",
 ) -> Interpretation:
     """
     Stage 2: give the raw observation structure/context -- specifically,
@@ -211,6 +223,12 @@ def _build_interpretation(
     if competency_block:
         context_lines.append(competency_block)
 
+    # Usable POC slice 1: recalled personal facts, rendered as their own
+    # block so competency guidance and remembered facts stay visibly
+    # distinct. Same passed-in-not-fetched reason as the competency block.
+    if personal_facts_block:
+        context_lines.append(personal_facts_block)
+
     if not context_lines:
         return Interpretation(observation=observation, prompt=observation.raw_content)
 
@@ -229,28 +247,58 @@ def _build_interpretation(
 _COMPETENCY_RETRIEVAL_TOP_K = 20
 
 
-async def _retrieve_competency_context(
+@dataclass(frozen=True)
+class ChatMemoryContext:
+    """What one chat turn's retrieval produced, kept as two separate
+    selections rather than one merged blob.
+
+    Separate on purpose. `select_relevant()` commits to a single domain per
+    selection (S5.3 Decision C, no cross-competency transfer), so folding
+    personal facts and competencies into one call would make them compete for
+    that single slot -- a remembered birthday could silently displace an
+    applicable competency, or vice versa. Two independent selections over the
+    same retrieved candidates preserve S5.3's behaviour exactly while letting
+    slice 1's facts through.
+    """
+
+    competency: CompetencyContext = EMPTY_CONTEXT
+    personal: CompetencyContext = EMPTY_CONTEXT
+
+
+EMPTY_CHAT_MEMORY_CONTEXT = ChatMemoryContext()
+
+
+async def _retrieve_memory_context(
     daemon: KernelDaemon,
     observation: Observation,
-) -> CompetencyContext:
+) -> ChatMemoryContext:
     """
-    S5.3: retrieve competency records relevant to this observation and select
-    which of them inform the CandidateAction.
+    Retrieve the stored records relevant to this observation and select which
+    of them inform the CandidateAction.
+
+    S5.3 established this for competency records. The Usable POC's slice 1
+    widens the retrieval filter to also cover the personal-fact kinds
+    (`personal_facts.PERSONAL_FACT_KINDS`), so an ordinary chat turn's
+    existing retrieval call sees facts captured from ordinary conversation --
+    which is the whole point of the slice: before it, nothing an ordinary
+    conversation produced was ever durable *and* retrievable.
 
     Uses the existing `ConsentGate`-filtered retrieval layer unchanged -- that
-    is what decides which records this request may see at all. Bodies are then
-    loaded for exactly those permitted ids, because `RetrievedItem` carries a
-    snippet rather than the stored value and selection needs each record's
-    provenance/classification/confidence (design Decision E.2).
+    is what decides which records this request may see at all, and it is why
+    a fact still sitting in the consent queue (never written to `memories`)
+    cannot be recalled. Bodies are then loaded for exactly those permitted
+    ids, because `RetrievedItem` carries a snippet rather than the stored
+    value and selection needs each record's provenance/classification/
+    confidence (S5.3 Decision E.2).
 
     Retrieval is synchronous (`Retriever.retrieve()` is a plain `def`), so it
     runs through `run_off_loop()` -- the B2/B8 discipline. Putting a
     per-request blocking database read on the event loop is exactly the defect
     class Phase B spent nine stages removing.
 
-    Never raises: competency enrichment must not be able to break a chat turn,
+    Never raises: memory enrichment must not be able to break a chat turn,
     matching `_build_interpretation()`'s own best-effort pattern. On any
-    failure this returns an empty context and the request proceeds exactly as
+    failure this returns empty contexts and the request proceeds exactly as
     it does today.
     """
     try:
@@ -263,14 +311,16 @@ async def _retrieve_competency_context(
         # measured reason (FTS5's AND semantics would match nothing).
         query = build_retrieval_query(observation.raw_content or "")
         if not query:
-            return EMPTY_CONTEXT
+            return EMPTY_CHAT_MEMORY_CONTEXT
+
+        kinds = list(COMPETENCY_KINDS) + list(personal_facts.PERSONAL_FACT_KINDS)
 
         def _search():
             retriever = get_retriever(db_path=db_path, memory_store=daemon.mem)
             return retriever.retrieve(
                 query,
                 top_k=_COMPETENCY_RETRIEVAL_TOP_K,
-                filters=RetrievalFilters(kinds=list(COMPETENCY_KINDS)),
+                filters=RetrievalFilters(kinds=kinds),
             )
 
         items = await run_off_loop(
@@ -278,40 +328,59 @@ async def _retrieve_competency_context(
             executor=getattr(daemon, "blocking_executor", None),
         )
         if not items:
-            return EMPTY_CONTEXT
+            return EMPTY_CHAT_MEMORY_CONTEXT
 
         rows = await daemon.mem.get_memories_by_ids([item.memory_id for item in items])
         by_id = {row["id"]: row for row in rows}
 
-        candidates: list[CompetencyCandidate] = []
+        competency_candidates: list[CompetencyCandidate] = []
+        fact_candidates: list[CompetencyCandidate] = []
         for item in items:
             row = by_id.get(item.memory_id)
             if row is None:
                 continue
+            score = float(getattr(item, "score", 0.0) or 0.0)
+
+            if row["kind"] in personal_facts.PERSONAL_FACT_KINDS:
+                fact_record = personal_facts.record_from_row(row)
+                if fact_record is None:
+                    continue
+                fact_candidates.append(
+                    CompetencyCandidate(
+                        kind=row["kind"],
+                        key=row["key"],
+                        score=score,
+                        record=fact_record,
+                    ),
+                )
+                continue
+
             record = _parse_competency_row(row)
             if record is None:
                 continue
-            candidates.append(
+            competency_candidates.append(
                 CompetencyCandidate(
                     kind=row["kind"],
                     key=row["key"],
-                    score=float(getattr(item, "score", 0.0) or 0.0),
+                    score=score,
                     record=record,
                 ),
             )
 
-        # The relevance gate: a record must share meaningful terms with the
-        # request to be applicable at all. Being the retriever's best result
-        # is not sufficient -- a retriever always returns a nearest
-        # neighbour, and an irrelevant record would otherwise be cited in the
-        # explanation-grade attribution as the basis of the decision.
-        return select_relevant(
-            candidates,
-            request_terms=query_terms(observation.raw_content or ""),
+        # The relevance gate, reused unmodified for both families: a record
+        # must share meaningful terms with the request to be applicable at
+        # all. Being the retriever's best result is not sufficient -- a
+        # retriever always returns a nearest neighbour, and an irrelevant
+        # record would otherwise be cited in the explanation-grade
+        # attribution as the basis of the decision.
+        request_terms = query_terms(observation.raw_content or "")
+        return ChatMemoryContext(
+            competency=select_relevant(competency_candidates, request_terms=request_terms),
+            personal=select_relevant(fact_candidates, request_terms=request_terms),
         )
     except Exception:
-        logger.exception("Competency retrieval failed; proceeding without competency context")
-        return EMPTY_CONTEXT
+        logger.exception("Memory retrieval failed; proceeding without retrieved context")
+        return EMPTY_CHAT_MEMORY_CONTEXT
 
 
 def _parse_competency_row(row: dict[str, Any]) -> Any | None:
@@ -338,6 +407,148 @@ def _parse_competency_row(row: dict[str, Any]) -> Any | None:
         return training.record_from_payload(row["kind"], data, slug=slug)
     except (ValueError, KeyError, TypeError):
         return None
+
+
+#: Outcome labels for one proposed personal-fact write. These name what the
+#: existing governed write path did with the proposal -- they are not a second
+#: policy vocabulary, and nothing here decides any of them.
+FACT_OUTCOME_STORED = "stored"
+FACT_OUTCOME_QUEUED_FOR_CONSENT = "queued_for_consent"
+FACT_OUTCOME_BLOCKED = "blocked"
+FACT_OUTCOME_ERROR = "error"
+
+
+async def _classify_fact_not_stored(
+    mem: Any,
+    kind: str,
+    key: str,
+) -> str:
+    """
+    Explain a `stored=False` personal-fact write by observing resulting state.
+
+    Same reasoning as `_classify_not_stored()` does for the training seam:
+    `StoreResult` does not distinguish its not-stored paths, and the
+    difference matters. Content queued for consent is waiting in the inbox and
+    will land if approved; content blocked by a `never_store` rule or declined
+    by a registered consent handler never will. This checks whether a row
+    actually appeared in the pending inbox -- an observation of state, not an
+    inference about `upsert_memory()`'s control flow.
+    """
+    try:
+        pending = await mem.list_pending_sensitive_writes(limit=50)
+    except Exception:
+        logger.exception("Failed to read pending consent queue while classifying a fact write")
+        return FACT_OUTCOME_QUEUED_FOR_CONSENT
+
+    for entry in pending:
+        if entry.get("kind") == kind and entry.get("key") == key:
+            return FACT_OUTCOME_QUEUED_FOR_CONSENT
+    return FACT_OUTCOME_BLOCKED
+
+
+async def _notify_fact_captured(daemon: KernelDaemon, outcomes: list[dict[str, Any]]) -> None:
+    """
+    Deliver one notification summarising what this turn remembered, through
+    the existing governed `NotifySkill` path -- not a second notification
+    mechanism, and not a direct call to the delivery function.
+
+    `SkillRegistry.execute_action()` runs its own independent Governance pass
+    on skill_id="notify" (brake + skill permissions + Identity Policy), and
+    `NotifySkill._action_send()` applies S1.3's quiet-hours/mute rules. Both
+    are reused exactly as `_notify_awaiting_response()` reuses them.
+
+    Best-effort: a delivery failure must never undo a write that already
+    committed, nor break the chat turn.
+    """
+    stored = [item for item in outcomes if item["outcome"] == FACT_OUTCOME_STORED]
+    queued = [item for item in outcomes if item["outcome"] == FACT_OUTCOME_QUEUED_FOR_CONSENT]
+    if not stored and not queued:
+        return
+
+    if stored:
+        message = "Remembered: " + "; ".join(item["value"] for item in stored)
+        title = "Bartholomew remembered something"
+    else:
+        # Deliberately does NOT include the content: it is sitting in the
+        # consent queue precisely because it has not been approved for
+        # storage, so quoting it in an outbound notification would leak
+        # exactly what the gate is holding back.
+        message = f"{len(queued)} thing(s) need your review before Bartholomew can remember them."
+        title = "Bartholomew needs your consent"
+
+    try:
+        await run_skill_through_runtime_contract(
+            daemon.skill_registry,
+            "notify",
+            "send",
+            {"message": message, "title": title, "priority": "normal"},
+        )
+    except Exception:
+        logger.exception("Failed to deliver a personal-fact capture notification")
+
+
+async def _capture_personal_facts(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> list[dict[str, Any]]:
+    """
+    Usable POC slice 1: propose durable personal facts found in this turn to
+    Memory, through the existing governed write path.
+
+    Every proposal goes through `MemoryStore.upsert_memory()` unchanged --
+    same `memory_rules.yaml` evaluation, same `never_store` hard block, same
+    `ask_before_store` -> `pending_sensitive_writes` consent queue, same
+    `privacy_guard` gate, same redaction/encryption/FTS handling. There is no
+    new write path here and no way to bypass one: this function chooses only
+    *what to propose*, never whether it may be stored.
+
+    Called only after the Governance stage allowed the turn, so an engaged
+    parking brake yields zero writes and zero consent-queue entries.
+
+    Never raises: memory capture must not be able to break a chat turn.
+    """
+    outcomes: list[dict[str, Any]] = []
+    try:
+        candidates = personal_facts.extract_facts(observation.raw_content or "")
+        if not candidates:
+            return outcomes
+
+        ts = datetime.now(timezone.utc).isoformat()
+        for fact in candidates:
+            record = fact.to_dict()
+            try:
+                store_result = await daemon.mem.upsert_memory(
+                    fact.kind,
+                    fact.key,
+                    fact.value,
+                    ts,
+                )
+            except Exception:
+                logger.exception("Personal-fact write failed for %s/%s", fact.kind, fact.key)
+                record["outcome"] = FACT_OUTCOME_ERROR
+                outcomes.append(record)
+                continue
+
+            if store_result.stored:
+                record["outcome"] = FACT_OUTCOME_STORED
+                record["memory_id"] = store_result.memory_id
+                # Only ever recorded for content the governed path actually
+                # stored -- never for content it is holding for consent.
+                record["value"] = fact.value
+            else:
+                record["outcome"] = await _classify_fact_not_stored(
+                    daemon.mem,
+                    fact.kind,
+                    fact.key,
+                )
+            outcomes.append(record)
+
+        if outcomes and getattr(daemon, "skill_registry", None) is not None:
+            await _notify_fact_captured(daemon, outcomes)
+    except Exception:
+        logger.exception("Personal-fact capture failed; the chat turn is unaffected")
+
+    return outcomes
 
 
 async def run_chat_through_runtime_contract(
@@ -373,21 +584,26 @@ async def run_chat_through_runtime_contract(
     # S5.3: this is also where relevant competency retrieval happens, per
     # COGNITIVE_RUNTIME.md's Executive/Interpretation rows. Chat is the only
     # surface that gets it (design Decision B).
-    competency_context = await _retrieve_competency_context(daemon, observation)
+    memory_context = await _retrieve_memory_context(daemon, observation)
+    competency_context = memory_context.competency
+    personal_fact_context = memory_context.personal
     interpretation = _build_interpretation(
         daemon,
         observation,
         competency_block=render_for_prompt(competency_context),
+        personal_facts_block=personal_facts.render_facts_for_prompt(personal_fact_context),
     )
 
     # Stage 3: Executive -- propose a candidate action, now carrying whichever
-    # competencies informed it (S5.3). Governance still decides admission;
+    # competencies informed it (S5.3) and whichever remembered personal facts
+    # were recalled (Usable POC slice 1). Governance still decides admission;
     # a competency's recorded supervision can only ever ADD a review
     # requirement, never relax one.
     candidate_action = CandidateAction(
         kind="chat_response",
         interpretation=interpretation,
         competency_context=competency_context,
+        personal_fact_context=personal_fact_context,
     )
 
     # Stage 4: Governance -- fail-closed Parking Brake "skills" check, same
@@ -440,6 +656,7 @@ async def run_chat_through_runtime_contract(
 
     response: str | None = None
     working_memory_item_id: str | None = None
+    captured_facts: list[dict[str, Any]] = []
 
     if governance_allowed:
         # Stage 5+6: Capability + Execution
@@ -462,6 +679,17 @@ async def run_chat_through_runtime_contract(
         details: dict[str, Any] = {"response_preview": (response or "")[:200]}
         if not competency_context.is_empty():
             details["competency_context"] = competency_context.to_dict()
+        if not personal_fact_context.is_empty():
+            details["personal_fact_context"] = personal_fact_context.to_dict()
+
+        # Usable POC slice 1: capture durable personal facts from this turn.
+        # Deliberately here -- inside the governance-allowed branch, after the
+        # response -- so an engaged brake or a policy denial produces zero
+        # writes, and so capture can never influence the same turn's answer
+        # (recall is a *later*-turn property; see the slice's acceptance bar).
+        captured_facts = await _capture_personal_facts(daemon, observation)
+        if captured_facts:
+            details["personal_facts_captured"] = captured_facts
 
         reflection = ActionReflection(
             surface="chat",
@@ -504,6 +732,7 @@ async def run_chat_through_runtime_contract(
         governance_reason=governance_reason,
         response=response,
         working_memory_item_id=working_memory_item_id,
+        personal_facts_captured=captured_facts,
     )
 
 

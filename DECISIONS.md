@@ -2,7 +2,12 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-12 (one new decision added — "Usable POC / time-to-real-use
+> **Last updated:** 2026-08-14 (one new decision added — "Usable POC slice 1 implementation
+> approved" — recording the separate, explicit implementation approval the prior entry required,
+> the one design deviation accepted at review, and the acceptance-bar wording clarification. Slice
+> 1 is implemented in `2d443a9`.)
+>
+> **Previously (2026-08-12):** one new decision added — "Usable POC / time-to-real-use
 > prioritisation" — approving a repository-grounded assessment's finding that development had
 > drifted toward polish/hardening ahead of real use, and formalising the resulting
 > execution-sequencing principle in new canonical document `docs/TILT.md`. Personal Memory Capture
@@ -1227,3 +1232,74 @@
   substantive decision beyond the already-approved time-to-real-use principle; it only removes a
   self-imposed, no-longer-necessary temporary contradiction between two canonical documents.
 - **Date (amendment):** 2026-08-12
+
+## Decision: Usable POC slice 1 implementation approved
+- **Decision:** Implementation of the Usable POC's first vertical slice (Personal Memory Capture
+  and Recall) is **approved and delivered** — commit `2d443a9`, approved on independent review.
+  This is the separate, explicit implementation approval the "Usable POC / time-to-real-use
+  prioritisation" entry above required and deliberately withheld; the planning note
+  (`docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md`, approved 2026-08-14 in `4de2962`) is its scope.
+
+  Three sub-decisions were fixed at approval:
+
+  **(a) The notification channel is a provider-agnostic outbound webhook.** A configurable-URL
+  JSON HTTP POST, with no provider SDK, payload shape, or code branch. `ntfy` is the intended
+  first real-world test endpoint, supplied as configuration — explicitly *not* an architectural
+  dependency. Chosen over SMTP/email because a topic-style webhook needs no stored credential at
+  all, so the slice adds no credential-storage surface. Pinned by a test asserting no
+  provider-specific identifier appears in the delivery code.
+
+  **(b) The fact extractor is POC scaffolding, not the long-term boundary of memory capture.** Its
+  pattern set is deliberately narrow and provisional. Broadening what counts as a capturable fact
+  is real, expected future work informed by real usage — not scoped or designed here. Recorded
+  because a narrow extractor is only acceptable *as* scaffolding; treating it as the definition of
+  "a personal fact" would be a misreading with real product consequences.
+
+  **(c) Two selection passes, not one merged call — a deviation from the planning note, accepted.**
+  The note said the retrieval filter widens to cover personal-fact kinds; it does. But
+  `competency_reasoning.select_relevant()` commits to a single domain per selection (S5.3 Decision
+  C, no cross-competency transfer), so passing facts and competencies through one call would let a
+  recalled personal fact evict an applicable competency, or vice versa — a silent S5.3 regression.
+  The implementation therefore runs two independent selections over the same retrieved candidates.
+  The relevance gate itself is reused byte-for-byte in both; nothing about it was generalised,
+  copied, or parameterised.
+
+- **Alternatives considered:**
+  (a) SMTP/email as the notification channel — rejected: needs stored credentials, adding a
+  credential-management surface to a slice whose whole purpose is reaching real use quickly.
+  (b) A bundled notification provider integration — rejected by explicit approval clarification:
+  it would make a configuration choice into an architectural dependency.
+  (c) One merged `select_relevant()` call, as the planning note's wording implied — rejected on
+  the mechanism above; it would have regressed S5.3 silently, which is exactly the class of defect
+  the relevance gate was added to prevent.
+  (d) A new memory kind for personal facts — rejected: `memory_rules.yaml` already governs
+  `user_profile`/`user_schedule` with `always_keep` rules, and a new kind would have needed new
+  governance rules, i.e. new architecture, which the slice explicitly excludes.
+  (e) Generalising `select_relevant()` to handle both record families natively — rejected as
+  premature: it would modify a mechanism S5.3 shipped with measured, characterised behaviour,
+  ahead of any evidence that the adapter approach is insufficient.
+
+- **Why:** The slice closes the three concrete gaps the 2026-08-12 assessment identified — ordinary
+  conversation wrote nothing durable and retrievable, the one working retrieval seam saw only
+  formally-trained material, and the one notification mechanism had no channel outside the browser
+  tab — without introducing a new memory kind, consent gate, governance category, or write path.
+  Every capture is a *proposal* to the existing governed write path; nothing in the new code
+  decides whether content may be stored.
+
+- **Consequences:**
+  - `ROADMAP.md`'s "Usable POC — progressive vertical slices" section records slice 1 as done with
+    a completion record; its "Not yet approved for implementation" line is removed as now false.
+  - `docs/TILT.md`'s "First vertical slice" section is marked implemented, and its **acceptance-bar
+    wording is clarified** (wording only, no behaviour change): it previously read "recalled,
+    unprompted, in a later *unrelated* conversation," which read literally asks for a memory to
+    surface in a conversation it has nothing to do with — the opposite of correct behaviour, and
+    precisely what the relevance gate prevents. It now reads: *a fact stated in one conversation
+    can be relevantly recalled in a later separate conversation without the user restating the
+    fact.* The same clarification is carried in the planning note.
+  - One new runtime configuration value exists: `BARTHOLOMEW_NOTIFY_WEBHOOK_URL`. Unset (the
+    default) preserves the previous log-only behaviour exactly, so this is additive.
+  - **Slice 1's completion does not authorise slice 2.** Per `docs/TILT.md`, the next step is real
+    use of this slice; slice 2 is scoped from that feedback and needs its own approval. Stage 5
+    S5.4–S5.7 remain deferred, unchanged.
+  - Open issues #42 and #22 are untouched and remain open.
+- **Date:** 2026-08-14

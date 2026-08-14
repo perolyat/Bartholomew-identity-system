@@ -2,7 +2,16 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-08-12 (Usable POC / time-to-real-use prioritisation approved: a
+> **Last updated:** 2026-08-14 — **Usable POC slice 1 (Personal Memory Capture and Recall) is
+> implemented and approved** (`2d443a9`). Ordinary conversation now produces durable, retrievable
+> memory through the existing governed write path; chat retrieval sees it; and the `notify` skill
+> has a real outbound delivery channel. This closes the three gaps the 2026-08-12 assessment named
+> as the reason none of the built machinery had generated real feedback. **"Next 3 Moves" item 4 is
+> now the next move: put slice 1 into real-world use** — not further slice-1 engineering, per
+> `docs/TILT.md`. Slice 1's completion does not authorise slice 2. See `DECISIONS.md`'s "Usable POC
+> slice 1 implementation approved" entry.
+>
+> **Previously (2026-08-12):** Usable POC / time-to-real-use prioritisation approved: a
 > repository-grounded assessment found that persistence, governance, and competency-retrieval
 > machinery are well-built and well-tested, but ordinary use of Bartholomew has not yet generated
 > real feedback — most notably, ordinary conversation writes nothing durable and retrievable. New
@@ -642,21 +651,29 @@ approval before work begins — this list records sequencing, not authorisation)
    acquisition with provenance/consent, and Executive competency reasoning (relevance-gated
    retrieval and selection, wired into chat via `run_chat_through_runtime_contract`). See
    `ROADMAP.md`'s Stage 5 section for exit evidence and merge commits.
-3. **Plan and implement the first Usable POC vertical slice: Personal Memory Capture and
-   Recall** — added 2026-08-12, pending its own separate, explicit approval (this documentation
-   pass authorises planning discipline and documentation only, per `docs/TILT.md`). Extends the
-   existing consent-gated write path and the existing competency-retrieval seam to ordinary
-   conversational facts, plus one real notification delivery channel. See `docs/TILT.md`'s "First
-   vertical slice" section for the concrete scope and acceptance bar. **This is the first slice of
-   the Usable POC, not its full boundary** — see item 5 below.
-4. **Subsequent Usable POC vertical slices** (scope deliberately not fixed yet — see
+3. ✅ **Done 2026-08-14** (`2d443a9`). **The first Usable POC vertical slice: Personal Memory
+   Capture and Recall.** Planning note approved in `4de2962`, implementation approved separately
+   and explicitly, then delivered. Extends the existing consent-gated write path and the existing
+   competency-retrieval seam to ordinary conversational facts, plus one real notification delivery
+   channel (a provider-agnostic outbound webhook). See `ROADMAP.md`'s "Usable POC" section for the
+   completion record, `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` for the as-implemented detail and
+   known limitations, and `DECISIONS.md`'s "Usable POC slice 1 implementation approved" entry.
+   **This is the first slice of the Usable POC, not its full boundary** — see item 5 below.
+4. **← NEXT: put slice 1 into real-world use.** Per `docs/TILT.md`'s time-to-real-use principle,
+   the next move is not more slice-1 engineering: it is the tester actually using the capability,
+   so slice 2 can be scoped from real feedback rather than designed ahead of it. Configuring
+   `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` and running the capture/recall loop against a real endpoint is
+   the concrete step. Further hardening of slice 1 competes with this and, per `docs/TILT.md`,
+   generally loses — unless a defect threatens safety, governance, privacy, data integrity,
+   architectural validity, or the validity of the experiment itself.
+5. **Subsequent Usable POC vertical slices** (scope deliberately not fixed yet — see
    `docs/TILT.md`'s "Direction for later slices"): progressing toward proactive surfacing of
    something Bartholomew noticed, and at least one genuine governed action with a visible
    real-world result. Draws on the real, already-considered material in `ROADMAP.md`'s S5.4
    (experience → learning/consolidation loop) and S5.5–S5.7 (initiative safety scaffolding,
    dry-run, controlled live initiative) — deferred, not discarded, and to be scoped from slice 1's
    real feedback rather than designed ahead of it.
-5. **Everything else previously sequenced here** — the pre-2026-08-08 Stage 5 initiative-engine
+6. **Everything else previously sequenced here** — the pre-2026-08-08 Stage 5 initiative-engine
    work (now S5.5–S5.7) and the reflection-ownership implementation gap S5.4 was to close — remains
    real and remains on the roadmap. It follows the Usable POC slices above rather than preceding
    them; see `docs/TILT.md`'s "What is deferred" section for the full list and reasons.
