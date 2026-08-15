@@ -179,6 +179,15 @@ class KernelDaemon:
         # construction -- this wiring is new and additive, not yet a
         # safety-critical dependency the whole daemon should die without.
         self.identity_context = None
+        # The full loaded Identity, retained alongside the narrow
+        # IdentityContext projection above. IdentityContext deliberately
+        # carries only values/red-lines/tool-use policy, but the model layer
+        # needs `meta.deployment_profile` (runtimes, model policies), so the
+        # loaded object was previously parsed and then discarded. Kept here
+        # so the chat surface can build a real model adapter without a second
+        # load and a second source of truth. None whenever identity_context
+        # is None -- same permissive failure behaviour, no new dependency.
+        self.identity = None
         if identity_path:
             try:
                 from identity_interpreter.identity_context import build_identity_context
@@ -186,6 +195,7 @@ class KernelDaemon:
 
                 identity = load_identity(identity_path)
                 self.identity_context = build_identity_context(identity)
+                self.identity = identity
             except Exception as e:
                 logger.warning(
                     "Failed to load Identity Context from %s: %s -- "

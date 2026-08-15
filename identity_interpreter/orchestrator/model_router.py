@@ -65,6 +65,49 @@ class ModelRouter:
                 # Adapter unavailable, will use stub
                 pass
 
+        # With a working adapter, default to the real local backend and take
+        # its model from Identity.yaml's own selection policy rather than
+        # this module's hardcoded backend table.
+        #
+        # Both halves are required. Wiring the adapter alone changed nothing,
+        # because `default_backend` stayed "stub" and route()'s real-backend
+        # branch was never reached. Flipping the backend alone selected the
+        # hardcoded "mistral-medium", which is in neither Identity.yaml's
+        # model list nor LLMAdapter.model_mapping, so it reached Ollama
+        # unmapped and failed the model-existence check.
+        #
+        # Consulting select_model() here is the narrow, task_type="general"
+        # closure of the gap recorded in
+        # identity_interpreter/policies/model_router.py's docstring and
+        # MASTER_PLAN.md item 11.15: the live runtime previously ignored
+        # Identity.yaml's by_task_type policy entirely, and only the CLI and
+        # standalone chat.py honoured it. Nothing broader is taken on here --
+        # no per-request task typing, no budget/context-window routing.
+        #
+        # When no identity config is supplied, every line below is skipped
+        # and the stub default stands, so existing callers and tests are
+        # unaffected.
+        if self.llm_adapter is not None and config is None:
+            try:
+                from ..policies.model_router import select_model
+
+                decision = select_model(identity_config, task_type="general")
+                model_name = decision.decision["model"]
+                parameters = decision.decision.get("parameters", {})
+
+                self.config["default_backend"] = "local"
+                self.config["backends"]["local"] = {
+                    "model": model_name,
+                    "temperature": parameters.get("temperature", 0.2),
+                }
+                self.config["default_model"] = model_name
+            except Exception:
+                # Identity did not yield a usable model selection. Leave the
+                # stub default in place rather than guessing a model name --
+                # a wrong name would fail at the provider with a confusing
+                # error instead of here, quietly.
+                pass
+
     def _default_config(self) -> dict[str, Any]:
         """Return default routing configuration."""
         return {
