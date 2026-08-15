@@ -802,7 +802,7 @@ The Architect should:
 - Prefer simplification over expansion.
 - Actively identify architectural debt.
 - Preserve the five-pillar architecture unless there is compelling evidence to change it.
-- **Surface, rather than silently resolve, any conflict with the eight properties listed in "One
+- **Surface, rather than silently resolve, any conflict with the nine properties listed in "One
   Platform, Many Personal Bartholomews" → "Conflict-surfacing rule" above.** Implementation
   convenience is never sufficient reason to trade one of them away unannounced.
 - Design for a system expected to evolve over decades, not months.

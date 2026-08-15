@@ -6,9 +6,17 @@
 > `docs/TILT.md` is a reference, not an authority. Where this file and a canonical document
 > disagree, the canonical document wins.
 >
-> **Status: PROPOSED — awaiting user approval. Nothing is committed.** Per `MASTER_PLAN.md`'s Doc
-> Governance section and `CHECKLISTS.md`'s Commit authorization checklist, no doc or code change is
-> committed without explicit user authorisation.
+> **Status: APPROVED AND COMMITTED (2026-08-15).** The changes this document proposed were approved
+> by the user and committed as `af5857b` (platform/personal-identity architecture) and `b01e129`
+> (Parking Brake authority tiers), with follow-up corrections in `07ab724` and later, on branch
+> `claude/bartholomew-platform-identity-architecture-xzwxfc` (PR #50). Approval was explicit, per
+> `MASTER_PLAN.md`'s Doc Governance section and `CHECKLISTS.md`'s Commit authorization checklist.
+>
+> **Everything below this line is a pre-commit snapshot, preserved verbatim as the review record.**
+> Its "PROPOSED", "awaiting approval", "nothing is committed" and discard-instruction wording
+> (notably §9) describes the state *at the time of review* and is **no longer the governance
+> state** — do not read it as current. It is kept unedited so the review that led to approval
+> remains auditable.
 >
 > **Purpose:** to let the proposed documentation changes be reviewed independently, and to preserve
 > the code findings so they are not rediscovered from scratch.

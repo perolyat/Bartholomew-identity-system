@@ -44,9 +44,10 @@ direction, and it carries a **conflict-surfacing rule that applies to coding age
   multi-user, tenancy, authentication or distributed infrastructure — see `ROADMAP.md`'s "What we
   will not do yet". The constraint is on how *new* code is shaped, not a mandate to refactor.
 
-**If a change you are about to make would materially jeopardise any of the eight properties listed
-in that section's "Conflict-surfacing rule", stop and tell the user about the conflict before
-implementing it.** Trading one of them away for implementation convenience, without surfacing it,
+**If a change you are about to make would materially jeopardise any of the nine properties listed
+in that section's "Conflict-surfacing rule" — including property 9, the Personal/User vs
+Platform/Admin Parking Brake authority tiers and their precedence — stop and tell the user about
+the conflict before implementing it.** Trading one of them away for implementation convenience, without surfacing it,
 is a governance violation. `CHECKLISTS.md`'s "Platform and personal-identity architecture
 checklist" is the operational form of this rule.
 

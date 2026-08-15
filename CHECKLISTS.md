@@ -100,12 +100,13 @@ asks *where authority sits*, not *whose Bartholomew this is*.
 The first item is the binding one. The rest are the questions that reveal whether it applies.
 
 - **PASS/BLOCKED — Conflict surfaced, not silently resolved:** if this change would materially
-  jeopardise any of the eight properties named in `CONSTITUTION.md`'s conflict-surfacing rule
+  jeopardise any of the nine properties named in `CONSTITUTION.md`'s conflict-surfacing rule
   (one platform / many identities; strong isolation; persistence of individual identity;
   portability of identity and state; Bartholomew-is-not-the-LLM separation; hybrid/local
   Governance authority; eventual lightweight client; ability to replace infrastructure or models
-  without replacing the person's Bartholomew), **the conflict has been explicitly put to the user
-  before implementation.** Implementation convenience is not a resolution.
+  without replacing the person's Bartholomew; the two Parking Brake authority tiers and their
+  precedence), **the conflict has been explicitly put to the user before implementation.**
+  Implementation convenience is not a resolution.
 - **PASS/BLOCKED — Ownership representable later:** any new persisted personal state could later
   acquire an owner without redesign (no new *global* uniqueness constraint over personal data, no
   new record type whose ownership would be unrecoverable).
