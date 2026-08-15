@@ -2,9 +2,38 @@
 Model Router
 ------------
 Routes requests to appropriate LLM backends based on configuration.
+
+Backend *routing* + generation only. Identity-policy-driven model
+*selection* ("which model does this Identity prefer for this task type?")
+belongs to `identity_interpreter.policies.model_router.select_model` --
+see that module's docstring, and MASTER_PLAN.md item 11.15, for why these
+are two concepts rather than a duplicate pair.
 """
 
 from typing import Any
+
+
+class ModelBackendError(RuntimeError):
+    """
+    A real model backend was selected and could not produce a generation.
+
+    Raised instead of returning placeholder text, so that no caller can
+    mistake a provider failure for a genuine model response. Carries the
+    backend/model/reason so a caller can render a truthful degraded state.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend: str,
+        model: str | None = None,
+        reason: str | None = None,
+    ):
+        super().__init__(message)
+        self.backend = backend
+        self.model = model
+        self.reason = reason
 
 
 class ModelRouter:
@@ -72,18 +101,50 @@ class ModelRouter:
         """
         Execute routing and return LLM response.
 
+        A backend that is *supposed* to produce a real generation must never
+        answer with mock text. Before 2026-08-15 this method fell through to
+        a `"Mock response for: ..."` placeholder whenever a real backend was
+        selected but failed -- an unreachable Ollama, a model that isn't
+        pulled, a timeout, or an unlisted backend name. The caller could not
+        distinguish that string from a genuine answer, so a provider outage
+        surfaced to the user as a fabricated conversational reply, and a
+        real-world test session could silently record mock output as real
+        model behaviour. Now only the explicit `stub` backend returns stub
+        text; every other backend either returns a genuine generation or
+        raises ModelBackendError.
+
         Args:
             data: Request data with prompt and routing information
 
         Returns:
             LLM response string
+
+        Raises:
+            ModelBackendError: the selected backend is a real one and could
+                not produce a generation. Callers are expected to surface
+                this as a truthful failure/degraded state, never to
+                substitute text of their own.
         """
         route = self.select_route(data)
         prompt = data.get("prompt", data.get("user_input", ""))
         backend = route["backend"]
 
-        # Use LLM adapter for local/ollama backends
-        if backend in ["local", "ollama"] and self.llm_adapter:
+        # The explicit stub backend -- the only path allowed to return text
+        # that did not come from a model. Unchanged behaviour, and still the
+        # default when no identity config was supplied.
+        if backend == "stub":
+            return f"[{route['model']}] Mock response for prompt: {prompt[:50]}..."
+
+        # Real backends: local/ollama via the adapter.
+        if backend in ("local", "ollama"):
+            if self.llm_adapter is None:
+                raise ModelBackendError(
+                    f"Backend {backend!r} requires an LLM adapter, but none was "
+                    "constructed (ModelRouter was built without an identity config).",
+                    backend=backend,
+                    model=route["model"],
+                    reason="adapter_unavailable",
+                )
             try:
                 result = self.llm_adapter.generate(
                     prompt=prompt,
@@ -91,15 +152,32 @@ class ModelRouter:
                     parameters=route["parameters"],
                     context=data,
                 )
-                if result.get("success"):
-                    return result.get("response", "")
-                # Fallback to stub on error
-            except Exception:
-                pass
+            except Exception as exc:  # adapter raised rather than returning
+                raise ModelBackendError(
+                    f"Backend {backend!r} raised while generating: {exc}",
+                    backend=backend,
+                    model=route["model"],
+                    reason="adapter_exception",
+                ) from exc
 
-        # Stub response for testing/fallback
-        if backend == "stub":
-            return f"[{route['model']}] Mock response for prompt: {prompt[:50]}..."
+            if result.get("success"):
+                return result.get("response", "")
 
-        # Placeholder for other backends
-        return f"[{route['model']}] Mock response for: {prompt[:80]}..."
+            # The adapter reports failures as structured data rather than
+            # exceptions (connection_failed, model_not_available, timeout,
+            # ollama_disabled, empty_prompt). Preserve its own reason.
+            raise ModelBackendError(
+                result.get("response") or f"Backend {backend!r} failed to generate.",
+                backend=backend,
+                model=result.get("model", route["model"]),
+                reason=result.get("error", "generation_failed"),
+            )
+
+        # Any other configured backend (openai/anthropic today) has no
+        # implementation. Say so rather than emitting placeholder prose.
+        raise ModelBackendError(
+            f"Backend {backend!r} is configured but not implemented.",
+            backend=backend,
+            model=route["model"],
+            reason="backend_not_implemented",
+        )
