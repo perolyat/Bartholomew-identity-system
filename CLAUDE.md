@@ -85,6 +85,18 @@ history).
 `CONSTITUTION.md` ~51KB). Do not read them end to end. Grep for the specific section or entry, then
 read that region. Reading a whole canonical doc to answer a narrow question is a context-budget bug.
 
+**Routing skills do this for you.** Five skills in `.claude/skills/` map the large docs and load
+themselves when the work matches — they hold section anchors and grep strategy, not copies of the
+content, so there is nothing to keep in sync:
+
+| Skill | Routes to | Fires when |
+|---|---|---|
+| `runtime-map` | `COGNITIVE_RUNTIME.md` | runtime loop, Experience Kernel, memory/reflection, subsystem ownership |
+| `interfaces` | `INTERFACES.md` | changing a signature, schema, route, or audit record |
+| `ci-triage` | `CI.md`, `TEST_MATRIX.md` | CI failures, test planning, before claiming tests pass |
+| `product-principles` | `CONSTITUTION.md` | product/identity questions — *should we*, not *how* |
+| `risk-check` | `RISKS.md`, `ASSUMPTIONS.md` | finding a defect, or relying on an unvalidated premise |
+
 ---
 
 ## 5. Commands that are actually correct here

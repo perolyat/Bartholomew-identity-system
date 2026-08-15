@@ -262,10 +262,27 @@ themselves.
   versions. Runs synchronously, remote sessions only. Validated 2026-08-15: pinned ruff 0.14.3 and
   black 26.3.1 resolve correctly, lint and tests pass.
 - **`.claude/settings.json`** — registers the hook, pre-approves read-only and test commands.
+**Governance skills** — encode the rituals:
+
 - **`.claude/skills/ssot-check`** — check a claim against the 14 canonical docs before writing.
 - **`.claude/skills/slice-plan`** — scope a slice against the TILT test; produce a planning note.
 - **`.claude/skills/approval-entry`** — draft the Approval Ledger line and `DECISIONS.md` entry in
   this repo's exact conventions.
+
+**Routing skills** — added 2026-08-15. The canonical docs total ~586KB, which previously reached a
+session only if Claude remembered to grep for it. These five carry section anchors and a grep
+strategy for the large docs and load automatically when the work matches:
+`runtime-map` (`COGNITIVE_RUNTIME.md`), `interfaces` (`INTERFACES.md`), `ci-triage` (`CI.md` +
+`TEST_MATRIX.md`), `product-principles` (`CONSTITUTION.md`), `risk-check` (`RISKS.md` +
+`ASSUMPTIONS.md`).
+
+They are **routers, not copies** — they point at headings and never duplicate content, so the
+canonical docs stay the single source and there is nothing to keep in sync. All 48 referenced
+headings were verified to resolve when the skills were written; they reference heading *text*
+rather than line numbers so they survive edits. If a doc is restructured, re-run that check.
+
+Note the design constraint: every skill's description sits permanently in context, so this layer
+works at roughly eight skills, not thirty. Adding more means choosing what to drop.
 
 Invoke the skills as `/ssot-check`, `/slice-plan`, `/approval-entry`. They also trigger
 automatically when a session's work matches their description.
