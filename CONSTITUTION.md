@@ -45,6 +45,20 @@
 > infrastructure, or Estate Management feature — see `ROADMAP.md`'s restructured Stage 5 for the
 > (unapproved-until-separately-approved) staged plan.
 >
+> **Amended 2026-08-15, follow-up pass** (Parking Brake authority tiers): the "One Platform, Many
+> Personal Bartholomews" section's hybrid/local-Governance subsection gains the requirement for two
+> distinct Parking Brake authority tiers — an independently enforceable **Personal/User** brake and
+> a separate higher-scope **Platform/Admin** brake — with their precedence stated (a platform halt
+> overrides personal autonomy/trust/approvals and cannot be overridden by a user; one user's brake
+> never halts another's), and the principle that brake scope is Governance authority enforced below
+> the presentation layer, not a UI feature. The **conflict-surfacing rule gains a ninth property**
+> covering these tiers. The scope/precedence semantics themselves live in `COGNITIVE_RUNTIME.md`'s
+> "Authority tiers" subsection, which is their canonical authority — this document states the
+> enduring requirement and does not restate the mechanics. Documentation-only; the current
+> single-user brake conceptually *is* the Personal/User tier and is sufficient, and no
+> Platform/Admin tier should be built now. See `DECISIONS.md`'s "Parking Brake authority tiers"
+> entry.
+>
 > **Amended 2026-08-15** (platform/personal-identity architecture, per this document's own
 > governance rule — recorded explicitly with rationale): added a new "One Platform, Many Personal
 > Bartholomews" section establishing that Bartholomew is ultimately **one shared platform serving
@@ -500,6 +514,24 @@ the independent-emergency-shutdown invariant below (§1), and it constrains any 
 lightweight-client design: the client is allowed to be thin in cognition, but never thin in the
 ability to stop.
 
+**Two Parking Brake authority tiers are therefore required** (added 2026-08-15): a
+**Personal/User** brake, independently enforceable, halting execution for that one personal
+Bartholomew without affecting any other user's; and a separate, higher-scope **Platform/Admin**
+brake allowing authorised platform governance to halt execution platform-wide in a serious safety,
+security, governance, systemic-defect or critical-operational emergency, without disabling users
+one at a time. An active Platform/Admin halt overrides subordinate personal autonomy permissions,
+trust levels, approvals and execution authority — **a user must not be able to override a
+platform-wide safety halt through personal settings** — while one user's Personal brake must never
+stop another user's Bartholomew. The Platform tier adds an authority above the user; it removes
+nothing from the local authority described in the paragraph above. Parking Brake scope is
+**Governance authority, not a UI feature**: the halt must be enforced below the presentation layer
+at the execution boundary, and a client crashing, disconnecting or being bypassed must not by
+itself invalidate the halt state. `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`" →
+"Authority tiers" section is the **canonical authority** for these scope and precedence semantics
+and is not restated here; see `DECISIONS.md` for the decision record. This requires no
+implementation now — the current single-user brake conceptually *is* the Personal/User tier and is
+sufficient at this stage.
+
 ### Strong isolation between personal identities is non-negotiable
 
 One user's Bartholomew must never accidentally receive, expose, infer from, modify, act upon, or
@@ -574,7 +606,14 @@ and never trade it away silently for implementation convenience:
 6. hybrid architecture and local Governance authority (including the ability to stop Bartholomew
    locally during a cloud outage);
 7. the eventual lightweight-client architecture;
-8. the ability to replace infrastructure or models without replacing the person's Bartholomew.
+8. the ability to replace infrastructure or models without replacing the person's Bartholomew;
+9. **the two Parking Brake authority tiers and their precedence** (added 2026-08-15) — an
+   independently enforceable Personal/User brake that never halts other users; a separate
+   platform-wide Platform/Admin brake that a user cannot override and that does not require
+   disabling users individually; and the enforcement of both below the presentation layer at the
+   execution boundary rather than in a client. Collapsing the tiers into one undifferentiated
+   switch, letting one user's brake affect another, or making a client the only thing holding the
+   halt state are conflicts under this rule, not implementation details.
 
 Surfacing the conflict is the requirement; the user may then decide. Proceeding without surfacing
 it is a governance violation, not a judgement call. See `CHECKLISTS.md`'s "Platform and

@@ -363,8 +363,14 @@ mandate to change existing code.
 
 ### The kill-switch: `ParkingBrake`
 
-One global brake (`system_flags` table), with scopes. `engage("skills")` blocks only that
-scope; `engage()` with no args defaults to `"global"`, which blocks everything. Fail-closed:
+> **This section is the canonical authority for Parking Brake scope, authority tiers, and
+> precedence.** Other documents reference it; they do not restate it. See "Authority tiers" below
+> — a reader who takes "one brake" to mean "one undifferentiated switch shared by every personal
+> Bartholomew" has misread this section, and that reading is explicitly wrong as architectural
+> direction.
+
+One brake per deployment today, with scopes. `engage("skills")` blocks only that scope;
+`engage()` with no args defaults to `"global"`, which blocks everything. Fail-closed:
 if the brake check itself errors, treat it as blocked (see `SkillRegistry._is_blocked_by_brake()`
 and `runtime_contract.py`'s governance stage — both catch-and-deny rather than catch-and-allow).
 
@@ -382,6 +388,95 @@ Live call sites today, each checking a different scope:
 As of item 11.21, the `sight`/`voice` scopes are no longer brake-*only*: those two seams run the
 brake check, then the same additive Identity Policy Decision the other surfaces use, then an
 always-required fail-closed device consent gate, before their (inert Stage 6) capability.
+
+**Where brake state actually lives (corrected 2026-08-15).** This section previously read "one
+global brake (`system_flags` table)", which Phase B overtook. Since stage **B6**, the write
+authority is `GovernanceStore` (`parking_brake_state` + `governance_audit`, in
+`bartholomew/orchestrator/safety/governance_store.py`) — `bartholomew/cli.py`'s `brake on`/
+`brake off`, the `skills` gate and the `scheduler` gate all go through it. The legacy
+`ParkingBrake`/`BrakeStorage` pair (`system_flags`) still exists and is still what the `sight` and
+`voice` seams read. That split is **known and deliberately deferred**, not newly discovered: B4
+found those paths unreachable (no live caller) and deferred consolidation; `docs/B6_EXTERNAL_
+GOVERNANCE_CLI_SAFETY.md` §1 finding 5 re-confirmed and again deferred it. It is not a live safety
+hole today because the capability behind those seams is inert. See `RISKS.md`'s tech-debt watchlist
+for why it matters more under the authority tiers below.
+
+#### Authority tiers: Personal/User and Platform/Admin (added 2026-08-15)
+
+*(Architectural direction, **not** current implementation. Required by `CONSTITUTION.md`'s "One
+Platform, Many Personal Bartholomews" and recorded in `DECISIONS.md`. Nothing here authorises
+implementation — see "Current PoC mapping" below for what exists now, which is sufficient.)*
+
+Once the platform serves many personal Bartholomews, there must be **two distinct Parking Brake
+authority tiers**. They are a MUST-HAVE pair; narrower governance scopes are possible future
+extensibility only (see "Not now" below).
+
+| Tier | Who may activate | What it halts | Authority |
+|---|---|---|---|
+| **Personal/User Parking Brake** | the user, for their own Bartholomew | relevant execution for **that personal Bartholomew only** — autonomous actions, scheduled execution, capability execution, external side effects, device/environment control | the user is the ultimate authority over execution performed on their behalf |
+| **Platform/Admin Parking Brake** | authorised platform administration/governance | relevant execution **across the entire platform**, in a serious safety, security, governance, systemic-defect, critical-operational or other platform-wide emergency | higher scope; overrides subordinate personal autonomy permissions, trust levels, approvals and execution authority |
+
+**The tiers are orthogonal to the existing `scopes` axis, and must not be conflated with it.**
+Today's scopes (`global`, `skills`, `sight`, `voice`, `scheduler`, `training`) answer *what class
+of execution is halted*. The tiers answer *whose execution stops, and on whose authority*. Adding
+`"platform"` as another string alongside `"skills"` would be a category error and an actual safety
+defect: it would make a platform-wide halt clearable by the same ordinary `disengage()` any user
+can call. A platform halt is a different authority, not a bigger scope.
+
+**Precedence rules (unambiguous, in order):**
+
+1. An active **Platform/Admin** brake overrides personal settings, autonomy level, trust level,
+   prior approvals and execution authority. **A user must not be able to override it** through any
+   personal control, setting, or accumulated trust.
+2. A **Personal/User** brake halts only that personal Bartholomew. One user engaging their brake
+   **must never** stop, degrade, or alter the authority or state of any other user's Bartholomew.
+3. The tiers compose **restrictively, never permissively**: execution proceeds only if *neither*
+   tier blocks it. Disengaging one tier never implies disengaging the other. This preserves the
+   existing "the brake can only become more restrictive without an explicit, confirmed loosening
+   action" invariant `GovernanceStore` already implements via revision-guarded `disengage()`.
+4. A platform-wide halt **must not require** administrators to disable users individually; and
+   individually disabling users is not a substitute for it.
+
+**Local enforceability is not optional, and the Platform tier does not replace it.** Per
+`CONSTITUTION.md`'s hybrid/local Governance requirement and `DECISIONS.md`'s hybrid local-first
+entry: wherever Bartholomew can act on a user's local devices or physical/digital environment,
+that user must retain a **locally enforceable** means of stopping their own Bartholomew even when
+central services are unavailable, connectivity is lost, or the remote platform is malfunctioning.
+**A platform outage must never leave local autonomous execution unstoppable.** The Platform/Admin
+tier adds an authority above the user; it removes nothing from the user's local authority over
+their own devices.
+
+**Parking Brake scope is Governance authority, not a UI feature.** A client may expose controls,
+but the halt must be enforced below the presentation layer, at the execution boundary — which is
+where the live gates already sit (`SkillRegistry.execute_action()`, the Runtime Contract's
+Governance stage, the scheduler drive path). A client disappearing, crashing, being bypassed, or
+losing connectivity **must not by itself invalidate the underlying halt state.** The current
+implementation already satisfies this shape: state is persisted and re-read fail-closed at the
+gate, not held in a UI session.
+
+**Designs that are ruled out** — each is a defect, not a trade-off: one undifferentiated global
+brake boolean used for every user; one user's brake stopping every user; one user's brake
+affecting another user's authority or state; no independent platform-wide emergency halt; users
+able to override a platform safety halt; central infrastructure as the *only* mechanism capable of
+stopping local execution; a platform-wide halt that requires disabling users one at a time.
+
+**Not now.** Narrower governance scopes — globally disabling one defective capability, suspending
+one integration, disabling an execution class while preserving read-only cognition, isolating a
+compromised subsystem — are recognised as **possible future extensibility only**. Do not design or
+implement that system. The two MUST-HAVE tiers are Personal/User and Platform/Admin.
+
+**Current PoC mapping.** This deployment serves exactly one personal Bartholomew identity
+(`ASSUMPTIONS.md` A9), so the existing brake **conceptually is the Personal/User Parking Brake**,
+and is sufficient at this stage. It is global only because there is exactly one user for it to be
+global over — not because a single undifferentiated switch is the intended architecture. **No
+Platform/Admin tier exists, and none should be built now**; with one deployment and one user there
+is no platform to halt and no administrator distinct from the user. The migration seam to preserve
+is simply that brake state and its gates must eventually be able to answer *whose* brake and
+*which tier* — which is the same ownership seam recorded under "Personal-identity ownership"
+above, applied to Governance. The relevant consequence for the deferred sight/voice consolidation:
+tier awareness must be added **once**, in `GovernanceStore`, not twice — so the legacy-reading
+seams should be consolidated onto `GovernanceStore` *before* tiers are introduced, or they would
+silently not honour them.
 
 ### Identity Context → Executive → Policy Decision
 

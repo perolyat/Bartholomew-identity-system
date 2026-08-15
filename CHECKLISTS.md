@@ -120,6 +120,14 @@ The first item is the binding one. The rest are the questions that reveal whethe
   emergency shutdown, or local device permission enforcement behind a remote service, and does not
   create a state where a cloud/service outage leaves the user unable to stop Bartholomew acting on
   their devices.
+- **PASS/BLOCKED — Parking Brake tiers and precedence respected:** if the change touches the
+  Parking Brake, a Governance gate, or anything that could halt execution, it does not collapse the
+  Personal/User and Platform/Admin tiers into one undifferentiated switch, does not let one user's
+  brake affect another user's execution or authority, does not make a platform-wide halt
+  user-overridable or require disabling users individually, and does not move enforcement into a
+  client such that a crash, disconnection or bypass could invalidate the halt state. New brake
+  scopes are *subsystem* scopes and are **not** a way to express an authority tier — see
+  `COGNITIVE_RUNTIME.md`'s "Authority tiers" subsection, the canonical authority.
 - **PASS/BLOCKED — Personal learning stays personal:** the change does not route personal memory,
   personal context, or user-identifying material into shared, platform-level, or cross-instance
   knowledge (see `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and

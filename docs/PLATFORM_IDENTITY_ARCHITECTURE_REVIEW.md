@@ -252,3 +252,121 @@ rm docs/PLATFORM_IDENTITY_ARCHITECTURE_REVIEW.md
 **Approval requested for:** committing the documentation changes listed in §3 to branch
 `claude/bartholomew-platform-identity-architecture-xzwxfc`. No code, schema, test, dependency or
 CI change is included or requested.
+
+---
+
+# Follow-up pass — Parking Brake authority tiers (2026-08-15)
+
+> Appended to this file rather than opening a second review document, per the no-doc-sprawl rule.
+> Targeted follow-up to the decision above; scope was deliberately not broadened.
+>
+> **Status: PROPOSED — awaiting user approval.** Nothing committed at time of writing.
+
+## A. Current implementation finding
+
+**1. What does the Parking Brake actually do today?** It is a persisted, fail-closed, scoped halt.
+`engage(*scopes)` writes state (defaulting to `{"global"}`); `is_blocked(scope)` returns
+`engaged and ("global" in scopes or scope in scopes)`; a failed check is treated as blocked
+(catch-and-deny, not catch-and-allow). It gates at the execution boundary, not in a UI:
+`SkillRegistry.execute_action()`, the Runtime Contract's chat Governance stage, the scheduler
+drive path, and the `sight`/`voice` seams.
+
+**2. What is its current scope?** A single deployment-wide brake with a *subsystem* scope axis:
+`global`, `skills`, `sight`, `voice`, `scheduler`, `training`. There is no user, tenant, or
+authority-tier dimension of any kind.
+
+**3. Is it effectively global only because the PoC has one user?** **Yes.** Nothing in the design
+expresses "all users" — there is exactly one personal Bartholomew for it to be global over
+(`ASSUMPTIONS.md` A9). The brake is best read today as the Personal/User tier with the user-scoping
+left implicit because it is currently unambiguous.
+
+**4. Does anything make future per-user + platform separation disproportionately difficult?**
+**No.** Two things actively help: `GovernanceStore` already persists brake state in its own
+governance-owned schema (`parking_brake_state`, `governance_audit` with an `actor` column) rather
+than in MemoryStore's tables, and it already implements revision-guarded `disengage()` — "the brake
+can only become more restrictive without an explicit, confirmed loosening action" — which is
+precisely the invariant the tiers' restrictive-composition rule needs. Adding tiers is an additive
+schema and predicate change, not a redesign.
+
+One ordering constraint was found, and it is **already known and deliberately deferred**, not a new
+discovery: the `sight`/`voice` seams still read the legacy `system_flags`-backed
+`ParkingBrake`/`BrakeStorage`, while the write authority moved to `GovernanceStore` in Phase B
+stage B6. B4 found this (paths unreachable, no live caller) and deferred consolidation;
+`docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §1 finding 5 re-confirmed and again deferred it. It is
+**not a live safety hole** — the capability behind both seams is inert (Stage 6). What is new is
+only the consequence: tier awareness must be added **once**, in `GovernanceStore`, so those seams
+must be consolidated onto it *before* tiers are introduced or before those capabilities become
+real, whichever comes first.
+
+**5. Is any code change justified NOW?** **No.** No live caller reaches the legacy-reading seams,
+the capability is inert, the deferral is pre-existing and tracked, and nothing about the tier
+decision requires code today. Fixing the split would be a small change to fail-closed governance
+code — worth doing deliberately, with tests, under its own approval, not as a side effect of a
+documentation pass.
+
+**6. Migration seam to document.** Brake state and its gates must eventually answer *whose* brake
+and *which tier* — the same ownership seam recorded under "Personal-identity ownership", applied to
+Governance — plus the consolidation-before-tiers ordering constraint above. Both are now recorded.
+
+## B. Required architecture interpretation
+
+The current single-user brake **conceptually is the Personal/User Parking Brake** and is sufficient
+at this stage. No Platform/Admin tier exists and none should be built now: with one deployment and
+one user there is no platform to halt and no administrator distinct from the user.
+
+The load-bearing insight, and the one most likely to be got wrong later: **the tiers are orthogonal
+to the existing `scopes` axis.** Scopes answer *what class of execution is halted*; tiers answer
+*whose execution stops, on whose authority*. Expressing a platform halt as a `"platform"` scope
+string would make it clearable by the same ordinary `disengage()` any user can call — turning a
+platform-wide safety halt into a user-overridable one, the exact property the requirement exists to
+prevent. This is called out explicitly in the canonical text as a category error.
+
+## C. Canonical documentation changed
+
+One authority, concise references elsewhere:
+
+| File | Role |
+|---|---|
+| `COGNITIVE_RUNTIME.md` § "The kill-switch: `ParkingBrake`" | **THE canonical authority** for brake scope, authority tiers and precedence. Gains an "Authority tiers" subsection (tier table, orthogonality warning, four precedence rules, local-enforceability requirement, Governance-not-UI principle, ruled-out designs, the not-now boundary for scoped suspension, and the current PoC mapping). Chosen because this section already owns brake scope semantics and the ownership table. Its stale "one global brake (`system_flags` table)" claim — the very sentence that would mislead a future architect — is corrected to reflect Phase B B6. |
+| `CONSTITUTION.md` | Enduring requirement only (~1 paragraph in the existing hybrid/local-Governance subsection), plus **property 9** on the conflict-surfacing rule. Explicitly defers mechanics to `COGNITIVE_RUNTIME.md`. |
+| `DECISIONS.md` | Decision record with alternatives (including why `"platform"`-as-a-scope is rejected) and relationship to the two prior entries. |
+| `CHECKLISTS.md` | One PASS/BLOCKED item on the existing platform/personal-identity checklist. |
+| `RISKS.md` | One tech-debt entry recording the known split-authority deferral and its new ordering constraint. |
+
+`ROADMAP.md` and `MASTER_PLAN.md` were **not** changed: the existing "What we will not do yet" line
+already covers platform infrastructure, and adding brake-specific text there would duplicate the
+authority rather than reference it.
+
+## D. Conflict-protection amendment
+
+**Yes — amended.** `CONSTITUTION.md`'s conflict-surfacing rule gains **property 9**: the two
+Parking Brake authority tiers and their precedence, naming three specific violations (collapsing
+the tiers into one switch, one user's brake affecting another, a client being the only thing
+holding halt state). `CHECKLISTS.md` carries the operational PASS/BLOCKED form. The agent-facing
+`.github/copilot-instructions.md` was not changed — it already points at the conflict-surfacing
+rule as a whole, so property 9 is picked up automatically without duplicating the list.
+
+## E. NOW vs DOCUMENT NOW / IMPLEMENT LATER
+
+**NOW:** documentation only (the five files above). No code, schema, tests, dependencies or CI.
+
+**DOCUMENT NOW / IMPLEMENT LATER:** the Personal/User tier made explicit rather than implicit; the
+Platform/Admin tier; tier-aware brake state and gate predicates; consolidating `sight`/`voice` onto
+`GovernanceStore` **before** tiers are introduced.
+
+**FUTURE PLATFORM WORK:** admin/governance services, distributed shutdown propagation, tenancy-aware
+brake storage, and any narrower scoped-suspension system (per-capability disable, integration
+suspension, read-only cognition, subsystem isolation) — recognised as possible extensibility only,
+explicitly not designed.
+
+## F. Code change required now
+
+**None.** No tenancy infrastructure, admin services, distributed shutdown, new databases, schema
+changes, or capability-scoping systems were added. No architectural trap was found that would become
+disproportionately expensive to correct later.
+
+## G. PoC scope confirmation
+
+Unchanged. `MASTER_PLAN.md`'s "Next 3 Moves" still has slice 1 into real-world use as the next move;
+no stage gate, exit criterion or sequencing moved; `docs/TILT.md` untouched. Nothing was merged to
+`main`.

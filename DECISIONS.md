@@ -2,7 +2,18 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-15 (one new decision added — "One shared Bartholomew platform; many
+> **Last updated:** 2026-08-15, second pass (one new decision added — "Parking Brake authority
+> tiers — Personal/User and Platform/Admin." A targeted follow-up to the same-day platform/personal-
+> identity decision: an independently enforceable per-user brake that never halts other users, plus
+> a separate higher-scope platform-wide brake a user cannot override and that does not require
+> disabling users individually. Records precedence, the orthogonality of tiers to the existing
+> subsystem `scopes` axis, and that brake scope is Governance authority enforced below the
+> presentation layer rather than a UI feature. Documentation-only — no code change authorised or
+> required; the current single-user brake conceptually *is* the Personal/User tier.
+> `COGNITIVE_RUNTIME.md`'s "Authority tiers" subsection is the canonical authority for the
+> semantics.)
+>
+> **Previously (2026-08-15, first pass):** one new decision added — "One shared Bartholomew platform; many
 > strongly isolated personal Bartholomew identities." Records the foundational distinction between
 > the shared platform, the replaceable underlying intelligence/models, and a user's persistent
 > personal Bartholomew; establishes that Bartholomew is not the LLM, that identity is portable
@@ -1518,4 +1529,92 @@
     distributed services, client/server split, migration systems — remains **FUTURE PLATFORM
     WORK**, requiring its own proposal and approval. It must not be pulled into the current PoC
     roadmap.
+- **Date:** 2026-08-15
+
+## Decision: Parking Brake authority tiers — Personal/User and Platform/Admin
+- **Decision:** The Parking Brake has **two distinct authority tiers**, and they are a MUST-HAVE
+  pair. A **Personal/User Parking Brake** is independently enforceable per personal Bartholomew: it
+  halts relevant execution — autonomous actions, scheduled execution, capability execution,
+  external side effects, device/environment control — for that user's Bartholomew only, and the
+  user remains the ultimate authority over execution performed on their behalf. A separate,
+  higher-scope **Platform/Admin Parking Brake** allows authorised platform administration/
+  governance to halt relevant execution across the entire platform in a serious safety, security,
+  governance, systemic-defect, critical-operational or other platform-wide emergency, **without
+  requiring every user's Personal brake to be activated individually.** Precedence is unambiguous:
+  an active Platform/Admin halt **overrides** subordinate personal autonomy permissions, trust
+  levels, approvals and execution authority, and **a user must not be able to override it** through
+  personal settings; conversely one user's Personal brake **must never** halt, degrade, or alter
+  the authority or state of another user's Bartholomew. The tiers compose **restrictively** —
+  execution proceeds only if neither blocks it, and disengaging one never implies disengaging the
+  other. The tiers are **orthogonal to the existing subsystem `scopes` axis** (`global`, `skills`,
+  `sight`, `voice`, `scheduler`, `training`), which answers *what* is halted rather than *whose
+  execution stops on whose authority*. Brake scope is **Governance authority, not a UI feature**:
+  enforcement sits below the presentation layer at the execution boundary, and a client crashing,
+  disconnecting, or being bypassed must not by itself invalidate the halt state. The Platform tier
+  **does not replace local user authority**: wherever Bartholomew can act on a user's local devices
+  or environment, that user must retain a locally enforceable means of stopping their own
+  Bartholomew even when central services are unavailable, connectivity is lost, or the platform is
+  malfunctioning — a platform outage must never leave local autonomous execution unstoppable.
+  `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`" → "Authority tiers" subsection is the
+  canonical authority for these semantics. This entry is **documentation-only and authorises no
+  implementation.**
+- **Alternatives considered:** (a) **Add `"platform"` as another string in the existing `scopes`
+  set** — rejected, and specifically called out as a category error in the canonical text because
+  it is the most likely wrong turn: scopes are cleared by the same ordinary `disengage()` any user
+  can call, so a platform-wide safety halt expressed as a scope would be **user-overridable**,
+  which is precisely the property this decision exists to guarantee against. It would also
+  conflate "what class of execution is halted" with "on whose authority" — two genuinely different
+  axes. (b) **Rely on a single global brake and activate it per user at incident time** — rejected:
+  it makes a platform-wide emergency halt an O(users) operation performed under incident
+  conditions, which is exactly when it will be slowest and least reliable, and it provides no
+  mechanism a user cannot simply undo. (c) **Put the platform halt in the client or admin UI** —
+  rejected: a halt that a client crash, disconnection, or bypass can invalidate is not a safety
+  control. (d) **Build the two tiers now** — rejected as premature platform work: with one
+  deployment and one user there is no platform to halt and no administrator distinct from the user,
+  so the tier would be untestable against any real requirement and would violate `docs/TILT.md`.
+  (e) **Design the narrower scoped-suspension system now** (disable one defective capability
+  platform-wide, suspend an integration, allow read-only cognition, isolate a compromised
+  subsystem) — rejected as explicitly out of scope; recognised as possible future extensibility
+  only, not a MUST-HAVE, and not to be designed or implemented now.
+- **Why:** The move to one shared platform serving many personal Bartholomews creates a governance
+  question the single-user brake never had to answer: *whose execution stops, and who may stop it?*
+  Left unstated, the most natural reading of the existing implementation — one persisted brake row,
+  one `is_blocked(scope)` check — is that "Parking Brake" means one undifferentiated switch shared
+  by everyone. That reading is cheap to prevent now with documentation and expensive to reverse
+  after a platform exists, because both failure directions are severe: a global brake that any user
+  can trip halts unrelated people's Bartholomews, and a brake with no platform tier leaves no way
+  to stop a systemic defect except user-by-user. Recording precedence explicitly also settles the
+  case that would otherwise be argued at incident time — whether accumulated personal trust or
+  autonomy level can outrank a platform safety halt. It cannot.
+- **Relationship to existing decisions:** **Extends** "One shared Bartholomew platform; many
+  strongly isolated personal Bartholomew identities" (2026-08-15) — this is the Governance-authority
+  consequence of that decision, and property 9 of its conflict-surfacing rule. **Bounded by**
+  "Deployment architecture — hybrid local-first" (2026-07-28), whose requirement that governance
+  and emergency shutdown never depend on cloud availability is what forbids reading the
+  Platform/Admin tier as central-only control. **Consistent with** `CONSTITUTION.md`'s
+  independent-emergency-shutdown invariant (§1) and with `GovernanceStore`'s existing
+  revision-guarded `disengage()` invariant ("the brake can only become more restrictive without an
+  explicit, confirmed loosening action"), which the restrictive-composition rule preserves rather
+  than replaces.
+- **Consequences:**
+  - `COGNITIVE_RUNTIME.md`'s kill-switch section becomes the explicit canonical authority for brake
+    scope, tiers and precedence, and gains an "Authority tiers" subsection. Its stale claim that
+    brake state lives in `system_flags` is corrected: since Phase B stage B6 the write authority is
+    `GovernanceStore` (`parking_brake_state`).
+  - `CONSTITUTION.md` states the enduring two-tier requirement concisely and adds a **ninth
+    property** to the conflict-surfacing rule; it does not restate the mechanics.
+  - `CHECKLISTS.md`'s platform/personal-identity checklist gains one brake-tier item.
+  - `RISKS.md` gains one tech-debt entry sharpening an **already-known, already-deferred** finding:
+    the `sight`/`voice` seams still read the legacy `system_flags`-backed `ParkingBrake` while the
+    write authority is `GovernanceStore` (found by B4, re-confirmed and deferred by B6 §1 finding
+    5). Not a live safety hole — the capability behind those seams is inert, and no live caller
+    reaches them — but under the tier model it acquires a new consequence: **tier awareness must be
+    added once, in `GovernanceStore`,** so those seams should be consolidated onto it *before*
+    tiers are introduced, or they would silently not honour them.
+  - **No code change is authorised by this entry**, and none is required. The current single-user
+    brake conceptually *is* the Personal/User tier and is sufficient for this stage; it is global
+    only because there is exactly one user for it to be global over.
+  - The Platform/Admin tier, tenancy-aware brake state, admin services, and any scoped-suspension
+    system remain **FUTURE PLATFORM WORK** under `ROADMAP.md`'s "What we will not do yet". No
+    stage's scope changed.
 - **Date:** 2026-08-15

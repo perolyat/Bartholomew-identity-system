@@ -2,7 +2,16 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-15 (three new tech-debt watchlist items added, all found by a
+> **Last updated:** 2026-08-15, second pass (one tech-debt watchlist item added: the Parking Brake's
+> split read/write authority — `sight`/`voice` still read the legacy `system_flags`-backed
+> `ParkingBrake` while the write authority has been `GovernanceStore` since Phase B stage B6. **Not
+> a new finding and not a live safety hole** — B4 and B6 §1 finding 5 both found it and deferred it,
+> and the capability behind those seams is inert. Recorded canonically because the new Parking Brake
+> authority tiers give it an ordering constraint: consolidate those seams onto `GovernanceStore`
+> *before* tiers are introduced. No fix authorised. See `DECISIONS.md`'s "Parking Brake authority
+> tiers" entry.)
+>
+> **Previously (2026-08-15, first pass):** three new tech-debt watchlist items added, all found by a
 > repository-grounded review for the platform/personal-identity architecture decision — the
 > globally-unique `memories(kind, key)` index with no ownership dimension; personal runtime state
 > held in module-level singletons; and the absence of an on-behalf-of identity on scheduler drives
@@ -183,6 +192,24 @@
 
 ## Tech debt watchlist
 
+- **(2026-08-15, second pass) Parking Brake read/write authority is split — known, deferred, and
+  newly consequential under the authority-tier model.** Since Phase B stage **B6** the brake's
+  write authority is `GovernanceStore` (`parking_brake_state`): `bartholomew/cli.py`'s
+  `brake on`/`brake off`, the `skills` gate and the `scheduler` gate all use it. The `sight` and
+  `voice` seams in `bartholomew/kernel/runtime_contract.py` still read the **legacy**
+  `ParkingBrake`/`BrakeStorage` pair (`system_flags`). **This is not a new finding and not a live
+  safety hole:** B4 found those paths unreachable (no live caller) and deferred consolidation, and
+  `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §1 finding 5 re-confirmed and again deferred it; the
+  capability behind both seams is inert (Stage 6), so nothing real is ungated today, and R1's
+  brake-coverage tests exercise the legacy path directly rather than through the CLI. **What
+  changed on 2026-08-15** is the consequence, not the facts: under the Personal/Platform authority
+  tiers now recorded in `COGNITIVE_RUNTIME.md`, tier awareness must be added **once**, in
+  `GovernanceStore`. If the legacy-reading seams are still present when tiers are introduced, they
+  would silently not honour them — a per-user or platform-wide halt that `sight`/`voice` ignore.
+  **Risk category:** safety / architectural migration. **Action:** none now — no code change is
+  authorised or required, and the existing deferral stands. **The ordering constraint is the
+  deliverable:** consolidate `sight`/`voice` onto `GovernanceStore` *before* introducing authority
+  tiers or making those capabilities real, whichever comes first.
 - **(2026-08-15) `memories` is uniquely indexed on `(kind, key)` globally, with no ownership
   dimension.** `bartholomew/kernel/memory_store.py` declares
   `CREATE UNIQUE INDEX uq_memories_kind_key ON memories(kind, key)`. Correct and desirable for a
