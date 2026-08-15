@@ -14,7 +14,7 @@ consent-first, governance-first system — treat them as a deliverable, not book
 | Change | Records required |
 |---|---|
 | Any approved change | `MASTER_PLAN.md` Approval Ledger line |
-| Architectural choice, or one with rejected alternatives | + `DECISIONS.md` entry **and** header note |
+| Architectural choice, or one with rejected alternatives | + `DECISIONS.md` entry **and** header note **and** a Decision Index row |
 | Newly discovered defect, debt, or unresolved disagreement | + `RISKS.md` watchlist entry |
 | New unvalidated premise | + `ASSUMPTIONS.md` entry |
 | New recurring gate to enforce | + `CHECKLISTS.md` line |
@@ -74,6 +74,27 @@ cross-references to every other canonical doc touched in the same pass.
 - **Consequences**, including what it extends rather than replaces.
 - **Authority pointer** — which canonical document now owns the semantics.
 - **What is explicitly NOT authorised** by this decision.
+
+## The Decision Index (same pass, not later)
+
+A filterable index over `DECISIONS.md` lives in Superhuman Docs:
+`https://docs.superhuman.com/d/_dn6FoFX71SV` (table `Decisions`). It holds **metadata only** —
+Title, Date, Status, Scope, Context — never decision content. `DECISIONS.md` stays canonical; if
+the two disagree, the file wins and the index is wrong.
+
+**When you add a `DECISIONS.md` entry, add the row in the same pass.** Deferring it is how the two
+drift, and drift is the failure this repository has already spent two reconciliation passes
+undoing.
+
+- **Title** must be the exact `## Decision: <title>` heading text, so the row is greppable.
+- **Status** is `Active`, `Amended` (the entry carries a dated `**Amended**` note), or
+  `Superseded`.
+- **Scope** drives the filtering — tag from the existing vocabulary (consent/privacy, parking
+  brake, persistence, scheduler, runtime, memory, identity, CI/testing, governance, docs, roadmap,
+  competency, deployment, platform) rather than inventing new tags.
+
+Drift check: `grep -c "^## Decision" DECISIONS.md` should equal the index row count (43 as of
+2026-08-15).
 
 ## Corrections
 

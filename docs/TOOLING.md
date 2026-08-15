@@ -142,26 +142,53 @@ it is not today.
 
 ---
 
-## 3. Blocked: Superhuman Docs
+## 3. Superhuman Docs — indexes and pre-decision material
 
-**Status:** connected and authenticated, but **unusable** as of 2026-08-15.
+**Status:** connected and working. Workspace `ws-1F1Ssyljdw`.
 
-`whoami` returns the account with **zero workspaces**, `search` returns nothing, and
-`document_create` fails with an internal error — there is no personal folder to create into. To fix
-it, sign in at docs.superhuman.com and create a workspace/doc once; the connector should work after
-that.
+*Corrected 2026-08-15: this section previously recorded the connector as unusable, on the evidence
+that `whoami` returned zero workspaces and `document_create` failed. That diagnosis was wrong — it
+was a **partially degraded service** on Coda/Superhuman's side, not an empty account. The workspace
+appeared on retry the same day. Noted because the failure mode is worth recognising: an empty
+`workspaces: []` from this connector may mean "service degraded", not "nothing there".*
 
-**A correction to the earlier recommendation.** I initially suggested moving the Approval Ledger
-and risk register into Superhuman tables to cut the size of `DECISIONS.md` and `RISKS.md`. Having
-read the doc governance properly, **do not do that.** Those ledgers are canonical. Moving them into
-a non-repo system would make an external tool authoritative for approvals and risks, which directly
-contradicts `MASTER_PLAN.md`'s "canonical docs are the only SSOT" and would break the audit trail
-for a consent-first system. The size problem is real, but the fix is grepping rather than reading
-(see `CLAUDE.md` §4), not relocating the authority.
+Two documents:
 
-What Superhuman *is* well suited to, once it works: the **raw real-use feedback log** for BAR-5.
-Tester reactions are input data, not doctrine — they do not belong in a canonical doc until
-they have been turned into a decision, and a table is a better shape for them than markdown.
+### Decision Index — `https://docs.superhuman.com/d/_dn6FoFX71SV`
+
+A filterable index over `DECISIONS.md`'s 43 entries: Title, Date, Status (Active / Amended /
+Superseded), Scope (multi-select), Context.
+
+**It is an index, not the record.** It holds metadata and pointers only — never decision content.
+`DECISIONS.md` remains canonical; if the two disagree the file wins. Each row's Title is the exact
+`## Decision: <title>` heading, so `grep -n "## Decision: <title>" DECISIONS.md` locates the full
+entry.
+
+*Why it exists:* "which decisions touch the consent gate?" is a filter here and a 163KB grep
+otherwise. Note the honest limit — for a session, `grep -i consent DECISIONS.md` is already one
+fast call, so the real beneficiary is a human browsing in a UI.
+
+*Keeping it accurate:* one rule — when a decision is added to `DECISIONS.md`, add the row in the
+same pass. The `approval-entry` skill carries this as a step. Drift check:
+`grep -c "^## Decision" DECISIONS.md` should equal the row count.
+
+### Real-Use Feedback Log — `https://docs.superhuman.com/d/_d6DT0Yndv2i`
+
+Raw tester reactions for BAR-5: what you were doing, what happened, **reaction verbatim**, type,
+governance flag (the six `docs/TILT.md` override reasons), slice candidate, promoted-to.
+
+Tester reactions are input data, not doctrine — they do not belong in a canonical doc until turned
+into a decision, and a table suits them better than markdown. The "Reaction (verbatim)" column
+exists because tidying raw annoyance into a feature request destroys the signal slice scoping needs.
+
+### What must NOT move here
+
+**The Approval Ledger and the risk register stay in the repository.** An earlier draft of this
+document suggested moving them; that was wrong. They are canonical, the ledger records commit
+hashes and is structurally coupled to git, and making an external tool authoritative for approvals
+would contradict `MASTER_PLAN.md`'s "canonical docs are the only SSOT" and break the audit trail a
+consent-first system depends on. The size problem is real — the fix is grepping rather than reading
+(`CLAUDE.md` §4) and the routing skills in §6, not relocating authority.
 
 ---
 
