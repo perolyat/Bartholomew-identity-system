@@ -49,9 +49,17 @@ To run the local REST API and minimal UI:
 # Start the API server
 uvicorn app:app --reload --port 5173
 
-# API docs available at: http://localhost:5173/docs
-# Minimal UI at: bartholomew_api_bridge_v0_1/ui/minimal/index.html
+# Minimal UI at:   http://localhost:5173/ui/  (http://localhost:5173/ redirects here)
+# API docs at:     http://localhost:5173/docs
 ```
+
+> **Open the UI over `http://`, not as a file.** The page resolves its API base as
+> `location.origin`, so it only reaches the API when served from the same origin. The API app
+> serves it at `/ui/` for exactly this reason. Opening
+> `bartholomew_api_bridge_v0_1/ui/minimal/index.html` directly from disk makes `location.origin`
+> the string `"null"` and every panel fails to load; serving it from a second port sends every
+> call to that port instead of the API. (This line previously pointed at the file path on disk,
+> which could not work — corrected 2026-08-15, when the `/ui` mount was added.)
 
 The API provides:
 - **`/healthz`** - Minimal liveness endpoint (for load balancers/monitoring)

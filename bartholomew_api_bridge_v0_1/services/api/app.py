@@ -5,11 +5,13 @@ import os
 import re
 import time as _time
 from datetime import datetime
+from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import JSONResponse, RedirectResponse
 
 # Load timezone from kernel config (single source of truth)
 with open("config/kernel.yaml", encoding="utf-8") as f:
@@ -83,6 +85,29 @@ app.include_router(training.router)
 metrics_internal_only = is_truthy(os.getenv("METRICS_INTERNAL_ONLY"))
 app.include_router(metrics.router, prefix="/internal" if metrics_internal_only else "")
 
+# Serve the minimal UI from this app, at /ui.
+#
+# The UI resolves its API base as `location.origin` (ui/minimal/index.html),
+# so it only works when served from the same origin as the API. Nothing served
+# it before this, and QUICKSTART.md pointed at the file path on disk -- opened
+# as file://, location.origin is the string "null" and every fetch fails; served
+# from a second port, every call 404s against that port instead of the API. The
+# panels and the chat box were unreachable either way.
+#
+# Path is resolved from this module's location rather than the working
+# directory, so `uvicorn app:app` works from anywhere.
+_UI_DIR = Path(__file__).resolve().parents[2] / "ui" / "minimal"
+if _UI_DIR.is_dir():
+    # html=True serves index.html for /ui/ itself, not just /ui/index.html.
+    app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
+
+
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    """Send the bare host to the UI, so `localhost:5173` opens something."""
+    return RedirectResponse(url="/ui/")
+
+
 # Register atexit handler for WAL cleanup on shutdown
 atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
 
@@ -97,10 +122,15 @@ atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
 # /api/onboarding (Stage 1, S1.6) joins this list for the same reason:
 # static deployment-guide content with no _kernel dependency at all (see
 # routes/onboarding.py's module docstring).
+#
+# /ui and / join it on the same grounds: static files and a redirect, no
+# _kernel access. Serving them under admission would also make the shell
+# itself 503 during startup/shutdown, which is precisely when a tester needs
+# the page to load so its panels can report what the kernel is doing.
 _ADMISSION_EXEMPT_PATHS = frozenset(
-    {"/healthz", "/api/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"},
+    {"/", "/healthz", "/api/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"},
 )
-_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding")
+_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding", "/ui")
 
 
 def _admission_exempt(path: str) -> bool:
