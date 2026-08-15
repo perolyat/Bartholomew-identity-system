@@ -20,18 +20,48 @@ from .state_manager import StateManager
 class Orchestrator:
     """Central controller coordinating input, memory, and model routing."""
 
-    def __init__(self, log_dir: str = "logs/orchestrator", identity_config: Any = None):
+    def __init__(
+        self,
+        log_dir: str = "logs/orchestrator",
+        identity_config: Any = None,
+        model_identity_config: Any = None,
+    ):
         """
         Initialize the orchestrator.
 
         Args:
             log_dir: Directory for orchestration trace logs
-            identity_config: Optional identity configuration for memory
+            identity_config: Optional identity configuration, applied to
+                *both* the memory ContextBuilder and the model router.
+            model_identity_config: Optional identity configuration applied to
+                the **model router only**, leaving ContextBuilder without one.
+
+                This is the parameter the live API uses. `identity_config`
+                cannot be used there for two reasons, both architectural
+                rather than incidental:
+
+                - `ContextBuilder(identity_config)` constructs a
+                  `MemoryManager`, which is the superseded conversational
+                  memory-injection path. `bartholomew.kernel.runtime_contract`
+                  is the single authority for that concern today (it reads
+                  prior turns from Working Memory), and reviving the second
+                  implementation would recreate exactly the duplicated-concept
+                  shape DECISIONS.md's "One authority per architectural
+                  concept" entry exists to prevent. See
+                  `_build_interpretation()`'s docstring, which records this
+                  deliberately.
+                - `MemoryManager` requires an OS keystore for encryption.
+                  Wiring it into API startup would make the whole chat surface
+                  depend on keystore availability to reach a model, which is
+                  both unnecessary and a new headless-deployment failure mode.
+
+                The model layer needs `meta.deployment_profile` and nothing
+                else, so it gets the Identity on its own.
         """
         self.pipeline = Pipeline()
         self.context = ContextBuilder(identity_config)
         self.state = StateManager()
-        self.router = ModelRouter(identity_config=identity_config)
+        self.router = ModelRouter(identity_config=model_identity_config or identity_config)
         self.formatter = ResponseFormatter()
 
         # Setup logging

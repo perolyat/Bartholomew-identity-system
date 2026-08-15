@@ -37,6 +37,26 @@ def client():
     # actually fires).
     os.environ["BARTH_DB_PATH"] = _DB_PATH
     with TestClient(app_module.app) as c:
+        # Pin the model backend to the stub for this module.
+        #
+        # startup() now rebuilds the orchestrator with the Identity the
+        # daemon loaded, so chat reaches a real local model when one is
+        # available. These tests were written against the stub and
+        # deliberately depend on its behaviour -- specifically that it echoes
+        # its prompt back, which is what lets
+        # test_chat_references_persisted_experience_kernel_state observe the
+        # persisted goal in the HTTP response.
+        #
+        # Without this pin the module would pass in CI (no Ollama) and fail
+        # on exactly the machines where the real model path is being
+        # exercised -- the tester's. Pinning keeps the assertion about
+        # end-to-end wiring, which is what it is really testing, rather than
+        # about which model happens to be installed. Real-model behaviour is
+        # covered separately by tests/test_real_model_path_wiring.py and
+        # tests/test_model_backend_honesty.py.
+        from identity_interpreter.orchestrator.orchestrator import Orchestrator
+
+        app_module.orch = Orchestrator()
         yield c
 
 

@@ -6,12 +6,18 @@ import re
 import time as _time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse, RedirectResponse
+
+# Raised by ModelRouter when a real backend cannot generate. Imported at
+# module scope so the chat route can translate it into a truthful 503
+# instead of a 500 with a stack trace, or -- worse -- mock text.
+from identity_interpreter.orchestrator.model_router import ModelBackendError
 
 # Load timezone from kernel config (single source of truth)
 with open("config/kernel.yaml", encoding="utf-8") as f:
@@ -244,6 +250,35 @@ async def startup():
     )
     await _kernel.start()
 
+    # Rebuild the chat orchestrator with the Identity the daemon just loaded,
+    # so /api/chat reaches a real model instead of the stub.
+    #
+    # The module-level `orch = Orchestrator()` above is constructed at import
+    # time, before any Identity exists, which is why the live chat path has
+    # always run on the stub backend: ModelRouter with identity_config=None
+    # builds no LLM adapter, and its default backend stays "stub". That was
+    # the whole of the "Mock response for prompt: ..." behaviour -- the
+    # runtime contract, governance, memory capture and recall around it were
+    # already real.
+    #
+    # Rebuilt here rather than at import because the Identity is loaded by
+    # KernelDaemon and this is the first point it exists. Best-effort by
+    # design: if it fails, the stub orchestrator built at import stays in
+    # place and chat keeps working exactly as it did before, rather than
+    # taking down startup.
+    #
+    # `model_identity_config`, not `identity_config`: the Identity goes to the
+    # model router alone. Passing it to the whole Orchestrator would also
+    # build a ContextBuilder/MemoryManager -- the superseded conversational
+    # memory path that runtime_contract replaced, and a hard OS-keystore
+    # dependency on startup. See Orchestrator.__init__'s docstring.
+    global orch
+    if getattr(_kernel, "identity", None) is not None:
+        try:
+            orch = Orchestrator(model_identity_config=_kernel.identity)
+        except Exception as e:
+            print(f"[api] Real model path unavailable, staying on stub: {e}")
+
     # Keep kernel running
     async def keep_alive():
         while True:
@@ -306,6 +341,19 @@ async def kernel_command(cmd: str):
 
 
 def _parse_reply(raw: str):
+    """
+    Split ResponseFormatter's `[tone: ...] [emotion: ...]` prefix off the
+    reply body.
+
+    Only those two known tags are removed. This previously stripped *every*
+    bracketed span in the response (`re.sub(r"\\[[^\\]]+\\]\\s*", "", raw)`),
+    which was harmless while the backend was a stub that never emitted
+    brackets, but silently deletes legitimate content from a real model --
+    array indexing and slices in code, markdown link text, citation markers,
+    `[INFO]`-style lines. The tags are a prefix written by
+    ResponseFormatter._format_tags(), so anchoring the strip to the start of
+    the string keeps the body byte-exact.
+    """
     tone = None
     emotion = None
     if not isinstance(raw, str):
@@ -316,7 +364,14 @@ def _parse_reply(raw: str):
         tone = m_tone.group(1).strip()
     if m_em:
         emotion = m_em.group(1).strip()
-    reply = re.sub(r"\[[^\]]+\]\s*", "", raw).strip()
+    # Strip only leading tone/emotion tags, in any order, and only at the
+    # front -- never bracketed text inside the reply body.
+    reply = re.sub(
+        r"^(?:\s*\[(?:tone|emotion):\s*[^\]]*\]\s*)+",
+        "",
+        raw,
+        flags=re.I,
+    ).strip()
     return (reply, tone, emotion)
 
 
@@ -352,12 +407,29 @@ async def health():
     else:
         kernel_info = {"kernel_online": False}
 
+    # Which model backend chat will actually use. Reported so "is this a real
+    # response or the stub?" is answerable from the UI, without reading server
+    # logs or inspecting the reply text -- the question the whole real-world
+    # test depends on.
+    model_info: dict[str, Any] = {"model_backend": "unknown", "model_real": False}
+    try:
+        router = orch.router
+        backend = router.config.get("default_backend")
+        model_info = {
+            "model_backend": backend,
+            "model_name": router.config["backends"].get(backend, {}).get("model"),
+            "model_real": backend != "stub",
+        }
+    except Exception:
+        pass
+
     return {
         "status": "ok",
         "tz": str(TZ),
         "time": datetime.now(TZ).isoformat(),
         "orchestrator": getattr(orch, "__class__", type("x", (object,), {})).__name__,
         "version": app.version,
+        **model_info,
         **kernel_info,
     }
 
@@ -384,7 +456,18 @@ async def chat(body: ChatIn):
             # synchronous SQLite read on every single chat message).
             return orch.handle_input(prompt, skip_governance_check=True)
 
-        result = await run_chat_through_runtime_contract(_kernel, body.message, _respond)
+        try:
+            result = await run_chat_through_runtime_contract(_kernel, body.message, _respond)
+        except ModelBackendError as e:
+            # The model backend could not generate. Report that truthfully
+            # rather than letting a fabricated reply reach the user -- see
+            # ModelRouter.route()'s docstring. 503, because this is a
+            # temporarily-unavailable dependency (Ollama down, model not
+            # pulled), not a malformed request.
+            raise HTTPException(
+                503,
+                f"Model backend unavailable ({e.backend}/{e.model}): {e.reason}. {e}",
+            ) from e
         if not result.governance_allowed:
             raise HTTPException(503, result.governance_reason or "Blocked by governance")
         raw = result.response
@@ -395,7 +478,13 @@ async def chat(body: ChatIn):
         # Governance read would otherwise block the event loop directly in
         # this async route -- run the whole call off it (Phase B stage B4;
         # see docs/B4_GOVERNANCE_RUNTIME_INTEGRATION.md).
-        raw = await asyncio.to_thread(orch.handle_input, body.message)
+        try:
+            raw = await asyncio.to_thread(orch.handle_input, body.message)
+        except ModelBackendError as e:
+            raise HTTPException(
+                503,
+                f"Model backend unavailable ({e.backend}/{e.model}): {e.reason}. {e}",
+            ) from e
 
     reply, tone, emotion = _parse_reply(raw)
     if not reply:
