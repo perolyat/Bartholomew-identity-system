@@ -8,6 +8,9 @@
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; margin: 24px; background: #0b0f14; color: #e8f0fe; }
     .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
     .card { background:#111827; border:1px solid #1f2937; border-radius:14px; padding:16px; margin-bottom:16px; }
+    /* Applied only while something is genuinely pending, so a real request
+       is distinguishable from the eleven identical boxes around it. */
+    .card-attention { border-color:#d97706; background:#1c1917; }
     button { border-radius:10px; border:1px solid #374151; background:#111827; color:#e8f0fe; padding:8px 12px; cursor:pointer; }
     button:hover { background:#1f2937; }
     button.ack { border-color: #059669; color: #10b981; }
@@ -140,13 +143,51 @@
     </details>
   </div>
 
-  <!-- Stage 1 (S1.6): Deployment Guide reference card -->
+  <!-- Chat -->
+  <div class="card">
+    <h3>💬 Chat</h3>
+    <div id="chatlog" class="mono"></div>
+    <div class="row">
+      <input id="msg" placeholder="Say something…" onkeydown="if(event.key==='Enter'){sendMsg()}"/>
+      <button onclick="sendMsg()">Send</button>
+    </div>
+  </div>
+
+  <!-- Consent-handler fix: Pending Memory Consent.
+       Sits directly under the conversation, because a pending write is a
+       question Bartholomew is asking the user about something they just
+       said. When the queue is empty the card stays quiet; when it is not,
+       `card-attention` marks it so the request is noticeable rather than
+       looking like one more identical box. The gate itself is untouched:
+       nothing here approves, pre-approves, or times out a write. -->
+  <div class="card" id="pending-consent-card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🔏 Pending Memory Consent</h3>
+      <button onclick="refreshPendingConsent()">Refresh</button>
+    </div>
+    <div id="pending-consent-list"></div>
+  </div>
+
+  <!-- Stage 1: Nudges Panel -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
-      <h3 style="margin:0">🏠 Deployment Guide</h3>
-      <button onclick="refreshOnboardingGuide()">Refresh</button>
+      <h3 style="margin:0">📌 Pending Nudges</h3>
+      <button onclick="refreshNudges()">Refresh</button>
     </div>
-    <div id="onboarding-card-content"><div class="empty-state">Loading…</div></div>
+    <div id="nudges-list"></div>
+  </div>
+
+  <!-- Stage 1 (S1.4): Awaiting Response -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">⏳ Awaiting Response</h3>
+      <button onclick="refreshAwaitingResponse()">Refresh</button>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <input id="awaiting-response-subject" placeholder="What are you waiting on a reply about?" onkeydown="if(event.key==='Enter'){openAwaitingResponse()}"/>
+      <button onclick="openAwaitingResponse()">+ Add</button>
+    </div>
+    <div id="awaiting-response-list"></div>
   </div>
 
   <!-- Stage 1 (S1.1): Parking Brake -->
@@ -169,15 +210,6 @@
       <button onclick="refreshBrake()">Refresh</button>
     </div>
     <div id="brake-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
-  </div>
-
-  <!-- Stage 1 (S1.5): Governance Audit -->
-  <div class="card">
-    <div class="row" style="justify-content:space-between;margin-bottom:12px">
-      <h3 style="margin:0">📜 Governance Audit</h3>
-      <button onclick="refreshAudit()">Refresh</button>
-    </div>
-    <div id="audit-list"></div>
   </div>
 
   <!-- Stage 1 (S1.3): Notification Settings -->
@@ -203,26 +235,37 @@
     <div id="notif-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
   </div>
 
-  <!-- Consent-handler fix: Pending Memory Consent -->
+
+  <!-- System / Advanced.
+       Everything below is diagnostic or configurational. It is collapsed by
+       default so an ordinary session opens on the conversation rather than on
+       a dashboard; nothing is removed, and one click restores the full
+       developer view this page has always had. -->
+  <details id="advanced-panels" style="margin-top:18px">
+    <summary style="cursor:pointer;color:#6b7280;padding:8px 0">
+      ⚙️ System &amp; diagnostics — deployment guide, audit, self-state, persona,
+      episodes, reflections
+    </summary>
+
+  <!-- Stage 1 (S1.6): Deployment Guide reference card -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
-      <h3 style="margin:0">🔏 Pending Memory Consent</h3>
-      <button onclick="refreshPendingConsent()">Refresh</button>
+      <h3 style="margin:0">🏠 Deployment Guide</h3>
+      <div class="row">
+        <button onclick="openOnboardingModal()">Open first-run guidance</button>
+        <button onclick="refreshOnboardingGuide()">Refresh</button>
+      </div>
     </div>
-    <div id="pending-consent-list"></div>
+    <div id="onboarding-card-content"><div class="empty-state">Loading…</div></div>
   </div>
 
-  <!-- Stage 1 (S1.4): Awaiting Response -->
+  <!-- Stage 1 (S1.5): Governance Audit -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
-      <h3 style="margin:0">⏳ Awaiting Response</h3>
-      <button onclick="refreshAwaitingResponse()">Refresh</button>
+      <h3 style="margin:0">📜 Governance Audit</h3>
+      <button onclick="refreshAudit()">Refresh</button>
     </div>
-    <div class="row" style="margin-bottom:8px">
-      <input id="awaiting-response-subject" placeholder="What are you waiting on a reply about?" onkeydown="if(event.key==='Enter'){openAwaitingResponse()}"/>
-      <button onclick="openAwaitingResponse()">+ Add</button>
-    </div>
-    <div id="awaiting-response-list"></div>
+    <div id="audit-list"></div>
   </div>
 
   <!-- Stage 3: Self-State Panel -->
@@ -338,15 +381,6 @@
     </div>
   </div>
 
-  <!-- Stage 1: Nudges Panel -->
-  <div class="card">
-    <div class="row" style="justify-content:space-between;margin-bottom:12px">
-      <h3 style="margin:0">📌 Pending Nudges</h3>
-      <button onclick="refreshNudges()">Refresh</button>
-    </div>
-    <div id="nudges-list"></div>
-  </div>
-
   <!-- Stage 1: Reflections Panel -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
@@ -364,19 +398,17 @@
     <div id="reflection-weekly" class="reflection-content mono" style="display:none"></div>
   </div>
 
-  <!-- Chat -->
+  <!-- Water (existing legacy panel).
+       Labelled unavailable because it is: this panel calls /api/water/today
+       and /api/water/log, and neither endpoint exists in the API bridge --
+       both 404 on every load. RISKS.md's hydration/water-logging tech-debt
+       entry describes them as "live, working, legacy code", which is
+       inaccurate; only the panel is real. Left in place and labelled rather
+       than removed, because removing the legacy water code is a separate,
+       explicitly unapproved decision recorded in that same entry, and
+       implementing the missing endpoints is out of scope for this slice. -->
   <div class="card">
-    <h3>💬 Chat</h3>
-    <div id="chatlog" class="mono"></div>
-    <div class="row">
-      <input id="msg" placeholder="Say something…" onkeydown="if(event.key==='Enter'){sendMsg()}"/>
-      <button onclick="sendMsg()">Send</button>
-    </div>
-  </div>
-
-  <!-- Water (existing) -->
-  <div class="card">
-    <h3>💧 Water</h3>
+    <h3>💧 Water <span class="badge" style="color:#f87171;border-color:#7f1d1d">endpoints not implemented</span></h3>
     <div class="row">
       <button onclick="addWater(250)">+250ml</button>
       <button onclick="addWater(500)">+500ml</button>
@@ -384,6 +416,8 @@
       <button onclick="refreshWater()">Refresh</button>
     </div>
   </div>
+
+  </details>
 
   <script>
     const API = location.origin;
@@ -644,6 +678,14 @@
     }
 
     // === Consent-handler fix: Pending Memory Consent ===
+    // Mark the consent card as needing attention only while something is
+    // actually pending. Presentation only -- it does not touch the gate.
+    function setConsentAttention(count){
+      const card = document.getElementById("pending-consent-card");
+      if(!card) return;
+      card.classList.toggle("card-attention", count > 0);
+    }
+
     async function refreshPendingConsent(){
       const el = document.getElementById("pending-consent-list");
       try{
@@ -654,6 +696,7 @@
         }
         const j = await r.json();
         const entries = j.entries || [];
+        setConsentAttention(entries.length);
 
         if(entries.length === 0){
           el.innerHTML = '<div class="empty-state">No memories awaiting consent. You\'re all caught up! ✨</div>';
@@ -857,6 +900,20 @@
       // server-persisted field; a cleared browser just sees the modal
       // again, with zero consequence beyond that.
       if(localStorage.getItem(ONBOARDING_SEEN_KEY)) return;
+      try{
+        const data = await loadOnboardingGuideData(false);
+        document.getElementById("onboarding-modal-content").innerHTML = renderOnboardingGuide(data);
+        document.getElementById("onboarding-modal-overlay").style.display = "flex";
+      }catch(e){
+        console.error("Onboarding modal load failed:", e);
+      }
+    }
+
+    // Open the deployment guidance on demand, from the System & diagnostics
+    // section. Same content, same render path -- it simply no longer
+    // interrupts every first session before anything has been said. The
+    // guide's own card is still there too.
+    async function openOnboardingModal(){
       try{
         const data = await loadOnboardingGuideData(false);
         document.getElementById("onboarding-modal-content").innerHTML = renderOnboardingGuide(data);
@@ -1278,7 +1335,15 @@
     refreshPendingConsent();
     refreshAwaitingResponse();
     refreshOnboardingGuide();
-    maybeShowOnboardingModal();
+    // maybeShowOnboardingModal() is deliberately not called on load.
+    //
+    // It opened a modal over the page on every first visit, before the user
+    // had said anything -- a wall of deployment guidance duplicating the
+    // Deployment Guide card immediately behind it, which had to be dismissed
+    // before the app could be used at all. The same content is one click
+    // away under "System & diagnostics", via openOnboardingModal(). The
+    // function and its seen-flag are kept intact so this is a one-line
+    // reversal if the first-run interrupt is wanted back.
     refreshSelfState();
     refreshPersona();
     refreshEpisodes();
