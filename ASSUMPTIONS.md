@@ -2,7 +2,16 @@
 
 > Living list of uncertainties that matter. Each must have a validation plan.
 >
-> **Last updated:** 2026-08-08 (New Direction reconciliation: added A6 — whether a single generic
+> **Last updated:** 2026-08-15 (added A9 — that the current deployment serves exactly one personal
+> Bartholomew identity, and that its single-user conveniences (one process, one SQLite database at
+> one path, module-level singletons, unauthenticated local API, ownerless records) are stage-
+> appropriate deployment choices rather than architectural commitments that would need rewriting
+> to support many isolated personal identities. Recorded as a tracked assumption rather than an
+> invisible one; deliberately unverified and not scheduled for verification. See
+> `CONSTITUTION.md`'s "One Platform, Many Personal Bartholomews" section and `DECISIONS.md`'s
+> corresponding entry.)
+>
+> **Previously (2026-08-08):** New Direction reconciliation: added A6 — whether a single generic
 > competency data/contract model can serve structurally different competencies (Estate, Vehicle,
 > Travel/Finance) without redesign or transfer-safety compromise is unverified until S5.1–S5.4 are
 > implemented and the generalisation test in `ROADMAP.md`'s "Estate Management as architecture
@@ -237,3 +246,39 @@
   learning records before assuming it is adequate.
 - **Status:** unverified — cannot be verified before either S5.1 or the future generalisation
   pipeline exist.
+
+## A9 — The current deployment serves exactly one personal Bartholomew identity
+- **ASSUMPTION (added 2026-08-15):** The repository, as it stands, serves exactly **one** personal
+  Bartholomew identity, and every single-user convenience it relies on — one process, one SQLite
+  database at one filesystem path, module-level singletons holding personal runtime state, an
+  unauthenticated local API surface that treats every caller as the owner, and persisted records
+  with no ownership column — is a **deployment choice appropriate to this stage**, not an
+  architectural commitment. The assumption is that these can later be extended to many strongly
+  isolated personal identities without redesigning Bartholomew's identity model, memory semantics,
+  Executive, or Governance — per `CONSTITUTION.md`'s "One Platform, Many Personal Bartholomews"
+  section and `DECISIONS.md`'s corresponding entry.
+- **Why it matters:** the entire platform architecture rests on the claim that today's single-user
+  PoC *is* the first personal identity on the future platform rather than a different system that
+  will need replacing. If that claim is wrong, the cost is not a migration but a rewrite — and the
+  point of recording the assumption now, while there is exactly one user, is that it is cheap to
+  correct at this stage and expensive at any later one. Recording it also prevents the assumption
+  from remaining invisible, which is how one-process-equals-one-user quietly becomes architecture.
+- **Risk if wrong:** persisted personal state that cannot acquire an owner without a destructive
+  migration; background/scheduled work whose beneficiary is unrecoverable; an Executive or Memory
+  runtime that cannot be separated per identity; or — the expensive failure — concluding that each
+  customer must receive their own copy of the whole stack, which makes every platform and model
+  upgrade an N-customer migration.
+- **How to validate:** cannot be fully validated until a second personal identity actually exists,
+  which is **not** current scope. Two cheaper partial validations are available and should be
+  preferred over building anything: (a) a design-level dry run — take one existing persisted record
+  type (e.g. `memories`) and one background drive, and confirm on paper that an additive ownership
+  column plus a per-identity runtime context would suffice, with no change to memory semantics,
+  governance, or the Runtime Contract; (b) treat `CHECKLISTS.md`'s "Platform and personal-identity
+  architecture checklist" as a running validation — each change that passes it without strain is
+  evidence for the assumption, and the first change that cannot pass it is the signal to revisit.
+  The known seams to re-check are listed in `COGNITIVE_RUNTIME.md`'s "Personal-identity ownership"
+  subsection.
+- **Status:** unverified — deliberately, and not scheduled for verification. The repository-grounded
+  review of 2026-08-15 found no current code that contradicts it (no model is equated with
+  Bartholomew's identity; no personal state is structurally unable to acquire an owner), which is
+  supporting evidence, not verification.

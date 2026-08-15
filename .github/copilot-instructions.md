@@ -25,6 +25,32 @@
 4. **Enables budget-conscious deployment** with offline-first, local-primary architecture
 5. **Scales from personal companion to enterprise policy enforcement**
 
+## Platform and personal identity — read before proposing architecture (added 2026-08-15)
+
+`CONSTITUTION.md`'s **"One Platform, Many Personal Bartholomews"** section is binding architectural
+direction, and it carries a **conflict-surfacing rule that applies to coding agents**:
+
+- **Bartholomew is one shared platform serving many strongly isolated personal Bartholomew
+  identities.** A new user never receives a duplicated copy of the stack, model, or cognition
+  system. Individuality comes from persistent, isolated personal state.
+- **Bartholomew is not the LLM.** Models are a replaceable cognitive resource. Never write code or
+  documentation that equates Bartholomew's identity with a particular model or provider.
+- **Personal identity/state must stay portable** across devices, clients, backends, databases, AI
+  providers and model generations.
+- **Local Governance authority stays local.** The parking brake and emergency shutdown must never
+  become dependent on a remote service — a cloud outage must never leave a user unable to stop
+  Bartholomew acting on their devices.
+- **This repository is currently a single-user PoC, and that is correct.** Do **not** build
+  multi-user, tenancy, authentication or distributed infrastructure — see `ROADMAP.md`'s "What we
+  will not do yet". The constraint is on how *new* code is shaped, not a mandate to refactor.
+
+**If a change you are about to make would materially jeopardise any of the nine properties listed
+in that section's "Conflict-surfacing rule" — including property 9, the Personal/User vs
+Platform/Admin Parking Brake authority tiers and their precedence — stop and tell the user about
+the conflict before implementing it.** Trading one of them away for implementation convenience, without surfacing it,
+is a governance violation. `CHECKLISTS.md`'s "Platform and personal-identity architecture
+checklist" is the operational form of this rule.
+
 ## Architecture Overview
 
 **Bartholomew** is an AI identity configuration and policy enforcement system centered around a single canonical `Identity.yaml` file that defines AI behavior, ethics, safety constraints, and operational parameters.

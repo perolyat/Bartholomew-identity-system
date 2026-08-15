@@ -9,7 +9,15 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-08-08 (New Direction reconciliation: added a new "Competency, Training,
+> **Last updated:** 2026-08-15 (platform/personal-identity architecture: added one Ownership-table
+> row and a new "Personal-identity ownership" subsection recording what the runtime assumes today
+> about *whose* Bartholomew it is serving — verified against the code, which has no user/tenant/
+> owner concept anywhere — and classifying each single-user assumption as acceptable-for-PoC, a
+> documented migration seam, or a trap. No trap was found. Documentation-only; no code change
+> authorised, and no existing runtime behaviour is described differently. See `CONSTITUTION.md`'s
+> "One Platform, Many Personal Bartholomews" section and `DECISIONS.md`'s corresponding entry.)
+>
+> **Previously (2026-08-08):** New Direction reconciliation: added a new "Competency, Training,
 > and Learning" section conceptually extending the Runtime Contract to cover competency/knowledge
 > retrieval, confidence/proficiency, Executive application of competencies, and the
 > Experience → Reflection → candidate learning → governed consolidation loop — per the
@@ -286,6 +294,7 @@ concept" entry; this file is the reference copy going forward.)
 | Competency (data: knowledge, procedures, evidence, proficiency) | Memory Substrate — competencies are a structured *description* held in the same substrate, not a separate store (added 2026-08-08, conceptual — no implementation exists yet) | — |
 | Competency (application/reasoning) | Kernel Executive — same owner as Planning, above; applying a competency is the Executive doing its existing job with richer inputs, not a second reasoning authority (added 2026-08-08, conceptual) | — |
 | Training (ingestion of trained material) | No new owner — training material is Observation → Interpretation → Memory like any other input (added 2026-08-08, conceptual) | — |
+| Personal-identity ownership (whose Bartholomew persisted state and executing work belong to) | **No owner exists today, deliberately.** The runtime serves exactly one personal Bartholomew identity, and the deployment itself — one process, one SQLite database, one filesystem path — is the implicit boundary. When ownership becomes real it belongs to the Identity System (row 1), never to individual stores or capabilities (added 2026-08-15, conceptual — see below) | — |
 
 The 2026-07-21 audit named four "duplicate pairs." Three (persona, permission gates,
 kill-switch) are genuine. The fourth, "model routing," was **reclassified in item 11.15 as not
@@ -302,12 +311,66 @@ dispatch) are distinct concepts, so neither side is deprecated. Status of each:
 Rule going forward: **do not add new callers to a deprecated module.** Delete only once its
 last caller is migrated.
 
+### Personal-identity ownership (added 2026-08-15)
+
+`CONSTITUTION.md`'s "One Platform, Many Personal Bartholomews" section establishes that
+Bartholomew is ultimately one shared platform serving many strongly isolated personal identities,
+and that the current runtime is **the first personal Bartholomew identity on an early deployment
+of that platform** — not a different system. This subsection records what that runtime actually
+assumes today, so a future reader does not mistake current deployment convenience for architecture,
+and does not have to re-derive the seams. **Nothing here is a defect report, and nothing here
+authorises a change.**
+
+**What the runtime assumes today.** There is no user, tenant, owner or account concept anywhere in
+`bartholomew/`, `bartholomew_api_bridge_v0_1/` or `identity_interpreter/` — verified by search, not
+assumed. One process serves one person; `BARTH_DB_PATH` (default `data/barth.db`) resolves one
+SQLite database that *is* the personal state; the API bridge has no authentication and treats every
+caller as the owner (`INTERFACES.md` §6 records this accurately as a local/dev surface). Several
+kernel components hold module-level singletons (`narrator.py`, `encryption_engine.py`,
+`memory_rules.py`, `retrieval_config.py`, `metrics_registry.py`), which is process-global state
+standing in for per-identity state. Two audit surfaces already carry a provenance field that could
+later carry identity — `governance_audit.actor` and `skill_permissions.granted_by` — though both
+currently record *which subsystem or surface* acted, not *which person*. Note also that
+`request_admission.py`'s "identity-bound" wording refers to per-request admission tokens, not to
+user identity; the two are unrelated.
+
+**Classification.** Each single-user assumption is one of four things. Recording which one it is
+now is the point of this subsection:
+
+| Assumption in current code | Classification |
+|---|---|
+| One process / one runtime serves one person; module-level singletons hold personal runtime state | **Acceptable for the PoC.** Correct for a single-identity deployment, and the natural multi-identity form (one runtime context per identity, or per-identity instances behind the platform) does not require these modules to be rewritten — only constructed differently. |
+| One SQLite database at one filesystem path is the personal-state boundary | **Acceptable for the PoC, and a documented seam.** A per-identity database is itself a legitimate strong-isolation strategy, so this choice does not foreclose the platform architecture. What must not happen is code *reasoning about* the path as though it were the identity. |
+| API bridge assumes a trusted single-user environment (no auth, no caller identity) | **Documented migration seam.** Already governed: `DECISIONS.md`'s hybrid local-first entry and `ROADMAP.md` Stage 6 both require a reviewed threat model before any remote exposure. The admission middleware in `app.py` is the existing single chokepoint where caller identity would attach — one place, not per-route. |
+| `memories` is uniquely indexed on `(kind, key)` **globally**, with no ownership dimension (`memory_store.py`) | **Documented migration seam — the one worth naming explicitly.** In a multi-identity store, uniqueness must be per identity, not global; two users may each have a `user_profile`/`home_address`. Correctable later by an ordinary additive migration (add the ownership column, rebuild the index over `(owner, kind, key)`). Cheap now *and* cheap later, so it is deliberately **not** being changed now — but it must not be relied upon as a global-uniqueness guarantee by future code. |
+| Scheduler, drives and background work carry no ownership (`scheduler/*`) | **Documented migration seam.** Background cognition executing on someone's behalf is precisely where "on whose behalf?" must eventually be answerable. No change now; the requirement is that new background work does not acquire *additional* assumptions that one scheduler equals one person. |
+| Governance/parking-brake state is a singleton row (`governance_store.py`) | **Acceptable for the PoC, with a constraint.** Per `CONSTITUTION.md`, local Governance authority must remain locally enforceable regardless of topology — so a future platform must not relocate the brake's authority to a central service, whatever it does with the brake's *state*. |
+
+**No serious architectural trap was found.** No current code equates Bartholomew with a particular
+model, prevents personal state from being exported or migrated, or makes personal state
+structurally unable to acquire an owner. The Ownership table above is already model-agnostic
+(Memory: "SQLite now, Postgres later"; Identity: "YAML today, database tomorrow"; Capabilities:
+"local skills today, remote services / MCP later"), which is the same replaceability this
+architecture requires.
+
+**The constraint this places on new work:** do not add *new* code that deepens any of the
+assumptions above — in particular, do not introduce new persisted personal state that could not
+later acquire an owner, new background execution whose beneficiary is unrecoverable, or new global
+uniqueness constraints over personal data. That is a constraint on how new code is shaped, not a
+mandate to change existing code.
+
 ## Governance checkpoints
 
 ### The kill-switch: `ParkingBrake`
 
-One global brake (`system_flags` table), with scopes. `engage("skills")` blocks only that
-scope; `engage()` with no args defaults to `"global"`, which blocks everything. Fail-closed:
+> **This section is the canonical authority for Parking Brake scope, authority tiers, and
+> precedence.** Other documents reference it; they do not restate it. See "Authority tiers" below
+> — a reader who takes "one brake" to mean "one undifferentiated switch shared by every personal
+> Bartholomew" has misread this section, and that reading is explicitly wrong as architectural
+> direction.
+
+One brake per deployment today, with scopes. `engage("skills")` blocks only that scope;
+`engage()` with no args defaults to `"global"`, which blocks everything. Fail-closed:
 if the brake check itself errors, treat it as blocked (see `SkillRegistry._is_blocked_by_brake()`
 and `runtime_contract.py`'s governance stage — both catch-and-deny rather than catch-and-allow).
 
@@ -325,6 +388,95 @@ Live call sites today, each checking a different scope:
 As of item 11.21, the `sight`/`voice` scopes are no longer brake-*only*: those two seams run the
 brake check, then the same additive Identity Policy Decision the other surfaces use, then an
 always-required fail-closed device consent gate, before their (inert Stage 6) capability.
+
+**Where brake state actually lives (corrected 2026-08-15).** This section previously read "one
+global brake (`system_flags` table)", which Phase B overtook. Since stage **B6**, the write
+authority is `GovernanceStore` (`parking_brake_state` + `governance_audit`, in
+`bartholomew/orchestrator/safety/governance_store.py`) — `bartholomew/cli.py`'s `brake on`/
+`brake off`, the `skills` gate and the `scheduler` gate all go through it. The legacy
+`ParkingBrake`/`BrakeStorage` pair (`system_flags`) still exists and is still what the `sight` and
+`voice` seams read. That split is **known and deliberately deferred**, not newly discovered: B4
+found those paths unreachable (no live caller) and deferred consolidation;
+`docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §1 finding 5 re-confirmed and again deferred it. It is
+not a live safety hole today because the capability behind those seams is inert. See `RISKS.md`'s
+tech-debt watchlist for why it matters more under the authority tiers below.
+
+#### Authority tiers: Personal/User and Platform/Admin (added 2026-08-15)
+
+*(Architectural direction, **not** current implementation. Required by `CONSTITUTION.md`'s "One
+Platform, Many Personal Bartholomews" and recorded in `DECISIONS.md`. Nothing here authorises
+implementation — see "Current PoC mapping" below for what exists now, which is sufficient.)*
+
+Once the platform serves many personal Bartholomews, there must be **two distinct Parking Brake
+authority tiers**. They are a MUST-HAVE pair; narrower governance scopes are possible future
+extensibility only (see "Not now" below).
+
+| Tier | Who may activate | What it halts | Authority |
+|---|---|---|---|
+| **Personal/User Parking Brake** | the user, for their own Bartholomew | relevant execution for **that personal Bartholomew only** — autonomous actions, scheduled execution, capability execution, external side effects, device/environment control | the user is the ultimate authority over execution performed on their behalf |
+| **Platform/Admin Parking Brake** | authorised platform administration/governance | relevant execution **across the entire platform**, in a serious safety, security, governance, systemic-defect, critical-operational or other platform-wide emergency | higher scope; overrides subordinate personal autonomy permissions, trust levels, approvals and execution authority |
+
+**The tiers are orthogonal to the existing `scopes` axis, and must not be conflated with it.**
+Today's scopes (`global`, `skills`, `sight`, `voice`, `scheduler`, `training`) answer *what class
+of execution is halted*. The tiers answer *whose execution stops, and on whose authority*. Adding
+`"platform"` as another string alongside `"skills"` would be a category error and an actual safety
+defect: it would make a platform-wide halt clearable by the same ordinary `disengage()` any user
+can call. A platform halt is a different authority, not a bigger scope.
+
+**Precedence rules (unambiguous, in order):**
+
+1. An active **Platform/Admin** brake overrides personal settings, autonomy level, trust level,
+   prior approvals and execution authority. **A user must not be able to override it** through any
+   personal control, setting, or accumulated trust.
+2. A **Personal/User** brake halts only that personal Bartholomew. One user engaging their brake
+   **must never** stop, degrade, or alter the authority or state of any other user's Bartholomew.
+3. The tiers compose **restrictively, never permissively**: execution proceeds only if *neither*
+   tier blocks it. Disengaging one tier never implies disengaging the other. This preserves the
+   existing "the brake can only become more restrictive without an explicit, confirmed loosening
+   action" invariant `GovernanceStore` already implements via revision-guarded `disengage()`.
+4. A platform-wide halt **must not require** administrators to disable users individually; and
+   individually disabling users is not a substitute for it.
+
+**Local enforceability is not optional, and the Platform tier does not replace it.** Per
+`CONSTITUTION.md`'s hybrid/local Governance requirement and `DECISIONS.md`'s hybrid local-first
+entry: wherever Bartholomew can act on a user's local devices or physical/digital environment,
+that user must retain a **locally enforceable** means of stopping their own Bartholomew even when
+central services are unavailable, connectivity is lost, or the remote platform is malfunctioning.
+**A platform outage must never leave local autonomous execution unstoppable.** The Platform/Admin
+tier adds an authority above the user; it removes nothing from the user's local authority over
+their own devices.
+
+**Parking Brake scope is Governance authority, not a UI feature.** A client may expose controls,
+but the halt must be enforced below the presentation layer, at the execution boundary — which is
+where the live gates already sit (`SkillRegistry.execute_action()`, the Runtime Contract's
+Governance stage, the scheduler drive path). A client disappearing, crashing, being bypassed, or
+losing connectivity **must not by itself invalidate the underlying halt state.** The current
+implementation already satisfies this shape: state is persisted and re-read fail-closed at the
+gate, not held in a UI session.
+
+**Designs that are ruled out** — each is a defect, not a trade-off: one undifferentiated global
+brake boolean used for every user; one user's brake stopping every user; one user's brake
+affecting another user's authority or state; no independent platform-wide emergency halt; users
+able to override a platform safety halt; central infrastructure as the *only* mechanism capable of
+stopping local execution; a platform-wide halt that requires disabling users one at a time.
+
+**Not now.** Narrower governance scopes — globally disabling one defective capability, suspending
+one integration, disabling an execution class while preserving read-only cognition, isolating a
+compromised subsystem — are recognised as **possible future extensibility only**. Do not design or
+implement that system. The two MUST-HAVE tiers are Personal/User and Platform/Admin.
+
+**Current PoC mapping.** This deployment serves exactly one personal Bartholomew identity
+(`ASSUMPTIONS.md` A9), so the existing brake **conceptually is the Personal/User Parking Brake**,
+and is sufficient at this stage. It is global only because there is exactly one user for it to be
+global over — not because a single undifferentiated switch is the intended architecture. **No
+Platform/Admin tier exists, and none should be built now**; with one deployment and one user there
+is no platform to halt and no administrator distinct from the user. The migration seam to preserve
+is simply that brake state and its gates must eventually be able to answer *whose* brake and
+*which tier* — which is the same ownership seam recorded under "Personal-identity ownership"
+above, applied to Governance. The relevant consequence for the deferred sight/voice consolidation:
+tier awareness must be added **once**, in `GovernanceStore`, not twice — so the legacy-reading
+seams should be consolidated onto `GovernanceStore` *before* tiers are introduced, or they would
+silently not honour them.
 
 ### Identity Context → Executive → Policy Decision
 

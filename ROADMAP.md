@@ -2,7 +2,14 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-14 — **Usable POC slice 1 (Personal Memory Capture and Recall) is
+> **Last updated:** 2026-08-15 — one line added to "What we will not do yet": multi-user/tenancy/
+> platform infrastructure is **FUTURE PLATFORM WORK**, explicitly out of current scope. This is a
+> scope *guard*, not a scope change — **no stage's exit criteria, sequencing, or status changed**,
+> and Stage 6's cross-device auth/threat-model work is unchanged. See `CONSTITUTION.md`'s new "One
+> Platform, Many Personal Bartholomews" section and `DECISIONS.md`'s "One shared Bartholomew
+> platform; many strongly isolated personal Bartholomew identities" entry.
+>
+> **Previously (2026-08-14):** **Usable POC slice 1 (Personal Memory Capture and Recall) is
 > implemented**, commit `2d443a9`, approved on review. Ordinary conversation now produces durable,
 > retrievable memory through the existing governed write path, chat retrieval sees it, and the
 > `notify` skill has a real outbound delivery channel — closing the three gaps the 2026-08-12
@@ -1223,3 +1230,15 @@ pass inserts ahead of them.
 
 - Expand automation/tooling surface without governance + test coverage.
 - “Act” features without parking-brake, consent, audit, and rollback.
+- **Build multi-user / tenancy / platform infrastructure (added 2026-08-15).** `CONSTITUTION.md`'s
+  "One Platform, Many Personal Bartholomews" section establishes that Bartholomew is ultimately one
+  shared platform serving many strongly isolated personal identities. That is **architectural
+  direction, not current scope.** Actual multi-user infrastructure — production tenancy, ownership
+  columns and their migrations, authentication and authorization systems, a client/server split,
+  distributed services, identity migration/portability tooling, scalable backend deployment — is
+  **FUTURE PLATFORM WORK**. It requires its own proposal and approval and **must not be pulled into
+  any current stage's scope**, including the Usable POC slices. No stage's exit criteria changed as
+  a result of that decision. What applies now is only the constraint on how *new* code is shaped
+  (see `CHECKLISTS.md`'s "Platform and personal-identity architecture checklist"), not a mandate to
+  build or refactor anything. The nearest genuinely-scheduled adjacent work remains Stage 6's
+  cross-device auth and threat model, which is unchanged and still gated as it was.

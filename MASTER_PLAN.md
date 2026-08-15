@@ -2,7 +2,19 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-08-14 — **Usable POC slice 1 (Personal Memory Capture and Recall) is
+> **Last updated:** 2026-08-15 — **platform/personal-identity architecture recorded**
+> (documentation-only). Bartholomew is architecturally **one shared platform serving many strongly
+> isolated personal Bartholomew identities**; a new user never receives a duplicated copy of the
+> stack or model; **Bartholomew is not the LLM**; personal identity/state must survive changes of
+> device, backend, database, AI provider and model generation; a lightweight client is the long-term
+> direction, but local Governance authority (parking brake above all) must never become
+> cloud-dependent. `CONSTITUTION.md` carries the enduring principle and a **binding
+> conflict-surfacing rule**; `DECISIONS.md` carries the decision and rationale. **Nothing is
+> implemented and no scope changed** — this deployment remains a single-user PoC, that remains
+> correct, and `docs/TILT.md`'s real-world-use priority is unchanged. "Next 3 Moves" below is
+> **unchanged**: putting slice 1 into real-world use is still the next move.
+>
+> **Previously (2026-08-14):** **Usable POC slice 1 (Personal Memory Capture and Recall) is
 > implemented and approved** (`2d443a9`). Ordinary conversation now produces durable, retrievable
 > memory through the existing governed write path; chat retrieval sees it; and the `notify` skill
 > has a real outbound delivery channel. This closes the three gaps the 2026-08-12 assessment named
@@ -155,6 +167,17 @@ logs/    (runtime logs)
 - **Single SQLite DB** is the shared persistence backbone.
 - **Consent + privacy gates** pre-filter retrieval results before they reach callers.
 - **Parking brake** provides an emergency/operational kill-switch by scope.
+- **This deployment serves exactly one personal Bartholomew identity** *(added 2026-08-15)*. The
+  diagram above is a **single-user PoC deployment**, and that is correct for this stage — it is
+  **not** evidence that multi-user or cloud infrastructure exists, because none does. Architecturally
+  this runtime is the *first personal Bartholomew identity on an early deployment of a platform that
+  will later serve many strongly isolated personal identities*; the shared platform, the replaceable
+  underlying models, and a user's persistent personal Bartholomew are three distinct layers, and
+  **Bartholomew is not the LLM**. See `CONSTITUTION.md`'s "One Platform, Many Personal Bartholomews"
+  section (the authority), `DECISIONS.md`'s corresponding entry, `COGNITIVE_RUNTIME.md`'s
+  "Personal-identity ownership" subsection (what the code assumes today), and `ASSUMPTIONS.md` A9.
+  Building any of that platform infrastructure is **not current scope** — see `ROADMAP.md`'s "What
+  we will not do yet".
 
 ## Stage gates / milestones
 

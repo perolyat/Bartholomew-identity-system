@@ -45,6 +45,38 @@
 > infrastructure, or Estate Management feature — see `ROADMAP.md`'s restructured Stage 5 for the
 > (unapproved-until-separately-approved) staged plan.
 >
+> **Amended 2026-08-15, follow-up pass** (Parking Brake authority tiers): the "One Platform, Many
+> Personal Bartholomews" section's hybrid/local-Governance subsection gains the requirement for two
+> distinct Parking Brake authority tiers — an independently enforceable **Personal/User** brake and
+> a separate higher-scope **Platform/Admin** brake — with their precedence stated (a platform halt
+> overrides personal autonomy/trust/approvals and cannot be overridden by a user; one user's brake
+> never halts another's), and the principle that brake scope is Governance authority enforced below
+> the presentation layer, not a UI feature. The **conflict-surfacing rule gains a ninth property**
+> covering these tiers. The scope/precedence semantics themselves live in `COGNITIVE_RUNTIME.md`'s
+> "Authority tiers" subsection, which is their canonical authority — this document states the
+> enduring requirement and does not restate the mechanics. Documentation-only; the current
+> single-user brake conceptually *is* the Personal/User tier and is sufficient, and no
+> Platform/Admin tier should be built now. See `DECISIONS.md`'s "Parking Brake authority tiers"
+> entry.
+>
+> **Amended 2026-08-15** (platform/personal-identity architecture, per this document's own
+> governance rule — recorded explicitly with rationale): added a new "One Platform, Many Personal
+> Bartholomews" section establishing that Bartholomew is ultimately **one shared platform serving
+> many strongly isolated personal Bartholomew identities**, that a new user does not receive a
+> duplicated copy of the stack or model, that **Bartholomew is not the LLM** (models are a
+> replaceable cognitive resource, not Bartholomew's identity), that personal identity/state must be
+> portable across devices, backends, databases, providers and model generations, that a lightweight
+> client is the long-term direction while local Governance authority (the parking brake above all)
+> must never become cloud-dependent, and that strong isolation between personal identities is
+> non-negotiable. The section closes with a **binding conflict-surfacing rule**: eight named
+> properties that a future proposal may not silently trade away without first informing the user.
+> This amendment is **documentation-only and authorises no implementation** — the current
+> single-user PoC, its SQLite persistence, local execution and absence of auth all remain correct
+> for this stage, and `docs/TILT.md`'s real-world-use priority is unchanged. See `DECISIONS.md`'s
+> "One shared Bartholomew platform; many strongly isolated personal Bartholomew identities" entry
+> for the full rationale, `COGNITIVE_RUNTIME.md`'s "Personal-identity ownership" subsection for
+> what the code assumes today, and `ASSUMPTIONS.md` A9.
+>
 > **Amended 2026-08-12** (Usable POC / time-to-real-use prioritisation, per this document's own
 > governance rule — resolved explicitly with rationale, not silently overridden or left as an
 > unreconciled conflict): a repository-grounded assessment found that this document's "Development
@@ -376,6 +408,218 @@ See `ROADMAP.md`'s Stage 5 for the staged, separately-approved plan this princip
 `COGNITIVE_RUNTIME.md` for how the Runtime Contract is conceptually extended to retrieve and apply
 competencies without creating a second decision authority.
 
+## One Platform, Many Personal Bartholomews (added 2026-08-15)
+
+*(Added 2026-08-15. This section states enduring architectural intent, **not** current
+implementation. Today's repository runs exactly one personal Bartholomew identity on a single-user
+deployment, and that is correct for the current stage — see "What this does not authorise" at the
+end of this section, `ASSUMPTIONS.md` A9, and `DECISIONS.md`'s "One shared Bartholomew platform;
+many strongly isolated personal Bartholomew identities" entry for the full rationale. Nothing here
+authorises building multi-user infrastructure now.)*
+
+**Bartholomew is ultimately one shared platform serving many strongly isolated personal
+Bartholomew identities.** A new Bartholomew user must never require the creation or distribution
+of an entirely separate copy of the complete Bartholomew software stack, AI model, cognition
+system, or infrastructure. Individuality comes from persistent, isolated, personal state — not
+from duplicating the machinery.
+
+The conceptual model is the way a person experiences a service like ChatGPT: shared underlying
+software, models and infrastructure, yet an experience that is unmistakably *theirs* and
+persistent across sessions. For Bartholomew the personal half is far larger — memory,
+preferences, permissions, relationships, goals, history, learned understanding, autonomy/trust
+configuration, and the evolving model of the user's household and world — but the structural
+insight is the same.
+
+### The three layers that must never be conflated
+
+1. **The Bartholomew platform** — shared software, architecture, the common Executive mechanisms,
+   the common Governance mechanisms, capability infrastructure, model access, updates, and other
+   shared services. This is what the repository builds.
+2. **Underlying intelligence and resources** — LLMs, multimodal models, specialist AI services,
+   reasoning engines, and other computational resources Bartholomew *uses*. These are replaceable
+   suppliers of cognition, not Bartholomew.
+3. **A user's personal Bartholomew** — the persistent, isolated identity and state representing
+   one individual's memories, preferences, goals, relationships, permissions, history, learned
+   understanding, trust/autonomy configuration, and evolving model of their life. This is what the
+   user means by "my Bartholomew."
+
+From the infrastructure side, users may share substantial parts of layers 1 and 2. From the user's
+side it must nevertheless feel like: **"This is my Bartholomew."** That personal continuity is a
+core product characteristic, not a presentation detail.
+
+### Bartholomew is not the LLM
+
+**Bartholomew must never be architecturally defined as an LLM, or as any particular AI model.**
+The model layer is a *cognitive resource available to* Bartholomew. Bartholomew itself is the
+persistent Personal Executive System surrounding and orchestrating those resources: its Executive,
+Memory, Capability, Governance and Experience pillars, its persistent personal state, provenance,
+learned user understanding, autonomy/trust model, and ongoing continuity.
+
+The practical consequence: Bartholomew must eventually be able to upgrade, replace, or mix
+underlying models **without destroying the user's personal Bartholomew identity.** A model
+generation change is a supplier change, not a bereavement. This is the same "responsibilities, not
+technologies" principle stated at the top of this document, applied to cognition itself — and it
+is why `COGNITIVE_RUNTIME.md`'s ownership table names *Identity System*, *Kernel Executive* and
+*Memory Substrate* as owners, never a model.
+
+### Identity is portable across infrastructure
+
+A user's Bartholomew must remain their Bartholomew even if they replace their phone or computer;
+the UI/client changes; the backend is migrated; servers are replaced; databases are replaced or
+upgraded; AI providers change; underlying model generations change; capabilities are added or
+removed; or the deployment topology evolves.
+
+**Bartholomew identity is therefore logically independent of the particular compute
+infrastructure, model provider, device, or application instance currently serving it.** Personal
+continuity and state must be portable, recoverable and capable of migration, subject to
+Governance, security, privacy and user control. This is the same commitment as the data-portability
+invariant below ("Safety, Accessibility, and Product Invariants" §3), stated one level up: not only
+must the user be able to *export* their data, the architecture must not trap their identity inside
+one implementation technology in the first place.
+
+### Client versus Bartholomew
+
+The eventual customer application downloaded to a phone, computer or other device **should not
+need to contain the entirety of Bartholomew's intelligence or platform.** The long-term
+architecture should permit a relatively lightweight Bartholomew client communicating securely with
+Bartholomew services.
+
+A client may legitimately own: interaction/UI; authentication; notifications; local device
+interfaces and selected sensors; selected local/private state; encryption and key functions where
+appropriate; local permissions; device-specific capability adapters; offline and degraded
+functionality; and locally enforceable safety/governance controls. Heavy or shared functions may
+eventually run remotely: expensive model inference, complex reasoning, shared capabilities,
+specialist AI orchestration, large-scale retrieval, background cognition, platform updates.
+
+**This is not a licence to make Bartholomew cloud-only.** It defines what *may* move, not what
+must.
+
+### Hybrid architecture and local Governance authority
+
+Bartholomew should be capable of evolving toward a hybrid Personal Executive architecture: some
+responsibilities remote or shared, some necessarily local or locally enforceable. This extends —
+and does not replace — `DECISIONS.md`'s "Deployment architecture — hybrid local-first" entry,
+which remains the authority on *where* authority sits.
+
+Because Bartholomew may eventually control significant parts of a person's digital and physical
+environment, **central infrastructure must never become the only authority capable of stopping or
+constraining the system.** The architecture must preserve the ability for critical local
+Governance controls to remain authoritative: the Parking Brake / kill switch, local device
+permissions, credential and security boundaries, safe degradation, defined loss-of-connectivity
+behaviour, and user control over local execution.
+
+**A cloud or service outage must never create a condition in which the user cannot locally stop
+Bartholomew from acting on their devices.** This is the multi-user, platform-era restatement of
+the independent-emergency-shutdown invariant below (§1), and it constrains any future
+lightweight-client design: the client is allowed to be thin in cognition, but never thin in the
+ability to stop.
+
+**Two Parking Brake authority tiers are therefore required** (added 2026-08-15): a
+**Personal/User** brake, independently enforceable, halting execution for that one personal
+Bartholomew without affecting any other user's; and a separate, higher-scope **Platform/Admin**
+brake allowing authorised platform governance to halt execution platform-wide in a serious safety,
+security, governance, systemic-defect or critical-operational emergency, without disabling users
+one at a time. An active Platform/Admin halt overrides subordinate personal autonomy permissions,
+trust levels, approvals and execution authority — **a user must not be able to override a
+platform-wide safety halt through personal settings** — while one user's Personal brake must never
+stop another user's Bartholomew. The Platform tier adds an authority above the user; it removes
+nothing from the local authority described in the paragraph above. Parking Brake scope is
+**Governance authority, not a UI feature**: the halt must be enforced below the presentation layer
+at the execution boundary, and a client crashing, disconnecting or being bypassed must not by
+itself invalidate the halt state. `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`" →
+"Authority tiers" section is the **canonical authority** for these scope and precedence semantics
+and is not restated here; see `DECISIONS.md` for the decision record. This requires no
+implementation now — the current single-user brake conceptually *is* the Personal/User tier and is
+sufficient at this stage.
+
+### Strong isolation between personal identities is non-negotiable
+
+One user's Bartholomew must never accidentally receive, expose, infer from, modify, act upon, or
+otherwise access another user's private state. The only exception is a future feature that
+*intentionally* permits interaction and that Governance authorises — designed deliberately, never
+arrived at by accident.
+
+**User ownership/tenancy must therefore become a first-class architectural concept wherever
+persistence or execution requires it.** Anything that persists personal state, executes on a
+user's behalf, schedules background work, or records governance/audit provenance must eventually
+be able to answer: *whose Bartholomew is this?*
+
+The failure modes to design against — each of which the current single-user PoC exhibits
+legitimately, and which must not harden into permanent architecture — are: one process implicitly
+equalling one user; one database implicitly equalling one user; global singleton personal state;
+storage records without ownership where ownership will eventually be required; local filesystem
+paths acting as permanent identity boundaries; APIs assuming a trusted single-user environment;
+Executive state that cannot be separated by user; memory that cannot be associated with an
+explicit personal identity; scheduler or background work without ownership; capabilities that
+cannot determine on whose behalf they are executing; and Governance or audit records lacking
+sufficient identity provenance. `COGNITIVE_RUNTIME.md`'s "Personal-identity ownership" subsection
+records which of these exist today, and how each is classified.
+
+### Personal learning does not become platform knowledge
+
+The distinction between personal, potentially generalisable, and system/product learning is
+already established above in "Personal learning vs. potentially generalisable and system-level
+learning," and is **not restated here** — that section remains the single authority. This section
+adds only its platform-era consequence: *shared platform improvement must never be conflated with
+sharing personal Bartholomew memories.* Only genuinely non-personal or properly depersonalised
+lessons may ever become candidates for shared platform learning, through an explicit, governed
+process that does not exist today. Removing a name is not depersonalisation.
+
+### The governing principle for the current stage
+
+> Build the current single-user Bartholomew as the first deployment of an architecture that can
+> later support many strongly isolated personal Bartholomew identities through lightweight clients
+> and shared backend services, without introducing unnecessary distributed-system complexity
+> before the usable PoC proves the product.
+
+The current single-user Bartholomew is conceptually **the first personal Bartholomew identity
+running on an early deployment of the future platform** — not a different, throwaway thing. SQLite,
+local execution, the current web application, process-global runtime state and the absence of
+authentication all remain appropriate for the PoC. The requirement is only that these temporary
+deployment choices never become inseparable from Bartholomew's identity or conceptual
+architecture.
+
+### What this does not authorise
+
+This section authorises **no implementation work**. It does not authorise multi-tenant
+infrastructure, cloud or microservice deployment, authentication systems, a client/server split, a
+tenancy migration, schema rewrites to add ownership columns, or any broad refactor of the current
+PoC to make it multi-user. `docs/TILT.md`'s priority — real-world use of a working vertical slice
+— is unchanged and takes precedence. Future platform work of that kind requires its own separate
+proposal and approval, the same as any other subsystem.
+
+### Conflict-surfacing rule (binding)
+
+This architectural decision is considered crucial to the success of the project, and the ordinary
+"resolve conflicts explicitly" rule in this document's header is **strengthened** for it.
+
+If a proposed feature, implementation shortcut, architecture change, refactor, dependency choice,
+or user request would materially jeopardise any of the following, the architect or builder **must
+explicitly inform the user of the conflict before implementing it** — not discover it afterwards,
+and never trade it away silently for implementation convenience:
+
+1. one shared platform / many personal identities;
+2. strong isolation between personal Bartholomew identities;
+3. persistence of an individual Bartholomew identity;
+4. portability of identity and personal state;
+5. separation between Bartholomew and its underlying LLM/model;
+6. hybrid architecture and local Governance authority (including the ability to stop Bartholomew
+   locally during a cloud outage);
+7. the eventual lightweight-client architecture;
+8. the ability to replace infrastructure or models without replacing the person's Bartholomew;
+9. **the two Parking Brake authority tiers and their precedence** (added 2026-08-15) — an
+   independently enforceable Personal/User brake that never halts other users; a separate
+   platform-wide Platform/Admin brake that a user cannot override and that does not require
+   disabling users individually; and the enforcement of both below the presentation layer at the
+   execution boundary rather than in a client. Collapsing the tiers into one undifferentiated
+   switch, letting one user's brake affect another, or making a client the only thing holding the
+   halt state are conflicts under this rule, not implementation details.
+
+Surfacing the conflict is the requirement; the user may then decide. Proceeding without surfacing
+it is a governance violation, not a judgement call. See `CHECKLISTS.md`'s "Platform and
+personal-identity architecture checklist" for the operational form of this rule, and "Expectations
+of the Architect" below.
+
 ## Current Philosophy on Persistence
 
 The project intentionally chose not to persist observations yet. Instead:
@@ -558,6 +802,9 @@ The Architect should:
 - Prefer simplification over expansion.
 - Actively identify architectural debt.
 - Preserve the five-pillar architecture unless there is compelling evidence to change it.
+- **Surface, rather than silently resolve, any conflict with the nine properties listed in "One
+  Platform, Many Personal Bartholomews" → "Conflict-surfacing rule" above.** Implementation
+  convenience is never sufficient reason to trade one of them away unannounced.
 - Design for a system expected to evolve over decades, not months.
 - Avoid premature abstraction, but also avoid domain-specific shortcuts that would block future
   expansion.

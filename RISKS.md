@@ -2,7 +2,26 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-14 (three new tech-debt watchlist items added — LICENSE declaration
+> **Last updated:** 2026-08-15, second pass (one tech-debt watchlist item added: the Parking Brake's
+> split read/write authority — `sight`/`voice` still read the legacy `system_flags`-backed
+> `ParkingBrake` while the write authority has been `GovernanceStore` since Phase B stage B6. **Not
+> a new finding and not a live safety hole** — B4 and B6 §1 finding 5 both found it and deferred it,
+> and the capability behind those seams is inert. Recorded canonically because the new Parking Brake
+> authority tiers give it an ordering constraint: consolidate those seams onto `GovernanceStore`
+> *before* tiers are introduced. No fix authorised. See `DECISIONS.md`'s "Parking Brake authority
+> tiers" entry.)
+>
+> **Previously (2026-08-15, first pass):** three new tech-debt watchlist items added, all found by a
+> repository-grounded review for the platform/personal-identity architecture decision — the
+> globally-unique `memories(kind, key)` index with no ownership dimension; personal runtime state
+> held in module-level singletons; and the absence of an on-behalf-of identity on scheduler drives
+> and capability execution. **None is a defect, and no fix is authorised by this pass** — all three
+> are correct for a single-identity PoC and are recorded as migration seams so they are not
+> rediscovered from scratch later. See `DECISIONS.md`'s "One shared Bartholomew platform; many
+> strongly isolated personal Bartholomew identities" entry and `COGNITIVE_RUNTIME.md`'s
+> "Personal-identity ownership" subsection.)
+>
+> **Previously (2026-08-14):** three new tech-debt watchlist items added — LICENSE declaration
 > inconsistency (MIT vs CC-BY-NC-4.0, no LICENSE file); absence of dependency-licence/SBOM/SCA
 > tooling; absence of a record of which AI coding tools/services this repository's development
 > relies on. Found during a repository-grounded AI-development-provenance and IP-governance review
@@ -173,6 +192,58 @@
 
 ## Tech debt watchlist
 
+- **(2026-08-15, second pass) Parking Brake read/write authority is split — known, deferred, and
+  newly consequential under the authority-tier model.** Since Phase B stage **B6** the brake's
+  write authority is `GovernanceStore` (`parking_brake_state`): `bartholomew/cli.py`'s
+  `brake on`/`brake off`, the `skills` gate and the `scheduler` gate all use it. The `sight` and
+  `voice` seams in `bartholomew/kernel/runtime_contract.py` still read the **legacy**
+  `ParkingBrake`/`BrakeStorage` pair (`system_flags`). **This is not a new finding and not a live
+  safety hole:** B4 found those paths unreachable (no live caller) and deferred consolidation, and
+  `docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §1 finding 5 re-confirmed and again deferred it; the
+  capability behind both seams is inert (Stage 6), so nothing real is ungated today, and R1's
+  brake-coverage tests exercise the legacy path directly rather than through the CLI. **What
+  changed on 2026-08-15** is the consequence, not the facts: under the Personal/Platform authority
+  tiers now recorded in `COGNITIVE_RUNTIME.md`, tier awareness must be added **once**, in
+  `GovernanceStore`. If the legacy-reading seams are still present when tiers are introduced, they
+  would silently not honour them — a per-user or platform-wide halt that `sight`/`voice` ignore.
+  **Risk category:** safety / architectural migration. **Action:** none now — no code change is
+  authorised or required, and the existing deferral stands. **The ordering constraint is the
+  deliverable:** consolidate `sight`/`voice` onto `GovernanceStore` *before* introducing authority
+  tiers or making those capabilities real, whichever comes first.
+- **(2026-08-15) `memories` is uniquely indexed on `(kind, key)` globally, with no ownership
+  dimension.** `bartholomew/kernel/memory_store.py` declares
+  `CREATE UNIQUE INDEX uq_memories_kind_key ON memories(kind, key)`. Correct and desirable for a
+  single-identity deployment — it is what makes `upsert_memory()` an upsert. In the multi-identity
+  architecture `CONSTITUTION.md`'s "One Platform, Many Personal Bartholomews" section establishes,
+  uniqueness must be **per personal identity**, not global: two users may each hold a
+  `user_profile`/`home_address`. **Not a defect and no fix is authorised** — the correction is an
+  ordinary additive migration (add the ownership column, rebuild the index over
+  `(owner, kind, key)`), no more expensive later than now, and doing it now would add an unused
+  column to satisfy no current requirement. **The real risk is different and worth watching:** new
+  code that *relies on* global `(kind, key)` uniqueness as a semantic guarantee — deduplication
+  across the whole store, "there is exactly one home address," caching keyed on `(kind, key)` alone
+  — would convert a cheap migration into an expensive one. **Risk category:** architectural
+  migration. **Action:** none now; flag in review if new code depends on the global-ness of this
+  constraint.
+- **(2026-08-15) Personal runtime state lives in module-level singletons.**
+  `bartholomew/kernel/narrator.py`, `encryption_engine.py`, `memory_rules.py`,
+  `retrieval_config.py` and `metrics_registry.py` each hold process-global singletons that stand in
+  for per-identity state. Appropriate for one process serving one person, and the natural
+  multi-identity form (a runtime context constructed per identity, or per-identity instances behind
+  the platform) does not require these modules to be rewritten — only constructed differently. The
+  watch item is that this stays true: a singleton that begins *caching personal content* rather
+  than configuration would be harder to separate later. **Risk category:** architectural migration.
+  **Action:** none now.
+- **(2026-08-15) No ownership/provenance dimension on background work or capability execution.**
+  The scheduler (`bartholomew/kernel/scheduler/*`) runs drives with no notion of whose behalf they
+  act on, and skills execute without an on-behalf-of identity. Two audit surfaces already carry a
+  field that could later carry it — `governance_audit.actor` and `skill_permissions.granted_by` —
+  but both currently record which *subsystem or surface* acted, not which *person*. Correct for a
+  single-identity PoC; named here so the seam is not rediscovered from scratch. Note the naming
+  collision worth avoiding: `bartholomew/kernel/request_admission.py` describes itself as
+  "identity-bound," meaning per-request admission tokens, **not** user identity. **Risk category:**
+  architectural migration. **Action:** none now; new background work should not deepen the
+  assumption (see `CHECKLISTS.md`'s platform/personal-identity checklist).
 - **(2026-07-25, Phase A) Undeclared-dependency class of defect — one instance fixed, the
   detection gap closed.** `MemoryStore.upsert_memory()` called `asyncio.run()` from inside an
   `async def`, so it raised `RuntimeError` on *every* sensitive-content write and always fell
