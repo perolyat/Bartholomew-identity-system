@@ -186,6 +186,11 @@ A change is done only when all of these hold (`MASTER_PLAN.md` DoD + `CHECKLISTS
 - **Correct drift when you find it.** This repo's convention is a dated, explicit correction note
   (`*Corrected 2026-07-28: ...*`) rather than a silent edit. Follow it — the history of a
   correction is part of the record.
+- **Check library docs before writing against an unfamiliar API.** Use the Context7 connector
+  before writing code against a library API not already used in this repo, and when a library
+  error suggests the API has moved. Do **not** use it for how *this* project works — the codebase
+  is the better source for that, and the repo's pinned versions are the authority on what is
+  actually installed.
 - **Branch discipline.** Develop on the assigned `claude/*` branch. Never push to `main`.
 
 ---
