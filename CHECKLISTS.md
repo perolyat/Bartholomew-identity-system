@@ -2,7 +2,15 @@
 
 > Operational and engineering checklists. If it’s not checked, it’s not real.
 >
-> **Last updated:** 2026-08-14 (added one line to the PR checklist making explicit that the
+> **Last updated:** 2026-08-15 (added a "Platform and personal-identity architecture" checklist —
+> the operational form of `CONSTITUTION.md`'s new binding conflict-surfacing rule, covering
+> ownership representability, execution beneficiary, identity-not-pinned-to-infrastructure, local
+> stop authority, personal-vs-platform learning, and an explicit guard against premature platform
+> engineering. No existing checklist covered the "whose Bartholomew is this?" question. See
+> `DECISIONS.md`'s "One shared Bartholomew platform; many strongly isolated personal Bartholomew
+> identities" entry.)
+>
+> **Previously (2026-08-14):** added one line to the PR checklist making explicit that the
 > existing secrets/confidential-data discipline applies equally to AI coding-agent sessions —
 > restates existing `.gitignore`/`detect-private-key` control scope; no new mechanism. See
 > `DECISIONS.md`'s new "AI-assisted development is governed by..." entry.)
@@ -79,6 +87,47 @@ section for the full rationale behind each item.
 - **Deployment-architecture consistency:** the change is consistent with the hybrid local-first
   architecture (`DECISIONS.md`) — sensitive memory/governance/emergency-shutdown stay local-
   authoritative; any remote/cross-device exposure has a reviewed threat model.
+
+## Platform and personal-identity architecture checklist (added 2026-08-15)
+
+Applies to any change that adds or alters persisted personal state, background/scheduled
+execution, capability execution context, governance/audit records, an API surface, a client/server
+boundary, or the way an underlying model is used. It makes `CONSTITUTION.md`'s "One Platform, Many
+Personal Bartholomews" → "Conflict-surfacing rule" operational at change time. The existing
+Product & safety invariants checklist above does not cover this: its deployment-architecture item
+asks *where authority sits*, not *whose Bartholomew this is*.
+
+The first item is the binding one. The rest are the questions that reveal whether it applies.
+
+- **PASS/BLOCKED — Conflict surfaced, not silently resolved:** if this change would materially
+  jeopardise any of the eight properties named in `CONSTITUTION.md`'s conflict-surfacing rule
+  (one platform / many identities; strong isolation; persistence of individual identity;
+  portability of identity and state; Bartholomew-is-not-the-LLM separation; hybrid/local
+  Governance authority; eventual lightweight client; ability to replace infrastructure or models
+  without replacing the person's Bartholomew), **the conflict has been explicitly put to the user
+  before implementation.** Implementation convenience is not a resolution.
+- **PASS/BLOCKED — Ownership representable later:** any new persisted personal state could later
+  acquire an owner without redesign (no new *global* uniqueness constraint over personal data, no
+  new record type whose ownership would be unrecoverable).
+- **PASS/BLOCKED — Beneficiary recoverable:** any new background, scheduled, or capability
+  execution can eventually answer "on whose behalf is this running?" — no new work whose
+  beneficiary is structurally unknowable.
+- **PASS/BLOCKED — Identity not pinned to infrastructure:** the change does not make personal
+  identity or continuity depend on a specific device, filesystem path, database engine, server,
+  AI provider, or model generation. Deployment choices may be convenient; they may not become
+  identity.
+- **PASS/BLOCKED — Local stop still local:** the change does not move the parking brake,
+  emergency shutdown, or local device permission enforcement behind a remote service, and does not
+  create a state where a cloud/service outage leaves the user unable to stop Bartholomew acting on
+  their devices.
+- **PASS/BLOCKED — Personal learning stays personal:** the change does not route personal memory,
+  personal context, or user-identifying material into shared, platform-level, or cross-instance
+  knowledge (see `CONSTITUTION.md`'s "Personal learning vs. potentially generalisable and
+  system-level learning" — name removal is not depersonalisation).
+- **PASS/BLOCKED — Not premature platform work:** conversely, the change does **not** build
+  multi-user, tenancy, authentication, or distributed infrastructure that the current PoC does not
+  need. This checklist exists to prevent dead ends, not to authorise platform engineering — see
+  `docs/TILT.md`.
 
 ## Staged workstream approval (e.g. Phase B B0–B9) (added 2026-07-31)
 

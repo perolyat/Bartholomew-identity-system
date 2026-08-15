@@ -9,7 +9,15 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-08-08 (New Direction reconciliation: added a new "Competency, Training,
+> **Last updated:** 2026-08-15 (platform/personal-identity architecture: added one Ownership-table
+> row and a new "Personal-identity ownership" subsection recording what the runtime assumes today
+> about *whose* Bartholomew it is serving — verified against the code, which has no user/tenant/
+> owner concept anywhere — and classifying each single-user assumption as acceptable-for-PoC, a
+> documented migration seam, or a trap. No trap was found. Documentation-only; no code change
+> authorised, and no existing runtime behaviour is described differently. See `CONSTITUTION.md`'s
+> "One Platform, Many Personal Bartholomews" section and `DECISIONS.md`'s corresponding entry.)
+>
+> **Previously (2026-08-08):** New Direction reconciliation: added a new "Competency, Training,
 > and Learning" section conceptually extending the Runtime Contract to cover competency/knowledge
 > retrieval, confidence/proficiency, Executive application of competencies, and the
 > Experience → Reflection → candidate learning → governed consolidation loop — per the
@@ -286,6 +294,7 @@ concept" entry; this file is the reference copy going forward.)
 | Competency (data: knowledge, procedures, evidence, proficiency) | Memory Substrate — competencies are a structured *description* held in the same substrate, not a separate store (added 2026-08-08, conceptual — no implementation exists yet) | — |
 | Competency (application/reasoning) | Kernel Executive — same owner as Planning, above; applying a competency is the Executive doing its existing job with richer inputs, not a second reasoning authority (added 2026-08-08, conceptual) | — |
 | Training (ingestion of trained material) | No new owner — training material is Observation → Interpretation → Memory like any other input (added 2026-08-08, conceptual) | — |
+| Personal-identity ownership (whose Bartholomew persisted state and executing work belong to) | **No owner exists today, deliberately.** The runtime serves exactly one personal Bartholomew identity, and the deployment itself — one process, one SQLite database, one filesystem path — is the implicit boundary. When ownership becomes real it belongs to the Identity System (row 1), never to individual stores or capabilities (added 2026-08-15, conceptual — see below) | — |
 
 The 2026-07-21 audit named four "duplicate pairs." Three (persona, permission gates,
 kill-switch) are genuine. The fourth, "model routing," was **reclassified in item 11.15 as not
@@ -301,6 +310,54 @@ dispatch) are distinct concepts, so neither side is deprecated. Status of each:
 
 Rule going forward: **do not add new callers to a deprecated module.** Delete only once its
 last caller is migrated.
+
+### Personal-identity ownership (added 2026-08-15)
+
+`CONSTITUTION.md`'s "One Platform, Many Personal Bartholomews" section establishes that
+Bartholomew is ultimately one shared platform serving many strongly isolated personal identities,
+and that the current runtime is **the first personal Bartholomew identity on an early deployment
+of that platform** — not a different system. This subsection records what that runtime actually
+assumes today, so a future reader does not mistake current deployment convenience for architecture,
+and does not have to re-derive the seams. **Nothing here is a defect report, and nothing here
+authorises a change.**
+
+**What the runtime assumes today.** There is no user, tenant, owner or account concept anywhere in
+`bartholomew/`, `bartholomew_api_bridge_v0_1/` or `identity_interpreter/` — verified by search, not
+assumed. One process serves one person; `BARTH_DB_PATH` (default `data/barth.db`) resolves one
+SQLite database that *is* the personal state; the API bridge has no authentication and treats every
+caller as the owner (`INTERFACES.md` §6 records this accurately as a local/dev surface). Several
+kernel components hold module-level singletons (`narrator.py`, `encryption_engine.py`,
+`memory_rules.py`, `retrieval_config.py`, `metrics_registry.py`), which is process-global state
+standing in for per-identity state. Two audit surfaces already carry a provenance field that could
+later carry identity — `governance_audit.actor` and `skill_permissions.granted_by` — though both
+currently record *which subsystem or surface* acted, not *which person*. Note also that
+`request_admission.py`'s "identity-bound" wording refers to per-request admission tokens, not to
+user identity; the two are unrelated.
+
+**Classification.** Each single-user assumption is one of four things. Recording which one it is
+now is the point of this subsection:
+
+| Assumption in current code | Classification |
+|---|---|
+| One process / one runtime serves one person; module-level singletons hold personal runtime state | **Acceptable for the PoC.** Correct for a single-identity deployment, and the natural multi-identity form (one runtime context per identity, or per-identity instances behind the platform) does not require these modules to be rewritten — only constructed differently. |
+| One SQLite database at one filesystem path is the personal-state boundary | **Acceptable for the PoC, and a documented seam.** A per-identity database is itself a legitimate strong-isolation strategy, so this choice does not foreclose the platform architecture. What must not happen is code *reasoning about* the path as though it were the identity. |
+| API bridge assumes a trusted single-user environment (no auth, no caller identity) | **Documented migration seam.** Already governed: `DECISIONS.md`'s hybrid local-first entry and `ROADMAP.md` Stage 6 both require a reviewed threat model before any remote exposure. The admission middleware in `app.py` is the existing single chokepoint where caller identity would attach — one place, not per-route. |
+| `memories` is uniquely indexed on `(kind, key)` **globally**, with no ownership dimension (`memory_store.py`) | **Documented migration seam — the one worth naming explicitly.** In a multi-identity store, uniqueness must be per identity, not global; two users may each have a `user_profile`/`home_address`. Correctable later by an ordinary additive migration (add the ownership column, rebuild the index over `(owner, kind, key)`). Cheap now *and* cheap later, so it is deliberately **not** being changed now — but it must not be relied upon as a global-uniqueness guarantee by future code. |
+| Scheduler, drives and background work carry no ownership (`scheduler/*`) | **Documented migration seam.** Background cognition executing on someone's behalf is precisely where "on whose behalf?" must eventually be answerable. No change now; the requirement is that new background work does not acquire *additional* assumptions that one scheduler equals one person. |
+| Governance/parking-brake state is a singleton row (`governance_store.py`) | **Acceptable for the PoC, with a constraint.** Per `CONSTITUTION.md`, local Governance authority must remain locally enforceable regardless of topology — so a future platform must not relocate the brake's authority to a central service, whatever it does with the brake's *state*. |
+
+**No serious architectural trap was found.** No current code equates Bartholomew with a particular
+model, prevents personal state from being exported or migrated, or makes personal state
+structurally unable to acquire an owner. The Ownership table above is already model-agnostic
+(Memory: "SQLite now, Postgres later"; Identity: "YAML today, database tomorrow"; Capabilities:
+"local skills today, remote services / MCP later"), which is the same replaceability this
+architecture requires.
+
+**The constraint this places on new work:** do not add *new* code that deepens any of the
+assumptions above — in particular, do not introduce new persisted personal state that could not
+later acquire an owner, new background execution whose beneficiary is unrecoverable, or new global
+uniqueness constraints over personal data. That is a constraint on how new code is shaped, not a
+mandate to change existing code.
 
 ## Governance checkpoints
 

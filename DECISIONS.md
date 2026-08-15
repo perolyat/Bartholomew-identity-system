@@ -2,7 +2,19 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-14, second pass (one new decision added — "AI-assisted development is
+> **Last updated:** 2026-08-15 (one new decision added — "One shared Bartholomew platform; many
+> strongly isolated personal Bartholomew identities." Records the foundational distinction between
+> the shared platform, the replaceable underlying intelligence/models, and a user's persistent
+> personal Bartholomew; establishes that Bartholomew is not the LLM, that identity is portable
+> across infrastructure, that the client may eventually be lightweight while local Governance
+> authority stays local, and that isolation between personal identities is non-negotiable. Extends
+> rather than replaces the 2026-07-28 "Deployment architecture — hybrid local-first" entry.
+> Documentation-only — no implementation, schema, or PoC-scope change authorised. See
+> `CONSTITUTION.md`'s new "One Platform, Many Personal Bartholomews" section, `COGNITIVE_RUNTIME.md`'s
+> new "Personal-identity ownership" subsection, `CHECKLISTS.md`'s new checklist, `RISKS.md`'s three
+> new tech-debt entries, and `ASSUMPTIONS.md` A9.)
+>
+> **Previously (2026-08-14, second pass):** one new decision added — "AI-assisted development is
 > governed by the existing Architect/User-Approval framework — provenance, IP, and third-party-
 > licensing risk made explicit." Prompted by Anthropic's introduction of machine-readable
 > provenance/watermarking for Claude-generated content; a repository-grounded governance review,
@@ -1415,3 +1427,95 @@
     S5.4–S5.7 remain deferred, unchanged.
   - Open issues #42 and #22 are untouched and remain open.
 - **Date:** 2026-08-14
+
+## Decision: One shared Bartholomew platform; many strongly isolated personal Bartholomew identities
+- **Decision:** Bartholomew is architecturally **one shared platform serving many strongly
+  isolated personal Bartholomew identities**, not a product of which each user receives a
+  duplicated copy. Three layers are permanently distinguished: (1) the **Bartholomew platform** —
+  shared software, common Executive and Governance mechanisms, capability infrastructure, model
+  access, updates; (2) **underlying intelligence/resources** — LLMs, multimodal models, specialist
+  AI services, reasoning engines, which Bartholomew *uses* and which are replaceable; and (3) a
+  **user's personal Bartholomew** — the persistent, isolated state carrying that individual's
+  memories, preferences, goals, relationships, permissions, history, learned understanding,
+  trust/autonomy configuration and world model. Individuality comes from layer 3, never from
+  duplicating layers 1 and 2. Four consequences are binding architectural direction:
+  **(a) Bartholomew is not the LLM** — the model layer is a cognitive resource, and models must be
+  upgradable or replaceable without destroying a user's Bartholomew identity;
+  **(b) identity is portable** — logically independent of the device, client, server, database,
+  AI provider, model generation and deployment topology currently serving it, subject to
+  Governance, security, privacy and user control; **(c) the client may eventually be lightweight**
+  — a downloaded application need not contain Bartholomew's whole intelligence, provided local
+  Governance authority (parking brake, local device permissions, credential boundaries, safe
+  degradation, loss-of-connectivity behaviour) remains locally enforceable, so that a cloud outage
+  can never leave a user unable to locally stop Bartholomew acting on their devices;
+  **(d) isolation between personal identities is non-negotiable** — user ownership/tenancy becomes
+  a first-class concept wherever persistence or execution eventually requires it, and personal
+  learning never becomes shared platform knowledge except through the explicit, governed,
+  not-yet-built generalisation process this document's "Personal, potentially generalisable, and
+  system-level learning are architecturally distinct" entry already governs.
+  The current single-user deployment is conceptually **the first personal Bartholomew identity
+  running on an early deployment of that platform** — not a different, throwaway system.
+  This entry is **documentation-only and authorises no implementation.**
+- **Alternatives considered:** (a) **Leave it undocumented** and decide at commercialisation time —
+  rejected: the repository-grounded review that produced this entry found the canonical set
+  effectively silent on how many users exist, with a single incidental mention of "single-user"
+  across fourteen documents. Silence is not neutral; it lets each future session assume whichever
+  model is locally convenient, which is exactly how one-process-equals-one-user hardens into
+  architecture. (b) **Fix it in code now** — add ownership columns, a tenancy dimension, an
+  authenticated identity, per-user runtime state — rejected as a direct violation of
+  `docs/TILT.md` and `CONSTITUTION.md`'s revised Development Philosophy: it would convert a
+  documentation decision into a large infrastructure project ahead of any real-world use of
+  slice 1, and would be premature abstraction against requirements no user has yet exercised.
+  (c) **Record it as a per-user deployment model instead** (each customer gets their own copy of
+  the whole stack) — rejected: it makes model/infrastructure upgrades a per-customer migration,
+  makes shared platform learning structurally impossible, and contradicts the product intent that
+  a user's Bartholomew persists across devices and infrastructure rather than being pinned to one
+  installation. (d) **Fold it into the existing hybrid local-first entry** — rejected as
+  conflating two genuinely different questions; see "relationship to existing decisions" below.
+- **Why:** The individuality of a person's Bartholomew is a product characteristic, and the review
+  found nothing in the canonical documentation that prevented a future session from implementing
+  it the expensive and fragile way — by duplicating the stack per user, or by equating Bartholomew
+  with whichever model it currently calls. Both would be extremely difficult to reverse later: the
+  first turns every platform improvement into an N-customer migration, and the second makes a
+  model-generation change an identity-destroying event. Writing the distinction down now costs a
+  documentation pass; discovering it after customers exist costs a rewrite. The same argument
+  applies to isolation: retrofitting ownership onto persisted state and background execution after
+  a second user exists is materially harder than reserving the concept while there is exactly one.
+- **Relationship to existing decisions:** This entry **extends, and does not replace,**
+  "Deployment architecture — hybrid local-first" (2026-07-28). That entry answers *where authority
+  and compute sit* for one user (local-authoritative for sensitive memory, governance and
+  emergency shutdown; optional cloud services). This entry answers *how many users there are, what
+  a personal Bartholomew is, and what must remain replaceable underneath it*. The two are
+  consistent: the lightweight-client direction recorded here is explicitly bounded by hybrid
+  local-first's requirement that governance and emergency shutdown never depend on cloud
+  availability. It also **builds on** "Personal, potentially generalisable, and system-level
+  learning are architecturally distinct" (2026-08-08), which already established that personal
+  learning is never auto-promoted; this entry supplies the platform context that made that
+  distinction necessary, and does not restate or weaken it. It is constrained by "Usable POC /
+  time-to-real-use prioritisation" (2026-08-12), which is why nothing here is implementation.
+- **Consequences:**
+  - `CONSTITUTION.md` gains a "One Platform, Many Personal Bartholomews" section — the enduring
+    authority for the three-layer distinction, Bartholomew-is-not-the-LLM, identity portability,
+    the client/Bartholomew boundary, local Governance authority, and isolation. It ends with a
+    **binding conflict-surfacing rule** naming eight properties a future proposal may not silently
+    trade away.
+  - `COGNITIVE_RUNTIME.md` gains a "Personal-identity ownership" subsection under its ownership
+    table, plus one ownership-table row, recording what the runtime assumes today and classifying
+    each single-user assumption as acceptable-for-PoC, a documented migration seam, or a trap.
+  - `CHECKLISTS.md` gains a "Platform and personal-identity architecture checklist" making the
+    conflict-surfacing rule operational at change time.
+  - `RISKS.md` gains three tech-debt watchlist entries for the concrete seams found in code.
+  - `ASSUMPTIONS.md` gains A9 — that the current deployment serves exactly one personal identity,
+    recorded as a deliberate, tracked assumption rather than an invisible one.
+  - `ROADMAP.md`'s "What we will not do yet" gains an explicit line: multi-user/tenancy
+    infrastructure is not current PoC scope. **No stage's scope grows as a result of this entry.**
+  - **No code change is authorised by this entry.** The review deliberately found no defect
+    requiring correction now: the single-user assumptions in the code are all either appropriate
+    for the PoC or cheap to correct later, and the one candidate worth flagging (the globally
+    unique `memories(kind, key)` index) is a documented seam, correctable by ordinary additive
+    migration if and when ownership becomes real.
+  - Future platform work — actual multi-user infrastructure, production tenancy, authentication,
+    distributed services, client/server split, migration systems — remains **FUTURE PLATFORM
+    WORK**, requiring its own proposal and approval. It must not be pulled into the current PoC
+    roadmap.
+- **Date:** 2026-08-15
