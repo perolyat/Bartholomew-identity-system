@@ -396,10 +396,10 @@ authority is `GovernanceStore` (`parking_brake_state` + `governance_audit`, in
 `brake off`, the `skills` gate and the `scheduler` gate all go through it. The legacy
 `ParkingBrake`/`BrakeStorage` pair (`system_flags`) still exists and is still what the `sight` and
 `voice` seams read. That split is **known and deliberately deferred**, not newly discovered: B4
-found those paths unreachable (no live caller) and deferred consolidation; `docs/B6_EXTERNAL_
-GOVERNANCE_CLI_SAFETY.md` §1 finding 5 re-confirmed and again deferred it. It is not a live safety
-hole today because the capability behind those seams is inert. See `RISKS.md`'s tech-debt watchlist
-for why it matters more under the authority tiers below.
+found those paths unreachable (no live caller) and deferred consolidation;
+`docs/B6_EXTERNAL_GOVERNANCE_CLI_SAFETY.md` §1 finding 5 re-confirmed and again deferred it. It is
+not a live safety hole today because the capability behind those seams is inert. See `RISKS.md`'s
+tech-debt watchlist for why it matters more under the authority tiers below.
 
 #### Authority tiers: Personal/User and Platform/Admin (added 2026-08-15)
 
