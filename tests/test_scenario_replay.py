@@ -150,7 +150,7 @@ class TestScenarioReplay:
         reflection = await daemon.mem.latest_reflection("daily_journal")
         assert reflection is not None
         assert "finish the quarterly report" in reflection["content"]
-        assert reflection["meta"].get("episodic_narrative_included") is True
+        assert reflection["meta"].get("episodic_evidence_present") is True
 
         # --- Simulated restart: persist, then boot a *second* daemon --------
         # against the same DB and confirm state survives, proving none of
