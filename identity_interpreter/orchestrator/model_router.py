@@ -54,6 +54,8 @@ class ModelRouter:
         self.config = config or self._default_config()
         self.identity_config = identity_config
         self.llm_adapter = None
+        self.cloud_adapter = None
+        self._ledger = None
 
         # Lazily initialize LLM adapter if identity config provided
         if identity_config:
@@ -63,6 +65,28 @@ class ModelRouter:
                 self.llm_adapter = LLMAdapter(identity_config)
             except Exception:
                 # Adapter unavailable, will use stub
+                pass
+
+            # Cloud is opt-in: built only when an API key is present, so a
+            # deployment that never configures one behaves exactly as it did
+            # before this existed. See docs/VISION_AND_PERSONAL_DEPLOYMENT.md
+            # §6 -- enabling cloud is the moment personal context first
+            # leaves the device, and that stays a deliberate user action.
+            try:
+                from ..adapters.cloud_llm import CloudLLMAdapter, is_configured
+
+                if is_configured():
+                    self.cloud_adapter = CloudLLMAdapter(identity_config)
+            except Exception:
+                pass
+
+            # Spend ledger, so Identity.yaml's monthly cap is enforced from
+            # recorded spend rather than left declarative.
+            try:
+                from .budget_ledger import BudgetLedger, resolve_ledger_path
+
+                self._ledger = BudgetLedger(resolve_ledger_path())
+            except Exception:
                 pass
 
         # With a working adapter, default to the real local backend and take
@@ -121,17 +145,50 @@ class ModelRouter:
             },
         }
 
+    def budget_snapshot(self):
+        """Cloud spend against Identity.yaml's monthly cap, or None when no
+        identity/ledger is wired (in which case nothing is capped because
+        nothing can reach a paid backend anyway)."""
+        if self._ledger is None or self.identity_config is None:
+            return None
+        try:
+            cap = self.identity_config.meta.deployment_profile.budgets.monthly_cloud_spend_usd
+        except Exception:
+            return None
+        return self._ledger.snapshot(float(cap) if cap is not None else None)
+
     def select_route(self, data: dict[str, Any]) -> dict[str, Any]:
         """
         Select the appropriate routing configuration.
 
+        With an identity wired, selection is per-request and Identity-driven:
+        `task_type` picks candidate models from `Identity.yaml`'s
+        `by_task_type` policy, recorded cloud spend decides whether cloud
+        candidates are still affordable, and the chosen model's family
+        determines the backend. Without one, the original behaviour stands --
+        a `backend` hint or the stub default.
+
+        This is the full form of the gap recorded in
+        `identity_interpreter/policies/model_router.py`'s docstring and
+        MASTER_PLAN item 11.15: the live runtime previously ignored
+        `by_task_type` entirely. An explicit `backend` in `data` still wins,
+        so callers that route by hand are unaffected.
+
         Args:
-            data: Request data containing routing hints
+            data: Request data. Honours `backend` (explicit override) and
+                `task_type` (Identity-policy selection; defaults to
+                "general").
 
         Returns:
-            Route configuration with backend, model, and parameters
+            Route configuration with backend, model, and parameters.
         """
-        backend = data.get("backend", self.config["default_backend"])
+        explicit_backend = data.get("backend")
+        if explicit_backend is None and self.identity_config is not None:
+            resolved = self._select_by_task_type(data.get("task_type", "general"))
+            if resolved is not None:
+                return resolved
+
+        backend = explicit_backend or self.config["default_backend"]
         backend_config = self.config["backends"].get(backend, {})
 
         return {
@@ -139,6 +196,57 @@ class ModelRouter:
             "model": backend_config.get("model", self.config["default_model"]),
             "parameters": {"temperature": backend_config.get("temperature", 0.7)},
         }
+
+    def _select_by_task_type(self, task_type: str) -> dict[str, Any] | None:
+        """Identity-policy model selection for one request.
+
+        Budget enforcement lives here rather than in `route()` because
+        `select_model()` already accepts `budget_exhausted` and applies
+        `low_balance_behavior: force-local` itself -- the policy was written
+        for this and simply never had a caller that computed the flag. All
+        this does is compute it from recorded spend.
+        """
+        try:
+            from ..policies.model_router import select_model
+
+            snapshot = self.budget_snapshot()
+            exhausted = bool(snapshot and snapshot.exhausted)
+
+            decision = select_model(
+                self.identity_config,
+                task_type=task_type,
+                budget_exhausted=exhausted,
+            )
+            model_name = decision.decision["model"]
+            parameters = dict(decision.decision.get("parameters", {}))
+
+            backend = self._backend_for_model(model_name)
+            if backend is None:
+                return None
+            return {
+                "backend": backend,
+                "model": model_name,
+                "parameters": parameters,
+                "budget_exhausted": exhausted,
+            }
+        except Exception:
+            return None
+
+    def _backend_for_model(self, model_name: str) -> str | None:
+        """Which backend serves this Identity-declared model.
+
+        Cloud only when it is both mappable to a real cloud model *and*
+        actually configured -- an unconfigured cloud selection falls back to
+        local rather than raising, because Identity may legitimately list a
+        cloud model the user has never enabled.
+        """
+        from ..adapters.cloud_llm import is_configured, map_model_name
+
+        if map_model_name(model_name) is not None:
+            return "cloud" if is_configured() else "local"
+        if self.llm_adapter is not None:
+            return "local"
+        return None
 
     def route(self, data: dict[str, Any]) -> str:
         """
@@ -177,6 +285,10 @@ class ModelRouter:
         # default when no identity config was supplied.
         if backend == "stub":
             return f"[{route['model']}] Mock response for prompt: {prompt[:50]}..."
+
+        # Cloud backend: opt-in, budget-capped, spend recorded.
+        if backend == "cloud":
+            return self._route_cloud(route, prompt, data)
 
         # Real backends: local/ollama via the adapter.
         if backend in ("local", "ollama"):
@@ -224,3 +336,72 @@ class ModelRouter:
             model=route["model"],
             reason="backend_not_implemented",
         )
+
+    def _route_cloud(self, route: dict[str, Any], prompt: str, data: dict[str, Any]) -> str:
+        """Generate via the cloud backend, refusing when the monthly cap is
+        spent and recording what the call cost.
+
+        The budget is checked here as well as during selection because an
+        explicit `backend="cloud"` hint bypasses `_select_by_task_type()`
+        entirely -- without this check, a hand-routed caller could spend past
+        a cap that Identity policy declares. Cheaper to refuse than to
+        discover the overspend on an invoice.
+        """
+        snapshot = self.budget_snapshot()
+        if snapshot is not None and snapshot.exhausted:
+            raise ModelBackendError(
+                f"Monthly cloud budget exhausted for {snapshot.period} "
+                f"(${snapshot.spent_usd:.2f} of ${snapshot.cap_usd:.2f}). "
+                "Identity policy is force-local until the period rolls over.",
+                backend="cloud",
+                model=route["model"],
+                reason="budget_exhausted",
+            )
+
+        if self.cloud_adapter is None:
+            raise ModelBackendError(
+                "Cloud backend selected but not configured.",
+                backend="cloud",
+                model=route["model"],
+                reason="cloud_not_configured",
+            )
+
+        try:
+            result = self.cloud_adapter.generate(
+                prompt=prompt,
+                model=route["model"],
+                parameters=route["parameters"],
+                context=data,
+            )
+        except Exception as exc:
+            raise ModelBackendError(
+                f"Cloud backend raised while generating: {exc}",
+                backend="cloud",
+                model=route["model"],
+                reason="adapter_exception",
+            ) from exc
+
+        if not result.get("success"):
+            raise ModelBackendError(
+                result.get("response") or "Cloud backend failed to generate.",
+                backend="cloud",
+                model=result.get("model", route["model"]),
+                reason=result.get("error", "generation_failed"),
+            )
+
+        # Record spend before returning. Best-effort: a ledger write failure
+        # must not discard a generation the user already paid for. The next
+        # snapshot() fails closed anyway, so an unwritable ledger degrades to
+        # local-only rather than to silent uncapped spend.
+        if self._ledger is not None:
+            try:
+                self._ledger.record(
+                    backend="cloud",
+                    model=result.get("model", route["model"]),
+                    input_tokens=result.get("input_tokens", 0),
+                    output_tokens=result.get("output_tokens", 0),
+                )
+            except Exception:
+                pass
+
+        return result.get("response", "")

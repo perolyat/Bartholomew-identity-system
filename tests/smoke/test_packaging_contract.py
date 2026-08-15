@@ -59,6 +59,11 @@ GUARDED_OPTIONAL_IMPORTS = {
     "sentence_transformers",
     # Optional local-LLM client; llm_stub sets HAS_OLLAMA_CLIENT=False without it.
     "ollama",
+    # Optional cloud-LLM client; cloud_llm sets HAS_ANTHROPIC_SDK=False without
+    # it. Cloud generation is opt-in (no API key means no cloud backend), so a
+    # deployment that never enables it never needs the package -- deliberately
+    # not a hard runtime dependency. See docs/VISION_AND_PERSONAL_DEPLOYMENT.md §6.
+    "anthropic",
 }
 
 # Modules whose import name differs from the distribution that provides them.
