@@ -2,7 +2,13 @@
 
 > Minimum test coverage by subsystem. Add to this when adding a subsystem.
 >
-> **Last updated:** 2026-07-27 (planning-document reconciliation: added the subsystems whose
+> **Last updated:** 2026-08-15 (added the "Usable POC slice 1" section, primarily to record a
+> coverage caveat found by real-world testing: the slice-1 and chat-seam tests inject their own
+> responder, so they cannot detect that the live chat path returns a stub response. Counts below
+> are unchanged and still dated 2026-07-27 — they predate the slice-1 tests and have not been
+> re-collected.)
+>
+> **Previously (2026-07-27):** planning-document reconciliation: added the subsystems whose
 > tests landed between 2026-07-23 and Phase A — runtime-contract seams for skills and
 > voice/sight, consent-bypass red team, scheduler startup readiness, packaging contract,
 > clean-start lifecycle, sensitive-memory consent. This matrix had recorded none of them, so a
@@ -135,6 +141,25 @@ by Governance, and emit exactly one `ActionReflection` per attempt.
   `async def`, always raising `RuntimeError` and falling through to an undeclared
   `import nest_asyncio` — so approved sensitive content raised `ModuleNotFoundError` instead of
   being stored. Consent remains fail-closed with no handler registered.
+
+## Usable POC slice 1 — personal memory capture/recall (added 2026-08-15)
+
+**Status:** `tests/test_personal_memory_capture_recall.py` (40 tests, added with commit `2d443a9`)
+covers capture through the governed write path, retrieval widening, the relevance gate's
+behaviour, brake/consent/privacy enforcement, explanation-grade recording, and a
+chat → governed write → notify skill → real outbound HTTP chain against a loopback server.
+
+- **Unit:** `bartholomew/kernel/personal_facts.py`'s extractor and retrieval adapter (pure logic).
+- **Integration:** the seam tests above, driving a real `KernelDaemon` through
+  `run_chat_through_runtime_contract()`.
+- **⚠️ Coverage caveat — read before citing these tests as end-to-end evidence.** These tests, and
+  `tests/test_api_chat_runtime_contract.py`, **inject their own `respond_fn`** and assert on the
+  prompt the seam constructs. That is correct and deliberate coverage *of the seam*, and it is
+  structurally incapable of detecting that the live deployment has no model behind chat — which is
+  exactly what the 2026-08-15 real-world session found (`/api/chat` returns a stub-backend mock
+  string; see `RISKS.md`'s tech-debt watchlist). **No test in this repository exercises the live
+  conversational response path.** Passing tests here therefore support "the seam builds the right
+  prompt and writes the right memory"; they do **not** support "conversational recall works."
 
 ## When adding a new subsystem
 

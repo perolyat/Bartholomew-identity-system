@@ -10,6 +10,11 @@ not a full design-doc-and-decision-ledger cycle") and `MASTER_PLAN.md`'s Doc Gov
 **Slice 1's completion does not authorise slice 2.** Per `docs/TILT.md`, slice 2 is scoped from
 slice 1's *real usage feedback*, not designed ahead of it, and requires its own approval.
 
+**First real-world validation session held 2026-08-15 — see §8.** Storage, encryption,
+notification persistence and end-to-end delivery to a real device are validated; the acceptance
+bar's *conversational recall* half is **not**, because `/api/chat` currently returns a stub
+response. §8 records the evidence, the cause, and one defect found.
+
 Scope is exactly `docs/TILT.md`'s "First vertical slice: Personal Memory Capture and Recall"
 section — this note makes that section's three additions concrete enough to implement, decides
 the notification channel `docs/TILT.md` left open, and states the acceptance bar and non-goals.
@@ -178,3 +183,86 @@ ahead of it):
 **Next step is real use, not more slice-1 work.** Per `docs/TILT.md`'s prioritisation principle,
 further hardening of this slice now competes with starting slice 2 and generally loses. Slice 2 is
 scoped from real feedback and requires its own approval.
+
+## 8. First real-world validation session (2026-08-15)
+
+The first hands-on session called for by `MASTER_PLAN.md`'s "Next 3 Moves" item 4 was run against
+a live `uvicorn` instance, a real `ntfy` topic on a real Android device, and direct inspection of
+`data/barth.db`. This section records what that session actually established. **It changes no
+stage status and closes no acceptance criterion that the evidence does not genuinely support.**
+
+Method note, and its limits: the session drove the running service through PowerShell (HTTP calls
+to the API bridge) and SQLite inspection. That is legitimate evidence for plumbing, persistence
+and transport, and it is **not** evidence about the user-facing experience — see `DECISIONS.md`'s
+"User-facing capability acceptance moves to the Bartholomew UI" entry, which this session
+prompted.
+
+### 8.1 Validated by this session
+
+| Area | Evidence observed |
+|---|---|
+| Service lifecycle | Startup logged kernel start, working-memory/state restoration, scheduler init, autonomy-loop start; shutdown logged autonomy-loop stop, kernel state persisted, clean process exit. Exercises the same lifecycle `tests/test_clean_start_lifecycle.py` covers, now against a real run. |
+| Autonomous scheduler | `self_check` and `reflection_micro` executed repeatedly with `ok=1` while the service ran. Resolved cadences matched `config/kernel.yaml`'s `drives` block (`self_check: every:900`, `curiosity_probe: window:3600`, `reflection_micro: every:7200`) plus the registered `fts_optimize` (604800s) and `awaiting_response_check` (900s) drives. The repeating output is expected daemon behaviour. |
+| Health endpoint | `GET /api/health` returned `status`, `tz`, `orchestrator`, `version`, `kernel_online=true`, last kernel beat, `db_path`, pending-nudge count and last daily reflection — the full shape `services/api/app.py`'s `health()` builds. |
+| Memory **storage** for the tested fact | "My birthday is 3rd March" produced a persisted row with `kind=user_profile`, `key=birthday`, surviving the request. Confirms §1's capture path end-to-end into the store for this fact type. |
+| Encryption at rest for the tested fact | The stored value was an AES-GCM encryption envelope, not plaintext — the `key: birthday` / `encrypt: standard` rule in `memory_rules.yaml` behaving as specified. |
+| Notification persistence + lifecycle | `skill_notifications` held the generated notification with the expected columns (`id`, `message`, `title`, `priority`, `status`, `sound`, `deliver_at`, `deliver_after_quiet_hours`, `created_at`, `sent_at`, `metadata_json`) and reached `status='sent'`. |
+| Notification transport | A direct POST to the configured `ntfy` topic reached the Android device (system notification + topic history) — the transport itself works independently of Bartholomew. |
+| **Bartholomew-generated** delivery, end to end | A Bartholomew-generated notification ("Remembered: Preference: tea over coffee", from `runtime_contract._notify_fact_captured()`) reached the same device. The chain Bartholomew event → notify skill → persisted notification → `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` → device is **validated**. This satisfies §4's fourth bullet ("the webhook fires at least once end-to-end"). |
+| Quiet hours via the direct API | `get_quiet_hours`/`set_quiet_hours` behaved as specified: config baseline `21:30`–`07:00`, a direct notification-API call set `08:00`–`09:00` and read back `start=08:00`, `end=09:00`, `is_active=false`. `is_quiet_hours`, `mute` and deliver-after-quiet-hours handling are present in `bartholomew/skills/notify.py` as documented. |
+
+### 8.2 Not validated — blocked by the stubbed chat response path
+
+`POST /api/chat` returned `"Mock response for prompt: …"` for every message tried, including
+"my birthday is 3rd March", "when is my birthday?", "I prefer tea over coffee" and
+"set quiet hours from 08:00 to 09:00".
+
+The cause is **not** the Runtime Contract seam, which ran correctly — that is why the birthday was
+captured and stored at all. It is the response generator behind the seam:
+`bartholomew_api_bridge_v0_1/services/api/app.py` constructs `orch = Orchestrator()` with no
+`identity_config`, so `identity_interpreter/orchestrator/model_router.py`'s `ModelRouter` never
+builds an `LLMAdapter` and falls back to its default config, whose `default_backend` is `"stub"`.
+`ModelRouter.route()` then returns the literal `f"[{model}] Mock response for prompt: …"` string.
+The Ollama-backed `LLMAdapter` exists (`identity_interpreter/adapters/llm_stub.py`) and
+`Identity.yaml` sets `ollama_enabled: true`, but nothing on the live path passes the identity
+config that would activate it.
+
+Consequently these parts of §4's acceptance bar are **not** met by real use, and are recorded as
+open rather than complete:
+
+- **"A fact stated in one conversation can be relevantly recalled in a later separate conversation
+  without the user restating the fact."** The *storage* half is validated (§8.1). The *recall
+  through conversation* half is not: a stub response cannot demonstrate that a retrieved fact
+  influenced the reply. The 40 tests added with this slice — including
+  `tests/test_personal_memory_capture_recall.py::…::test_fact_stated_in_one_turn_is_recalled_in_a_later_turn`
+  — pass by injecting their own `_respond` callable and asserting on the prompt the seam builds.
+  That is correct coverage of the seam and it is **not** coverage of the conversational
+  experience; no test exercises the live response generator.
+- **Recall visible "in the rendered personal-fact prompt block."** Verified in tests; not observed
+  in real use, for the same reason.
+- **Natural-language settings changes**, including setting quiet hours by asking for it. The direct
+  API path is validated; the conversational path cannot be until chat produces real replies.
+
+### 8.3 Defect found: the webhook body is the internal notification object
+
+Delivery works; presentation does not. `NotifySkill._deliver_notification()` sends
+`notification.to_dict()` (plus `source`) as a JSON body, and `ntfy` renders the raw request body
+as the message text — so the device showed the entire serialized object (`id`, `message`, `title`,
+`priority`, `status`, `sound`, `deliver_at`, `deliver_after_quiet_hours`, `created_at`, `sent_at`,
+`metadata`, `source`) instead of something like title "Bartholomew remembered something" / body
+"Preference: tea over coffee".
+
+Recorded canonically in `RISKS.md`'s tech-debt watchlist. **Not fixed here, and the fix is not as
+small as it looks:** §3 of this note deliberately committed to a provider-agnostic body with no
+provider-specific shaping, so an `ntfy`-shaped fix would violate an approved constraint of this
+slice. Any fix has to answer "what does a human-readable notification look like on an arbitrary
+POST endpoint" — most likely a documented human-facing payload contract, or content negotiation —
+which is a design question, not a one-line change.
+
+### 8.4 What this session means for slice 2
+
+Nothing here authorises slice 2. It does tell us what the blocking dependency is: per
+`docs/TILT.md`'s six exceptions, the stubbed chat response path threatens **the validity of the
+experiment itself** — it is the one category of slice-1 work that the time-to-real-use principle
+does *not* defer. See `ROADMAP.md`'s "Usable POC" section and `docs/TILT.md` for the roadmap-level
+statement of that conclusion.

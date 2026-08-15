@@ -6,8 +6,13 @@
 > non-authoritative reference — this specific document governs near-term execution sequencing and
 > is binding, the same way `ROADMAP.md` and `DECISIONS.md` are.
 >
-> **Last updated:** 2026-08-14 (slice 1 implemented — see "First vertical slice" below; its
-> acceptance-bar wording clarified in the same pass, wording only, no behaviour change).
+> **Last updated:** 2026-08-15 (first real-world use of slice 1 — see "Real-world use of slice 1"
+> below. The acceptance bar is **partially met**: capture/storage and notification delivery are
+> validated in real use; conversational recall is blocked by a stubbed `/api/chat` response path.
+> The principle, the prioritisation test, and the deferral list below are **unchanged**.)
+>
+> **Previously (2026-08-14):** slice 1 implemented — see "First vertical slice" below; its
+> acceptance-bar wording clarified in the same pass, wording only, no behaviour change.
 >
 > **Previously (2026-08-12):** reconciled into `CONSTITUTION.md`, same day as creation.
 > `CONSTITUTION.md`'s "Development Philosophy" section now states this document's principle
@@ -161,6 +166,43 @@ conversation without the user restating the fact, and without bypassing consent/
 > gate exists to prevent. The intent was always a *separate later* conversation in which the fact
 > is relevant, without the user restating it. The implementation behaves that way; only the
 > wording changed.
+
+## Real-world use of slice 1 — first session (2026-08-15): partially achieved, then blocked
+
+This is the record of what the priority in this document actually produced, kept here because this
+document is what claimed real use was the next step. Evidence detail is in
+`docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` §8; the roadmap-level summary is in `ROADMAP.md`'s
+"Usable POC" section. **No implementation is authorised by this record.**
+
+**The acceptance bar is partially met.** Splitting it the way the evidence splits:
+
+| Half of the bar | Status |
+|---|---|
+| A fact stated in conversation is durably stored, governed and encrypted, surviving the request | ✅ **validated in real use** (`kind=user_profile`, `key=birthday`, AES-GCM envelope at rest) |
+| The webhook fires at least once end-to-end, outside the browser tab | ✅ **validated in real use** — a Bartholomew-generated notification reached a real Android device via a real `ntfy` topic |
+| …can be **relevantly recalled in a later separate conversation** without the user restating it | ⛔ **not demonstrated** — `/api/chat` returns `"Mock response for prompt: …"`, so no conversational recall could be observed |
+| Natural-language control of settings (e.g. quiet hours) as part of ordinary use | ⛔ **not demonstrated** — same cause; the *direct API* path is validated, which is a different claim |
+
+**Why this is not "more hardening of slice 1."** The prioritisation test asks what real capability
+a piece of work unlocks for the tester. A stubbed conversational response path does not fail that
+test as polish — it fails it as **experiment invalidity**, the sixth of the six exceptions in "The
+principle" above. Slice 1 exists to generate conversational feedback; it cannot, and slice 2 is
+supposed to be scoped from feedback that therefore does not exist yet. This is precisely the
+situation the exception list is for, and it is the only slice-1 work this document's principle
+does not defer. Acting on it still needs its own explicit approval.
+
+**What this does not change.** The deferral list below is unchanged — S5.4–S5.7, embeddings
+activation, a second competency domain, Stage 6, and relevance-gate tuning all remain deferred.
+Nothing observed in this session argues for un-deferring any of them. In particular, the
+notification-presentation defect found in the same session (`RISKS.md`) is real but is **not** an
+exception-list item: delivery works, only presentation is wrong, so under this document's own
+principle it queues behind unblocking the experiment.
+
+**One methodological consequence, recorded because this session exposed it.** The session was run
+through direct HTTP/database inspection, which is exactly right for plumbing and exactly wrong for
+judging a user-facing capability — it can show a row was written but not that a person was served.
+User-facing acceptance moves to the Bartholomew UI from here; see `DECISIONS.md`'s "User-facing
+capability acceptance moves to the Bartholomew UI" entry.
 
 ## Direction for later slices (deliberately not specified yet)
 

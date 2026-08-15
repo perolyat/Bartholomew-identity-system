@@ -2,7 +2,12 @@
 
 > Contracts between core modules. If a contract changes, update this doc and add/adjust tests.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: §6's security stance updated
+> **Last updated:** 2026-08-15 (§6: recorded that `/api/chat`'s reply text currently comes from a
+> stub backend in the live deployment — a fact about the shipped contract, found by the first
+> real-world validation session of Usable POC slice 1. The route and the Runtime Contract seam
+> behind it are unchanged; no fix is authorised. See `RISKS.md`'s tech-debt watchlist.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: §6's security stance updated
 > for the hybrid local-first deployment decision; a new "Proposed contracts" subsection added
 > under §6 for emergency-shutdown, capture-control, data-export, notification, and
 > awaiting-response interfaces — all explicitly unimplemented and unapproved for implementation.)
@@ -143,7 +148,13 @@ implemented"; a fresh database actually contains 37.)*
   `/ticks` returns `[]` rather than 500 when the `ticks` table is absent — retained as defense in
   depth even though S5.0 removed the startup window that made it reachable (issue #24, PR #23).
 - Chat: `/api/chat`, routed through `run_chat_through_runtime_contract()` when the kernel is
-  running (item 11.4).
+  running (item 11.4). **Reply text is currently produced by a stub backend (added 2026-08-15).**
+  The seam is real and runs — governance, memory capture and retrieval all execute on this path —
+  but `services/api/app.py` constructs `Orchestrator()` with no `identity_config`, so
+  `identity_interpreter`'s `ModelRouter` never builds an `LLMAdapter` and returns its
+  `default_backend: "stub"` string (`"[stub-llm] Mock response for prompt: …"`). Callers and UI
+  clients should not treat `ChatOut.reply` as model output today. Recorded in `RISKS.md`'s
+  tech-debt watchlist; no fix authorised.
 - Self-state: self-snapshot, goals, persona, drives, attention and episode routers
   (`tests/test_self_state_api.py`).
 

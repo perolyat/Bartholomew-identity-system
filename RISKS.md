@@ -2,7 +2,16 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-15, second pass (one tech-debt watchlist item added: the Parking Brake's
+> **Last updated:** 2026-08-15, third pass (two tech-debt watchlist items added, both found by the
+> first hands-on real-world validation session of Usable POC slice 1 — see
+> `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` §8 and `ROADMAP.md`'s "Usable POC" section: **(1)**
+> outbound notifications carry the internal `Notification` object as the user-facing message body,
+> a real user-facing defect on a working delivery path; **(2)** `/api/chat` returns a stub-backend
+> mock string in the live deployment, which blocks end-to-end conversational validation. **Neither
+> is fixed and no fix is authorised by that pass** — both are recorded so they cannot fall out of
+> the backlog.)
+>
+> **Previously (2026-08-15, second pass):** one tech-debt watchlist item added: the Parking Brake's
 > split read/write authority — `sight`/`voice` still read the legacy `system_flags`-backed
 > `ParkingBrake` while the write authority has been `GovernanceStore` since Phase B stage B6. **Not
 > a new finding and not a live safety hole** — B4 and B6 §1 finding 5 both found it and deferred it,
@@ -192,6 +201,46 @@
 
 ## Tech debt watchlist
 
+- **(2026-08-15, third pass) DEFECT — outbound notifications expose the internal `Notification`
+  object as the user-facing message body.** Found in real use: a Bartholomew-generated
+  notification reached a real Android device via a real `ntfy` topic, and the body the user saw was
+  the entire serialized notification (`id`, `message`, `title`, `priority`, `status`, `sound`,
+  `deliver_at`, `deliver_after_quiet_hours`, `created_at`, `sent_at`, `metadata`, `source`) rather
+  than something like title "Bartholomew remembered something" / body "Preference: tea over
+  coffee". **Delivery is not affected** — the transport chain works end to end; only presentation
+  is wrong. Cause: `bartholomew/skills/notify.py`'s `_deliver_notification()` builds
+  `payload = notification.to_dict()` and `_post_webhook()` sends it as a JSON request body;
+  `ntfy` renders the raw request body as the message text. **Risk category:** user-facing
+  correctness / product quality (not safety, not privacy — the payload contains only content the
+  notification was already going to deliver to that endpoint). **Why the fix is not trivial, and
+  must not be done casually:** `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` §3 deliberately made
+  this channel *provider-agnostic*, an approved constraint of slice 1 — "make it `ntfy`-shaped"
+  would violate it. A correct fix has to decide what a human-readable notification is on an
+  arbitrary POST endpoint (a documented human-facing payload contract, a plain-text body mode, or
+  content negotiation), which is a design question. **Action:** none authorised. Must be resolved
+  before any slice claims a user-facing notification *experience* — as opposed to notification
+  *delivery*, which is already validated.
+- **(2026-08-15, third pass) BLOCKER — the live chat path returns a stub-backend mock string, so
+  no conversational capability can be validated end to end.** `POST /api/chat` responds
+  `"[stub-llm] Mock response for prompt: …"`. **The Runtime Contract seam is not at fault and does
+  run** — memory capture, governance and retrieval all execute on that path (a personal fact typed
+  into chat was durably stored and encrypted in the same session). The response *generator* is the
+  gap: `bartholomew_api_bridge_v0_1/services/api/app.py` constructs `orch = Orchestrator()` with no
+  `identity_config`, so `identity_interpreter/orchestrator/model_router.py`'s `ModelRouter` never
+  builds an `LLMAdapter` and falls back to its default config, whose `default_backend` is
+  `"stub"`; `route()` then returns the literal mock string. The Ollama-backed adapter exists
+  (`identity_interpreter/adapters/llm_stub.py`) and `Identity.yaml` sets `ollama_enabled: true` —
+  nothing on the live path passes the config that would activate it. **Why this was not caught by
+  tests, which is the part worth remembering:** the slice-1 acceptance tests
+  (`tests/test_personal_memory_capture_recall.py`) and the chat-seam tests
+  (`tests/test_api_chat_runtime_contract.py`) inject their own `respond_fn` and assert on the
+  prompt the seam builds. That is correct coverage *of the seam* and it is structurally incapable
+  of noticing that the real deployment has no model behind it. **Risk category:** validation gap /
+  product completeness; per `docs/TILT.md` it is an "experiment validity" exception, not polish.
+  **Action:** none authorised by the pass that recorded it. Whatever the eventual answer (wire the
+  identity config through, make the stub fallback loud, or make the backend explicitly
+  configured), it should also close the test-shaped hole above — otherwise the same class of gap
+  recurs silently.
 - **(2026-08-15, second pass) Parking Brake read/write authority is split — known, deferred, and
   newly consequential under the authority-tier model.** Since Phase B stage **B6** the brake's
   write authority is `GovernanceStore` (`parking_brake_state`): `bartholomew/cli.py`'s

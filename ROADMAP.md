@@ -2,12 +2,22 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-15 — one line added to "What we will not do yet": multi-user/tenancy/
-> platform infrastructure is **FUTURE PLATFORM WORK**, explicitly out of current scope. This is a
-> scope *guard*, not a scope change — **no stage's exit criteria, sequencing, or status changed**,
-> and Stage 6's cross-device auth/threat-model work is unchanged. See `CONSTITUTION.md`'s new "One
-> Platform, Many Personal Bartholomews" section and `DECISIONS.md`'s "One shared Bartholomew
-> platform; many strongly isolated personal Bartholomew identities" entry.
+> **Last updated:** 2026-08-15, second pass — **first real-world validation session of Usable POC
+> slice 1 recorded** (see "Slice 1 — first real-world validation session" in the Usable POC section
+> below). Runtime lifecycle, the autonomous scheduler, the health endpoint, memory storage and
+> at-rest encryption for the tested fact, notification persistence, the direct quiet-hours API, and
+> **end-to-end notification delivery to a real mobile device** are validated in real use. Slice 1's
+> acceptance bar is **not** closed: `/api/chat` returns a stub response, so conversational recall
+> and natural-language settings control are unproven. One defect found (the outbound webhook sends
+> the internal notification object as the user-facing message body) — recorded in `RISKS.md`.
+> **No stage status changed, no milestone advanced, no exit criterion marked complete.**
+>
+> **Previously (2026-08-15, first pass):** one line added to "What we will not do yet": multi-user/
+> tenancy/platform infrastructure is **FUTURE PLATFORM WORK**, explicitly out of current scope.
+> This is a scope *guard*, not a scope change — **no stage's exit criteria, sequencing, or status
+> changed**, and Stage 6's cross-device auth/threat-model work is unchanged. See `CONSTITUTION.md`'s
+> new "One Platform, Many Personal Bartholomews" section and `DECISIONS.md`'s "One shared
+> Bartholomew platform; many strongly isolated personal Bartholomew identities" entry.
 >
 > **Previously (2026-08-14):** **Usable POC slice 1 (Personal Memory Capture and Recall) is
 > implemented**, commit `2d443a9`, approved on review. Ordinary conversation now produces durable,
@@ -470,8 +480,50 @@ approved separately and explicitly, then delivered in `2d443a9`. What shipped:
 Known limitations are recorded in the planning note's "As implemented" section and are accepted as
 POC scaffolding per `docs/TILT.md` — tuned from real usage, not ahead of it.
 
+**Slice 1 — first real-world validation session (2026-08-15).** The real-world use called for by
+`MASTER_PLAN.md`'s "Next 3 Moves" item 4 began: a hands-on session against a live service, a real
+`ntfy` topic on a real Android device, and direct database inspection. Full evidence, method, and
+limits are in `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` §8. Summary, stated at the strength the
+evidence actually supports:
+
+- **Validated in real use** — application startup/shutdown and kernel state persistence hooks; the
+  autonomous scheduler running continuously with `self_check`/`reflection_micro` reporting `ok=1`
+  at the cadences `config/kernel.yaml` declares; `GET /api/health`; durable storage of the tested
+  personal fact (`kind=user_profile`, `key=birthday`) with an AES-GCM envelope at rest, not
+  plaintext; `skill_notifications` persistence and lifecycle through `status='sent'`; the direct
+  quiet-hours API (`set_quiet_hours` → `08:00`/`09:00`, `is_active=false`); the `ntfy` transport
+  itself; and **the full Bartholomew event → notify skill → persisted notification → webhook →
+  Android device path**. That last one closes the slice-1 acceptance bullet "the webhook fires at
+  least once end-to-end."
+- **Not validated — open** — the acceptance bar's conversational half. `POST /api/chat` returns
+  `"Mock response for prompt: …"`, so no tested phrasing demonstrated recall of the stored fact
+  through conversation, and no natural-language settings or quiet-hours change could be attempted.
+  Memory **storage** working is not evidence that memory **recall through the real conversational
+  experience** works, and is not treated as such here.
+- **Cause of the blocker** — not the Runtime Contract seam (which ran correctly; that is why the
+  fact was captured), but the response generator behind it:
+  `bartholomew_api_bridge_v0_1/services/api/app.py` builds `Orchestrator()` with no
+  `identity_config`, so `ModelRouter` never constructs the Ollama-backed `LLMAdapter` and falls
+  back to its `default_backend: "stub"`, whose `route()` returns the literal mock string. Recorded
+  in `RISKS.md`'s tech-debt watchlist.
+- **Defect found** — outbound notification delivery sends the internal notification object as the
+  user-facing message body (`ntfy` shows the full serialized `Notification`, not a clean
+  title/body). Delivery is unaffected; presentation is wrong. Recorded in `RISKS.md`'s tech-debt
+  watchlist. **No fix is authorised by this pass**, and the fix is a design question, not a
+  one-liner — slice 1 deliberately committed to a provider-agnostic body, which an `ntfy`-shaped
+  payload would violate.
+
+**This session advances no stage and closes no stage gate.** It is slice-level evidence recorded
+against slice 1's own acceptance bar (`docs/TILT.md`), which remains **partially met**. Stage 1
+and Stage 5 statuses are unchanged by it.
+
 **Slice 1's completion does not authorise slice 2.** Per `docs/TILT.md`, the next step is real-world
-use of this slice; slice 2 is scoped from that feedback and requires its own explicit approval.
+use of this slice; slice 2 is scoped from that feedback and requires its own explicit approval. As
+of the 2026-08-15 session, the honest position is that real-world use has **started and is
+blocked**: the stubbed chat path prevents the slice from generating the conversational feedback
+slice 2 is supposed to be scoped from. Per `docs/TILT.md`'s six exceptions, that is a defect
+threatening **the validity of the experiment itself** — the one category the time-to-real-use
+principle does not defer. Acting on it still requires its own explicit approval.
 
 **Slice 1 is the first slice, not the POC's boundary.** Later slices are expected to progress
 toward proactive surfacing of something noticed and at least one genuine governed action with a
@@ -587,6 +639,24 @@ writes are now queued for review instead of silently discarded when no consent h
 registered (the real headless/API case). S1.2 (2026-08-04) closed the separate,
 previously-unfixed gap in `memory_rules.yaml`'s `ask_before_store` category, reusing the same
 `pending_sensitive_writes` inbox this fix built rather than a parallel one.
+
+**Note added 2026-08-15 (status unchanged — Stage 1 remains complete).** Stage 1's shell is a real,
+implemented UI: `bartholomew_api_bridge_v0_1/ui/minimal/index.html`, a zero-dependency browser page
+covering parking brake, consent inbox, notification settings/quiet hours/mute, awaiting-response
+queue, governance audit, onboarding guidance, self-state/persona/episodes, nudges, reflections —
+**and a chat panel that posts to `/api/chat`**. Two things follow, neither of which reopens this
+stage:
+
+- **This is the surface user-facing acceptance testing should now use**, per `DECISIONS.md`'s
+  "User-facing capability acceptance moves to the Bartholomew UI" entry (2026-08-15). The `ntfy`
+  Android app is a notification *transport* and a test client; it is not, and must not become,
+  Bartholomew's product UI. The three layers stay distinct: the backend/API, the notification
+  delivery transport, and the Bartholomew user interface.
+- **The shell's chat panel is subject to the same stub-response blocker** recorded in the Usable
+  POC section above — it renders whatever `/api/chat` returns, which is currently a mock string.
+  Stage 1's own exit criteria never included conversational quality (they are governance-shell
+  criteria, and they are met); this is noted so nobody reads "Stage 1 complete" as "the UI can be
+  used to accept conversational capabilities today."
 
 **Goal:** A minimal consumer web governance shell on top of the API bridge, consistent with the
 hybrid local-first deployment architecture (`DECISIONS.md`) — browser-based, reaching the trusted

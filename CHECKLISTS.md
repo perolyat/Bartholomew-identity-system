@@ -2,7 +2,14 @@
 
 > Operational and engineering checklists. If it’s not checked, it’s not real.
 >
-> **Last updated:** 2026-08-15 (added a "Platform and personal-identity architecture" checklist —
+> **Last updated:** 2026-08-15, second pass (added an "Acceptance evidence for user-facing
+> capabilities" checklist — the operational form of `DECISIONS.md`'s "User-facing capability
+> acceptance moves to the Bartholomew UI" entry, prompted by the first real-world validation
+> session of Usable POC slice 1. No existing checklist asked whether the evidence offered actually
+> matches the strength of the claim being made, or whether a mock stood in for a real component on
+> the accepted path.)
+>
+> **Previously (2026-08-15, first pass):** added a "Platform and personal-identity architecture" checklist —
 > the operational form of `CONSTITUTION.md`'s new binding conflict-surfacing rule, covering
 > ownership representability, execution beneficiary, identity-not-pinned-to-infrastructure, local
 > stop authority, personal-vs-platform learning, and an explicit guard against premature platform
@@ -156,6 +163,29 @@ between an overview and its stages, or between one stage and the next.
 - **PASS/BLOCKED:** Implementation still requires diff review, and committing still requires
   explicit user approval, per the Commit authorization checklist below — staging does not relax
   either requirement.
+
+## Acceptance evidence for user-facing capabilities (added 2026-08-15)
+
+Applies whenever a capability a *person* uses — conversation, memory recall, proactive behaviour,
+the notification experience, quiet-hours management, consent, preferences/settings, personality,
+interaction flows — is about to be called validated, accepted, done, or complete. It does not
+apply to subsystem/plumbing claims, which API and database evidence covers perfectly well. See
+`DECISIONS.md`'s "User-facing capability acceptance moves to the Bartholomew UI" entry.
+
+- **PASS/BLOCKED:** The capability has been exercised **through the Bartholomew user interface**,
+  not only through terminal/API calls or direct database inspection.
+- **PASS/BLOCKED:** The evidence matches the claim's scope. "The record was written" supports a
+  *storage* claim only — it does not support a *recall*, *experience*, or *end-to-end* claim.
+  Where only part of a loop was exercised, the status says so.
+- **PASS/BLOCKED:** What the **user actually received** was inspected, not just what the system
+  recorded — the rendered reply, the notification as it appears on the device, the setting as the
+  UI reports it. (This is the check the 2026-08-15 notification-body defect would have failed while
+  every database assertion passed.)
+- **PASS/BLOCKED:** No mock, stub, or test-injected component stood in for a real one on the path
+  being accepted. If one did, the item is recorded as **blocked by mock implementation**, not as
+  validated.
+- **PASS/BLOCKED:** Transport/test clients (e.g. the `ntfy` app) are not treated as the Bartholomew
+  UI, and delivery through them is not treated as evidence of notification *experience*.
 
 ## Release checklist (Stage gate)
 

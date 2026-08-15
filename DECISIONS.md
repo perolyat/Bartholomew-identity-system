@@ -2,7 +2,19 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-15, second pass (one new decision added — "Parking Brake authority
+> **Last updated:** 2026-08-15, third pass (one new decision added — "User-facing capability
+> acceptance moves to the Bartholomew UI; backend/API testing keeps its diagnostic role." Prompted
+> by the first hands-on real-world validation session of Usable POC slice 1, in which direct
+> API/database testing simultaneously over-reported memory readiness (storage proven, conversational
+> recall unproven and blocked by a stubbed `/api/chat`) and under-reported a user-facing
+> notification defect that no database assertion could fail on. Records the three distinct layers —
+> backend/API, notification transport, Bartholomew UI — and that `ntfy` is layer 2, a temporary
+> transport and test client, not the product UI. Documentation-only: **no UI work, UI milestone, or
+> fix is authorised**, and no stage status changed. See `ROADMAP.md`'s "Usable POC" section,
+> `docs/TILT.md`, `RISKS.md`'s two new tech-debt entries, `CHECKLISTS.md`'s new acceptance-evidence
+> checklist, and `TEST_MATRIX.md`'s new caveat.)
+>
+> **Previously (2026-08-15, second pass):** one new decision added — "Parking Brake authority
 > tiers — Personal/User and Platform/Admin." A targeted follow-up to the same-day platform/personal-
 > identity decision: an independently enforceable per-user brake that never halts other users, plus
 > a separate higher-scope platform-wide brake a user cannot override and that does not require
@@ -1617,4 +1629,64 @@
   - The Platform/Admin tier, tenancy-aware brake state, admin services, and any scoped-suspension
     system remain **FUTURE PLATFORM WORK** under `ROADMAP.md`'s "What we will not do yet". No
     stage's scope changed.
+- **Date:** 2026-08-15
+
+## Decision: User-facing capability acceptance moves to the Bartholomew UI; backend/API testing keeps its diagnostic role
+- **Decision:** Backend/component testing — PowerShell/`curl` calls to the API bridge, direct
+  SQLite inspection, automated tests — **remains appropriate and continues** for diagnostics,
+  automated regression, and subsystem validation. **User-facing feature acceptance should
+  increasingly be performed through the Bartholomew user interface rather than direct
+  terminal/API manipulation.** Capabilities in scope of that shift: conversation, memory recall,
+  proactive behaviour, the notification experience, quiet-hours management, consent, preferences
+  and settings, personality, and user interaction flows generally. Three layers stay explicitly
+  distinct and must not be conflated in planning or in acceptance claims: **(1)** Bartholomew's
+  backend/API, **(2)** the notification delivery transport, and **(3)** the Bartholomew user
+  interface. The `ntfy` Android application is layer 2 — a temporary transport and test client that
+  proves mobile push delivery. It **must not** become Bartholomew's product UI by default merely
+  because it is currently the most usable surface on a phone.
+- **Alternatives considered:** (a) **Keep accepting user-facing capabilities through direct
+  API/database checks** — rejected: the 2026-08-15 session is the concrete counter-example. Direct
+  inspection proved a personal fact was stored and encrypted, which is genuinely valuable evidence,
+  and a reader could easily have taken it as evidence that "memory works" — while the actual
+  conversational experience returned a mock string and recalled nothing. The method cannot see the
+  difference between a working subsystem and a working product. (b) **Stop backend testing in
+  favour of UI-only acceptance** — rejected: backend testing found the storage evidence, the
+  scheduler cadence, the notification lifecycle state and the transport validation in that same
+  session, and remains the only practical way to diagnose *why* a UI-level failure happens. This
+  decision reassigns which questions each method answers; it removes nothing. (c) **Build a new
+  acceptance UI first** — rejected as unnecessary: Stage 1 already shipped
+  `bartholomew_api_bridge_v0_1/ui/minimal/index.html`, a real zero-dependency shell covering
+  parking brake, consent inbox, notification settings/quiet hours/mute, awaiting-response,
+  governance audit, onboarding, self-state/persona/episodes, nudges, reflections, and chat. The
+  acceptance surface exists; this decision points acceptance at it rather than commissioning
+  another one.
+- **Why:** A capability is not delivered when its subsystem works — it is delivered when a person
+  can use it. Terminal/API testing systematically over-reports readiness because it exercises each
+  seam in isolation, with the tester supplying by hand exactly the inputs an end user would have to
+  get from the product. The 2026-08-15 session showed the failure mode in both directions at once:
+  it over-reported memory (storage proven, recall unproven) and it under-reported the notification
+  problem (delivery proven at the transport, while the message a human actually received was a JSON
+  dump — a defect no database assertion would ever fail on). Fixing the *reporting method* is
+  cheaper than repeatedly correcting the conclusions drawn from it.
+- **Relationship to existing decisions:** **Applies** `docs/TILT.md`'s time-to-real-use principle
+  — real use means a person using the product, which is what makes the UI the right acceptance
+  surface. **Consistent with** `MASTER_PLAN.md`'s verification-first non-negotiable: this raises
+  the bar on what counts as verification of a user-facing claim; it does not lower it anywhere.
+  **Does not change** `ROADMAP.md` Stage 1, which is complete on its own governance-shell exit
+  criteria — those criteria never included conversational quality, and this entry does not
+  retroactively add any.
+- **Consequences:**
+  - `ROADMAP.md`'s Stage 1 section gains a status-neutral note identifying the existing shell as
+    the acceptance surface, and flagging that its chat panel currently renders the same stubbed
+    `/api/chat` response as any other client.
+  - `CHECKLISTS.md` gains a short acceptance-evidence checklist: a user-facing capability is not
+    accepted on API/database evidence alone.
+  - `TEST_MATRIX.md` records the corresponding coverage caveat — the slice-1 acceptance tests
+    inject their own responder, so they cannot speak to the live conversational path.
+  - **No new UI work, UI framework, or UI milestone is authorised by this entry.** It states where
+    acceptance happens, not what should be built. Whether the minimal shell is sufficient for a
+    given capability's acceptance is judged per capability, and any UI work beyond it needs its own
+    approval.
+  - This does not weaken automated testing requirements anywhere: `MASTER_PLAN.md`'s Definition of
+    Done, `CHECKLISTS.md`'s PR gate and `TEST_MATRIX.md`'s per-subsystem minimums are unchanged.
 - **Date:** 2026-08-15

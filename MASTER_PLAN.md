@@ -2,7 +2,20 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-08-15 — **platform/personal-identity architecture recorded**
+> **Last updated:** 2026-08-15, second pass — **first real-world validation session of Usable POC
+> slice 1 recorded** (documentation-only). "Next 3 Moves" item 4 is now **in progress and blocked**,
+> not done. Validated in real use: service lifecycle and kernel persistence hooks, the autonomous
+> scheduler, `/api/health`, durable + encrypted storage of the tested personal fact, notification
+> persistence, the direct quiet-hours API, the `ntfy` transport, and the full Bartholomew →
+> notification subsystem → transport → Android device delivery path. **Not validated:** the
+> conversational half of slice 1's acceptance bar — `/api/chat` returns a stub response, because
+> `services/api/app.py` constructs `Orchestrator()` with no identity config and `ModelRouter` falls
+> back to `default_backend: "stub"`. One defect found (outbound notifications carry the internal
+> notification object as the user-facing body). **No stage gate advanced and no milestone
+> completed** — see `ROADMAP.md`'s "Usable POC" section, `docs/TILT.md`, and
+> `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` §8 for the evidence.
+>
+> **Previously (2026-08-15, first pass):** **platform/personal-identity architecture recorded**
 > (documentation-only). Bartholomew is architecturally **one shared platform serving many strongly
 > isolated personal Bartholomew identities**; a new user never receives a duplicated copy of the
 > stack or model; **Bartholomew is not the LLM**; personal identity/state must survive changes of
@@ -682,13 +695,30 @@ approval before work begins — this list records sequencing, not authorisation)
    completion record, `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` for the as-implemented detail and
    known limitations, and `DECISIONS.md`'s "Usable POC slice 1 implementation approved" entry.
    **This is the first slice of the Usable POC, not its full boundary** — see item 5 below.
-4. **← NEXT: put slice 1 into real-world use.** Per `docs/TILT.md`'s time-to-real-use principle,
-   the next move is not more slice-1 engineering: it is the tester actually using the capability,
-   so slice 2 can be scoped from real feedback rather than designed ahead of it. Configuring
-   `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` and running the capture/recall loop against a real endpoint is
-   the concrete step. Further hardening of slice 1 competes with this and, per `docs/TILT.md`,
-   generally loses — unless a defect threatens safety, governance, privacy, data integrity,
-   architectural validity, or the validity of the experiment itself.
+4. **← CURRENT: put slice 1 into real-world use — started 2026-08-15, partially achieved, now
+   blocked.** Per `docs/TILT.md`'s time-to-real-use principle, this move is not more slice-1
+   engineering: it is the tester actually using the capability, so slice 2 can be scoped from real
+   feedback rather than designed ahead of it. `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` was configured
+   against a real `ntfy` topic and the first hands-on session was run.
+   - **Achieved:** the delivery half. Bartholomew-generated notifications reach a real Android
+     device end to end, and the runtime, scheduler, health, storage/encryption, notification
+     persistence and direct quiet-hours API all behaved as documented under real use. Evidence:
+     `ROADMAP.md`'s "Slice 1 — first real-world validation session" and
+     `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` §8.
+   - **Blocked:** the capture/**recall** loop through conversation. `/api/chat` returns
+     `"Mock response for prompt: …"` — `bartholomew_api_bridge_v0_1/services/api/app.py` builds
+     `Orchestrator()` without an identity config, so `identity_interpreter`'s `ModelRouter` never
+     constructs the Ollama-backed `LLMAdapter` and returns its stub-backend string. Memory storage
+     is confirmed working; conversational recall is therefore **unproven**, and slice 1's
+     acceptance bar stays open.
+   - **Consequence for sequencing:** this is the narrow case `docs/TILT.md`'s exception list
+     covers — a defect threatening **the validity of the experiment itself**. It is not "more
+     hardening of slice 1" and does not lose to slice 2 on the prioritisation test; the experiment
+     cannot produce the feedback slice 2 is scoped from until chat returns real replies. **No
+     implementation is authorised by this record** — that requires its own explicit approval, per
+     this document's Doc Governance rule.
+   - Also open from the same session: the notification presentation defect (internal notification
+     object sent as the user-facing body) — recorded in `RISKS.md`, unfixed, not authorised.
 5. **Subsequent Usable POC vertical slices** (scope deliberately not fixed yet — see
    `docs/TILT.md`'s "Direction for later slices"): progressing toward proactive surfacing of
    something Bartholomew noticed, and at least one genuine governed action with a visible
@@ -751,6 +781,11 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
 > **Rule:** Never mark anything as committed without a commit hash.
 
 ### Pending (awaiting user approval)
+- 2026-08-15 — Slice 1 real-world validation session reconciliation (documentation-only; no
+  production code, tests, dependencies, workflows, configuration or schema touched). Records
+  validated/partial/blocked status against existing acceptance criteria, one new defect and one
+  new blocker in `RISKS.md`, and the UI-acceptance testing decision in `DECISIONS.md`. **No stage
+  advanced, no fix implemented** — **not yet committed**
 - 2026-07-27 — Planning-document reconciliation (documentation-only; no production code, tests,
   dependencies, workflows, configuration or schema touched) — **not yet committed**
 
