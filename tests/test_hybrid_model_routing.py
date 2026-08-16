@@ -59,10 +59,26 @@ class TestCloudIsOptIn:
         assert ModelRouter(identity_config=identity).cloud_adapter is None
 
     def test_every_task_type_stays_local_without_a_key(self, identity, no_cloud):
+        """Backend *and* model must both be local-servable.
+
+        The original version of this test asserted only the backend, and so
+        passed while `safety_review` returned backend="local" with
+        model="Anthropic" -- a cloud provider name handed to the local
+        adapter, which then asked Ollama for a model called "Anthropic".
+        Found by review on PR #53; the assertion on the model is the part
+        that was missing.
+        """
         router = ModelRouter(identity_config=identity)
         for task_type in ("general", "code", "safety_review"):
             route = router.select_route({"task_type": task_type})
             assert route["backend"] == "local", f"{task_type} escaped to {route['backend']}"
+            assert (
+                map_model_name(route["model"]) is None
+            ), f"{task_type} routed to local but kept cloud model {route['model']!r}"
+            assert ":" in router.llm_adapter._map_model_name(route["model"]), (
+                f"{task_type} selected {route['model']!r}, which the local "
+                "adapter cannot map to an Ollama model"
+            )
 
     def test_cloud_adapter_built_when_configured(self, identity, with_cloud):
         assert ModelRouter(identity_config=identity).cloud_adapter is not None
@@ -91,6 +107,66 @@ class TestIdentityPolicyRouting:
         router = ModelRouter()
         assert router.select_route({})["backend"] == "stub"
         assert router.cloud_adapter is None
+
+    def test_explicit_cloud_route_gets_a_cloud_model(self, identity, with_cloud):
+        """An explicit backend="cloud" bypasses task-type selection, so the
+        cloud backend needs its own model entry. Without one it fell through
+        to `default_model` -- which construction sets to the *local* model --
+        and sent a Mistral name to a cloud provider. Found by review on
+        PR #53."""
+        route = ModelRouter(identity_config=identity).select_route({"backend": "cloud"})
+        assert route["backend"] == "cloud"
+        assert (
+            map_model_name(route["model"]) is not None
+        ), f"explicit cloud route resolved {route['model']!r}, which is not a cloud model"
+
+
+class TestLowBalanceBehaviour:
+    """`low_balance_behavior` is a three-value policy. Refusing
+    unconditionally at the cap made two of them ineffective -- this class
+    enforces the user's declared policy, it does not substitute a stricter
+    one. Found by review on PR #53."""
+
+    @staticmethod
+    def _exhausted_router(identity, ledger_path, behavior):
+        router = ModelRouter(identity_config=identity)
+        router._ledger = BudgetLedger(ledger_path)
+        router._ledger.record(
+            backend="cloud",
+            model="claude-opus-5",
+            input_tokens=100_000_000,
+            output_tokens=0,
+        )
+        router._low_balance_behavior = lambda: behavior
+        return router
+
+    def test_force_local_refuses(self, identity, with_cloud, ledger_path):
+        router = self._exhausted_router(identity, ledger_path, "force-local")
+        with pytest.raises(ModelBackendError) as exc:
+            router.route({"prompt": "hello", "backend": "cloud"})
+        assert exc.value.reason == "budget_exhausted"
+        assert "force-local" in str(exc.value)
+
+    @pytest.mark.parametrize("behavior", ["warn", "continue"])
+    def test_non_blocking_policies_are_not_refused(
+        self,
+        identity,
+        with_cloud,
+        ledger_path,
+        behavior,
+    ):
+        """Past the cap under warn/continue, the request must reach the
+        adapter rather than being refused for budget."""
+        router = self._exhausted_router(identity, ledger_path, behavior)
+        with pytest.raises(ModelBackendError) as exc:
+            router.route({"prompt": "hello", "backend": "cloud"})
+        assert exc.value.reason != "budget_exhausted"
+
+    def test_unreadable_policy_defaults_to_strict(self, identity, with_cloud):
+        """An unreadable policy must not become permission to keep spending."""
+        router = ModelRouter(identity_config=identity)
+        router.identity_config = object()  # no deployment_profile
+        assert router._low_balance_behavior() == "force-local"
 
 
 class TestBudgetEnforcement:
