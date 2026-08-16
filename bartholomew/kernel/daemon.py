@@ -79,6 +79,32 @@ _ADMISSION_DRAIN_TIMEOUT_S = 10.0
 logger = logging.getLogger(__name__)
 
 
+def _compose_episodic_section(episodic_evidence: str | None) -> str:
+    """
+    Render episodic evidence for the kernel's last-resort reflection template.
+
+    Delegates to `ReflectionGenerator`, which owns reflection composition
+    (`COGNITIVE_RUNTIME.md`, "Reflection ownership"), so the formatting has a
+    single implementation. The import is deliberately guarded and local: this
+    is only ever called from the branch that runs *because* importing or
+    constructing `ReflectionGenerator` failed, so it must degrade to omitting
+    the section rather than raising a second error out of reflection
+    generation.
+
+    Args:
+        episodic_evidence: Narrator episodic narrative, or None/empty
+
+    Returns:
+        A markdown section, or "" when unavailable or empty
+    """
+    try:
+        from identity_interpreter.adapters.reflection_generator import ReflectionGenerator
+
+        return ReflectionGenerator._compose_fallback_sections(episodic_evidence)
+    except Exception:
+        return ""
+
+
 class KernelDaemon:
     def __init__(
         self,
@@ -972,6 +998,25 @@ class KernelDaemon:
         except Exception:
             pass
 
+        # Collect the Experience Kernel's episodic narrative (real
+        # affect/attention/drive/goal/observation episodes from today) *before*
+        # generating, so it can be supplied to ReflectionGenerator as evidence.
+        # ReflectionGenerator is the authoritative owner of reflection
+        # composition (COGNITIVE_RUNTIME.md, "Reflection ownership"); the
+        # narrator is supplementary. This previously ran *after* generation and
+        # string-concatenated the two outputs, which was the reflection-
+        # ownership implementation gap ROADMAP.md S5.4 required closing.
+        # A narrator failure must never break reflection generation.
+        episodic_evidence: str | None = None
+        try:
+            episodic_evidence = await run_off_loop(
+                self.narrator.generate_daily_reflection_narrative,
+                now,
+                executor=self.blocking_executor,
+            )
+        except Exception as e:
+            print(f"[Kernel] Failed to collect episodic evidence for daily reflection: {e}")
+
         # Generate reflection using Identity Interpreter
         try:
             from identity_interpreter.adapters.reflection_generator import ReflectionGenerator
@@ -985,6 +1030,7 @@ class KernelDaemon:
                 date=now,
                 timezone_str=str(self.tz),
                 backend="stub",  # Use stub by default
+                episodic_evidence=episodic_evidence,
             )
 
             content = result["content"]
@@ -999,8 +1045,13 @@ class KernelDaemon:
                     f"[Kernel] Daily reflection used fallback: {meta.get('error', 'unknown')}",
                 )
         except Exception as e:
-            # Fallback to basic template on error
+            # Last-resort template: reached only when ReflectionGenerator
+            # itself is unavailable (import or construction failed), so there
+            # is no authoritative composer to defer to. The evidence is folded
+            # in as a section of this one document rather than concatenated as
+            # a second reflection.
             print(f"[Kernel] Reflection generator error: {e}, using fallback")
+            episodic_section = _compose_episodic_section(episodic_evidence)
             content = f"""# Daily Reflection - {now.date()}
 
 ## Summary
@@ -1012,7 +1063,7 @@ Wellness monitoring and proactive care delivered.
 
 ## Notable Events
 (Future: chat highlights, emotional events, user activities)
-
+{episodic_section}
 ## Intent for Tomorrow
 Continue supporting user wellness and autonomy.
 """
@@ -1021,32 +1072,10 @@ Continue supporting user wellness and autonomy.
                 "pending_nudges": pending_nudges,
                 "generator": "template",
                 "error": str(e),
+                "episodic_evidence_present": bool(
+                    episodic_evidence and episodic_evidence.strip(),
+                ),
             }
-
-        # Enrich with the Experience Kernel's own episodic narrative (real
-        # affect/attention/drive/goal/observation episodes from today) --
-        # otherwise the persisted/exported reflection only ever contains
-        # ReflectionGenerator's generic template text (its own "Notable
-        # Events" section literally says "(Future: chat highlights,
-        # emotional events, user activities)"), even though the Narrator's
-        # episodic layer already tracks exactly that. This was ROADMAP.md
-        # Stage 3's "Still open: reconciling the two non-unified reflection
-        # pipelines" note -- appended rather than merged/replacing either
-        # pipeline's own output, the safer integration given both pipelines
-        # are independently tested and this doesn't require parsing either
-        # one's text. Never lets a narrator error break reflection
-        # generation.
-        try:
-            episodic_narrative = await run_off_loop(
-                self.narrator.generate_daily_reflection_narrative,
-                now,
-                executor=self.blocking_executor,
-            )
-            if episodic_narrative:
-                content = f"{content}\n\n---\n\n{episodic_narrative}"
-                meta["episodic_narrative_included"] = True
-        except Exception as e:
-            print(f"[Kernel] Failed to include episodic narrative in daily reflection: {e}")
 
         # Persist reflection
         await self.mem.insert_reflection(
@@ -1073,6 +1102,17 @@ Continue supporting user wellness and autonomy.
         iso_week = now.isocalendar()[1]
         year = now.year
 
+        # Collect episodic evidence before generating -- same ownership
+        # rationale as _run_daily_reflection()'s equivalent block above.
+        episodic_evidence: str | None = None
+        try:
+            episodic_evidence = await run_off_loop(
+                self.narrator.generate_weekly_reflection_narrative,
+                executor=self.blocking_executor,
+            )
+        except Exception as e:
+            print(f"[Kernel] Failed to collect episodic evidence for weekly reflection: {e}")
+
         # Generate audit using Identity Interpreter
         try:
             from identity_interpreter.adapters.reflection_generator import ReflectionGenerator
@@ -1087,6 +1127,7 @@ Continue supporting user wellness and autonomy.
                 iso_week=iso_week,
                 year=year,
                 backend="stub",
+                episodic_evidence=episodic_evidence,
             )
 
             content = result["content"]
@@ -1101,7 +1142,9 @@ Continue supporting user wellness and autonomy.
                 print(f"[Kernel] Weekly audit used fallback: {meta.get('error', 'unknown')}")
         except Exception as e:
             # Fallback to basic template on error
+            # Last-resort template -- see _run_daily_reflection()'s equivalent.
             print(f"[Kernel] Weekly audit generator error: {e}, using fallback")
+            episodic_section = _compose_episodic_section(episodic_evidence)
             content = f"""# Weekly Alignment Audit - Week {iso_week}, {year}
 
 ## Identity Core Alignment
@@ -1114,7 +1157,7 @@ Continue supporting user wellness and autonomy.
 - [x] Proactive care delivered within policy boundaries
 - [x] No policy violations detected
 - [x] User autonomy preserved
-
+{episodic_section}
 ## Recommendations
 Continue current operation. No remediation needed.
 """
@@ -1123,22 +1166,10 @@ Continue current operation. No remediation needed.
                 "year": year,
                 "generator": "template",
                 "error": str(e),
+                "episodic_evidence_present": bool(
+                    episodic_evidence and episodic_evidence.strip(),
+                ),
             }
-
-        # Enrich with the Experience Kernel's own episodic narrative for the
-        # week -- same rationale as _run_daily_reflection()'s equivalent
-        # block above. Appended, not merged; never lets a narrator error
-        # break reflection generation.
-        try:
-            episodic_narrative = await run_off_loop(
-                self.narrator.generate_weekly_reflection_narrative,
-                executor=self.blocking_executor,
-            )
-            if episodic_narrative:
-                content = f"{content}\n\n---\n\n{episodic_narrative}"
-                meta["episodic_narrative_included"] = True
-        except Exception as e:
-            print(f"[Kernel] Failed to include episodic narrative in weekly reflection: {e}")
 
         # Persist reflection
         await self.mem.insert_reflection(

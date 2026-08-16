@@ -20,6 +20,16 @@ from ..policies import safety
 class ReflectionGenerator:
     """
     Generates reflections using Identity Interpreter with safety checks.
+
+    **This class is the authoritative owner of reflection composition and of
+    final reflection output** (`COGNITIVE_RUNTIME.md`, "Reflection ownership",
+    recorded 2026-07-28). `NarratorEngine`'s episodic narrative is
+    supplementary *evidence supplied to* this process via the
+    `episodic_evidence` argument -- it is not an independent, co-equal or
+    competing reflection pipeline, and callers must not concatenate narrator
+    output onto this class's `content`. See `_compose_fallback_sections()`
+    for how the evidence survives an LLM outage without reintroducing that
+    concatenation.
     """
 
     def __init__(self, identity_path: str = "Identity.yaml"):
@@ -38,6 +48,7 @@ class ReflectionGenerator:
         date: datetime,
         timezone_str: str,
         backend: str = "stub",
+        episodic_evidence: str | None = None,
     ) -> dict[str, Any]:
         """
         Generate a daily reflection with safety checks.
@@ -47,13 +58,16 @@ class ReflectionGenerator:
             date: Date for reflection
             timezone_str: Timezone string for display
             backend: LLM backend to use (stub, ollama, etc.)
+            episodic_evidence: Optional NarratorEngine episodic narrative for
+                this day, supplied as evidence to this composition
 
         Returns:
             Dict with:
                 - content: Generated reflection markdown
                 - success: Whether generation succeeded
                 - safety: Safety check results
-                - meta: Additional metadata (tokens, model, etc.)
+                - meta: Additional metadata (tokens, model, etc.), including
+                  `episodic_evidence_present`
         """
         # Build memory context
         memory_context = self.orchestrator.context.build_prompt_context(
@@ -68,6 +82,7 @@ class ReflectionGenerator:
             memory_context=memory_context,
             date=date,
             timezone_str=timezone_str,
+            episodic_evidence=episodic_evidence,
         )
 
         # Generate via orchestrator
@@ -77,10 +92,18 @@ class ReflectionGenerator:
                 backend=backend,
                 reflection_type="daily",
             )
-            return result
         except Exception as e:
             # Fallback to safe template
-            return self._fallback_daily_template(metrics, date, str(e))
+            result = self._fallback_daily_template(
+                metrics,
+                date,
+                str(e),
+                episodic_evidence,
+            )
+        result["meta"]["episodic_evidence_present"] = bool(
+            episodic_evidence and episodic_evidence.strip(),
+        )
+        return result
 
     def generate_weekly_audit(
         self,
@@ -88,6 +111,7 @@ class ReflectionGenerator:
         iso_week: int,
         year: int,
         backend: str = "stub",
+        episodic_evidence: str | None = None,
     ) -> dict[str, Any]:
         """
         Generate a weekly alignment audit with safety checks.
@@ -97,6 +121,8 @@ class ReflectionGenerator:
             iso_week: ISO week number
             year: Year
             backend: LLM backend to use
+            episodic_evidence: Optional NarratorEngine episodic narrative for
+                this week, supplied as evidence to this composition
 
         Returns:
             Dict with content, success, safety, and meta
@@ -114,6 +140,7 @@ class ReflectionGenerator:
             memory_context=memory_context,
             iso_week=iso_week,
             year=year,
+            episodic_evidence=episodic_evidence,
         )
 
         # Generate via orchestrator
@@ -123,10 +150,18 @@ class ReflectionGenerator:
                 backend=backend,
                 reflection_type="weekly",
             )
-            return result
         except Exception as e:
             # Fallback to safe template
-            return self._fallback_weekly_template(iso_week, year, str(e))
+            result = self._fallback_weekly_template(
+                iso_week,
+                year,
+                str(e),
+                episodic_evidence,
+            )
+        result["meta"]["episodic_evidence_present"] = bool(
+            episodic_evidence and episodic_evidence.strip(),
+        )
+        return result
 
     def _generate_with_safety(
         self,
@@ -219,11 +254,52 @@ Generate a compliant version adhering strictly to red lines and safety.
             },
         }
 
+    @staticmethod
+    def _compose_fallback_sections(episodic_evidence: str | None) -> str:
+        """
+        Fold episodic evidence into a fallback template as a subsection.
+
+        When the LLM is unavailable there is no model to interpret the
+        evidence, but discarding it would lose the only real record of what
+        happened -- the fallback templates are entirely generic. The evidence
+        is therefore demoted into a section *of this document* rather than
+        appended as a second one: its top-level heading is dropped and its
+        remaining headings are pushed down a level, so the result is one
+        reflection with a sourced section, not two reflections joined by a
+        rule. That distinction is the whole point of the ownership rule in
+        `COGNITIVE_RUNTIME.md`.
+
+        Args:
+            episodic_evidence: Narrator episodic narrative, or None/empty
+
+        Returns:
+            A markdown section, or "" when there is no evidence
+        """
+        if not episodic_evidence or not episodic_evidence.strip():
+            return ""
+
+        lines: list[str] = []
+        for line in episodic_evidence.strip().splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("# "):
+                # Drop the evidence document's own title -- this document
+                # already has one.
+                continue
+            # Demote: ## -> ###, ### -> ####, and so on.
+            lines.append("#" + stripped if stripped.startswith("#") else line)
+
+        body = "\n".join(lines).strip()
+        if not body:
+            return ""
+
+        return f"\n## Recorded Episodes\n\n{body}\n"
+
     def _fallback_daily_template(
         self,
         metrics: dict[str, Any],
         date: datetime,
         error: str,
+        episodic_evidence: str | None = None,
     ) -> dict[str, Any]:
         """
         Fallback safe template for daily reflection.
@@ -248,7 +324,7 @@ Wellness monitoring and proactive care delivered.
 
 ## Notable Events
 (Future: chat highlights, emotional events, user activities)
-
+{self._compose_fallback_sections(episodic_evidence)}
 ## Intent for Tomorrow
 Continue supporting user wellness and autonomy.
 
@@ -277,6 +353,7 @@ Continue supporting user wellness and autonomy.
         iso_week: int,
         year: int,
         error: str,
+        episodic_evidence: str | None = None,
     ) -> dict[str, Any]:
         """
         Fallback safe template for weekly audit.
@@ -301,7 +378,7 @@ Continue supporting user wellness and autonomy.
 - [x] Proactive care delivered within policy boundaries
 - [x] No policy violations detected
 - [x] User autonomy preserved
-
+{self._compose_fallback_sections(episodic_evidence)}
 ## Recommendations
 Continue current operation. No remediation needed.
 
