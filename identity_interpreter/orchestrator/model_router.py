@@ -10,7 +10,10 @@ see that module's docstring, and MASTER_PLAN.md item 11.15, for why these
 are two concepts rather than a duplicate pair.
 """
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ModelBackendError(RuntimeError):
@@ -77,6 +80,15 @@ class ModelRouter:
 
                 if is_configured():
                     self.cloud_adapter = CloudLLMAdapter(identity_config)
+                    # Give the cloud backend a real entry, so an explicit
+                    # `backend="cloud"` resolves an Identity-declared cloud
+                    # model. Without this it fell through to `default_model`,
+                    # which construction sets to the *local* model -- sending
+                    # a Mistral name to a cloud provider that has never heard
+                    # of it.
+                    cloud_model = self._identity_cloud_model(identity_config)
+                    if cloud_model is not None:
+                        self.config["backends"]["cloud"] = {"model": cloud_model}
             except Exception:
                 pass
 
@@ -144,6 +156,29 @@ class ModelRouter:
                 "local": {"model": "mistral-medium", "temperature": 0.5},
             },
         }
+
+    def _low_balance_behavior(self) -> str:
+        """Identity's declared over-cap policy. Defaults to the strict value
+        when it cannot be read -- an unreadable policy should not silently
+        become permission to keep spending."""
+        try:
+            return self.identity_config.meta.deployment_profile.budgets.low_balance_behavior
+        except Exception:
+            return "force-local"
+
+    @staticmethod
+    def _identity_cloud_model(identity_config: Any) -> str | None:
+        """The first `cloud_optional` entry this adapter can actually serve."""
+        from ..adapters.cloud_llm import map_model_name
+
+        try:
+            for candidate in identity_config.meta.deployment_profile.models.cloud_optional:
+                name = candidate.replace(" (cloud_optional)", "").strip()
+                if map_model_name(name) is not None:
+                    return name
+        except Exception:
+            return None
+        return None
 
     def budget_snapshot(self):
         """Cloud spend against Identity.yaml's monthly cap, or None when no
@@ -220,11 +255,32 @@ class ModelRouter:
             model_name = decision.decision["model"]
             parameters = dict(decision.decision.get("parameters", {}))
 
-            backend = self._backend_for_model(model_name)
-            if backend is None:
+            from ..adapters.cloud_llm import is_configured, map_model_name
+
+            if map_model_name(model_name) is not None:
+                if is_configured():
+                    return {
+                        "backend": "cloud",
+                        "model": model_name,
+                        "parameters": parameters,
+                        "budget_exhausted": exhausted,
+                    }
+                # Identity picked a cloud model the user has never enabled.
+                # Switching the backend to local is not enough -- the model
+                # name has to change too, or the local adapter is handed a
+                # cloud provider name ("Anthropic") and asks Ollama for a
+                # model by that name. That broke the *default* deployment,
+                # where cloud is off: safety_review selected "Anthropic" and
+                # failed at the provider instead of quietly using the local
+                # candidate Identity declares right beside it.
+                model_name = self._local_fallback_model(task_type)
+                if model_name is None:
+                    return None
+
+            if self.llm_adapter is None:
                 return None
             return {
-                "backend": backend,
+                "backend": "local",
                 "model": model_name,
                 "parameters": parameters,
                 "budget_exhausted": exhausted,
@@ -232,21 +288,28 @@ class ModelRouter:
         except Exception:
             return None
 
-    def _backend_for_model(self, model_name: str) -> str | None:
-        """Which backend serves this Identity-declared model.
+    def _local_fallback_model(self, task_type: str) -> str | None:
+        """The model to use when Identity's first choice for this task is a
+        cloud model the deployment has not enabled.
 
-        Cloud only when it is both mappable to a real cloud model *and*
-        actually configured -- an unconfigured cloud selection falls back to
-        local rather than raising, because Identity may legitimately list a
-        cloud model the user has never enabled.
+        Prefers the next locally-servable candidate Identity declares for
+        this task type, so the task's own ordering is respected, and falls
+        back to `models.local_primary` -- the same fallback `select_model()`
+        itself uses when no candidate survives filtering.
         """
-        from ..adapters.cloud_llm import is_configured, map_model_name
+        from ..adapters.cloud_llm import map_model_name
 
-        if map_model_name(model_name) is not None:
-            return "cloud" if is_configured() else "local"
-        if self.llm_adapter is not None:
-            return "local"
-        return None
+        try:
+            profile = self.identity_config.meta.deployment_profile
+            by_task = profile.model_policies.selection.get("by_task_type", {})
+            candidates = by_task.get(task_type) or by_task.get("general") or []
+            for candidate in candidates:
+                name = candidate.replace(" (cloud_optional)", "").strip()
+                if map_model_name(name) is None:
+                    return name
+            return profile.models.local_primary
+        except Exception:
+            return None
 
     def route(self, data: dict[str, Any]) -> str:
         """
@@ -349,14 +412,33 @@ class ModelRouter:
         """
         snapshot = self.budget_snapshot()
         if snapshot is not None and snapshot.exhausted:
-            raise ModelBackendError(
-                f"Monthly cloud budget exhausted for {snapshot.period} "
-                f"(${snapshot.spent_usd:.2f} of ${snapshot.cap_usd:.2f}). "
-                "Identity policy is force-local until the period rolls over.",
-                backend="cloud",
-                model=route["model"],
-                reason="budget_exhausted",
-            )
+            # Refuse only when Identity says to. `low_balance_behavior` is a
+            # three-value policy (force-local | warn | continue), and
+            # `get_available_models()` deliberately keeps cloud candidates
+            # available for the latter two once the cap is reached. Refusing
+            # unconditionally made two schema-supported values ineffective --
+            # this class enforces the user's declared policy, it does not get
+            # to substitute a stricter one of its own.
+            behavior = self._low_balance_behavior()
+            if behavior == "force-local":
+                raise ModelBackendError(
+                    f"Monthly cloud budget exhausted for {snapshot.period} "
+                    f"(${snapshot.spent_usd:.2f} of ${snapshot.cap_usd:.2f}). "
+                    "Identity policy low_balance_behavior=force-local, so cloud is "
+                    "refused until the period rolls over.",
+                    backend="cloud",
+                    model=route["model"],
+                    reason="budget_exhausted",
+                )
+            if behavior == "warn":
+                logger.warning(
+                    "Cloud budget exhausted for %s ($%.2f of $%.2f) -- proceeding "
+                    "because Identity policy low_balance_behavior=warn.",
+                    snapshot.period,
+                    snapshot.spent_usd,
+                    snapshot.cap_usd,
+                )
+            # "continue": proceed silently, as declared.
 
         if self.cloud_adapter is None:
             raise ModelBackendError(
