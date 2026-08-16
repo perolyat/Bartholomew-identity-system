@@ -77,12 +77,42 @@ def _build_persona_context(identity: Identity) -> str:
     return "\n".join(context_parts)
 
 
+def _build_episodic_evidence_block(episodic_evidence: str | None) -> str:
+    """
+    Render the Narrator's episodic material as supplementary evidence.
+
+    Per `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section, the
+    Narrator's episodic narrative is *evidence supplied to* the authoritative
+    reflection composition -- not a second reflection concatenated onto it.
+    Framing it explicitly as source material (rather than as prose to echo)
+    is what keeps that distinction real in the generated output.
+
+    Args:
+        episodic_evidence: Narrator episodic narrative, or None/empty
+
+    Returns:
+        A prompt section, or "" when there is no evidence to supply
+    """
+    if not episodic_evidence or not episodic_evidence.strip():
+        return ""
+
+    return f"""
+Episodic evidence (recorded episodes for this period -- affect, attention,
+drives, goals and observations). This is source material, not text to copy:
+summarise and interpret it in your own composition, and prefer it over
+generic phrasing when describing what actually happened.
+
+{episodic_evidence.strip()}
+"""
+
+
 def compose_daily_reflection_prompt(
     identity: Identity,
     metrics: dict[str, Any],
     memory_context: str,
     date: datetime,
     timezone_str: str,
+    episodic_evidence: str | None = None,
 ) -> str:
     """
     Compose a prompt for daily reflection generation.
@@ -93,12 +123,15 @@ def compose_daily_reflection_prompt(
         memory_context: Recent memory context from ContextBuilder
         date: Date for reflection
         timezone_str: Timezone string
+        episodic_evidence: Optional NarratorEngine episodic narrative, supplied
+            as evidence to this composition
 
     Returns:
         Complete prompt for LLM
     """
     safety_preamble = _build_safety_preamble(identity)
     persona_context = _build_persona_context(identity)
+    episodic_block = _build_episodic_evidence_block(episodic_evidence)
 
     prompt = f"""{safety_preamble}
 
@@ -112,7 +145,7 @@ Generate a daily reflection for {date.strftime('%Y-%m-%d')} ({timezone_str}).
 
 Recent memories:
 {memory_context or "(No recent memories)"}
-
+{episodic_block}
 ## Metrics for Today
 - Nudges sent: {metrics.get('nudges_count', 0)}
 - Pending nudges: {metrics.get('pending_nudges', 0)}
@@ -133,7 +166,8 @@ Brief summary of wellness monitoring and care delivered (2-3 sentences).
 
 #### Notable Events
 Summarize any significant interactions, memory highlights, or emotional moments.
-If none: note "Routine monitoring continued."
+Ground this section in the episodic evidence above where it is present.
+If there is genuinely nothing to report: note "Routine monitoring continued."
 
 #### Intent for Tomorrow
 One sentence on continued support goals.
@@ -156,6 +190,7 @@ def compose_weekly_audit_prompt(
     memory_context: str,
     iso_week: int,
     year: int,
+    episodic_evidence: str | None = None,
 ) -> str:
     """
     Compose a prompt for weekly alignment audit generation.
@@ -166,12 +201,15 @@ def compose_weekly_audit_prompt(
         memory_context: Recent memory context
         iso_week: ISO week number
         year: Year
+        episodic_evidence: Optional NarratorEngine episodic narrative, supplied
+            as evidence to this composition
 
     Returns:
         Complete prompt for LLM
     """
     safety_preamble = _build_safety_preamble(identity)
     persona_context = _build_persona_context(identity)
+    episodic_block = _build_episodic_evidence_block(episodic_evidence)
 
     prompt = f"""{safety_preamble}
 
@@ -185,7 +223,7 @@ Generate a weekly alignment audit for Week {iso_week}, {year}.
 
 Recent memories:
 {memory_context or "(No recent memories)"}
-
+{episodic_block}
 ## Weekly Scope
 - Total reflections: {weekly_scope.get('reflections_count', 0)}
 - Policy checks run: {weekly_scope.get('policy_checks', 0)}
