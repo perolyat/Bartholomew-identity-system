@@ -2,7 +2,17 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-15, second pass (one tech-debt watchlist item added: the Parking Brake's
+> **Last updated:** 2026-08-17 (four tech-debt watchlist items added, none of them a live defect:
+> the server-centric deployment decision's connectivity dependency and its unbuilt degraded-mode
+> requirement; the cloud budget ledger's check-then-act window (unreachable today — no live path
+> passes a `task_type`); the consent ask-path being unreachable from the API/web surface
+> (fail-closed, so safe, but `/ui` cannot exercise ask-and-deny); and `test_memory_privacy.py`
+> writing to the live `./data` directory when run by hand. Separately, the entry describing
+> `/api/water/log` and `/api/water/today` as "live, working, legacy code" is **corrected** — neither
+> endpoint exists, and no commit removing them was found. See `DECISIONS.md`'s server-centric
+> deployment entry and `docs/FIRST_REAL_WORLD_TEST.md`.)
+>
+> **Previously (2026-08-15, second pass):** one tech-debt watchlist item added: the Parking Brake's
 > split read/write authority — `sight`/`voice` still read the legacy `system_flags`-backed
 > `ParkingBrake` while the write authority has been `GovernanceStore` since Phase B stage B6. **Not
 > a new finding and not a live safety hole** — B4 and B6 §1 finding 5 both found it and deferred it,
@@ -192,6 +202,23 @@
 
 ## Tech debt watchlist
 
+- **(2026-08-17) Server-centric cognition creates a connectivity dependency that has no defined
+  degraded mode — TARGET-architecture risk, not a current defect.** `DECISIONS.md`'s "Deployment
+  architecture — server-centric Bartholomew with local/edge capability agents" makes core cognition
+  server-side by default. That trades a per-device installation burden for a dependency on reaching
+  the platform, and the failure it introduces is not "chat is slow" but "the assistant that holds
+  your life is unreachable". **Nothing is broken today** — the current prototype is entirely local
+  and has no such dependency — which is precisely why this is recorded now, before anything is
+  built against it.
+  **The mitigation is already constitutionally required and remains unbuilt:** `CONSTITUTION.md`
+  requires defined loss-of-connectivity behaviour, safe degradation, and — the hard one — that
+  "central infrastructure must never become the only authority capable of stopping or constraining
+  the system", carried forward as clause (b) of the superseding decision. So a device agent cannot
+  be a pure pass-through: **a user must still be able to stop their own Bartholomew acting on their
+  devices while the platform is unreachable**, which means local stop authority cannot itself be a
+  remote call. Designing that, along with what Bartholomew is allowed to *do* while degraded (act on
+  stale state? queue? refuse?), is a prerequisite for the first device agent, not a follow-up to it.
+  No design exists, and none is authorised.
 - **(2026-08-17) Cloud budget ledger has a check-then-act window under concurrency — deferred,
   and deliberately not fixed now.** `ModelRouter._route_cloud()` reads the spend snapshot, makes
   the provider request, then records the cost. Two concurrent cloud generations can each observe

@@ -2,7 +2,16 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-15 — one line added to "What we will not do yet": multi-user/tenancy/
+> **Last updated:** 2026-08-17 — two changes, neither altering any stage's scope, sequencing or
+> status. **(1)** One line added to "What we will not do yet": native device agents and a
+> device-capability protocol are **FUTURE PLATFORM WORK** under `DECISIONS.md`'s new server-centric
+> deployment entry — TARGET architecture, nothing of it exists, and the Usable POC / TILT priority
+> is explicitly unchanged. **(2)** A stale-status correction in the Phase B findings list: the two
+> reflection pipelines are recorded as **resolved** (`8d87258`) rather than "partially addressed",
+> and the separate repair of the reflection *model* path is noted — that text still said Stage 5
+> live proactive reflection was blocked on a code change that had already landed.
+>
+> **Previously (2026-08-15):** one line added to "What we will not do yet": multi-user/tenancy/
 > platform infrastructure is **FUTURE PLATFORM WORK**, explicitly out of current scope. This is a
 > scope *guard*, not a scope change — **no stage's exit criteria, sequencing, or status changed**,
 > and Stage 6's cross-device auth/threat-model work is unchanged. See `CONSTITUTION.md`'s new "One
@@ -1246,3 +1255,18 @@ pass inserts ahead of them.
   (see `CHECKLISTS.md`'s "Platform and personal-identity architecture checklist"), not a mandate to
   build or refactor anything. The nearest genuinely-scheduled adjacent work remains Stage 6's
   cross-device auth and threat model, which is unchanged and still gated as it was.
+- **Build native device agents or a device-capability protocol (added 2026-08-17).**
+  `DECISIONS.md`'s "Deployment architecture — server-centric Bartholomew with local/edge capability
+  agents" makes core cognition server-centric by default, with native PC/mobile applications acting
+  as governed capability bridges. That is **TARGET architecture, not current scope, and nothing of
+  it exists** — no agent, no capability protocol, no transport, no pairing or per-device trust, no
+  authentication to carry any of it. It joins the line above as **FUTURE PLATFORM WORK** requiring
+  its own proposal and approval.
+  **Explicitly unchanged by that decision:** the Usable POC / time-to-real-use prioritisation and
+  `docs/TILT.md` sequencing continue to govern what is worked on next; no stage's exit criteria,
+  sequencing or status changed; and real-world use of slice 1 remains the next step. A destination
+  was recorded, not a schedule. Two prerequisites are worth naming because they are easy to
+  discover late: a defined loss-of-connectivity/degraded-mode behaviour with locally enforceable
+  stop authority (`RISKS.md`, and clause (b) of that entry), and the same Stage 6 auth/threat-model
+  gate that already blocks remote exposure. The proposed *shape* of the capability contract is
+  recorded in `INTERFACES.md` §6 under "Proposed contracts — NOT implemented, NOT approved".

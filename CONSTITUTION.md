@@ -498,8 +498,17 @@ must.
 
 Bartholomew should be capable of evolving toward a hybrid Personal Executive architecture: some
 responsibilities remote or shared, some necessarily local or locally enforceable. This extends —
-and does not replace — `DECISIONS.md`'s "Deployment architecture — hybrid local-first" entry,
-which remains the authority on *where* authority sits.
+and does not replace — `DECISIONS.md`'s deployment-architecture entry, which remains the authority
+on *where* authority sits.
+
+> **Pointer (2026-08-17):** that authority is now `DECISIONS.md`'s **"Deployment architecture —
+> server-centric Bartholomew with local/edge capability agents"**, which supersedes the
+> "hybrid local-first" entry this section previously named. Core cognition and personal memory are
+> intended to be server-centric by default, with native device applications acting as governed
+> capability bridges rather than independent brains. **This section is unchanged in substance and
+> is not weakened by that decision** — the paragraphs below, and the "not a licence to make
+> Bartholomew cloud-only" constraint above, are named by the superseding entry as binding
+> constraints *on* it.
 
 Because Bartholomew may eventually control significant parts of a person's digital and physical
 environment, **central infrastructure must never become the only authority capable of stopping or

@@ -2,10 +2,16 @@
 
 > Contracts between core modules. If a contract changes, update this doc and add/adjust tests.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: §6's security stance updated
+> **Last updated:** 2026-08-17 (§6's security stance sharpened with the verified fact that the
+> Parking Brake engage/disengage endpoints answer 200 unauthenticated, and repointed to the
+> superseding server-centric deployment decision; a device-capability declaration shape added to
+> §6's "Proposed contracts" subsection — **not implemented, not approved for implementation**, and
+> no device agent or capability protocol exists.)
+>
+> **Previously (2026-07-28):** documentation reconciliation pass 2: §6's security stance updated
 > for the hybrid local-first deployment decision; a new "Proposed contracts" subsection added
 > under §6 for emergency-shutdown, capture-control, data-export, notification, and
-> awaiting-response interfaces — all explicitly unimplemented and unapproved for implementation.)
+> awaiting-response interfaces — all explicitly unimplemented and unapproved for implementation.
 >
 > **Previously (2026-07-27):** the header had read 2026-01-19 while sections were appended
 > through July. §2's table list and WAL-checkpoint invariant, §4's consent-gate bypass wording and
@@ -149,11 +155,14 @@ implemented"; a fresh database actually contains 37.)*
 
 **Security stance (today):**
 - Treat as local/dev surface until auth is introduced. Unchanged: there is still no
-  authentication. Auth is Stage 6 work, and is now explicitly scoped by the hybrid local-first
-  deployment architecture (`DECISIONS.md`, 2026-07-28): remote/cross-device exposure of this API
-  must not occur until authentication, authorization, transport security, and a reviewed threat
-  model are designed and separately approved — a simple token-auth scheme is explicitly **not**
-  assumed sufficient (see `ASSUMPTIONS.md`).
+  authentication. Auth is Stage 6 work, and is explicitly scoped by the deployment architecture
+  decision (`DECISIONS.md`): remote/cross-device exposure of this API must not occur until
+  authentication, authorization, transport security, and a reviewed threat model are designed and
+  separately approved — a simple token-auth scheme is explicitly **not** assumed sufficient (see
+  `ASSUMPTIONS.md`). (**Repointed 2026-08-17:** originally the 2026-07-28 "hybrid local-first"
+  entry, superseded by the server-centric entry, which carries this gate forward **unchanged**.
+  A server-centric target makes remote exposure eventually necessary; it does not make it approved,
+  and nothing about the current API has changed.)
 - **The governance surface is included in "no authentication" (verified live 2026-08-17).** This is
   worth stating explicitly because it is the sharpest consequence: `POST /api/governance/brake/
   engage` and `.../disengage` answer `200` to an unauthenticated request, so anyone who can reach
@@ -187,6 +196,31 @@ Listing them here does not authorise building them.
   Stage 6 design scope.
 - **`awaiting_response` queue.** Per `COGNITIVE_RUNTIME.md`'s `awaiting_response` obligation-state
   section: list/resolve open obligations, minimum viable version scoped to Stage 1.
+- **Device-capability declaration (added 2026-08-17).** Per `DECISIONS.md`'s "Deployment
+  architecture — server-centric Bartholomew with local/edge capability agents". **Nothing of this
+  exists**: there is no device agent, no capability protocol, no transport, and no authentication to
+  carry one. Recorded so a future, separately-approved implementation has one agreed shape rather
+  than three invented ones. Required properties, not a schema:
+  - **Declared, not assumed.** An agent states which capabilities it offers (files, applications,
+    notifications, sensors, camera/microphone, screen/context, peripherals, local-network
+    resources). The platform must never infer a capability from the device's *kind* — Windows,
+    macOS, Android and iOS differ materially, and a capability may be present on one OS version and
+    absent on the next.
+  - **Availability is distinct from declaration.** A declared capability that cannot currently be
+    served must be reportable as such. The precedent already in this codebase is
+    `cloud_llm.readiness()` / `/api/health`'s `model_status`, which separate *configured* from
+    *reachable* precisely because conflating them produced a surface that claimed a readiness it had
+    never checked.
+  - **Every capability is governed.** Invocation passes the same Governance checkpoints as any other
+    capability, and the Parking Brake must be able to halt it. Per `DECISIONS.md`'s brake-tier
+    entry, the user's stop authority over their own devices must remain **locally enforceable when
+    central services are unavailable** — so an agent cannot be a pure pass-through that only obeys a
+    remote instruction to stop.
+  - **Consent is per-capability and revocable**, not granted wholesale at pairing time.
+  - **Identification and trust** of a device (pairing, revocation, per-device permissions) is part of
+    the authentication design that `DECISIONS.md` gates behind a reviewed threat model. This bullet
+    does not pre-empt that design; it only records that the capability contract cannot be built
+    before it.
 
 ---
 

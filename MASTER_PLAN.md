@@ -2,7 +2,17 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-08-15 — **platform/personal-identity architecture recorded**
+> **Last updated:** 2026-08-17 — **P0–P6 stabilisation merged (PR #56)** and the **server-centric
+> deployment architecture recorded** in `DECISIONS.md`, superseding "hybrid local-first". The
+> stabilisation repaired the reflection model path (no reflection had ever been model-composed),
+> untracked two runtime databases the test suite was mutating, separated cloud *configured* from
+> cloud *ready*, and made `/api/health` report model reachability distinctly from model selection;
+> `docs/FIRST_REAL_WORLD_TEST.md` is the controlled-test procedure. The architecture entry is
+> **documentation-only and authorises no implementation** — no multi-tenancy, cloud infrastructure,
+> device agent or authentication exists. **The Usable POC / time-to-real-use priority and
+> `docs/TILT.md` sequencing are unchanged**, and "Next 3 Moves" below still stands.
+>
+> **Previously (2026-08-15):** **platform/personal-identity architecture recorded**
 > (documentation-only). Bartholomew is architecturally **one shared platform serving many strongly
 > isolated personal Bartholomew identities**; a new user never receives a duplicated copy of the
 > stack or model; **Bartholomew is not the LLM**; personal identity/state must survive changes of
@@ -178,6 +188,18 @@ logs/    (runtime logs)
   "Personal-identity ownership" subsection (what the code assumes today), and `ASSUMPTIONS.md` A9.
   Building any of that platform infrastructure is **not current scope** — see `ROADMAP.md`'s "What
   we will not do yet".
+- **The intended destination is a server-centric platform with local/edge capability agents**
+  *(added 2026-08-17)*. `DECISIONS.md`'s "Deployment architecture — server-centric Bartholomew with
+  local/edge capability agents" — which **supersedes** the 2026-07-28 "hybrid local-first" entry —
+  makes core cognition and personal memory server-centric by default, reached through a web
+  application, with optional native applications acting as governed capability bridges rather than
+  independent brains. **This changes nothing about the current system or the current plan.** It is
+  TARGET architecture: no multi-tenancy, cloud infrastructure, device agent, capability protocol or
+  authentication exists, and the four-state reading of this document is unchanged —
+  **CURRENT** is the single-user local prototype described above; **NEAR-TERM** is the first
+  controlled real-world test (`docs/FIRST_REAL_WORLD_TEST.md`); **TARGET** is that decision;
+  **FUTURE** is `ROADMAP.md`'s "What we will not do yet". The "Next 3 Moves" below are unaffected:
+  real-world use of slice 1 is still next, per `docs/TILT.md`.
 
 ## Stage gates / milestones
 

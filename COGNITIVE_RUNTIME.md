@@ -9,7 +9,17 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-08-15 (platform/personal-identity architecture: added one Ownership-table
+> **Last updated:** 2026-08-17 (two changes. (1) The "Reflection ownership" section was rewritten:
+> its "current implementation" text described concatenation and stated the unification code change
+> "has not been made", both superseded by `8d87258`; and the reflection *model* path was repaired
+> (the daemon no longer pins `backend="stub"`, and `ReflectionGenerator` can now be constructed on a
+> headless host), so the section records provenance semantics and marks the S5.4 ownership
+> prerequisite discharged. (2) Added "Cognition is independent of device and UI" under
+> Personal-identity ownership, recording what `DECISIONS.md`'s server-centric deployment entry means
+> for ownership inside this runtime. Documentation-only; that subsection authorises no device-agent,
+> capability-protocol or multi-tenancy implementation, and none exists.)
+>
+> **Previously (2026-08-15):** (platform/personal-identity architecture: added one Ownership-table
 > row and a new "Personal-identity ownership" subsection recording what the runtime assumes today
 > about *whose* Bartholomew it is serving — verified against the code, which has no user/tenant/
 > owner concept anywhere — and classifying each single-user assumption as acceptable-for-PoC, a
@@ -358,6 +368,33 @@ assumptions above — in particular, do not introduce new persisted personal sta
 later acquire an owner, new background execution whose beneficiary is unrecoverable, or new global
 uniqueness constraints over personal data. That is a constraint on how new code is shaped, not a
 mandate to change existing code.
+
+### Cognition is independent of device and UI (added 2026-08-17)
+
+`DECISIONS.md`'s "Deployment architecture — server-centric Bartholomew with local/edge capability
+agents" is the authority for the deployment direction; this subsection records only what it means
+for **ownership inside this runtime**, which is this document's concern.
+
+**No device, client or presentation surface owns any part of cognition.** The Runtime Contract,
+Executive, Memory Substrate, Experience Kernel and Governance checkpoints must remain reachable and
+correct with *no* particular UI attached. A client — the web application today, a native companion
+application later — is a source of Observations and a consumer of output, never a required
+component of the loop. This is already how the runtime is built: `run_chat_through_runtime_contract()`
+takes an `Observation` and a response callable and knows nothing about HTTP or a browser, and the
+voice/sight seams are the same shape. The entry above makes that property load-bearing rather than
+incidental, so it is recorded here.
+
+**Device capabilities are discovered, never assumed.** When device/agent capabilities eventually
+exist, what a device can do is a runtime fact it declares and Governance constrains — not a static
+assumption compiled into cognition, and not uniform across platforms (Windows, macOS, Android and
+iOS differ materially). The existing precedent is the correct one: `cloud_llm.readiness()` and
+`/api/health`'s `model_status` report what is *actually* available rather than what is configured,
+because a capability reported as present but unusable is the failure mode worth designing against.
+
+**The constraint this places on new work:** do not make cognition depend on a specific client,
+transport, or device being present; do not infer a capability's availability from configuration
+alone. **No device-agent, capability-protocol or multi-tenancy implementation is authorised** —
+none exists, and this subsection creates no interface.
 
 ## Governance checkpoints
 
