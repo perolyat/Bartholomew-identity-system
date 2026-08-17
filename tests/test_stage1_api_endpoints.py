@@ -11,6 +11,7 @@ Stage 1 Exit Criteria (from ROADMAP.md):
 
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -321,6 +322,122 @@ class TestHealthEndpoint:
                 result = await health()
 
         assert result["kernel_online"] is False
+
+
+class TestHealthModelHonesty:
+    """`model_real` must not imply a model will answer (2026-08-17).
+
+    It reports backend *selection*. Observed on a real run: `model_real:
+    true` while Ollama had no model pulled and every /api/chat was returning
+    503. Reachability is now a separate, tri-state field, and `model_status`
+    is the combined answer -- because "is this a genuine reply or the stub?"
+    is the question the whole controlled real-world test rests on.
+    """
+
+    @pytest.mark.asyncio
+    async def test_selected_but_unreachable_is_not_reported_as_ready(self):
+        from bartholomew_api_bridge_v0_1.services.api import app as app_module
+
+        class _Router:
+            config = {
+                "default_backend": "local",
+                "backends": {"local": {"model": "Mistral-7B-Instruct-GGUF-Q4_K_M"}},
+            }
+            llm_adapter = object()
+
+        with (
+            patch.object(app_module, "orch", SimpleNamespace(router=_Router())),
+            patch.object(
+                app_module,
+                "_probe_model_reachable",
+                AsyncMock(return_value=False),
+            ),
+        ):
+            result = await app_module._model_health()
+
+        assert result["model_real"] is True, "a real backend is selected"
+        assert result["model_reachable"] is False
+        assert result["model_status"] == "selected_but_unreachable"
+
+    @pytest.mark.asyncio
+    async def test_reachable_backend_reports_ready(self):
+        from bartholomew_api_bridge_v0_1.services.api import app as app_module
+
+        class _Router:
+            config = {
+                "default_backend": "local",
+                "backends": {"local": {"model": "Mistral-7B-Instruct-GGUF-Q4_K_M"}},
+            }
+            llm_adapter = object()
+
+        with (
+            patch.object(app_module, "orch", SimpleNamespace(router=_Router())),
+            patch.object(
+                app_module,
+                "_probe_model_reachable",
+                AsyncMock(return_value=True),
+            ),
+        ):
+            result = await app_module._model_health()
+
+        assert result["model_status"] == "ready"
+
+    @pytest.mark.asyncio
+    async def test_unknown_reachability_is_not_ready(self):
+        """A probe that could not answer must never read as working."""
+        from bartholomew_api_bridge_v0_1.services.api import app as app_module
+
+        class _Router:
+            config = {
+                "default_backend": "local",
+                "backends": {"local": {"model": "m"}},
+            }
+            llm_adapter = object()
+
+        with (
+            patch.object(app_module, "orch", SimpleNamespace(router=_Router())),
+            patch.object(
+                app_module,
+                "_probe_model_reachable",
+                AsyncMock(return_value=None),
+            ),
+        ):
+            result = await app_module._model_health()
+
+        assert result["model_reachable"] is None
+        assert result["model_status"] == "selected_reachability_unknown"
+
+    @pytest.mark.asyncio
+    async def test_stub_backend_is_reported_as_stub(self):
+        from bartholomew_api_bridge_v0_1.services.api import app as app_module
+
+        class _Router:
+            config = {"default_backend": "stub", "backends": {"stub": {"model": "stub-llm"}}}
+            llm_adapter = None
+
+        with patch.object(app_module, "orch", SimpleNamespace(router=_Router())):
+            result = await app_module._model_health()
+
+        assert result["model_real"] is False
+        assert result["model_status"] == "stub"
+
+    @pytest.mark.asyncio
+    async def test_cloud_state_is_reported(self, monkeypatch):
+        from bartholomew_api_bridge_v0_1.services.api import app as app_module
+        from identity_interpreter.adapters import cloud_llm
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+        monkeypatch.setattr(cloud_llm, "HAS_ANTHROPIC_SDK", False)
+
+        class _Router:
+            config = {"default_backend": "stub", "backends": {"stub": {"model": "stub-llm"}}}
+            llm_adapter = None
+
+        with patch.object(app_module, "orch", SimpleNamespace(router=_Router())):
+            result = await app_module._model_health()
+
+        assert result["cloud_status"] == "unavailable"
+        assert result["cloud_unavailable_reason"] == "sdk_unavailable"
 
 
 class TestKernelCommandEndpoint:

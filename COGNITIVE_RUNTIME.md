@@ -595,38 +595,53 @@ which subsystem composes daily/weekly reflection *content*.
 
 ### Reflection ownership (corrected 2026-07-28)
 
-**Current implementation:** `daemon.py`'s `_run_daily_reflection()`/`_run_weekly_reflection()`
-call **both** `identity_interpreter.adapters.reflection_generator.ReflectionGenerator` (LLM-based,
-safety-checked, produces `content`) **and** `narrator.py`'s
-`generate_daily_reflection_narrative()`/`generate_weekly_reflection_narrative()` (template-based,
-built from real persisted episodes), and string-concatenate the two outputs
-(`content = f"{content}\n\n---\n\n{episodic_narrative}"`, added in item 11.8, 2026-07-21). **This
-is concatenation, not architectural unification.** Both pipelines run unconditionally and
-independently; the code does not enforce a single authority over reflection composition today.
-This document previously stated the two pipelines "remain unreconciled" while `ROADMAP.md`
-separately stated they were "✅ reconciled... additively" and referenced a "Still open" note in
-`ROADMAP.md` Stage 3 that no longer exists there (it had been overwritten by the "reconciled"
-text in the same 2026-07-27 pass that removed it) — those two canonical documents gave literally
-opposite answers to the same question. That contradiction is resolved by this section: neither
-past phrasing was quite right; "additive concatenation, not unification" is the precise, single
-description now used consistently in `MASTER_PLAN.md`, `ROADMAP.md`, and here.
-
 **Approved target architecture (recorded 2026-07-28):** `ReflectionGenerator` is the authoritative
 owner of reflection composition and final reflection output. `NarratorEngine`'s episodic
 narrative is supplementary evidence supplied *to* that authoritative process — not an
 independent, co-equal, or competing reflection pipeline.
 
-**The gap between current implementation and approved target:** closing this gap requires a real
-code change — routing `NarratorEngine`'s episodic narrative into `ReflectionGenerator` as an input
-(e.g. as additional context/evidence it composes with, rather than an appended, separately-produced
-block) — plus tests verifying `ReflectionGenerator` is the sole point of final composition. **That
-code change has not been made.** It is out of scope for this documentation-only pass and requires
-its own separate authorisation.
+**Current implementation (updated 2026-08-17): the target architecture is implemented.**
+`daemon.py`'s `_run_daily_reflection()`/`_run_weekly_reflection()` collect the narrator's episodic
+material **first** and pass it into `ReflectionGenerator` as `episodic_evidence`; one authority
+composes one document. The string concatenation this section previously described
+(`content = f"{content}\n\n---\n\n{episodic_narrative}"`) is gone. See
+`docs/S5_4_REFLECTION_OWNERSHIP.md` for the design, and `tests/test_reflection_ownership.py` /
+`tests/test_reflection_narrative_integration.py` for the tests that pin it.
 
-**Binding consequence for Stage 5:** live proactive *reflection* behaviour (`ROADMAP.md` Stage 5)
-remains blocked until this gap is closed by a separately authorised code change and verified by
-tests — concatenation of two independently-running pipelines is not an acceptable foundation for
-new proactive behaviour built on top of reflection output.
+> **Superseded text.** Until 2026-08-17 this subsection stated that both pipelines ran
+> independently, that "additive concatenation, not unification" was the precise description, and
+> that "**That code change has not been made.**" All three statements described behaviour that
+> commit `8d87258` had already replaced. The historical contradiction they were written to resolve
+> — this document saying "remain unreconciled" while `ROADMAP.md` said "✅ reconciled…additively" —
+> is settled and no longer live; it is recorded here only so the correction is traceable.
+
+**What was still missing, and is now fixed (2026-08-17):** ownership was correct, but no real model
+had ever *exercised* it. Two independent defects made every reflection in the project's history
+template-composed:
+
+1. `daemon.py` pinned `backend="stub"` in both reflection paths. The stub's mock text tripped
+   `ReflectionGenerator`'s own red-line check, the redraft tripped it again, and composition fell
+   through to a fallback template every night. Identity's model policy never applied to reflection.
+2. `ReflectionGenerator.__init__` could not run on a headless host at all —
+   `Orchestrator(identity_config=…)` built a `ContextBuilder`, which eagerly built a
+   `MemoryManager`, which required the OS keystore and raised.
+
+Both are repaired. The daemon passes no `backend` override, so reflection routes through the same
+Identity-driven selection as every other surface (`task_type: general`, which `Identity.yaml` keeps
+local — reflection reads stored personal memory, and the local/cloud egress boundary is
+unratified). `ContextBuilder` builds its `MemoryManager` lazily, so a keystore-less host composes
+with empty memory context instead of failing to construct. Pinned by
+`tests/test_reflection_model_path.py`.
+
+**Provenance:** a stored reflection's `meta.generator` names what actually composed it — `llm`,
+`template` (generation failed; `meta.error` carries backend/model/reason), or `stub`. It was
+previously hard-coded to `llm` for any success, including stub output, which meant mock text could
+be persisted as model-composed.
+
+**Binding consequence for Stage 5:** the reflection-ownership prerequisite is **discharged**. Live
+proactive reflection behaviour (`ROADMAP.md` Stage 5) is no longer blocked on it. The remainder of
+S5.4 — the experience → candidate learning → provenance/confidence → Governance → consolidation
+loop — is the larger half and remains unbuilt.
 
 ## Exit Gate status
 

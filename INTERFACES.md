@@ -154,6 +154,12 @@ implemented"; a fresh database actually contains 37.)*
   must not occur until authentication, authorization, transport security, and a reviewed threat
   model are designed and separately approved — a simple token-auth scheme is explicitly **not**
   assumed sufficient (see `ASSUMPTIONS.md`).
+- **The governance surface is included in "no authentication" (verified live 2026-08-17).** This is
+  worth stating explicitly because it is the sharpest consequence: `POST /api/governance/brake/
+  engage` and `.../disengage` answer `200` to an unauthenticated request, so anyone who can reach
+  the port can **release the Parking Brake**. The safety control is not privileged above the rest
+  of the API. Bind to `127.0.0.1`; do not tunnel or port-forward the development server for
+  convenience. `docs/FIRST_REAL_WORLD_TEST.md` §0 carries the operational form of this.
 
 ### Proposed contracts — NOT implemented, NOT approved for implementation (added 2026-07-28)
 

@@ -381,6 +381,120 @@ def healthz():
     return {"status": "ok", "version": app.version}
 
 
+# Model-reachability probe cache: (monotonic_deadline, reachable).
+#
+# The probe is a real call to the local provider, so it is neither free nor
+# instant, and /api/health is polled by the UI. A few seconds of staleness is
+# the right trade: long enough that polling costs nothing, short enough that
+# "I just started Ollama" shows up while the tester is still looking.
+_MODEL_PROBE_TTL_SECONDS = 10.0
+_MODEL_PROBE_TIMEOUT_SECONDS = 2.0
+_model_probe_cache: tuple[float, bool | None] = (0.0, None)
+
+
+async def _probe_model_reachable(router) -> bool | None:
+    """Whether the selected local model can actually be reached right now.
+
+    Returns None when reachability is unknown (no adapter, probe timed out,
+    or the backend isn't one this can probe) -- deliberately tri-state, so
+    "we could not tell" is never reported as "it works".
+    """
+    global _model_probe_cache
+
+    deadline, cached = _model_probe_cache
+    now = _time.monotonic()
+    if now < deadline:
+        return cached
+
+    adapter = getattr(router, "llm_adapter", None)
+    if adapter is None:
+        return None
+
+    backend = router.config.get("default_backend")
+    if backend not in ("local", "ollama"):
+        return None
+
+    model = router.config["backends"].get(backend, {}).get("model")
+    if not model:
+        return None
+
+    def _check() -> bool:
+        return adapter._model_exists(adapter._map_model_name(model))
+
+    try:
+        # Off the event loop (it does blocking IO) and bounded, so an
+        # unresponsive provider degrades the health *answer* rather than the
+        # health *endpoint*.
+        reachable: bool | None = await asyncio.wait_for(
+            asyncio.to_thread(_check),
+            timeout=_MODEL_PROBE_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        reachable = None
+
+    _model_probe_cache = (_time.monotonic() + _MODEL_PROBE_TTL_SECONDS, reachable)
+    return reachable
+
+
+async def _model_health() -> dict[str, Any]:
+    """What chat will actually do if a message arrives right now.
+
+    Two independent questions, previously answered as one. `model_real` only
+    ever meant "a real backend is *selected*" -- it reported True while
+    Ollama had no model pulled and every chat request was returning 503, so
+    the one field the real-world test relies on to answer "is this a genuine
+    reply?" implied a readiness it had never checked. Selection and
+    reachability are now separate fields, and `model_status` combines them
+    into the single answer a tester actually wants.
+    """
+    info: dict[str, Any] = {
+        "model_backend": "unknown",
+        "model_real": False,
+        "model_reachable": None,
+        "model_status": "unknown",
+    }
+    try:
+        router = orch.router
+        backend = router.config.get("default_backend")
+        real = backend != "stub"
+        reachable = await _probe_model_reachable(router) if real else None
+
+        if not real:
+            status = "stub"
+        elif reachable is True:
+            status = "ready"
+        elif reachable is False:
+            status = "selected_but_unreachable"
+        else:
+            status = "selected_reachability_unknown"
+
+        info = {
+            "model_backend": backend,
+            "model_name": router.config["backends"].get(backend, {}).get("model"),
+            # A real backend is selected. NOT a promise that it will answer.
+            "model_real": real,
+            # Tri-state: True/False/None (unknown).
+            "model_reachable": reachable,
+            "model_status": status,
+        }
+    except Exception:
+        pass
+
+    # Cloud is off unless deliberately enabled, and "enabled" is not the same
+    # as "usable" -- an API key without the optional SDK is configured but
+    # unservable. Reported so that state is visible rather than surfacing
+    # only as a failed request.
+    try:
+        from identity_interpreter.adapters.cloud_llm import readiness, unreadiness_reason
+
+        info["cloud_status"] = readiness()
+        info["cloud_unavailable_reason"] = unreadiness_reason()
+    except Exception:
+        pass
+
+    return info
+
+
 @app.get("/api/health")
 async def health():
     kernel_info = {}
@@ -407,21 +521,7 @@ async def health():
     else:
         kernel_info = {"kernel_online": False}
 
-    # Which model backend chat will actually use. Reported so "is this a real
-    # response or the stub?" is answerable from the UI, without reading server
-    # logs or inspecting the reply text -- the question the whole real-world
-    # test depends on.
-    model_info: dict[str, Any] = {"model_backend": "unknown", "model_real": False}
-    try:
-        router = orch.router
-        backend = router.config.get("default_backend")
-        model_info = {
-            "model_backend": backend,
-            "model_name": router.config["backends"].get(backend, {}).get("model"),
-            "model_real": backend != "stub",
-        }
-    except Exception:
-        pass
+    model_info = await _model_health()
 
     return {
         "status": "ok",

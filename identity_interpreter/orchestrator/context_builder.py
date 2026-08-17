@@ -11,6 +11,17 @@ always `None` and `build_prompt_context()`/`inject_context()` are no-ops.
 recent conversation history from Working Memory instead. See
 `identity_interpreter/adapters/memory_manager.py`'s module docstring for
 the full writeup.
+
+CONSTRUCTION (2026-08-17): the `MemoryManager` is built lazily, on first
+use, rather than in `__init__`. `MemoryManager.__init__` reaches the OS
+keystore for its encryption key and raises when none is available, so
+building it eagerly made *constructing* anything that owns a ContextBuilder
+impossible on a headless host. That is what stopped `ReflectionGenerator`
+-- which needs `build_prompt_context()` and therefore cannot simply switch
+to `Orchestrator(model_identity_config=...)` -- from being constructed at
+all outside a desktop session. Deferring the build moves the keystore
+requirement from "any construction" to "actually asking for memory
+context", where it belongs and where this class already degrades to `""`.
 """
 
 from typing import Any
@@ -26,11 +37,29 @@ class ContextBuilder:
         Args:
             identity_config: Optional identity configuration for memory
         """
-        self.memory = None
-        if identity_config:
+        self._identity_config = identity_config
+        #: Resolved on first `memory` access. `None` means "not yet built";
+        #: `False` means "tried and failed, do not retry".
+        self._memory: Any | None | bool = None if identity_config else False
+
+    @property
+    def memory(self) -> Any | None:
+        """The MemoryManager, built on first use, or None when unavailable.
+
+        Failure is cached: a missing keystore does not become one retry --
+        and one log line -- per reflection.
+        """
+        if self._memory is False:
+            return None
+        if self._memory is None:
             from identity_interpreter.adapters.memory_manager import MemoryManager
 
-            self.memory = MemoryManager(identity_config)
+            try:
+                self._memory = MemoryManager(self._identity_config)
+            except Exception:
+                self._memory = False
+                return None
+        return self._memory
 
     def build_prompt_context(self, session_id: str, limit: int = 10) -> str:
         """
@@ -41,13 +70,15 @@ class ContextBuilder:
             limit: Maximum number of memories to retrieve
 
         Returns:
-            Formatted context string ready for LLM prompt
+            Formatted context string ready for LLM prompt, or "" when no
+            memory source is available.
         """
-        if not self.memory:
+        memory = self.memory
+        if not memory:
             return ""
 
         try:
-            return self.memory.build_context(limit=limit)
+            return memory.build_context(limit=limit)
         except Exception:
             return ""
 

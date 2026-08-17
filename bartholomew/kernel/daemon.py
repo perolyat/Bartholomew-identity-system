@@ -1029,7 +1029,15 @@ class KernelDaemon:
                 },
                 date=now,
                 timezone_str=str(self.tz),
-                backend="stub",  # Use stub by default
+                # No `backend` argument: reflection routes through the same
+                # Identity-driven model selection every other surface uses.
+                # This used to be `backend="stub"`, which meant no real model
+                # had ever composed a reflection -- the stub's mock text
+                # tripped the generator's own red-line check every night and
+                # fell through to a template, so the whole reflection history
+                # is template-composed. Pinning the backend here also made
+                # Identity.yaml's model policy inapplicable to the one
+                # surface that reads the user's stored memory.
                 episodic_evidence=episodic_evidence,
             )
 
@@ -1126,7 +1134,8 @@ Continue supporting user wellness and autonomy.
                 },
                 iso_week=iso_week,
                 year=year,
-                backend="stub",
+                # No `backend` argument -- same reasoning as
+                # _run_daily_reflection()'s equivalent call above.
                 episodic_evidence=episodic_evidence,
             )
 

@@ -63,9 +63,56 @@ API_KEY_ENV = "ANTHROPIC_API_KEY"
 DEFAULT_MAX_TOKENS = 8192
 
 
+# Cloud has three distinguishable states, not two. Collapsing them was a
+# real defect: `is_configured()` answered "is there a key?", and
+# `ModelRouter._select_by_task_type()` used that to decide cloud-vs-local.
+# With a key present but the optional `anthropic` package absent, Identity's
+# cloud candidate was selected, the request reached `_route_cloud()`, and it
+# failed `sdk_unavailable` -- instead of falling back to the local model
+# Identity declares immediately beside it for that same task type. The
+# failure was truthful but entirely avoidable, and it broke exactly the
+# deployment most likely to exist in practice: a user who has pasted in an
+# API key but not yet installed the SDK.
+CLOUD_DISABLED = "disabled"  # user has not enabled cloud
+CLOUD_READY = "ready"  # enabled and servable right now
+CLOUD_UNAVAILABLE = "unavailable"  # enabled, but cannot currently serve
+
+
 def is_configured() -> bool:
-    """Whether a cloud backend could be built. No key means no cloud."""
+    """Whether the user has *enabled* cloud. No key means no cloud.
+
+    Enablement only. This deliberately does not consider whether a request
+    could actually be served -- use `is_ready()` for that.
+    """
     return bool(os.getenv(API_KEY_ENV, "").strip())
+
+
+def is_ready() -> bool:
+    """Whether a cloud generation could actually be served right now.
+
+    Enabled *and* the optional SDK importable. This is the predicate that
+    should gate routing a request to cloud.
+    """
+    return is_configured() and HAS_ANTHROPIC_SDK
+
+
+def readiness() -> str:
+    """Cloud state as one of CLOUD_DISABLED / CLOUD_READY / CLOUD_UNAVAILABLE.
+
+    For truthful status reporting -- a user must be able to tell "I have not
+    turned cloud on" apart from "I turned it on and it cannot run", because
+    the second is a fixable misconfiguration and the first is a choice.
+    """
+    if not is_configured():
+        return CLOUD_DISABLED
+    return CLOUD_READY if HAS_ANTHROPIC_SDK else CLOUD_UNAVAILABLE
+
+
+def unreadiness_reason() -> str | None:
+    """Why cloud is enabled but unservable, or None when that isn't the case."""
+    if readiness() != CLOUD_UNAVAILABLE:
+        return None
+    return "sdk_unavailable"
 
 
 def map_model_name(name: str) -> str | None:
