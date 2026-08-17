@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from ..loader import load_identity
+from ..orchestrator.model_router import ModelBackendError
 from ..orchestrator.orchestrator import Orchestrator
 from ..orchestrator.prompt_composer import (
     compose_daily_reflection_prompt,
@@ -32,12 +33,34 @@ class ReflectionGenerator:
     concatenation.
     """
 
+    #: Identity task type reflections are composed under.
+    #:
+    #: `Identity.yaml`'s `by_task_type` policy routes `general` to the local
+    #: model and lists no cloud candidate, so composing a reflection stays
+    #: local-first and no personal material reaches a cloud provider. The
+    #: local/cloud data boundary is an unratified product decision (see
+    #: `docs/VISION_AND_PERSONAL_DEPLOYMENT.md` §9); until it is decided,
+    #: reflection -- which reads stored personal memory by construction --
+    #: is not the place to pre-empt it.
+    REFLECTION_TASK_TYPE = "general"
+
     def __init__(self, identity_path: str = "Identity.yaml"):
         """
         Initialize the reflection generator.
 
         Args:
             identity_path: Path to Identity.yaml configuration
+
+        Note:
+            `identity_config=` (not `model_identity_config=`) is deliberate:
+            this class needs `orchestrator.context.build_prompt_context()`,
+            which only exists when the ContextBuilder has an Identity. That
+            used to make construction impossible on a headless host, because
+            ContextBuilder built its `MemoryManager` -- and therefore reached
+            the OS keystore -- eagerly. ContextBuilder now defers that to
+            first use, so construction here is keystore-free and a host
+            without a keystore simply composes with empty memory context
+            instead of failing to construct at all.
         """
         self.identity = load_identity(identity_path)
         self.orchestrator = Orchestrator(identity_config=self.identity)
@@ -47,7 +70,7 @@ class ReflectionGenerator:
         metrics: dict[str, Any],
         date: datetime,
         timezone_str: str,
-        backend: str = "stub",
+        backend: str | None = None,
         episodic_evidence: str | None = None,
     ) -> dict[str, Any]:
         """
@@ -57,7 +80,10 @@ class ReflectionGenerator:
             metrics: Dict with water_ml, nudges_count, pending_nudges
             date: Date for reflection
             timezone_str: Timezone string for display
-            backend: LLM backend to use (stub, ollama, etc.)
+            backend: LLM backend override. **Leave as None** to use the
+                Identity-driven routing every other surface uses; that is
+                what makes a reflection model-composed. An explicit value
+                bypasses Identity policy and is intended for tests.
             episodic_evidence: Optional NarratorEngine episodic narrative for
                 this day, supplied as evidence to this composition
 
@@ -97,7 +123,7 @@ class ReflectionGenerator:
             result = self._fallback_daily_template(
                 metrics,
                 date,
-                str(e),
+                self._describe_failure(e),
                 episodic_evidence,
             )
         result["meta"]["episodic_evidence_present"] = bool(
@@ -110,7 +136,7 @@ class ReflectionGenerator:
         weekly_scope: dict[str, Any],
         iso_week: int,
         year: int,
-        backend: str = "stub",
+        backend: str | None = None,
         episodic_evidence: str | None = None,
     ) -> dict[str, Any]:
         """
@@ -120,7 +146,7 @@ class ReflectionGenerator:
             weekly_scope: Dict with reflections_count, policy_checks, etc.
             iso_week: ISO week number
             year: Year
-            backend: LLM backend to use
+            backend: LLM backend override; see `generate_daily_reflection`.
             episodic_evidence: Optional NarratorEngine episodic narrative for
                 this week, supplied as evidence to this composition
 
@@ -155,7 +181,7 @@ class ReflectionGenerator:
             result = self._fallback_weekly_template(
                 iso_week,
                 year,
-                str(e),
+                self._describe_failure(e),
                 episodic_evidence,
             )
         result["meta"]["episodic_evidence_present"] = bool(
@@ -166,7 +192,7 @@ class ReflectionGenerator:
     def _generate_with_safety(
         self,
         prompt: str,
-        backend: str,
+        backend: str | None,
         reflection_type: str,
     ) -> dict[str, Any]:
         """
@@ -174,18 +200,32 @@ class ReflectionGenerator:
 
         Args:
             prompt: Composed prompt
-            backend: Backend identifier
+            backend: Backend identifier, or None to let Identity policy
+                choose (the normal path)
             reflection_type: 'daily' or 'weekly'
 
         Returns:
             Dict with content, success, safety, and meta
+
+        Raises:
+            ModelBackendError: the selected real backend could not generate.
+                Propagated deliberately -- the caller turns it into a
+                fallback template marked `success: False`, so a provider
+                outage can never be stored as a successful reflection.
         """
-        # Route to LLM
-        data = {
+        # Route to LLM.
+        #
+        # Omitting `backend` entirely (rather than passing None) is what
+        # hands the decision to `select_route()`'s Identity-driven
+        # `task_type` branch -- `data.get("backend")` must be absent for
+        # that branch to run at all.
+        data: dict[str, Any] = {
             "prompt": prompt,
-            "backend": backend,
             "session_id": "system_reflection",
+            "task_type": self.REFLECTION_TASK_TYPE,
         }
+        if backend is not None:
+            data["backend"] = backend
 
         # Execute pipeline
         route = self.orchestrator.router.select_route(data)
@@ -247,12 +287,42 @@ Generate a compliant version adhering strictly to red lines and safety.
                 "crisis_detected": crisis_detected,
             },
             "meta": {
-                "generator": "llm",
+                # Provenance must name what actually composed this document.
+                #
+                # `generator` was unconditionally "llm" here, including when
+                # the route resolved to the stub backend -- whose output is
+                # the literal string "[stub-llm] Mock response for prompt:
+                # ...". Today's reflection prompts happen to trip a red line
+                # when echoed back, so that text falls to the template
+                # instead of being stored; but that is an accident of the
+                # prompt text, not a guarantee. A shorter prompt passes
+                # safety cleanly and would persist mock text labelled as
+                # model-composed -- pinned weekly, in the user's own
+                # reflection history. Naming the stub as the generator makes
+                # a stored reflection's provenance answerable without
+                # re-deriving which backend was live that day.
+                "generator": "stub" if route["backend"] == "stub" else "llm",
                 "backend": route["backend"],
                 "model": route["model"],
                 "reflection_type": reflection_type,
             },
         }
+
+    @staticmethod
+    def _describe_failure(exc: Exception) -> str:
+        """Render a generation failure for the persisted `meta.error` field.
+
+        A reflection that degraded to a template records *why* here, and that
+        record is the only evidence available afterwards -- the run is
+        unattended and nightly. `str(ModelBackendError)` carries the human
+        message but drops the structured backend/model/reason it was built to
+        carry, which are what distinguish "Ollama is down" from "the model
+        isn't pulled" from "cloud is unconfigured" when reading a month-old
+        reflection.
+        """
+        if isinstance(exc, ModelBackendError):
+            return f"{exc} [backend={exc.backend} model={exc.model} reason={exc.reason}]"
+        return str(exc)
 
     @staticmethod
     def _compose_fallback_sections(episodic_evidence: str | None) -> str:

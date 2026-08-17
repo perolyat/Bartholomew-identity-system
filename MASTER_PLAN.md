@@ -262,7 +262,12 @@ partly manual. See [ROADMAP.md](ROADMAP.md) for per-stage exit criteria.
    - **Follow-up fixed 2026-07-20:** pinned `fastapi>=0.104,<0.121` in `pyproject.toml` and
      `requirements.txt` (that ceiling keeps `starlette` on the `0.4x` line; `fastapi>=0.121`
      pulls `starlette>=1.0`, which breaks `starlette.testclient`'s implicit `httpx`
-     dependency — reproduced and confirmed on a clean venv). Also re-encoded
+     dependency — reproduced and confirmed on a clean venv).
+     **Superseded 2026-08-17:** that ceiling is no longer what the project pins. `requirements.txt`
+     and `requirements.in` now carry `fastapi>=0.134,<0.141`, raised for CVE-2026-54283 — the floor
+     was lifted because `fastapi<0.133` cannot resolve any patched Starlette. The `0.104,<0.121`
+     text above is preserved as the historical record of the 2026-07-20 fix; **the live constraint
+     is whatever `requirements.txt` says**, and it is not this. Also re-encoded
      `requirements.lock` from UTF-16 to UTF-8/LF so it's actually readable/usable, and added
      `httpx`/`freezegun` to `requirements-dev.txt` (both were imported by tests but
      undeclared, so a clean dev install couldn't even collect the test suite).
@@ -367,10 +372,16 @@ status and test references.
      (`DECISIONS.md`'s "Reflection ownership — target architecture" entry;
      `COGNITIVE_RUNTIME.md`'s "Reflection ownership" section) is that `ReflectionGenerator` owns
      final reflection composition, with `NarratorEngine` supplying supplementary episodic evidence
-     to it, not standing as a second, independent pipeline. **The implementation remains
-     incomplete relative to that target** — no code change has routed `NarratorEngine`'s narrative
-     into `ReflectionGenerator` as an input, and no test verifies `ReflectionGenerator` as the sole
-     point of final composition. Closing that gap is separately-authorised future work, not
+     to it, not standing as a second, independent pipeline. **Closed 2026-08-17** (change landed
+     `8d87258`, 2026-08-16): `daemon.py` collects the narrator's episodic material first and passes
+     it in as `episodic_evidence`, and `tests/test_reflection_ownership.py` /
+     `tests/test_reflection_narrative_integration.py` verify `ReflectionGenerator` as the sole
+     point of final composition. The sentence above beginning "The implementation remains
+     incomplete" described the state before that commit and is retained only for traceability.
+     A second, separate defect — that no *model* had ever composed a reflection, because
+     `daemon.py` pinned `backend="stub"` and `ReflectionGenerator` could not be constructed
+     headless — was repaired 2026-08-17 (`tests/test_reflection_model_path.py`). Closing the
+     remaining S5.4 loop is separately-authorised future work, not
      implied as done anywhere in this document.
 
 9. ✅ **Persona / Mentor Mode packs (config-driven)** — verified against acceptance criteria and one

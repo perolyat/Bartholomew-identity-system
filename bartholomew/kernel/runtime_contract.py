@@ -177,9 +177,12 @@ def _build_interpretation(
     ContextBuilder` was meant to be the thing that injects prior
     conversational memory into the prompt, but it's dead code in production
     today: `bartholomew_api_bridge_v0_1/services/api/app.py` constructs
-    `Orchestrator()` with no `identity_config`, so `ContextBuilder.__init__`
-    never builds a `MemoryManager` and `build_prompt_context()` always
-    returns `""`. Rather than reviving that separate, superseded path (see
+    `Orchestrator()` with no `identity_config`, so `ContextBuilder` never
+    builds a `MemoryManager` and `build_prompt_context()` always returns
+    `""`. (Since 2026-08-17 that build is lazy rather than eager, so the
+    keystore is only reached if something actually asks for memory context;
+    with no `identity_config` nothing is built either way, and this path is
+    unchanged.) Rather than reviving that separate, superseded path (see
     DECISIONS.md's "One authority per architectural concept" entry -- this
     is the same duplicated-concept shape as the four pairs item 11.1 already
     found, just for conversational memory injection specifically), this

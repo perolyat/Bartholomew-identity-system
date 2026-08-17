@@ -19,6 +19,21 @@ pip install -e .
 pip install email-validator
 ```
 
+### Databases are created on first run
+
+`data/barth.db` and `data/memory.db` are **runtime state and are not tracked in Git** — a fresh
+clone has no `data/*.db`, and the runtime creates what it needs on first start. `.gitignore`
+excludes them.
+
+Until 2026-08-17 both files *were* tracked, which had two live consequences worth knowing if you
+are looking at old branches: ordinary use produced modified tracked databases (the cloud-spend
+ledger creates its table in `data/barth.db` on the first routing decision), and running the test
+suite destroyed repository content (`test_memory_functionality.py` ran expiry cleanup against the
+real `./data`). Both are fixed; `tests/smoke/test_repository_hygiene.py` stops a database from
+being re-added.
+
+To point the runtime somewhere else, set `BARTH_DB_PATH`.
+
 ### Dependency Management
 
 This project uses `pip-tools` to manage dependencies:

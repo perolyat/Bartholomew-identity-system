@@ -708,13 +708,17 @@ this subsystem — episodic entries and self-model snapshots bypassed `ConsentGa
   `daemon.py`'s daily/weekly reflection generation was changed to append `narrator.py`'s real
   episodic-narrative output alongside `ReflectionGenerator`'s own content (`MASTER_PLAN.md` item
   11.8), replacing a placeholder that had never run at all. **Corrected 2026-07-28: this is
-  concatenation, not architectural unification.** Both pipelines still execute independently and
-  neither is the codebase's enforced single authority. See `COGNITIVE_RUNTIME.md`'s "Reflection
-  ownership" section for the approved target architecture (`ReflectionGenerator` authoritative,
-  `NarratorEngine` supplementary) and the tracked implementation gap between that target and the
-  current appending behaviour. **Stage 5 live proactive reflection behaviour remains blocked until
-  a separately authorised code change makes the implementation conform to the approved ownership
-  model and tests verify it** — this exit criterion is not satisfied by concatenation alone.
+  concatenation, not architectural unification.** **Resolved 2026-08-17** (change landed
+  `8d87258`, 2026-08-16): `daemon.py` now collects the narrator's episodic material first and
+  passes it into `ReflectionGenerator` as `episodic_evidence`, so a single authority composes a
+  single document; `tests/test_reflection_ownership.py` and
+  `tests/test_reflection_narrative_integration.py` verify it. **This exit criterion is
+  satisfied and Stage 5 live proactive reflection behaviour is no longer blocked on it.**
+  Separately, the reflection *model* path — which had never actually run a model, because
+  `daemon.py` pinned `backend="stub"` and `ReflectionGenerator` could not be constructed on a
+  headless host — was repaired on 2026-08-17 and is pinned by
+  `tests/test_reflection_model_path.py`. See `COGNITIVE_RUNTIME.md`'s "Reflection ownership"
+  section, which is the authority for both.
 
 **Verify:**
 ```bash

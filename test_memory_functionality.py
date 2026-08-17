@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 # Add the package to path for development
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -20,6 +22,33 @@ from identity_interpreter.adapters.memory_manager import (
     ConversationTurn,
     MemoryManager,
 )
+
+# Where these checks read and write `memory.db`.
+#
+# Defaults to the real `./data` so running this file directly still inspects
+# the live deployment, which is what it was written for. Under pytest the
+# autouse fixture below redirects it to a temp directory -- `MemoryManager`'s
+# own `data_dir` default is `./data`, and constructing one there runs
+# `_cleanup_expired_memories()`, which DELETEs every row whose `expires_at`
+# has passed. Collected from the repository root, that silently emptied the
+# repository's own `data/memory.db` on every test run. The databases are no
+# longer tracked (see the packaging-contract regression test), but a suite
+# that destroys the developer's live memories is a footgun either way.
+_DATA_DIR = {"path": "./data"}
+
+
+def data_dir() -> str:
+    """The directory these checks read and write."""
+    return _DATA_DIR["path"]
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _isolated_data_dir(tmp_path_factory):
+    """Keep this module's writes out of the working tree."""
+    original = _DATA_DIR["path"]
+    _DATA_DIR["path"] = str(tmp_path_factory.mktemp("memory_functionality"))
+    yield
+    _DATA_DIR["path"] = original
 
 
 def test_memory_persistence():
@@ -31,7 +60,7 @@ def test_memory_persistence():
     identity = normalize_identity(identity)
 
     # Create memory manager
-    memory_manager = MemoryManager(identity)
+    memory_manager = MemoryManager(identity, data_dir=data_dir())
 
     # Create a test conversation turn
     test_id = str(uuid.uuid4())
@@ -85,7 +114,7 @@ def test_context_injection():
     identity = normalize_identity(identity)
 
     # Create memory manager
-    memory_manager = MemoryManager(identity)
+    memory_manager = MemoryManager(identity, data_dir=data_dir())
 
     # Get recent conversation history
     recent = memory_manager.get_recent_conversation(limit=3)
@@ -114,9 +143,9 @@ def test_encryption_security():
     print(f"🔒 Encryption at rest enabled: {encryption_enabled}")
 
     # Check if data directory contains encrypted files
-    data_dir = Path("./data")
-    if data_dir.exists():
-        db_file = data_dir / "memory.db"
+    target_dir = Path(data_dir())
+    if target_dir.exists():
+        db_file = target_dir / "memory.db"
         if db_file.exists():
             print(f"📁 Memory database found: {db_file}")
 

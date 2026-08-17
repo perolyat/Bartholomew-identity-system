@@ -192,6 +192,35 @@
 
 ## Tech debt watchlist
 
+- **(2026-08-17) Cloud budget ledger has a check-then-act window under concurrency — deferred,
+  and deliberately not fixed now.** `ModelRouter._route_cloud()` reads the spend snapshot, makes
+  the provider request, then records the cost. Two concurrent cloud generations can each observe
+  headroom under the cap and jointly exceed it. **Current POC risk is nil and the reason is
+  structural, not luck:** no live code path passes a `task_type`, so `select_route()` always
+  defaults to `general`, which `Identity.yaml` routes to the local model with no cloud candidate —
+  cloud is unreachable from the running system regardless of whether a key is present. The ledger
+  also already fails closed on an unreadable read, `low_balance_behavior` is `force-local`, and the
+  cap is $25/month for a single user. **This becomes a real requirement before either autonomous
+  cloud use or multi-user operation**, at which point the correction is a transactional
+  reserve-then-settle against the ledger rather than a distributed billing system. Recorded here
+  rather than fixed, because hardening an unreachable path now buys nothing and adds a concurrency
+  mechanism nobody can exercise.
+- **(2026-08-17) The consent ask-path is unreachable from the API/web surface.**
+  `set_consent_handler()` is called only by `chat.py`, the standalone terminal entrypoint. On the
+  API path no handler is registered, so `request_permission_to_store()` returns `False`
+  unconditionally: sensitive content is **not stored**, and the user is **not asked**. The
+  behaviour is fail-closed and therefore safe, but it means the "ask before storing" experience
+  does not exist in `/ui` — only its refusal half does. Consequence for testing is recorded in
+  `docs/FIRST_REAL_WORLD_TEST.md` §5. Registering a handler on the API path is small, but it is a
+  new user-facing behaviour rather than a repair and needs its own approval.
+- **(2026-08-17) `test_memory_privacy.py` writes to the live `./data` directory.** It is a manual
+  script (its entry point is `run_test()`, which pytest does not collect, so the suite never runs
+  it), but executing it by hand constructs a `MemoryManager` against the real deployment and
+  attempts to store a synthetic "bank password" memory. Left alone deliberately — it is a manual
+  privacy check whose whole point is to run against a real configuration — but worth knowing before
+  running it on a machine holding real memories. Its sibling `test_memory_functionality.py`, which
+  *is* collected, was redirected to a temp directory on 2026-08-17 after it was found deleting the
+  repository's tracked `data/memory.db` contents on every test run.
 - **(2026-08-15, second pass) Parking Brake read/write authority is split — known, deferred, and
   newly consequential under the authority-tier model.** Since Phase B stage **B6** the brake's
   write authority is `GovernanceStore` (`parking_brake_state`): `bartholomew/cli.py`'s
@@ -337,9 +366,13 @@
   ahead of current architectural work.** The 2026-07-28 documentation reconciliation removed
   hydration/water-logging from onboarding examples, headline demonstrations, and current product
   positioning (see `README.md`, `QUICKSTART.md`, `bartholomew_api_bridge_v0_1/README_API_BRIDGE.md`,
-  `ROADMAP.md`'s Stage 0 section). The underlying code was **not** touched — `/api/water/log`,
-  `/api/water/today`, the `water_logs` table, and the minimal UI panel
-  (`bartholomew_api_bridge_v0_1/ui/minimal/index.html`) remain live, working, legacy code. Whether
+  `ROADMAP.md`'s Stage 0 section). The underlying code was **not** touched.
+  **Corrected 2026-08-17:** this entry previously described `/api/water/log` and
+  `/api/water/today` as "live, working, legacy code". **Neither endpoint exists** — a repository
+  search for `api/water` finds no route registration anywhere in the codebase, and no commit
+  removing them, so the claim appears never to have been accurate. What *does* remain is the
+  `water_logs` table (2 rows of historical data) and the minimal UI panel
+  (`bartholomew_api_bridge_v0_1/ui/minimal/index.html`), which is labelled accordingly. Whether
   to actually remove that code is a separate, future, unapproved decision — recorded here so it
   is not lost, and explicitly **not** placed ahead of Phase B/Stage 1/Stage 5 in priority merely
   because it exists.

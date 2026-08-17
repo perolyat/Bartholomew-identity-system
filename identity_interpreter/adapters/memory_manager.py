@@ -9,7 +9,21 @@ context source is unreachable in production today, not merely deprecated.
 constructs a `MemoryManager` when given a non-None `identity_config`, and
 `bartholomew_api_bridge_v0_1/services/api/app.py` constructs
 `Orchestrator()` with no `identity_config` -- so `ContextBuilder.memory` is
-always `None` and `build_prompt_context()` always returns `""`. The two
+always `None` and `build_prompt_context()` always returns `""`.
+
+CORRECTION (2026-08-17): the paragraph above is accurate for **chat**, which
+was the concern it was written about, but it is not true of the module as a
+whole. `identity_interpreter.adapters.reflection_generator.
+ReflectionGenerator` constructs `Orchestrator(identity_config=...)`, so on a
+host with a working OS keystore this module *is* live -- it supplies the
+memory context for daily/weekly reflection prompts. That was already the case
+when the paragraph was written; it simply was not noticed, because reflection
+ran on `backend="stub"` and never reached a model. Reflection's dependency on
+this superseded path is **known technical debt, not an endorsement**:
+consolidating it onto the Memory Substrate belongs with the remainder of
+S5.4. Nothing new was routed through here. (Construction is now lazy rather
+than eager, so a keystore-less host degrades to `""` instead of failing to
+construct `ReflectionGenerator` at all.) The two
 `# TODO Phase 2b/2c` comments below (`Enforce encryption based on
 evaluated["encrypt"]`, `Generate summary if evaluated["summarize"] is
 true`) are therefore stale: `bartholomew.kernel.memory_store.MemoryStore`

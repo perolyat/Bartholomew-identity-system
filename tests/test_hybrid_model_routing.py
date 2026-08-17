@@ -23,6 +23,7 @@ import tempfile
 
 import pytest
 
+from identity_interpreter.adapters import cloud_llm
 from identity_interpreter.adapters.cloud_llm import CloudLLMAdapter, map_model_name
 from identity_interpreter.loader import load_identity
 from identity_interpreter.orchestrator.budget_ledger import (
@@ -51,7 +52,27 @@ def no_cloud(monkeypatch):
 
 @pytest.fixture
 def with_cloud(monkeypatch):
+    """A cloud deployment that can actually serve a request.
+
+    Both halves are required. `anthropic` is an optional dependency and is
+    declared in neither `requirements.txt` nor `pyproject.toml`, so
+    `HAS_ANTHROPIC_SDK` is False in CI and in most developer environments.
+    Setting only the key used to be enough for these tests because
+    `is_configured()` ignored the SDK entirely -- which meant the tests
+    below were asserting a cloud route that a real deployment in the same
+    state could never have served. Patching both makes "with cloud" mean a
+    deployment where cloud genuinely works; `cloud_key_without_sdk` covers
+    the state that was previously conflated with it.
+    """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    monkeypatch.setattr(cloud_llm, "HAS_ANTHROPIC_SDK", True)
+
+
+@pytest.fixture
+def cloud_key_without_sdk(monkeypatch):
+    """Cloud enabled by the user, but not servable: key set, SDK missing."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    monkeypatch.setattr(cloud_llm, "HAS_ANTHROPIC_SDK", False)
 
 
 class TestCloudIsOptIn:
@@ -89,6 +110,75 @@ class TestCloudIsOptIn:
         with pytest.raises(ModelBackendError) as exc:
             router.route({"prompt": "hello", "backend": "cloud"})
         assert exc.value.reason == "cloud_not_configured"
+
+
+class TestCloudReadinessIsDistinctFromConfiguration:
+    """Cloud has three states, not two (2026-08-17).
+
+    `is_configured()` answers "has the user enabled cloud?" and
+    `is_ready()` answers "can a request be served right now?". They differ
+    whenever a key is set but the optional `anthropic` SDK is absent -- a
+    state a real user reaches simply by pasting in a key before running
+    `pip install anthropic`. Routing used to consult the first predicate and
+    then fail at the provider, instead of taking the local candidate
+    Identity declares beside the cloud one.
+    """
+
+    def test_three_states_are_distinguishable(
+        self,
+        no_cloud,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(cloud_llm, "HAS_ANTHROPIC_SDK", True)
+        assert cloud_llm.readiness() == cloud_llm.CLOUD_DISABLED
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+        assert cloud_llm.readiness() == cloud_llm.CLOUD_READY
+
+        monkeypatch.setattr(cloud_llm, "HAS_ANTHROPIC_SDK", False)
+        assert cloud_llm.readiness() == cloud_llm.CLOUD_UNAVAILABLE
+
+    def test_key_without_sdk_is_configured_but_not_ready(self, cloud_key_without_sdk):
+        assert cloud_llm.is_configured() is True
+        assert cloud_llm.is_ready() is False
+        assert cloud_llm.unreadiness_reason() == "sdk_unavailable"
+
+    def test_ready_deployment_reports_no_unreadiness_reason(self, with_cloud):
+        assert cloud_llm.is_ready() is True
+        assert cloud_llm.unreadiness_reason() is None
+
+    def test_unservable_cloud_falls_back_to_identitys_local_candidate(
+        self,
+        identity,
+        cloud_key_without_sdk,
+    ):
+        """The defect this distinction exists to fix.
+
+        Identity routes safety_review to Anthropic first and the local
+        Mistral second. With a key but no SDK, selecting cloud produced a
+        hard `sdk_unavailable` failure; it must take the second candidate
+        instead.
+        """
+        router = ModelRouter(identity_config=identity)
+        route = router.select_route({"task_type": "safety_review"})
+
+        assert route["backend"] == "local"
+        assert map_model_name(route["model"]) is None
+
+    def test_unservable_cloud_still_refuses_an_explicit_cloud_hint_truthfully(
+        self,
+        identity,
+        cloud_key_without_sdk,
+    ):
+        """Falling back is for *policy* selection. A caller who explicitly
+        demands cloud still gets a truthful failure rather than being
+        silently downgraded to a different model than it asked for."""
+        router = ModelRouter(identity_config=identity)
+        with pytest.raises(ModelBackendError) as exc:
+            router.route({"prompt": "hello", "backend": "cloud"})
+
+        assert exc.value.reason == "sdk_unavailable"
+        assert "mock response" not in str(exc.value).lower()
 
 
 class TestIdentityPolicyRouting:

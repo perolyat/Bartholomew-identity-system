@@ -255,17 +255,24 @@ class ModelRouter:
             model_name = decision.decision["model"]
             parameters = dict(decision.decision.get("parameters", {}))
 
-            from ..adapters.cloud_llm import is_configured, map_model_name
+            from ..adapters.cloud_llm import is_ready, map_model_name
 
             if map_model_name(model_name) is not None:
-                if is_configured():
+                # `is_ready()`, not `is_configured()`: an API key alone does
+                # not make cloud servable. When the optional `anthropic` SDK
+                # is missing, routing here would reach the provider call and
+                # fail `sdk_unavailable`, when Identity lists a perfectly good
+                # local candidate for this same task type. Enabled-but-broken
+                # therefore takes the local fallback below, exactly as
+                # not-enabled does.
+                if is_ready():
                     return {
                         "backend": "cloud",
                         "model": model_name,
                         "parameters": parameters,
                         "budget_exhausted": exhausted,
                     }
-                # Identity picked a cloud model the user has never enabled.
+                # Identity picked a cloud model this deployment cannot serve.
                 # Switching the backend to local is not enough -- the model
                 # name has to change too, or the local adapter is handed a
                 # cloud provider name ("Anthropic") and asks Ollama for a
@@ -290,7 +297,8 @@ class ModelRouter:
 
     def _local_fallback_model(self, task_type: str) -> str | None:
         """The model to use when Identity's first choice for this task is a
-        cloud model the deployment has not enabled.
+        cloud model the deployment cannot serve -- either never enabled, or
+        enabled but not currently servable (see `cloud_llm.readiness()`).
 
         Prefers the next locally-servable candidate Identity declares for
         this task type, so the task's own ordering is respected, and falls
