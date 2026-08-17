@@ -403,8 +403,9 @@
   to actually remove that code is a separate, future, unapproved decision — recorded here so it
   is not lost, and explicitly **not** placed ahead of Phase B/Stage 1/Stage 5 in priority merely
   because it exists.
-- **(2026-07-28) Cross-device auth threat model does not yet exist.** The hybrid local-first
-  deployment architecture (`DECISIONS.md`) explicitly rejects "simple token auth is sufficient" as
+- **(2026-07-28) Cross-device auth threat model does not yet exist.** The deployment architecture
+  (`DECISIONS.md`; originally the hybrid local-first entry, whose auth gate the 2026-08-17
+  server-centric entry carries forward unchanged) explicitly rejects "simple token auth is sufficient" as
   an assumption (see the corrected entry in `ASSUMPTIONS.md`) and requires a reviewed threat model
   before any remote/cross-device exposure of the local runtime. That threat model does not exist
   yet. This is a genuine open risk, not merely a documentation gap: any Stage 6 work that exposes

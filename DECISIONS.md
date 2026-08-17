@@ -445,8 +445,9 @@
   and `MASTER_PLAN.md` ("Echo Integration Roadmap"), is moved to
   `docs/incubator/ECHO_IDEAS.md` — explicitly non-canonical and non-authoritative. Every
   individual idea in that document requires independent evaluation against `CONSTITUTION.md`,
-  `COGNITIVE_RUNTIME.md`'s ownership table, and this document's hybrid local-first entry before
-  any adoption; none of it is scheduled, approved, or a stage gate.
+  `COGNITIVE_RUNTIME.md`'s ownership table, and this document's current deployment-architecture
+  entry (the server-centric entry, which supersedes "hybrid local-first") before any adoption; none
+  of it is scheduled, approved, or a stage gate.
 - **Alternatives considered:** (a) leave it in canonical docs but relabel as "future exploration"
   — already tried (both sections carried exactly that label) and insufficient: a coding agent
   reading canonical `ROADMAP.md`/`MASTER_PLAN.md` would still find a fully-specified second
@@ -1507,7 +1508,8 @@
   applies to isolation: retrofitting ownership onto persisted state and background execution after
   a second user exists is materially harder than reserving the concept while there is exactly one.
 - **Relationship to existing decisions:** This entry **extends, and does not replace,**
-  "Deployment architecture — hybrid local-first" (2026-07-28). That entry answers *where authority
+  "Deployment architecture — hybrid local-first" (2026-07-28) — **superseded 2026-08-17** by the
+  server-centric entry, which restates this relationship in its clause (f). That entry answers *where authority
   and compute sit* for one user (local-authoritative for sensitive memory, governance and
   emergency shutdown; optional cloud services). This entry answers *how many users there are, what
   a personal Bartholomew is, and what must remain replaceable underneath it*. The two are
@@ -1603,7 +1605,8 @@
 - **Relationship to existing decisions:** **Extends** "One shared Bartholomew platform; many
   strongly isolated personal Bartholomew identities" (2026-08-15) — this is the Governance-authority
   consequence of that decision, and property 9 of its conflict-surfacing rule. **Bounded by**
-  "Deployment architecture — hybrid local-first" (2026-07-28), whose requirement that governance
+  "Deployment architecture — hybrid local-first" (2026-07-28) — **superseded 2026-08-17**, but the
+  clause relied on here was retained verbatim by the server-centric entry — whose requirement that governance
   and emergency shutdown never depend on cloud availability is what forbids reading the
   Platform/Admin tier as central-only control. **Consistent with** `CONSTITUTION.md`'s
   independent-emergency-shutdown invariant (§1) and with `GovernanceStore`'s existing

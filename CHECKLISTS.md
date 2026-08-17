@@ -84,9 +84,15 @@ section for the full rationale behind each item.
   bypass) the `awaiting_response` state rather than silently treating a sent message as resolved.
 - **Data portability:** any new kind of user data (memory, preference, goal, approval, audit
   record) is exportable via the data-portability mechanism, or an explicit exception is recorded.
-- **Deployment-architecture consistency:** the change is consistent with the hybrid local-first
-  architecture (`DECISIONS.md`) — sensitive memory/governance/emergency-shutdown stay local-
-  authoritative; any remote/cross-device exposure has a reviewed threat model.
+- **Deployment-architecture consistency (updated 2026-08-17):** the change is consistent with
+  `DECISIONS.md`'s "Deployment architecture — server-centric Bartholomew with local/edge capability
+  agents", which **supersedes** "hybrid local-first". Concretely: **governance, the Parking Brake
+  and emergency shutdown stay locally enforceable** and must not become dependent on central
+  services being reachable; any remote/cross-device exposure has a reviewed threat model; and
+  cognition does not acquire a dependency on a particular UI or device.
+  **Changed:** this item previously also required *sensitive memory* to stay local-authoritative.
+  It no longer does — personal memory is intended to become server-side. The locally-enforceable
+  *stop authority* requirement is the part that was retained, and is what this check now turns on.
 
 ## Platform and personal-identity architecture checklist (added 2026-08-15)
 

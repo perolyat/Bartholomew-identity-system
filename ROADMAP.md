@@ -598,8 +598,8 @@ previously-unfixed gap in `memory_rules.yaml`'s `ask_before_store` category, reu
 `pending_sensitive_writes` inbox this fix built rather than a parallel one.
 
 **Goal:** A minimal consumer web governance shell on top of the API bridge, consistent with the
-hybrid local-first deployment architecture (`DECISIONS.md`) — browser-based, reaching the trusted
-local Bartholomew runtime — that can, at minimum:
+deployment architecture (`DECISIONS.md`) — browser-based, reaching the Bartholomew runtime, which
+in the current prototype is local — that can, at minimum:
 - display current state (nudges, last reflections) and overall system status
 - acknowledge/dismiss nudges; trigger reflections (dev/testing)
 - provide **parking-brake access** (view/engage/disengage, by scope)
@@ -1058,9 +1058,16 @@ has been proven.
 ### Stage 6 — Distributed being (cross-device) + voice adapters
 
 **Goal:** Same Bartholomew across devices with secure auth and optional voice, consistent with the
-hybrid local-first deployment architecture (`DECISIONS.md`): the trusted local runtime remains
-authoritative for sensitive memory and governance; cross-device access is an explicitly-designed,
-threat-modelled extension of it, not a default assumption.
+deployment architecture (`DECISIONS.md`): **governance and stop authority remain locally
+enforceable**, and cross-device access is an explicitly-designed, threat-modelled extension, not a
+default assumption.
+
+> **Corrected 2026-08-17.** This goal previously read "the trusted local runtime remains
+> authoritative for **sensitive memory** and governance". That is the one clause the server-centric
+> deployment entry superseded — personal memory is intended to become server-side. The
+> locally-enforceable *governance/stop* half was retained deliberately and is what this goal now
+> states. **Stage 6's scope, exit criteria and gating are otherwise unchanged**, and the auth/
+> threat-model requirement below is unchanged.
 
 **Exit criteria:**
 - **Auth updated 2026-07-28:** remote/cross-device exposure of the local runtime must not occur
@@ -1136,8 +1143,9 @@ non-canonical and non-authoritative, because embedding a second agent kernel (La
 memory architecture (Chroma+RAG), and a second permissions system as canonical roadmap content
 directly conflicted with `CONSTITUTION.md`'s "one architectural authority per concept" principle.
 Every individual idea in that document requires independent evaluation against `CONSTITUTION.md`,
-`COGNITIVE_RUNTIME.md`'s ownership table, and the hybrid local-first deployment architecture
-(`DECISIONS.md`) before any adoption — none of it is scheduled, approved, or a stage gate.
+`COGNITIVE_RUNTIME.md`'s ownership table, and the current deployment architecture
+(`DECISIONS.md`'s server-centric entry, which supersedes "hybrid local-first") before any adoption
+— none of it is scheduled, approved, or a stage gate.
 
 ---
 
