@@ -650,6 +650,59 @@ def run_quick_integrity_check(db_path: str) -> tuple[bool, str]:
     return result == "ok", result
 
 
+class ParkingBrakeEngagedError(RuntimeError):
+    """A state-changing operation was refused because the brake is engaged.
+
+    Raised by operations governed under "inspect, but do not mutate" (see
+    `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`"), where the
+    correct outcome is to leave the pending work untouched and resolvable
+    once the brake is released -- not to fail it, and not to discard it.
+    """
+
+    def __init__(self, message: str, *, scopes: frozenset[str] | None = None):
+        super().__init__(message)
+        self.scopes = frozenset(scopes or ())
+
+
+def engaged_state_fail_closed(
+    db_path: str,
+    *,
+    governance_store: GovernanceStore | None = None,
+) -> GovernanceState:
+    """Refreshed brake state, for operations gated on the brake being engaged
+    **at all** rather than on one subsystem scope.
+
+    `is_blocked_fail_closed()` answers "is scope X halted?", which is the
+    right question for a subsystem (`skills`, `voice`, `scheduler`, ...).
+    Some operations are not a subsystem: resolving a pending consent request
+    mutates the user's memory and belongs to no scope in the existing axis,
+    so gating it on any single scope would be arbitrary. Those read the
+    engaged flag directly.
+
+    Fails closed by construction: a governance read that raises propagates,
+    aborting the caller before it mutates anything.
+    """
+    store = governance_store or GovernanceStore(db_path)
+    return store.refresh()
+
+
+async def engaged_state_fail_closed_off_loop(
+    db_path: str,
+    *,
+    governance_store: GovernanceStore | None = None,
+    executor: SingleWorkerExecutor | None = None,
+) -> GovernanceState:
+    """Off-event-loop wrapper around `engaged_state_fail_closed()`, matching
+    `is_blocked_fail_closed_off_loop()`'s pattern -- the read is synchronous
+    SQLite and must not run on the event loop."""
+    return await run_off_loop(
+        engaged_state_fail_closed,
+        db_path,
+        governance_store=governance_store,
+        executor=executor,
+    )
+
+
 def is_blocked_fail_closed(
     scope: str,
     db_path: str,

@@ -1755,3 +1755,66 @@
   - It remains true, and is unaffected by this entry, that the current API has **no authentication**
     and must not be exposed beyond localhost (`INTERFACES.md`, security stance).
 - **Date:** 2026-08-17
+
+## Decision: Parking Brake means inspect, but do not mutate
+- **Decision:** While a user's Parking Brake is engaged, governed state may be **read** but must
+  not be **changed**. Inspection is never blocked — a halt that hides what Bartholomew was about to
+  do defeats the purpose of halting, because the user can no longer see what they are deciding
+  about. Mutation is blocked until the brake is released, **including mutation the user requests
+  through a legitimate surface**. The concrete case this was decided for is **pending consent
+  resolution**: listing the inbox is allowed; approving is refused; denying is refused; the pending
+  request stays `pending` and remains resolvable once the brake is disengaged. Four clauses are
+  binding:
+  **(a) Denial is refused too, despite looking like the safe direction.** It is not safe: denial
+  marks the row denied *and clears its payload*, irreversibly. A halted system must not destroy the
+  evidence of what it was asked to decide. The brake **defers** the decision; it does not make one.
+  **(b) The brake's own operations are exempt.** Engaging, maintaining, auditing, inspecting and
+  disengaging the brake are how the halt is controlled; gating them on the halt would make it
+  impossible to release. Enforcement covers governed *work*, not governance itself.
+  **(c) Enforcement sits at the execution boundary, not in the API.** `MemoryStore` raises
+  `ParkingBrakeEngagedError`; the route only translates it to a 503. This follows this document's
+  "Parking Brake authority tiers" entry — brake scope is Governance authority, not a UI feature —
+  so a bypassed, crashed or replaced client cannot get around the halt.
+  **(d) Gated on the brake being engaged at all, not on one scope.** Resolving consent mutates the
+  user's memory, which belongs to none of the existing subsystem scopes (`skills`, `sight`,
+  `voice`, `scheduler`, `training`); gating it on any single one would be arbitrary. A brake
+  engaged for `voice` alone still blocks consent resolution. **This is the one interpretive choice
+  in this entry** — the decision as given says "the Parking Brake is engaged" without qualifying by
+  scope, and this implements that literally. If a scope-sensitive reading is wanted instead, that
+  is a small follow-up against this entry, not a re-decision of the principle.
+  `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`" → "Inspect, but do not mutate" is the
+  canonical authority for these semantics; this entry records the decision and its reasoning, and
+  does not restate them elsewhere.
+- **Alternatives considered:** (a) **Leave the previous behaviour** — approving a queued write
+  succeeded while braked, on the reading that the brake halts *Bartholomew* acting rather than *the
+  user* deciding. Rejected: it produced an incoherent pair, where submitting new material was
+  refused (`blocked_by_governance`) but the same content already queued could be committed. The
+  front door was gated and the queued back door was not. (b) **Block approve but allow deny**, on
+  the intuition that refusing is the conservative direction. Rejected for the reason in clause (a)
+  above: denial is destructive and irreversible, so allowing it during a halt destroys state the
+  user may want to review once they understand why they halted. (c) **Add a `memory` brake scope**
+  and gate on that. Rejected as scope expansion: it changes the scope axis, `VALID_SCOPES`,
+  validation and documentation, to express something the engaged flag already expresses. It remains
+  available later if the scope axis grows for independent reasons.
+- **Why:** The prior behaviour was found by a test written specifically to pin it *without*
+  endorsing it, precisely so that changing it would have to be a recorded decision rather than
+  silent drift. That worked as intended. The principle chosen is the one that makes a halt mean
+  something a non-engineer can predict: **while the brake is on, Bartholomew shows you everything
+  and changes nothing.** A rule that admitted exceptions for "safe-looking" mutations would be
+  unpredictable at exactly the moment the user most needs predictability — they engaged the brake
+  because something was wrong.
+- **Consequences:**
+  - `COGNITIVE_RUNTIME.md`'s Parking Brake section gains an "Inspect, but do not mutate"
+    subsection. No other document restates the rule.
+  - `bartholomew/orchestrator/safety/governance_store.py` gains `ParkingBrakeEngagedError` and
+    `engaged_state_fail_closed()` / `..._off_loop()` — a brake-level read, alongside the existing
+    scope-level `is_blocked_fail_closed()`.
+  - `MemoryStore.approve_pending_sensitive_write()` / `deny_pending_sensitive_write()` refuse while
+    braked; `list_pending_sensitive_writes()` is untouched.
+  - `tests/test_consent_api.py::TestConsentResolutionUnderTheParkingBrake` is **rewritten** — it
+    previously asserted the opposite for approve. That is the intended effect of a pinning test.
+  - **No other call site was changed.** The rule is stated generally because it is general, but
+    only consent resolution is enforced today; extending it to a further mutation is a small,
+    separate change against this entry rather than a new decision.
+  - No new brake scope, no change to the authority tiers, no change to `VALID_SCOPES`.
+- **Date:** 2026-08-18

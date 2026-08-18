@@ -26,6 +26,14 @@ app.py's existing routes already call MemoryStore (e.g.
 skill-execution runtime-contract seam `routes/notifications.py` had to go
 through; it's called directly throughout this API bridge.
 
+Parking Brake (2026-08-18): listing is allowed while the brake is
+engaged, approving and denying are refused with 503. "Inspect, but do not
+mutate" -- see `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`"
+for the semantics and `DECISIONS.md` for the decision. The refusal is
+raised by `MemoryStore`, not by these handlers: enforcement belongs at the
+execution boundary so bypassing this API cannot bypass the halt. These
+handlers only translate it into an honest status code.
+
 Auth note: same as every other route in this API bridge -- no
 authentication today; ROADMAP.md's Stage 1 section defers that to a
 separate future project.
@@ -34,6 +42,8 @@ separate future project.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+
+from bartholomew.orchestrator.safety.governance_store import ParkingBrakeEngagedError
 
 router = APIRouter(prefix="/api/consent", tags=["consent"])
 
@@ -61,6 +71,8 @@ async def approve_pending_write(pending_id: int) -> dict:
     kernel = _get_kernel()
     try:
         result = await kernel.mem.approve_pending_sensitive_write(pending_id)
+    except ParkingBrakeEngagedError as e:
+        raise HTTPException(503, str(e)) from e
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
 
@@ -72,6 +84,8 @@ async def deny_pending_write(pending_id: int) -> dict:
     kernel = _get_kernel()
     try:
         await kernel.mem.deny_pending_sensitive_write(pending_id)
+    except ParkingBrakeEngagedError as e:
+        raise HTTPException(503, str(e)) from e
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
 

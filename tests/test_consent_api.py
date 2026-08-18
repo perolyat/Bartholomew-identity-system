@@ -155,28 +155,21 @@ async def test_rule_consent_pending_write_round_trips_through_the_same_endpoints
 
 
 class TestConsentResolutionUnderTheParkingBrake:
-    """Pins how consent resolution behaves while the Parking Brake is
-    engaged (established by live probe, 2026-08-18).
+    """ "Inspect, but do not mutate" -- governance decision 2026-08-18.
 
-    Recorded because the behaviour is *asymmetric* and the asymmetry is
-    deliberate-looking but was never written down: with a global brake
-    engaged, submitting new material through `/api/training/submit` is
-    refused (`blocked_by_governance`, scope `training`), yet resolving an
-    already-queued pending write through these endpoints still succeeds
-    and still writes to memory.
+    While the Parking Brake is engaged the consent inbox stays readable, but
+    neither approve nor deny may run. Both mutate: approve writes a memory,
+    and deny marks the row denied *and clears its payload* irreversibly. A
+    refused request stays `pending`, so the halt defers the decision instead
+    of making one.
 
-    The defensible reading is that the brake halts *Bartholomew* acting,
-    not *the user* deciding: approve/deny here is an explicit human
-    decision on material Bartholomew already refused to store on its own,
-    and `CONSTITUTION.md`'s Sovereign Principle makes the user the final
-    authority. Denial in particular must keep working while braked --
-    "stop, and also let me reject what you queued" is a coherent and
-    likely thing to want during a halt.
+    These tests previously pinned the opposite behaviour for approve -- it
+    used to succeed while braked -- deliberately, "without endorsing it", so
+    that a change here would have to be a recorded governance decision rather
+    than silent drift. That decision was taken; this is the update it forced.
 
-    These tests do not assert that the current behaviour is *right*; they
-    assert it is what happens, so that changing it later is a deliberate
-    governance decision with a failing test to force the conversation,
-    rather than a silent drift. See the report accompanying this change.
+    See `DECISIONS.md`'s "Parking Brake means inspect, but do not mutate"
+    entry and `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`".
     """
 
     @staticmethod
@@ -196,70 +189,96 @@ class TestConsentResolutionUnderTheParkingBrake:
         )
         assert response.status_code == 200
 
+    @staticmethod
+    def _pending_id(client, key):
+        return next(
+            e["id"]
+            for e in client.get("/api/consent/pending-writes").json()["entries"]
+            if e["key"] == key
+        )
+
     @pytest.mark.asyncio
     async def test_pending_writes_remain_readable_while_braked(self, client):
-        """Reading the inbox is not execution; a halt must not hide what is
+        """Inspection is explicitly allowed: a halt must not hide what is
         waiting, or the user cannot see what they are being asked about."""
         await _queue_sensitive_write("brake-readable")
         self._engage(client)
         try:
             response = client.get("/api/consent/pending-writes")
             assert response.status_code == 200
-            keys = [e["key"] for e in response.json()["entries"]]
-            assert "brake-readable" in keys
+            assert "brake-readable" in [e["key"] for e in response.json()["entries"]]
         finally:
             self._disengage(client)
 
         client.post(
-            f"/api/consent/pending-writes/"
-            f"{next(e['id'] for e in client.get('/api/consent/pending-writes').json()['entries'] if e['key'] == 'brake-readable')}"
-            f"/deny",
+            f"/api/consent/pending-writes/{self._pending_id(client, 'brake-readable')}/deny",
         )
 
     @pytest.mark.asyncio
-    async def test_denying_still_works_while_braked(self, client):
-        """The safety-preserving direction must never be blocked."""
-        await _queue_sensitive_write("brake-deny")
-        entry_id = next(
-            e["id"]
-            for e in client.get("/api/consent/pending-writes").json()["entries"]
-            if e["key"] == "brake-deny"
-        )
-
-        self._engage(client)
-        try:
-            response = client.post(f"/api/consent/pending-writes/{entry_id}/deny")
-            assert response.status_code == 200
-            assert response.json()["denied"] is True
-        finally:
-            self._disengage(client)
-
-        remaining = [e["key"] for e in client.get("/api/consent/pending-writes").json()["entries"]]
-        assert "brake-deny" not in remaining
-
-    @pytest.mark.asyncio
-    async def test_approving_while_braked_currently_succeeds(self, client):
-        """Current behaviour, pinned rather than endorsed.
-
-        If a future decision makes the brake gate user-initiated consent
-        approvals too, this test is the one that must be updated -- and
-        updating it should be a recorded governance decision, not an
-        incidental edit.
-        """
+    async def test_approving_while_braked_is_refused(self, client):
         await _queue_sensitive_write("brake-approve")
-        entry_id = next(
-            e["id"]
-            for e in client.get("/api/consent/pending-writes").json()["entries"]
-            if e["key"] == "brake-approve"
-        )
+        entry_id = self._pending_id(client, "brake-approve")
 
         self._engage(client)
         try:
             response = client.post(f"/api/consent/pending-writes/{entry_id}/approve")
-            assert response.status_code == 200
-            assert response.json()["stored"] is True
+            assert response.status_code == 503
+            assert "parking brake" in response.json()["detail"].lower()
         finally:
             self._disengage(client)
+
+        # Still pending, and nothing was written.
+        assert entry_id == self._pending_id(client, "brake-approve")
+        client.post(f"/api/consent/pending-writes/{entry_id}/deny")
+
+    @pytest.mark.asyncio
+    async def test_denying_while_braked_is_refused(self, client):
+        """Denial mutates too -- it clears the payload irreversibly -- so it
+        is refused rather than treated as the "safe" direction."""
+        await _queue_sensitive_write("brake-deny")
+        entry_id = self._pending_id(client, "brake-deny")
+
+        self._engage(client)
+        try:
+            response = client.post(f"/api/consent/pending-writes/{entry_id}/deny")
+            assert response.status_code == 503
+            assert "parking brake" in response.json()["detail"].lower()
+        finally:
+            self._disengage(client)
+
+        assert entry_id == self._pending_id(client, "brake-deny")
+
+    @pytest.mark.asyncio
+    async def test_a_refused_request_is_resolvable_after_release(self, client):
+        """The halt defers the decision; it must not destroy it."""
+        await _queue_sensitive_write("brake-deferred")
+        entry_id = self._pending_id(client, "brake-deferred")
+
+        self._engage(client)
+        try:
+            assert client.post(f"/api/consent/pending-writes/{entry_id}/approve").status_code == 503
+        finally:
+            self._disengage(client)
+
+        response = client.post(f"/api/consent/pending-writes/{entry_id}/approve")
+        assert response.status_code == 200
+        assert response.json()["stored"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_scoped_brake_also_blocks_resolution(self, client):
+        """Gated on the brake being engaged at all, not on one subsystem
+        scope: resolving consent mutates memory, which belongs to none of the
+        existing scopes, so no single scope is the right gate."""
+        await _queue_sensitive_write("brake-scoped")
+        entry_id = self._pending_id(client, "brake-scoped")
+
+        self._engage(client, scopes=["voice"])
+        try:
+            assert client.post(f"/api/consent/pending-writes/{entry_id}/deny").status_code == 503
+        finally:
+            self._disengage(client)
+
+        client.post(f"/api/consent/pending-writes/{entry_id}/deny")
 
     def test_brake_state_is_restored_after_these_tests(self, client):
         """Guard against a leaked engaged brake poisoning later tests."""

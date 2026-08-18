@@ -9,7 +9,14 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-08-17 (two changes. (1) The "Reflection ownership" section was rewritten:
+> **Last updated:** 2026-08-18 — added "Inspect, but do not mutate" to the Parking Brake section:
+> while the brake is engaged, governed state may be read but not changed. Recorded for pending
+> consent resolution, which is the case that exists and is now enforced (list allowed; approve and
+> deny both refused; the request stays pending and resolvable after release). The brake's own
+> operations are exempt. See `DECISIONS.md`'s "Parking Brake means inspect, but do not mutate"
+> entry for the decision and its alternatives; this section is the authority for the semantics.
+>
+> **Previously (2026-08-17):** (two changes. (1) The "Reflection ownership" section was rewritten:
 > its "current implementation" text described concatenation and stated the unification code change
 > "has not been made", both superseded by `8d87258`; and the reflection *model* path was repaired
 > (the daemon no longer pins `backend="stub"`, and `ReflectionGenerator` can now be constructed on a
@@ -425,6 +432,47 @@ Live call sites today, each checking a different scope:
 As of item 11.21, the `sight`/`voice` scopes are no longer brake-*only*: those two seams run the
 brake check, then the same additive Identity Policy Decision the other surfaces use, then an
 always-required fail-closed device consent gate, before their (inert Stage 6) capability.
+
+#### Inspect, but do not mutate (added 2026-08-18)
+
+**While the brake is engaged, governed state may be read but must not be changed.** Inspection is
+never blocked: a halt that hides what Bartholomew was about to do would defeat the purpose of
+halting, because the user could no longer see what they are deciding about. Mutation is blocked,
+including mutation the user asks for through a legitimate surface, until the brake is released.
+
+The consequence that forced this to be written down is **pending consent resolution**:
+
+| Operation while braked | Outcome |
+|---|---|
+| List `/api/consent/pending-writes` | **Allowed** — inspection |
+| Approve a pending write | **Refused** — writes a memory |
+| Deny a pending write | **Refused** — marks the row denied *and clears its payload*, irreversibly |
+| The pending request itself | **Left `pending`**, resolvable once released |
+
+Denial is refused despite looking like the "safe" direction. It is not a safe direction: it is
+destructive and irreversible, and a halted system should not be destroying the evidence of what it
+was asked to decide. The brake **defers** the decision; it does not make one.
+
+**Gated on the brake being engaged at all, not on one scope.** Resolving consent mutates the
+user's memory, which belongs to none of the existing subsystem scopes (`skills`, `sight`, `voice`,
+`scheduler`, `training`), so gating it on any single one would be arbitrary. A brake engaged for
+`voice` alone still blocks consent resolution.
+
+**The brake's own operations are exempt**, and must be: engaging, maintaining, auditing,
+inspecting and disengaging the brake are how the halt is controlled, and gating them on the halt
+would make it impossible to release. Enforcement therefore covers governed *work*, not governance
+itself.
+
+**Enforced at the execution boundary, not in the API.** `MemoryStore.
+_refuse_consent_resolution_if_braked()` raises `ParkingBrakeEngagedError`; the API route only
+translates it into a 503. This follows the authority-tiers rule below — brake scope is Governance
+authority, not a UI feature — so a client that is bypassed, crashes, or is replaced cannot get
+around the halt. Pinned by `tests/test_consent_api.py::TestConsentResolutionUnderTheParkingBrake`.
+
+**Scope of this rule as recorded.** It is stated here for consent resolution, which is the case
+that exists and is enforced. It is written as a general principle because it is one, but no other
+call site was changed: extending it to a further mutation is a small, separate change against this
+same rule, not a re-decision.
 
 **Where brake state actually lives (corrected 2026-08-15).** This section previously read "one
 global brake (`system_flags` table)", which Phase B overtook. Since stage **B6**, the write
