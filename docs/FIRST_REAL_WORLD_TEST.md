@@ -45,6 +45,17 @@ Two further environment facts worth knowing before you read anything into a resu
 - **Databases are no longer tracked in Git** (2026-08-17). A fresh clone creates its own
   `data/barth.db` and `data/memory.db` on first run. If you are testing on the machine that
   previously held the tracked copies, your existing files are untouched.
+- **`BARTH_DB_PATH` now relocates *all* runtime state** (2026-08-18). Set it and the whole runtime —
+  including the `memory.db` written by the legacy `MemoryManager` path — moves with it. Until that
+  fix it moved most but not all, so a test run could still reach into `./data`. **Recommended for a
+  first pass:** point it at a scratch directory, so the run starts from a genuinely clean state and
+  cannot disturb anything you want to keep:
+  ```bash
+  export BARTH_DB_PATH="$HOME/bartholomew-test/barth.db"
+  mkdir -p "$(dirname "$BARTH_DB_PATH")"
+  ```
+  `/api/health` echoes `db_path`, so you can confirm which database is live before trusting a
+  result.
 
 ---
 
