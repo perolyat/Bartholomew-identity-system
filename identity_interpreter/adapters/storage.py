@@ -38,8 +38,18 @@ class StorageAdapter:
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize memory manager
-        self.memory = MemoryManager(identity_config, data_dir="./data")
+        # Initialize memory manager.
+        #
+        # No explicit data_dir: MemoryManager resolves it from BARTH_DB_PATH,
+        # falling back to "./data". Hardcoding "./data" here meant this
+        # adapter -- and therefore chat.py, and therefore
+        # test_bartholomew.py, which pytest collects and which constructs a
+        # BartholomewChat -- always touched the working directory's data/
+        # regardless of how the runtime was configured. Constructing a
+        # MemoryManager runs _cleanup_expired_memories(), so that silently
+        # deleted expired rows from a live memory.db during an ordinary test
+        # run. See resolve_memory_dir()'s docstring.
+        self.memory = MemoryManager(identity_config)
 
     def write_audit_log(
         self,

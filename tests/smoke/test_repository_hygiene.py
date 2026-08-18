@@ -64,3 +64,32 @@ def test_no_sqlite_databases_are_tracked() -> None:
         "in the index. Remove it with `git rm --cached <path>` (which keeps "
         "your local copy) rather than relaxing this test."
     )
+
+
+@pytest.mark.smoke
+def test_memory_manager_data_dir_follows_barth_db_path(monkeypatch, tmp_path):
+    """`BARTH_DB_PATH` must isolate `MemoryManager` too, not just the kernel.
+
+    `MemoryManager`'s `data_dir` used to default to a hardcoded `"./data"`,
+    which `BARTH_DB_PATH` did not influence. Constructing one runs
+    `_init_database()` -> `_cleanup_expired_memories()`, which DELETEs every
+    row past its TTL -- so a test that merely built a `ReflectionGenerator`
+    (which builds a `ContextBuilder`, which builds a `MemoryManager`) emptied
+    the developer's live `data/memory.db` while `BARTH_DB_PATH` pointed
+    somewhere else entirely. Measured: 9 rows -> 0 from
+    `tests/test_reflection_generation.py` alone.
+
+    This asserts the resolver, not the filesystem, so it stays fast and does
+    not need a keystore.
+    """
+    from identity_interpreter.adapters.memory_manager import resolve_memory_dir
+
+    monkeypatch.setenv("BARTH_DB_PATH", str(tmp_path / "state" / "barth.db"))
+    assert (
+        Path(resolve_memory_dir()) == tmp_path / "state"
+    ), "MemoryManager would write outside the configured runtime directory."
+
+    monkeypatch.delenv("BARTH_DB_PATH", raising=False)
+    assert (
+        resolve_memory_dir() == "./data"
+    ), "Unset BARTH_DB_PATH must keep the historical default for ordinary local deployments."

@@ -15,6 +15,16 @@
 > pinning that approving a queued write currently succeeds while the brake is engaged — flagged as
 > an open governance question, not endorsed.
 >
+> **Also fixed 2026-08-18 — a proven runtime/test isolation leak.** `BARTH_DB_PATH` did not isolate
+> `MemoryManager`: its `data_dir` defaulted to a hardcoded `./data`, and `StorageAdapter` passed
+> `./data` explicitly. Because constructing one runs `_cleanup_expired_memories()`, merely building
+> a `ReflectionGenerator` or a `BartholomewChat` **deleted every expired row from a live
+> `data/memory.db`**. Measured, not theorised: the full suite emptied a 9-row database while
+> `BARTH_DB_PATH` pointed at a temp file. Both now resolve through `resolve_memory_dir()`, which
+> follows `BARTH_DB_PATH` and falls back to `./data`; the full suite now leaves the file untouched.
+> Guarded by `tests/smoke/test_repository_hygiene.py`. This closed the deployment-isolation gap as
+> well as the test leak — `BARTH_DB_PATH` now actually relocates all of the runtime's state.
+>
 > **Previously (2026-08-17):** (four tech-debt watchlist items added, none of them a live defect:
 > the server-centric deployment decision's connectivity dependency and its unbuilt degraded-mode
 > requirement; the cloud budget ledger's check-then-act window (unreachable today — no live path
@@ -272,7 +282,9 @@
   privacy check whose whole point is to run against a real configuration — but worth knowing before
   running it on a machine holding real memories. Its sibling `test_memory_functionality.py`, which
   *is* collected, was redirected to a temp directory on 2026-08-17 after it was found deleting the
-  repository's tracked `data/memory.db` contents on every test run.
+  repository's tracked `data/memory.db` contents on every test run. **Note (2026-08-18):** the
+  `BARTH_DB_PATH` resolver added that day does **not** protect this script — it passes
+  `data_dir="./data"` explicitly, and explicit callers are deliberately left alone.
 - **(2026-08-15, second pass) Parking Brake read/write authority is split — known, deferred, and
   newly consequential under the authority-tier model.** Since Phase B stage **B6** the brake's
   write authority is `GovernanceStore` (`parking_brake_state`): `bartholomew/cli.py`'s
