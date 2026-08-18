@@ -152,3 +152,115 @@ async def test_rule_consent_pending_write_round_trips_through_the_same_endpoints
 
     remaining = client.get("/api/consent/pending-writes").json()["entries"]
     assert all(e["key"] != "api-rule-consent" for e in remaining)
+
+
+class TestConsentResolutionUnderTheParkingBrake:
+    """Pins how consent resolution behaves while the Parking Brake is
+    engaged (established by live probe, 2026-08-18).
+
+    Recorded because the behaviour is *asymmetric* and the asymmetry is
+    deliberate-looking but was never written down: with a global brake
+    engaged, submitting new material through `/api/training/submit` is
+    refused (`blocked_by_governance`, scope `training`), yet resolving an
+    already-queued pending write through these endpoints still succeeds
+    and still writes to memory.
+
+    The defensible reading is that the brake halts *Bartholomew* acting,
+    not *the user* deciding: approve/deny here is an explicit human
+    decision on material Bartholomew already refused to store on its own,
+    and `CONSTITUTION.md`'s Sovereign Principle makes the user the final
+    authority. Denial in particular must keep working while braked --
+    "stop, and also let me reject what you queued" is a coherent and
+    likely thing to want during a halt.
+
+    These tests do not assert that the current behaviour is *right*; they
+    assert it is what happens, so that changing it later is a deliberate
+    governance decision with a failing test to force the conversation,
+    rather than a silent drift. See the report accompanying this change.
+    """
+
+    @staticmethod
+    def _engage(client, scopes=None):
+        response = client.post(
+            "/api/governance/brake/engage",
+            json={"reason": "consent-governance regression test", "scopes": scopes or []},
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    @staticmethod
+    def _disengage(client):
+        response = client.post(
+            "/api/governance/brake/disengage",
+            json={"reason": "consent-governance regression test complete"},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_pending_writes_remain_readable_while_braked(self, client):
+        """Reading the inbox is not execution; a halt must not hide what is
+        waiting, or the user cannot see what they are being asked about."""
+        await _queue_sensitive_write("brake-readable")
+        self._engage(client)
+        try:
+            response = client.get("/api/consent/pending-writes")
+            assert response.status_code == 200
+            keys = [e["key"] for e in response.json()["entries"]]
+            assert "brake-readable" in keys
+        finally:
+            self._disengage(client)
+
+        client.post(
+            f"/api/consent/pending-writes/"
+            f"{next(e['id'] for e in client.get('/api/consent/pending-writes').json()['entries'] if e['key'] == 'brake-readable')}"
+            f"/deny",
+        )
+
+    @pytest.mark.asyncio
+    async def test_denying_still_works_while_braked(self, client):
+        """The safety-preserving direction must never be blocked."""
+        await _queue_sensitive_write("brake-deny")
+        entry_id = next(
+            e["id"]
+            for e in client.get("/api/consent/pending-writes").json()["entries"]
+            if e["key"] == "brake-deny"
+        )
+
+        self._engage(client)
+        try:
+            response = client.post(f"/api/consent/pending-writes/{entry_id}/deny")
+            assert response.status_code == 200
+            assert response.json()["denied"] is True
+        finally:
+            self._disengage(client)
+
+        remaining = [e["key"] for e in client.get("/api/consent/pending-writes").json()["entries"]]
+        assert "brake-deny" not in remaining
+
+    @pytest.mark.asyncio
+    async def test_approving_while_braked_currently_succeeds(self, client):
+        """Current behaviour, pinned rather than endorsed.
+
+        If a future decision makes the brake gate user-initiated consent
+        approvals too, this test is the one that must be updated -- and
+        updating it should be a recorded governance decision, not an
+        incidental edit.
+        """
+        await _queue_sensitive_write("brake-approve")
+        entry_id = next(
+            e["id"]
+            for e in client.get("/api/consent/pending-writes").json()["entries"]
+            if e["key"] == "brake-approve"
+        )
+
+        self._engage(client)
+        try:
+            response = client.post(f"/api/consent/pending-writes/{entry_id}/approve")
+            assert response.status_code == 200
+            assert response.json()["stored"] is True
+        finally:
+            self._disengage(client)
+
+    def test_brake_state_is_restored_after_these_tests(self, client):
+        """Guard against a leaked engaged brake poisoning later tests."""
+        assert client.get("/api/governance/brake").json()["engaged"] is False

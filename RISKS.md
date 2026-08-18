@@ -2,11 +2,24 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-17 (four tech-debt watchlist items added, none of them a live defect:
+> **Last updated:** 2026-08-18 — **a retraction.** The 2026-08-17 entry claiming "the consent
+> ask-path is unreachable from the API/web surface" is **withdrawn as false**. The web/API runtime
+> has a complete governed consent path: `MemoryStore.upsert_memory()` queues sensitive writes into
+> `pending_sensitive_writes` when no interactive handler is registered, `/api/consent/pending-writes`
+> exposes them with approve/deny, and `/ui` has a pending-consent card. Verified live end-to-end.
+> The error came from reading `request_permission_to_store()` in isolation without tracing its
+> caller, where the no-handler case is intercepted first. See the retracted entry below for the
+> full correction, and `docs/FIRST_REAL_WORLD_TEST.md` §5 for the corrected procedure. The genuine
+> residual is narrower and remains open: nothing actively notifies the user that something awaits
+> consent. Also added: `tests/test_consent_api.py::TestConsentResolutionUnderTheParkingBrake`,
+> pinning that approving a queued write currently succeeds while the brake is engaged — flagged as
+> an open governance question, not endorsed.
+>
+> **Previously (2026-08-17):** (four tech-debt watchlist items added, none of them a live defect:
 > the server-centric deployment decision's connectivity dependency and its unbuilt degraded-mode
 > requirement; the cloud budget ledger's check-then-act window (unreachable today — no live path
-> passes a `task_type`); the consent ask-path being unreachable from the API/web surface
-> (fail-closed, so safe, but `/ui` cannot exercise ask-and-deny); and `test_memory_privacy.py`
+> passes a `task_type`); the consent ask-path item **now retracted, see above**; and
+> `test_memory_privacy.py`
 > writing to the live `./data` directory when run by hand. Separately, the entry describing
 > `/api/water/log` and `/api/water/today` as "live, working, legacy code" is **corrected** — neither
 > endpoint exists, and no commit removing them was found. See `DECISIONS.md`'s server-centric
@@ -232,14 +245,26 @@
   reserve-then-settle against the ledger rather than a distributed billing system. Recorded here
   rather than fixed, because hardening an unreachable path now buys nothing and adds a concurrency
   mechanism nobody can exercise.
-- **(2026-08-17) The consent ask-path is unreachable from the API/web surface.**
-  `set_consent_handler()` is called only by `chat.py`, the standalone terminal entrypoint. On the
-  API path no handler is registered, so `request_permission_to_store()` returns `False`
-  unconditionally: sensitive content is **not stored**, and the user is **not asked**. The
-  behaviour is fail-closed and therefore safe, but it means the "ask before storing" experience
-  does not exist in `/ui` — only its refusal half does. Consequence for testing is recorded in
-  `docs/FIRST_REAL_WORLD_TEST.md` §5. Registering a handler on the API path is small, but it is a
-  new user-facing behaviour rather than a repair and needs its own approval.
+- **(2026-08-17, WITHDRAWN 2026-08-18) ~~The consent ask-path is unreachable from the API/web
+  surface.~~ This entry was wrong and is retracted.** It claimed that because `set_consent_handler()`
+  is only called by `chat.py`, the API path never asks and sensitive content is silently refused.
+  The first half is true; the conclusion is not. `MemoryStore.upsert_memory()` branches on
+  `get_consent_handler() is None` and **queues** the write into `pending_sensitive_writes` rather
+  than discarding it, and that inbox has had a full governed surface the whole time:
+  `/api/consent/pending-writes` with approve/deny (`routes/consent.py`, registered in `app.py`), a
+  *pending consent* card in `/ui` with Approve/Deny buttons, and HTTP-level tests over the real app
+  (`tests/test_consent_api.py`). Verified live end-to-end on 2026-08-18: queue -> deny (nothing
+  stored, decision recorded as `denied`) -> queue -> approve (`stored: true`).
+  **How the error happened, since that is the reusable part:** the conclusion was drawn from
+  reading `privacy_guard.request_permission_to_store()` -- which does return `False` with no
+  handler -- without tracing its *caller*, where the no-handler case is intercepted before that
+  function is ever reached. Reading one function and inferring the system's behaviour is what put a
+  confidently-worded false claim into a canonical document and sent a real test session down the
+  wrong path. `docs/FIRST_REAL_WORLD_TEST.md` §5 is corrected accordingly.
+  **What is genuinely open** is much narrower: nothing actively *notifies* the user that something
+  is awaiting consent, beyond the `/ui` card's 30-second refresh and a line on the server console,
+  so a queued item could sit unnoticed. That is a real usability gap, unfixed, and it needs its own
+  approval -- it is not a safety defect, since the fail-closed behaviour holds either way.
 - **(2026-08-17) `test_memory_privacy.py` writes to the live `./data` directory.** It is a manual
   script (its entry point is `run_test()`, which pytest does not collect, so the suite never runs
   it), but executing it by hand constructs a `MemoryManager` against the real deployment and
