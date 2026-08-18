@@ -2,7 +2,16 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-18 — **a retraction.** The 2026-08-17 entry claiming "the consent
+> **Last updated:** 2026-08-18 (second pass) — one new tech-debt item: the **repeated SQLite
+> contention/timing failures in the full-suite CI job**, now recorded as a known engineering issue
+> rather than unrelated flakes, because three *distinct* tests have shown the same failure mode on
+> three commits. Demonstrated facts only — **no root cause is asserted**, and a dedicated
+> investigation is warranted but not authorised. Also: the Parking Brake / pending-consent question
+> flagged below as open has been **decided** — "inspect, but do not mutate" (`DECISIONS.md`;
+> semantics in `COGNITIVE_RUNTIME.md`) — and enforced, so the pinning test now asserts refusal
+> rather than the previous behaviour.
+>
+> **Previously (2026-08-18, first pass) — a retraction.** The 2026-08-17 entry claiming "the consent
 > ask-path is unreachable from the API/web surface" is **withdrawn as false**. The web/API runtime
 > has a complete governed consent path: `MemoryStore.upsert_memory()` queues sensitive writes into
 > `pending_sensitive_writes` when no interactive handler is registered, `/api/consent/pending-writes`
@@ -12,8 +21,9 @@
 > full correction, and `docs/FIRST_REAL_WORLD_TEST.md` §5 for the corrected procedure. The genuine
 > residual is narrower and remains open: nothing actively notifies the user that something awaits
 > consent. Also added: `tests/test_consent_api.py::TestConsentResolutionUnderTheParkingBrake`,
-> pinning that approving a queued write currently succeeds while the brake is engaged — flagged as
-> an open governance question, not endorsed.
+> which pinned the then-current behaviour (approving a queued write succeeded while braked) as an
+> open governance question, explicitly not endorsed. **That question was decided on 2026-08-18**
+> and the test now asserts refusal — see this document's second-pass header note above.
 >
 > **Also fixed 2026-08-18 — a proven runtime/test isolation leak.** `BARTH_DB_PATH` did not isolate
 > `MemoryManager`: its `data_dir` defaulted to a hardcoded `./data`, and `StorageAdapter` passed
@@ -225,6 +235,31 @@
 
 ## Tech debt watchlist
 
+- **(2026-08-18) Repeated SQLite contention/timing failures in the full-suite CI job — a known
+  engineering issue, root cause NOT established.** Recorded because the evidence is now
+  cross-test rather than anecdotal. **Demonstrated facts only:**
+  - Three *distinct* tests have failed in the `pytest -q` full-suite job (`lint-test`, in
+    `.github/workflows/pre-commit.yml`), on three separate commits:
+    `tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes` on
+    `d0c202f` (on `main`, 2026-08-15) with `Worker 0 failed: database is locked`;
+    `tests/test_notifications_api.py::test_set_quiet_hours_updates_settings` on `33721de`, where a
+    SQLite write inside a skill surfaced as HTTP 400; and
+    `tests/test_b9_adversarial_startup_shutdown.py::test_stop_drains_an_admitted_request_that_itself_writes_governance`
+    on `db9af55`, a governance write racing `daemon.stop()`.
+  - All three involve a SQLite write concurrent with other activity.
+  - Each was non-reproducible locally on the same commit, and each subsequent run of the same job
+    passed with no code change (two verified by re-run, one by the same job passing on the very
+    next commit, a documentation-only change).
+  - The first instance occurred on `main` before the 2026-08-17/18 work, so it predates it.
+  - The job runs the whole suite, including tests that start real kernels and schedulers.
+  **Not established, and deliberately not asserted:** which component holds the lock, whether the
+  three share one mechanism, whether it is a product defect or a test-harness artefact, and whether
+  it can affect a real single-user deployment. `INTERFACES.md` §2 already records that this
+  database has no single owner (`aiosqlite`, synchronous `sqlite3`, and `SchedulerStore`'s worker
+  thread all access one file), which is a plausible neighbourhood for the cause but is **not**
+  evidence of it. **A dedicated investigation is warranted and is not authorised by this entry.**
+  Until then: a failure in this job matching this pattern should be re-run and confirmed before
+  being treated as a regression, and no test may be skipped or quarantined to avoid it.
 - **(2026-08-17) Server-centric cognition creates a connectivity dependency that has no defined
   degraded mode — TARGET-architecture risk, not a current defect.** `DECISIONS.md`'s "Deployment
   architecture — server-centric Bartholomew with local/edge capability agents" makes core cognition
@@ -273,8 +308,12 @@
   wrong path. `docs/FIRST_REAL_WORLD_TEST.md` §5 is corrected accordingly.
   **What is genuinely open** is much narrower: nothing actively *notifies* the user that something
   is awaiting consent, beyond the `/ui` card's 30-second refresh and a line on the server console,
-  so a queued item could sit unnoticed. That is a real usability gap, unfixed, and it needs its own
-  approval -- it is not a safety defect, since the fail-closed behaviour holds either way.
+  so a queued item could sit unnoticed. That is a real usability gap, unfixed, and not a safety
+  defect -- the fail-closed behaviour holds either way. **Deliberately deferred as a first
+  real-world-test follow-up (2026-08-18):** whether the existing `/ui` indication is actually
+  inadequate is a question for real use to answer, not for speculation, so no notification work is
+  authorised until the controlled test has run. `docs/FIRST_REAL_WORLD_TEST.md` §12 carries it as a
+  known limitation to observe during the run.
 - **(2026-08-17) `test_memory_privacy.py` writes to the live `./data` directory.** It is a manual
   script (its entry point is `run_test()`, which pytest does not collect, so the suite never runs
   it), but executing it by hand constructs a `MemoryManager` against the real deployment and

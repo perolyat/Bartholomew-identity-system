@@ -228,12 +228,19 @@ testing.
 
 ### Interaction with the Parking Brake
 
-Worth knowing before §6, and **currently asymmetric**: with the brake engaged, submitting *new*
-material is refused (`blocked_by_governance`, scope `training`), and the inbox stays readable and
-deniable — but **approving a queued item still succeeds and still writes**. The defensible reading
-is that the brake halts *Bartholomew* acting, not *you* deciding. It is pinned by
-`tests/test_consent_api.py::TestConsentResolutionUnderTheParkingBrake` and flagged as an open
-governance question rather than treated as settled. Note it if you exercise both in one session.
+**Decided and enforced 2026-08-18: "inspect, but do not mutate."** With the brake engaged you can
+still *see* the consent inbox, but you cannot resolve anything in it:
+
+| While braked | Result |
+|---|---|
+| List pending requests | **Works** — a halt must not hide what is waiting |
+| Approve | **Refused, HTTP 503** |
+| Deny | **Refused, HTTP 503** — denial clears the payload irreversibly, so it is a mutation too |
+| The request itself | Stays `pending`, resolvable once you release the brake |
+
+If you exercise both in one session, that is the behaviour to expect: the brake **defers** the
+decision rather than making one for you. See `COGNITIVE_RUNTIME.md`'s "Inspect, but do not mutate"
+for the semantics and `DECISIONS.md` for the decision.
 
 ## 6. Governance — the Parking Brake
 
@@ -378,7 +385,10 @@ The test **passes** when, on your machine:
 1. ~~The consent ask-path is not reachable from `/ui`.~~ **Withdrawn 2026-08-18 — this was
    false.** The inbox, its API and its `/ui` card all exist and were verified live (§5). What
    remains genuinely open is narrower: nothing *notifies* you that something is waiting beyond the
-   `/ui` card's own 30-second refresh and a line on the server console.
+   `/ui` card's own 30-second refresh and a line on the server console. **Please judge this during
+   the run** — whether that indication is actually inadequate is exactly the sort of thing real use
+   should decide, so no notification work is being done until you have used it. If you miss a
+   pending request, say so; if you notice it fine, that settles it.
 2. No API authentication — localhost only (§0).
 3. The Platform/Admin Parking Brake is not built (§6).
 4. `POST /api/reflection/run` reports trigger success, not composition success (§8).

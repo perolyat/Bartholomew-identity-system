@@ -1079,6 +1079,47 @@ class MemoryStore:
                 )
             return entries
 
+    async def _refuse_consent_resolution_if_braked(self, action: str) -> None:
+        """Refuse to resolve a pending consent request while the brake is on.
+
+        Governance decision 2026-08-18 ("Parking Brake means inspect, but do
+        not mutate" -- `DECISIONS.md`; semantics in `COGNITIVE_RUNTIME.md`'s
+        "The kill-switch: `ParkingBrake`"). Listing the inbox stays allowed,
+        because seeing what is waiting is inspection and a halt must not hide
+        it. Approving and denying are both refused, because both mutate: one
+        writes a memory, and the other marks the row denied *and clears its
+        payload*, which is irreversible.
+
+        Refusal leaves the request `pending`, so it is still resolvable once
+        the brake is released -- the halt defers the decision rather than
+        deciding it.
+
+        Enforced here rather than in the API route because brake scope is
+        Governance authority, not a UI feature: `DECISIONS.md`'s Parking
+        Brake authority-tiers entry requires enforcement to sit below the
+        presentation layer at the execution boundary, so a client that is
+        bypassed, crashes, or is replaced cannot get around it. This method
+        is that boundary for consent resolution.
+
+        Gated on the brake being engaged **at all**, not on one scope:
+        resolving consent mutates the user's memory, which belongs to none of
+        the existing subsystem scopes (`skills`, `sight`, `voice`,
+        `scheduler`, `training`), so picking one would be arbitrary.
+        """
+        from bartholomew.orchestrator.safety.governance_store import (
+            ParkingBrakeEngagedError,
+            engaged_state_fail_closed_off_loop,
+        )
+
+        state = await engaged_state_fail_closed_off_loop(self.db_path)
+        if state.engaged:
+            raise ParkingBrakeEngagedError(
+                f"Parking brake engaged: cannot {action} a pending consent "
+                "request while Bartholomew is halted. The request remains "
+                "pending and can be resolved once the brake is released.",
+                scopes=state.scopes,
+            )
+
     async def approve_pending_sensitive_write(self, pending_id: int) -> StoreResult:
         """
         Store a pending write for real, using its original kind/key/ts, then
@@ -1092,7 +1133,12 @@ class MemoryStore:
         with a real memory_consent row (bartholomew/kernel/consent_gate.py),
         so without this the memory would be stored but permanently
         unretrievable.
+
+        Refused while the Parking Brake is engaged -- see
+        `_refuse_consent_resolution_if_braked()`.
         """
+        await self._refuse_consent_resolution_if_braked("approve")
+
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
@@ -1171,7 +1217,13 @@ class MemoryStore:
         password, bank detail, or other sensitive content) must not remain
         recoverable in the database after an explicit denial just because
         the row itself is kept for audit purposes (Codex review finding).
+
+        Refused while the Parking Brake is engaged -- see
+        `_refuse_consent_resolution_if_braked()`. Denial is a mutation too,
+        and a destructive one: it clears the payload irreversibly.
         """
+        await self._refuse_consent_resolution_if_braked("deny")
+
         resolved_at = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
