@@ -9,7 +9,17 @@
 > shape described here, that's stated explicitly rather than glossed over — see "Exit Gate
 > status" below.
 >
-> **Last updated:** 2026-08-15 (platform/personal-identity architecture: added one Ownership-table
+> **Last updated:** 2026-08-17 (two changes. (1) The "Reflection ownership" section was rewritten:
+> its "current implementation" text described concatenation and stated the unification code change
+> "has not been made", both superseded by `8d87258`; and the reflection *model* path was repaired
+> (the daemon no longer pins `backend="stub"`, and `ReflectionGenerator` can now be constructed on a
+> headless host), so the section records provenance semantics and marks the S5.4 ownership
+> prerequisite discharged. (2) Added "Cognition is independent of device and UI" under
+> Personal-identity ownership, recording what `DECISIONS.md`'s server-centric deployment entry means
+> for ownership inside this runtime. Documentation-only; that subsection authorises no device-agent,
+> capability-protocol or multi-tenancy implementation, and none exists.)
+>
+> **Previously (2026-08-15):** (platform/personal-identity architecture: added one Ownership-table
 > row and a new "Personal-identity ownership" subsection recording what the runtime assumes today
 > about *whose* Bartholomew it is serving — verified against the code, which has no user/tenant/
 > owner concept anywhere — and classifying each single-user assumption as acceptable-for-PoC, a
@@ -341,7 +351,7 @@ now is the point of this subsection:
 |---|---|
 | One process / one runtime serves one person; module-level singletons hold personal runtime state | **Acceptable for the PoC.** Correct for a single-identity deployment, and the natural multi-identity form (one runtime context per identity, or per-identity instances behind the platform) does not require these modules to be rewritten — only constructed differently. |
 | One SQLite database at one filesystem path is the personal-state boundary | **Acceptable for the PoC, and a documented seam.** A per-identity database is itself a legitimate strong-isolation strategy, so this choice does not foreclose the platform architecture. What must not happen is code *reasoning about* the path as though it were the identity. |
-| API bridge assumes a trusted single-user environment (no auth, no caller identity) | **Documented migration seam.** Already governed: `DECISIONS.md`'s hybrid local-first entry and `ROADMAP.md` Stage 6 both require a reviewed threat model before any remote exposure. The admission middleware in `app.py` is the existing single chokepoint where caller identity would attach — one place, not per-route. |
+| API bridge assumes a trusted single-user environment (no auth, no caller identity) | **Documented migration seam.** Already governed: `DECISIONS.md`'s deployment-architecture entry and `ROADMAP.md` Stage 6 both require a reviewed threat model before any remote exposure (a requirement the 2026-08-17 server-centric entry carries forward unchanged from the superseded hybrid local-first entry). The admission middleware in `app.py` is the existing single chokepoint where caller identity would attach — one place, not per-route. |
 | `memories` is uniquely indexed on `(kind, key)` **globally**, with no ownership dimension (`memory_store.py`) | **Documented migration seam — the one worth naming explicitly.** In a multi-identity store, uniqueness must be per identity, not global; two users may each have a `user_profile`/`home_address`. Correctable later by an ordinary additive migration (add the ownership column, rebuild the index over `(owner, kind, key)`). Cheap now *and* cheap later, so it is deliberately **not** being changed now — but it must not be relied upon as a global-uniqueness guarantee by future code. |
 | Scheduler, drives and background work carry no ownership (`scheduler/*`) | **Documented migration seam.** Background cognition executing on someone's behalf is precisely where "on whose behalf?" must eventually be answerable. No change now; the requirement is that new background work does not acquire *additional* assumptions that one scheduler equals one person. |
 | Governance/parking-brake state is a singleton row (`governance_store.py`) | **Acceptable for the PoC, with a constraint.** Per `CONSTITUTION.md`, local Governance authority must remain locally enforceable regardless of topology — so a future platform must not relocate the brake's authority to a central service, whatever it does with the brake's *state*. |
@@ -358,6 +368,33 @@ assumptions above — in particular, do not introduce new persisted personal sta
 later acquire an owner, new background execution whose beneficiary is unrecoverable, or new global
 uniqueness constraints over personal data. That is a constraint on how new code is shaped, not a
 mandate to change existing code.
+
+### Cognition is independent of device and UI (added 2026-08-17)
+
+`DECISIONS.md`'s "Deployment architecture — server-centric Bartholomew with local/edge capability
+agents" is the authority for the deployment direction; this subsection records only what it means
+for **ownership inside this runtime**, which is this document's concern.
+
+**No device, client or presentation surface owns any part of cognition.** The Runtime Contract,
+Executive, Memory Substrate, Experience Kernel and Governance checkpoints must remain reachable and
+correct with *no* particular UI attached. A client — the web application today, a native companion
+application later — is a source of Observations and a consumer of output, never a required
+component of the loop. This is already how the runtime is built: `run_chat_through_runtime_contract()`
+takes an `Observation` and a response callable and knows nothing about HTTP or a browser, and the
+voice/sight seams are the same shape. The entry above makes that property load-bearing rather than
+incidental, so it is recorded here.
+
+**Device capabilities are discovered, never assumed.** When device/agent capabilities eventually
+exist, what a device can do is a runtime fact it declares and Governance constrains — not a static
+assumption compiled into cognition, and not uniform across platforms (Windows, macOS, Android and
+iOS differ materially). The existing precedent is the correct one: `cloud_llm.readiness()` and
+`/api/health`'s `model_status` report what is *actually* available rather than what is configured,
+because a capability reported as present but unusable is the failure mode worth designing against.
+
+**The constraint this places on new work:** do not make cognition depend on a specific client,
+transport, or device being present; do not infer a capability's availability from configuration
+alone. **No device-agent, capability-protocol or multi-tenancy implementation is authorised** —
+none exists, and this subsection creates no interface.
 
 ## Governance checkpoints
 
@@ -438,8 +475,10 @@ can call. A platform halt is a different authority, not a bigger scope.
    individually disabling users is not a substitute for it.
 
 **Local enforceability is not optional, and the Platform tier does not replace it.** Per
-`CONSTITUTION.md`'s hybrid/local Governance requirement and `DECISIONS.md`'s hybrid local-first
-entry: wherever Bartholomew can act on a user's local devices or physical/digital environment,
+`CONSTITUTION.md`'s hybrid/local Governance requirement and `DECISIONS.md`'s deployment-
+architecture entry — clause (b) of the 2026-08-17 server-centric entry, which retained this
+requirement verbatim from the superseded hybrid local-first entry precisely because moving
+cognition server-side makes it matter more, not less: wherever Bartholomew can act on a user's local devices or physical/digital environment,
 that user must retain a **locally enforceable** means of stopping their own Bartholomew even when
 central services are unavailable, connectivity is lost, or the remote platform is malfunctioning.
 **A platform outage must never leave local autonomous execution unstoppable.** The Platform/Admin

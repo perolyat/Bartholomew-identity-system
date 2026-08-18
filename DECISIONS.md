@@ -388,6 +388,20 @@
 - **Date:** 2026-07-25 (Stage 5 prerequisite; closes issue #24 on merge)
 
 ## Decision: Deployment architecture — hybrid local-first
+> **⚠️ SUPERSEDED 2026-08-17** by "Deployment architecture — server-centric Bartholomew with
+> local/edge capability agents" (end of this document). Preserved unchanged as the record of a
+> decision correctly made on the evidence then available.
+>
+> **What changed:** this entry's clause making a local runtime "the authority for **sensitive
+> memory**", and its rejection of alternative (a) (a hosted service with a thin local client). Core
+> cognition and personal memory are now intended to be server-centric.
+>
+> **What still stands, and is carried forward by the superseding entry:** governance enforcement,
+> the parking brake and emergency shutdown must not depend on cloud availability; and no
+> remote/cross-device exposure before authentication, authorization, transport security and a
+> reviewed threat model are designed and separately approved — "simple token auth" is explicitly not
+> assumed sufficient. Documents citing this entry *for those points* remain correct.
+
 - **Decision:** Bartholomew uses a hybrid local-first architecture. The primary consumer
   experience is browser-based and usable across the user's authorised devices. A trusted local
   Bartholomew runtime is the authority for sensitive memory, governance enforcement (including the
@@ -431,8 +445,9 @@
   and `MASTER_PLAN.md` ("Echo Integration Roadmap"), is moved to
   `docs/incubator/ECHO_IDEAS.md` — explicitly non-canonical and non-authoritative. Every
   individual idea in that document requires independent evaluation against `CONSTITUTION.md`,
-  `COGNITIVE_RUNTIME.md`'s ownership table, and this document's hybrid local-first entry before
-  any adoption; none of it is scheduled, approved, or a stage gate.
+  `COGNITIVE_RUNTIME.md`'s ownership table, and this document's current deployment-architecture
+  entry (the server-centric entry, which supersedes "hybrid local-first") before any adoption; none
+  of it is scheduled, approved, or a stage gate.
 - **Alternatives considered:** (a) leave it in canonical docs but relabel as "future exploration"
   — already tried (both sections carried exactly that label) and insufficient: a coding agent
   reading canonical `ROADMAP.md`/`MASTER_PLAN.md` would still find a fully-specified second
@@ -1493,7 +1508,8 @@
   applies to isolation: retrofitting ownership onto persisted state and background execution after
   a second user exists is materially harder than reserving the concept while there is exactly one.
 - **Relationship to existing decisions:** This entry **extends, and does not replace,**
-  "Deployment architecture — hybrid local-first" (2026-07-28). That entry answers *where authority
+  "Deployment architecture — hybrid local-first" (2026-07-28) — **superseded 2026-08-17** by the
+  server-centric entry, which restates this relationship in its clause (f). That entry answers *where authority
   and compute sit* for one user (local-authoritative for sensitive memory, governance and
   emergency shutdown; optional cloud services). This entry answers *how many users there are, what
   a personal Bartholomew is, and what must remain replaceable underneath it*. The two are
@@ -1589,7 +1605,8 @@
 - **Relationship to existing decisions:** **Extends** "One shared Bartholomew platform; many
   strongly isolated personal Bartholomew identities" (2026-08-15) — this is the Governance-authority
   consequence of that decision, and property 9 of its conflict-surfacing rule. **Bounded by**
-  "Deployment architecture — hybrid local-first" (2026-07-28), whose requirement that governance
+  "Deployment architecture — hybrid local-first" (2026-07-28) — **superseded 2026-08-17**, but the
+  clause relied on here was retained verbatim by the server-centric entry — whose requirement that governance
   and emergency shutdown never depend on cloud availability is what forbids reading the
   Platform/Admin tier as central-only control. **Consistent with** `CONSTITUTION.md`'s
   independent-emergency-shutdown invariant (§1) and with `GovernanceStore`'s existing
@@ -1618,3 +1635,123 @@
     system remain **FUTURE PLATFORM WORK** under `ROADMAP.md`'s "What we will not do yet". No
     stage's scope changed.
 - **Date:** 2026-08-15
+
+## Decision: Deployment architecture — server-centric Bartholomew with local/edge capability agents (supersedes "hybrid local-first")
+- **Decision:** Bartholomew's core cognition and platform are **server-centric by default**. The
+  persistent thing that is a user's Bartholomew — Executive/orchestration, model access, memory,
+  reasoning, background cognition, learning and continuity — is intended to run as shared platform
+  infrastructure rather than as a full runtime installed on each end-user device. The user's primary
+  interface is a **web application** reachable from PC, phone or tablet. Optional native companion
+  applications for platforms such as Windows, macOS, Android and iOS are **capability bridges / edge
+  components, not independent Bartholomew brains**: they expose permitted device-local capabilities
+  — files, applications, notifications, sensors, camera/microphone, screen/context, peripherals,
+  local-network resources and other OS facilities — to the user's server-side Bartholomew. The model
+  is a **"server brain + local nervous system"** hybrid. Eight clauses are binding:
+
+  **(a) This is NOT a mandate to become cloud-only.** It defines where cognition runs *by default*,
+  not that everything must move. Local or edge execution remains appropriate — and in some cases
+  mandatory — where device access, privacy, latency, resilience, security, offline/degraded
+  operation or platform restriction justify it. `CONSTITUTION.md`'s "Client versus Bartholomew"
+  constraint ("this is not a licence to make Bartholomew cloud-only") is **not weakened** by this
+  entry; this entry is the decision about the default, not permission to ignore that constraint.
+
+  **(b) Locally enforceable stop authority survives, unconditionally.** Wherever Bartholomew can act
+  on a user's devices or environment, that user must retain a locally enforceable means of stopping
+  their own Bartholomew even when central services are unavailable, connectivity is lost, or the
+  platform is malfunctioning. `CONSTITUTION.md`'s "central infrastructure must never become the only
+  authority capable of stopping or constraining the system", its independent-emergency-shutdown
+  invariant, and this document's "Parking Brake authority tiers" entry all remain in force and are
+  **constraints on this decision**, not casualties of it. A platform outage must never leave local
+  autonomous execution unstoppable.
+
+  **(c) Core cognition is independent of any particular UI or end-user device.** No device, client
+  or presentation surface may become a required component of cognition. The web application is a
+  client, not the system.
+
+  **(d) Device capabilities are explicitly discoverable and governed.** A device/agent declares what
+  it can do; capabilities are not assumed. Windows, macOS, Android and iOS expose materially
+  different facilities and must not be modelled as interchangeable. Every capability is subject to
+  permission and Governance constraint, and capability availability is a runtime fact to be
+  discovered and reported truthfully, never inferred.
+
+  **(e) Physical embodiments attach through the same capability/device model.** Home hubs, robots,
+  drones, vehicles and smart-home systems are, by default, capability-bearing devices attached to a
+  user's Bartholomew — not independent full Bartholomew brains. A future requirement may justify an
+  exception; it would need its own decision.
+
+  **(f) Commercial multi-user operation uses shared platform/runtime infrastructure with strict
+  per-user isolation** of identity, memory, permissions, devices, history, trust state and personal
+  model. This restates rather than replaces this document's "One shared Bartholomew platform; many
+  strongly isolated personal Bartholomew identities" entry, which remains the authority on the
+  three-layer model, identity portability and isolation being non-negotiable.
+
+  **(g) Global/platform administrative stop controls and individual-user Parking Brake controls are
+  distinct concepts and must eventually be represented separately.** The authority on their
+  semantics remains this document's "Parking Brake authority tiers — Personal/User and
+  Platform/Admin" entry and `COGNITIVE_RUNTIME.md`'s "Authority tiers" subsection.
+
+  **(h) This is TARGET architecture.** It is **not** a claim that production multi-tenancy, cloud
+  infrastructure, native device agents, a device-capability protocol, or authentication currently
+  exist. **None of them do.** The current system remains a single-user local development prototype,
+  and that prototype is conceptually the first personal Bartholomew identity on an early deployment
+  of this platform, not a throwaway. **This entry is documentation-only and authorises no
+  implementation.**
+
+- **Supersedes:** this document's **"Deployment architecture — hybrid local-first" (2026-07-28)**,
+  which is marked superseded in place. Precisely what changes: that entry made *"a trusted local
+  Bartholomew runtime … the authority for sensitive memory"* and rejected its own alternative (a),
+  "a pure hosted web service, with the local runtime reduced to a thin client". **That clause is
+  reversed for cognition and memory**: personal memory and core cognition are now intended to live
+  server-side. What is **retained unchanged** from that entry: governance enforcement, the parking
+  brake and emergency shutdown must not depend on cloud availability; and remote exposure of the
+  runtime must not occur until authentication, authorization, transport security and a reviewed
+  threat model are designed and separately approved, with "simple token auth" explicitly not assumed
+  sufficient. Two competing deployment authorities are not left standing.
+
+- **Alternatives considered:** (a) **Leave "hybrid local-first" in place and record the new
+  direction elsewhere** — rejected: it would leave two canonical entries giving opposite answers to
+  "where does sensitive memory live?", which is exactly the failure mode this document's "One
+  authority per architectural concept" entry exists to prevent, and which the 2026-07-28
+  reconciliation pass had to repair once already for reflection ownership. (b) **Amend the
+  2026-07-28 entry in place** — rejected: it would rewrite the record of a decision that was
+  correctly made on the evidence available then, and destroy the traceability of *why* the direction
+  changed. Superseding preserves both. (c) **Create a numbered ADR file or an `adr/` directory** —
+  rejected: the repository has no such convention, `DECISIONS.md` *is* the ADR store, and creating a
+  parallel one would violate "Canonical SSOT docs (no doc sprawl)" (reasoning already recorded in
+  `docs/PLATFORM_IDENTITY_ARCHITECTURE_REVIEW.md` §4). (d) **Defer the decision until the platform
+  is actually built** — rejected for the reason the platform-identity entry gives: silence is not
+  neutral, and each session otherwise assumes whichever topology is locally convenient.
+
+- **Why:** The 2026-07-28 entry's local-authoritative-memory clause was written to protect
+  sovereignty, and sovereignty is better served by portability and isolation than by physical
+  locality: `CONSTITUTION.md` already makes identity "logically independent of the device, client,
+  server, database, AI provider, model generation and deployment topology currently serving it".
+  Requiring every user to host a complete Bartholomew also contradicts the product thesis — an
+  assistant available to an ordinary individual, reachable from a phone — and would make the model
+  layer, which `CONSTITUTION.md` insists is a replaceable supplier, into a per-device installation
+  burden. Most of this direction was already permitted: `CONSTITUTION.md`'s "Client versus
+  Bartholomew" section already anticipates a lightweight client, device-specific capability adapters
+  and remote "background cognition"; the platform-identity entry already anticipates a client that
+  "need not contain Bartholomew's whole intelligence". What was missing was a decision on the
+  **default**, and the resolution of the one clause that genuinely conflicted. The sovereignty
+  concern that produced the original rejection is answered by clause (b), which keeps the ability to
+  stop Bartholomew local and unconditional — that, not the physical location of a database, is what
+  makes the user the final authority.
+
+- **Consequences:**
+  - `DECISIONS.md`'s "Deployment architecture — hybrid local-first" carries a superseded banner
+    pointing here. No other entry is retired: "One shared Bartholomew platform…", "Parking Brake
+    authority tiers…", and "Usable POC / time-to-real-use prioritisation" all stand.
+  - `CONSTITUTION.md`, `ASSUMPTIONS.md`, `COGNITIVE_RUNTIME.md`, `INTERFACES.md`, `ROADMAP.md`,
+    `MASTER_PLAN.md` and `RISKS.md` take **pointer/consequential amendments only**. The decision is
+    not restated in any of them.
+  - **A new risk is created and recorded** (`RISKS.md`): server-centric cognition increases
+    dependence on connectivity. Defined loss-of-connectivity behaviour and degraded-mode operation
+    become requirements rather than nice-to-haves — they were already constitutionally required and
+    remain unbuilt.
+  - **`ROADMAP.md`'s and `MASTER_PLAN.md`'s current priority does not change.** The usable-PoC /
+    time-to-real-use prioritisation and `docs/TILT.md` sequencing continue to govern what is worked
+    on next. This entry describes a destination, and explicitly does not schedule the journey.
+  - It remains true, and is unaffected by this entry, that the current API has **no authentication**
+    and must not be exposed beyond localhost (`INTERFACES.md`, security stance).
+- **Date:** 2026-08-17

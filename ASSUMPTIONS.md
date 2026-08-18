@@ -132,9 +132,12 @@
   made it read as already resolved when it isn't — the live open question has moved forward to
   Phase B (proposed, not approved), whose evidence base is the mixed `aiosqlite`/sync-`sqlite3`/
   scheduler-thread ownership of one file tracked in `RISKS.md`'s tech-debt watchlist.
-- **Why it matters:** Architectural simplicity hinges on it; the hybrid local-first deployment
-  architecture (`DECISIONS.md`) also depends on the local runtime's persistence layer being sound
-  before any cross-device/sync work builds on top of it.
+- **Why it matters:** Architectural simplicity hinges on it; the deployment architecture
+  (`DECISIONS.md`) also depends on the runtime's persistence layer being sound before any
+  cross-device/sync work builds on top of it. (**Repointed 2026-08-17:** the deployment authority
+  is now the server-centric entry, which supersedes "hybrid local-first". The dependency described
+  here is unchanged — a persistence layer that is unsound locally does not become sound by being
+  hosted.)
 - **Risk if wrong:** Forced migration mid-stream.
 - **How to validate:** Track perf budgets; measure WAL growth/lock contention; define migration triggers in DECISIONS.
 - **Status:** unverified
@@ -157,18 +160,24 @@
 ## ASSUMPTION: Cross-device 'one mind' requires a reviewed threat model before any remote exposure — corrected 2026-07-28
 - **Statement (superseded):** this entry previously assumed "a minimal token-based auth layer is
   sufficient for early cross-device experiments." **That assumption is explicitly rejected** by
-  the hybrid local-first deployment architecture decision recorded in `DECISIONS.md`
-  (2026-07-28): simple token authentication is **not** assumed sufficient. Remote/cross-device
-  exposure of the trusted local Bartholomew runtime must not occur until authentication,
-  authorization, transport security, and a reviewed threat model are designed and separately
-  approved.
+  the deployment architecture decision recorded in `DECISIONS.md`: simple token authentication is
+  **not** assumed sufficient. Remote/cross-device exposure of the Bartholomew runtime must not
+  occur until authentication, authorization, transport security, and a reviewed threat model are
+  designed and separately approved. (**Repointed 2026-08-17:** originally the 2026-07-28
+  "hybrid local-first" entry, now superseded by the server-centric entry, which **carries this gate
+  forward unchanged** — it is one of the clauses explicitly retained. Moving cognition server-side
+  raises the stakes of this gate rather than relaxing it.)
 - **Current statement:** no cross-device auth mechanism (token-based or otherwise) may be treated
   as sufficient until a threat model for it has been designed and reviewed. This is a gate, not a
   simplification to avoid "premature complex auth/SSO" — the previous framing had that backwards.
-- **Why it matters:** Bartholomew's local runtime is the authority for sensitive memory and
-  governance (including the parking brake and emergency shutdown); an under-specified auth scheme
-  for reaching it remotely is a direct path to compromising that authority, not a minor UX
-  shortcut.
+- **Why it matters:** Bartholomew's runtime holds sensitive memory, and governance authority
+  (including the parking brake and emergency shutdown) must remain locally enforceable; an
+  under-specified auth scheme for reaching it remotely is a direct path to compromising that
+  authority, not a minor UX shortcut. (**Corrected 2026-08-17:** this previously read "the local
+  runtime is the authority for sensitive memory", which was the clause the server-centric
+  deployment decision superseded. Memory authority is intended to become server-side; **the
+  locally-enforceable-stop requirement is not** — that clause was retained deliberately, and is
+  what this assumption now turns on.)
 - **Risk if wrong:** Security holes in the exact subsystem responsible for privacy, consent, and
   safety enforcement.
 - **How to validate:** Threat model + penetration-style tests on auth endpoints, completed and

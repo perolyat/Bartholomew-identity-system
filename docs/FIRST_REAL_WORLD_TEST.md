@@ -7,6 +7,11 @@
 >
 > **Deployment boundary:** this procedure describes a **personal development prototype running on
 > `localhost`**. See §0 before exposing anything to a network.
+>
+> **Consent path (corrected 2026-08-18):** §5 uses the **web/API consent inbox**, which already
+> exists and is the authoritative path for this runtime. The previous revision of this document
+> claimed the API path "never asks" and routed this step through `python chat.py`; that claim was
+> false and the instruction was wrong — see §5. No code change was needed to fix it.
 
 ---
 
@@ -40,6 +45,17 @@ Two further environment facts worth knowing before you read anything into a resu
 - **Databases are no longer tracked in Git** (2026-08-17). A fresh clone creates its own
   `data/barth.db` and `data/memory.db` on first run. If you are testing on the machine that
   previously held the tracked copies, your existing files are untouched.
+- **`BARTH_DB_PATH` now relocates *all* runtime state** (2026-08-18). Set it and the whole runtime —
+  including the `memory.db` written by the legacy `MemoryManager` path — moves with it. Until that
+  fix it moved most but not all, so a test run could still reach into `./data`. **Recommended for a
+  first pass:** point it at a scratch directory, so the run starts from a genuinely clean state and
+  cannot disturb anything you want to keep:
+  ```bash
+  export BARTH_DB_PATH="$HOME/bartholomew-test/barth.db"
+  mkdir -p "$(dirname "$BARTH_DB_PATH")"
+  ```
+  `/api/health` echoes `db_path`, so you can confirm which database is live before trusting a
+  result.
 
 ---
 
@@ -123,31 +139,101 @@ Personal-fact capture runs through `MemoryStore.upsert_memory()`, so `memory_rul
 
 ---
 
-## 5. Consent / privacy — **read this before attempting it**
+## 5. Consent / privacy — use the web/API consent inbox
 
-**This step cannot currently be performed through `/ui`.** The consent handler is registered only
-by `chat.py`, the standalone terminal entrypoint; the API path never registers one. With no handler
-registered, `request_permission_to_store()` returns `False` unconditionally.
+> **Corrected 2026-08-18.** An earlier revision of this section told you to run this step in
+> `python chat.py`, on the claim that the API path "never asks". **That claim was wrong**, and the
+> instruction it produced was wrong. The web/API runtime has a complete, governed consent path: it
+> queues sensitive writes for review instead of discarding them, exposes them over
+> `/api/consent/*`, and surfaces them in `/ui`. Everything below was verified live against a
+> running server, end to end, rather than read off the source.
 
-The behaviour is therefore **fail-closed**: sensitive content is **not stored**, and the user is
-**not asked**. Nothing unsafe happens — but the ask-and-deny path is not exercisable from the web
-UI, so the "deny consent, confirm denial is respected" test reduces to "confirm nothing sensitive
-was stored".
+### How it actually works
 
-Two options:
+`MemoryStore.upsert_memory()` — the single governed write path — has two consent gates, and **both
+queue into the same inbox** (`pending_sensitive_writes`) rather than dropping content:
 
-- **(a) Accept the reduced check for this test.** Mention something the rules classify as sensitive
-  in `/ui`, then confirm via `/api/self-state` or the database that it was not persisted. This
-  verifies fail-closed behaviour, which is the safety-relevant half.
-- 🖥️ **(b) Run the full path in the terminal client instead**, via `python chat.py` — which does
-  register a terminal consent handler — and exercise ask → deny → confirm-not-stored there.
+| `reason` | Gate | Example |
+|---|---|---|
+| `rule_consent` | `config/memory_rules.yaml`'s `ask_before_store` category | tagged with a `privacy_class`, e.g. `user.secure` |
+| `privacy_guard` | keyword sensitivity check, when no interactive consent handler is registered | `privacy_class` is null |
 
-Registering a consent handler on the API path is a small, well-understood change. It was
-deliberately **not** made as part of this stabilisation work because it is a new user-facing
-behaviour rather than a repair, and it needs its own approval. It is the most likely candidate for
-the next small piece of work.
+Queued content is **not stored**. It waits for an explicit human decision. Nothing is lost, and
+nothing is written without you.
 
----
+**One authority, not two.** If an interactive consent handler *is* registered (the CLI case), that
+handler decides and the item is **not** also queued — pinned by
+`tests/test_memory_store_sensitive_consent.py::test_explicit_decline_is_not_queued`. The web/API
+runtime registers no handler, so the inbox is its authority. There is exactly one decision-maker
+per write.
+
+### Triggering a consent request
+
+**Option A — model-free, works in any environment (recommended for a first pass).** Submit
+material through the governed training path:
+
+```bash
+curl -s -X POST http://127.0.0.1:5173/api/training/submit \
+  -H 'Content-Type: application/json' -d '{
+    "competency_id":"household_admin","source_type":"user_instruction",
+    "source_detail":"consent check",
+    "records":[{"kind":"competency_heuristic","slug":"consent_probe",
+                "data":{"rule":"Please remember my auth code for later."}}]}'
+```
+
+Expect a response whose summary reports **`"stored": 0, "queued_for_consent": 1`**, with a detail
+line naming the pending id and reason. That the endpoint distinguishes *stored* from
+*queued_for_consent* is the point: it does not claim to have learned something it has not.
+
+🖥️ **Option B — the real user experience.** With Ollama running, say something sensitive in `/ui`
+(something matching `ask_before_store`, or containing a password). Same inbox, same resolution.
+
+### Reviewing and deciding
+
+**In `/ui`:** the *pending consent* card lists what is waiting, badges the reason, and gives
+**Approve** / **Deny** buttons. It refreshes every 30 seconds and highlights itself while anything
+needs attention.
+
+**Or over HTTP:**
+
+```bash
+curl -s http://127.0.0.1:5173/api/consent/pending-writes            # list
+curl -s -X POST http://127.0.0.1:5173/api/consent/pending-writes/<id>/deny
+curl -s -X POST http://127.0.0.1:5173/api/consent/pending-writes/<id>/approve
+```
+
+### What counts as a pass
+
+1. The request **appears** in the inbox with a sensible `reason` — the gate noticed.
+2. **Deny** → `{"ok":true,...,"denied":true}`, the entry leaves the inbox, and **nothing is
+   written**. Verify:
+   ```bash
+   sqlite3 data/barth.db "SELECT COUNT(*) FROM memories WHERE key='household_admin.consent_probe';"
+   # expect 0
+   sqlite3 data/barth.db "SELECT status, COUNT(*) FROM pending_sensitive_writes GROUP BY status;"
+   # expect the row recorded as 'denied' -- the decision is auditable, not merely forgotten
+   ```
+3. **Approve** (queue a second item first) → `{"ok":true,"stored":true,"memory_id":N}` and the row
+   now exists. Consent granted through the API is honoured by the governed write.
+
+All three were verified live on 2026-08-18 against a fresh database.
+
+### Do not use `chat.py` for this step
+
+`chat.py` is a **separate legacy entrypoint** that stores through `StorageAdapter` →
+`MemoryManager` into **`data/memory.db`** — a different database from the one the running
+application uses (`MemoryStore` → `data/barth.db`). It also requires an OS keystore. Consent
+decisions made there do not appear in `/ui` and tell you nothing about the runtime you are
+testing.
+
+### Interaction with the Parking Brake
+
+Worth knowing before §6, and **currently asymmetric**: with the brake engaged, submitting *new*
+material is refused (`blocked_by_governance`, scope `training`), and the inbox stays readable and
+deniable — but **approving a queued item still succeeds and still writes**. The defensible reading
+is that the brake halts *Bartholomew* acting, not *you* deciding. It is pinned by
+`tests/test_consent_api.py::TestConsentResolutionUnderTheParkingBrake` and flagged as an open
+governance question rather than treated as settled. Note it if you exercise both in one session.
 
 ## 6. Governance — the Parking Brake
 
@@ -280,7 +366,7 @@ The test **passes** when, on your machine:
 - [ ] Ordinary conversation works and no reply contains `Mock response for prompt:`
 - [ ] Stopping Ollama produces a truthful 503, not a fabricated reply
 - [ ] A told fact survives a clean restart with sensible provenance
-- [ ] Sensitive content is not silently stored (§5, option (a) or (b))
+- [ ] A sensitive write appears in the consent inbox, **deny** stores nothing, and **approve** stores (§5)
 - [ ] Parking Brake blocks, reports truthfully, releases, and is audited
 - [ ] At least one real capability executes, and its failure mode is honest
 - [ ] A reflection is stored with `meta.generator == "llm"`
@@ -289,7 +375,10 @@ The test **passes** when, on your machine:
 
 **Known limitations carried into this test, none of which are defects to be found:**
 
-1. The consent ask-path is not reachable from `/ui` (§5).
+1. ~~The consent ask-path is not reachable from `/ui`.~~ **Withdrawn 2026-08-18 — this was
+   false.** The inbox, its API and its `/ui` card all exist and were verified live (§5). What
+   remains genuinely open is narrower: nothing *notifies* you that something is waiting beyond the
+   `/ui` card's own 30-second refresh and a line on the server console.
 2. No API authentication — localhost only (§0).
 3. The Platform/Admin Parking Brake is not built (§6).
 4. `POST /api/reflection/run` reports trigger success, not composition success (§8).

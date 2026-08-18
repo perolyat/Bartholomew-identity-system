@@ -2,7 +2,40 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-15, second pass (one tech-debt watchlist item added: the Parking Brake's
+> **Last updated:** 2026-08-18 — **a retraction.** The 2026-08-17 entry claiming "the consent
+> ask-path is unreachable from the API/web surface" is **withdrawn as false**. The web/API runtime
+> has a complete governed consent path: `MemoryStore.upsert_memory()` queues sensitive writes into
+> `pending_sensitive_writes` when no interactive handler is registered, `/api/consent/pending-writes`
+> exposes them with approve/deny, and `/ui` has a pending-consent card. Verified live end-to-end.
+> The error came from reading `request_permission_to_store()` in isolation without tracing its
+> caller, where the no-handler case is intercepted first. See the retracted entry below for the
+> full correction, and `docs/FIRST_REAL_WORLD_TEST.md` §5 for the corrected procedure. The genuine
+> residual is narrower and remains open: nothing actively notifies the user that something awaits
+> consent. Also added: `tests/test_consent_api.py::TestConsentResolutionUnderTheParkingBrake`,
+> pinning that approving a queued write currently succeeds while the brake is engaged — flagged as
+> an open governance question, not endorsed.
+>
+> **Also fixed 2026-08-18 — a proven runtime/test isolation leak.** `BARTH_DB_PATH` did not isolate
+> `MemoryManager`: its `data_dir` defaulted to a hardcoded `./data`, and `StorageAdapter` passed
+> `./data` explicitly. Because constructing one runs `_cleanup_expired_memories()`, merely building
+> a `ReflectionGenerator` or a `BartholomewChat` **deleted every expired row from a live
+> `data/memory.db`**. Measured, not theorised: the full suite emptied a 9-row database while
+> `BARTH_DB_PATH` pointed at a temp file. Both now resolve through `resolve_memory_dir()`, which
+> follows `BARTH_DB_PATH` and falls back to `./data`; the full suite now leaves the file untouched.
+> Guarded by `tests/smoke/test_repository_hygiene.py`. This closed the deployment-isolation gap as
+> well as the test leak — `BARTH_DB_PATH` now actually relocates all of the runtime's state.
+>
+> **Previously (2026-08-17):** (four tech-debt watchlist items added, none of them a live defect:
+> the server-centric deployment decision's connectivity dependency and its unbuilt degraded-mode
+> requirement; the cloud budget ledger's check-then-act window (unreachable today — no live path
+> passes a `task_type`); the consent ask-path item **now retracted, see above**; and
+> `test_memory_privacy.py`
+> writing to the live `./data` directory when run by hand. Separately, the entry describing
+> `/api/water/log` and `/api/water/today` as "live, working, legacy code" is **corrected** — neither
+> endpoint exists, and no commit removing them was found. See `DECISIONS.md`'s server-centric
+> deployment entry and `docs/FIRST_REAL_WORLD_TEST.md`.)
+>
+> **Previously (2026-08-15, second pass):** one tech-debt watchlist item added: the Parking Brake's
 > split read/write authority — `sight`/`voice` still read the legacy `system_flags`-backed
 > `ParkingBrake` while the write authority has been `GovernanceStore` since Phase B stage B6. **Not
 > a new finding and not a live safety hole** — B4 and B6 §1 finding 5 both found it and deferred it,
@@ -192,6 +225,23 @@
 
 ## Tech debt watchlist
 
+- **(2026-08-17) Server-centric cognition creates a connectivity dependency that has no defined
+  degraded mode — TARGET-architecture risk, not a current defect.** `DECISIONS.md`'s "Deployment
+  architecture — server-centric Bartholomew with local/edge capability agents" makes core cognition
+  server-side by default. That trades a per-device installation burden for a dependency on reaching
+  the platform, and the failure it introduces is not "chat is slow" but "the assistant that holds
+  your life is unreachable". **Nothing is broken today** — the current prototype is entirely local
+  and has no such dependency — which is precisely why this is recorded now, before anything is
+  built against it.
+  **The mitigation is already constitutionally required and remains unbuilt:** `CONSTITUTION.md`
+  requires defined loss-of-connectivity behaviour, safe degradation, and — the hard one — that
+  "central infrastructure must never become the only authority capable of stopping or constraining
+  the system", carried forward as clause (b) of the superseding decision. So a device agent cannot
+  be a pure pass-through: **a user must still be able to stop their own Bartholomew acting on their
+  devices while the platform is unreachable**, which means local stop authority cannot itself be a
+  remote call. Designing that, along with what Bartholomew is allowed to *do* while degraded (act on
+  stale state? queue? refuse?), is a prerequisite for the first device agent, not a follow-up to it.
+  No design exists, and none is authorised.
 - **(2026-08-17) Cloud budget ledger has a check-then-act window under concurrency — deferred,
   and deliberately not fixed now.** `ModelRouter._route_cloud()` reads the spend snapshot, makes
   the provider request, then records the cost. Two concurrent cloud generations can each observe
@@ -205,14 +255,26 @@
   reserve-then-settle against the ledger rather than a distributed billing system. Recorded here
   rather than fixed, because hardening an unreachable path now buys nothing and adds a concurrency
   mechanism nobody can exercise.
-- **(2026-08-17) The consent ask-path is unreachable from the API/web surface.**
-  `set_consent_handler()` is called only by `chat.py`, the standalone terminal entrypoint. On the
-  API path no handler is registered, so `request_permission_to_store()` returns `False`
-  unconditionally: sensitive content is **not stored**, and the user is **not asked**. The
-  behaviour is fail-closed and therefore safe, but it means the "ask before storing" experience
-  does not exist in `/ui` — only its refusal half does. Consequence for testing is recorded in
-  `docs/FIRST_REAL_WORLD_TEST.md` §5. Registering a handler on the API path is small, but it is a
-  new user-facing behaviour rather than a repair and needs its own approval.
+- **(2026-08-17, WITHDRAWN 2026-08-18) ~~The consent ask-path is unreachable from the API/web
+  surface.~~ This entry was wrong and is retracted.** It claimed that because `set_consent_handler()`
+  is only called by `chat.py`, the API path never asks and sensitive content is silently refused.
+  The first half is true; the conclusion is not. `MemoryStore.upsert_memory()` branches on
+  `get_consent_handler() is None` and **queues** the write into `pending_sensitive_writes` rather
+  than discarding it, and that inbox has had a full governed surface the whole time:
+  `/api/consent/pending-writes` with approve/deny (`routes/consent.py`, registered in `app.py`), a
+  *pending consent* card in `/ui` with Approve/Deny buttons, and HTTP-level tests over the real app
+  (`tests/test_consent_api.py`). Verified live end-to-end on 2026-08-18: queue -> deny (nothing
+  stored, decision recorded as `denied`) -> queue -> approve (`stored: true`).
+  **How the error happened, since that is the reusable part:** the conclusion was drawn from
+  reading `privacy_guard.request_permission_to_store()` -- which does return `False` with no
+  handler -- without tracing its *caller*, where the no-handler case is intercepted before that
+  function is ever reached. Reading one function and inferring the system's behaviour is what put a
+  confidently-worded false claim into a canonical document and sent a real test session down the
+  wrong path. `docs/FIRST_REAL_WORLD_TEST.md` §5 is corrected accordingly.
+  **What is genuinely open** is much narrower: nothing actively *notifies* the user that something
+  is awaiting consent, beyond the `/ui` card's 30-second refresh and a line on the server console,
+  so a queued item could sit unnoticed. That is a real usability gap, unfixed, and it needs its own
+  approval -- it is not a safety defect, since the fail-closed behaviour holds either way.
 - **(2026-08-17) `test_memory_privacy.py` writes to the live `./data` directory.** It is a manual
   script (its entry point is `run_test()`, which pytest does not collect, so the suite never runs
   it), but executing it by hand constructs a `MemoryManager` against the real deployment and
@@ -220,7 +282,9 @@
   privacy check whose whole point is to run against a real configuration — but worth knowing before
   running it on a machine holding real memories. Its sibling `test_memory_functionality.py`, which
   *is* collected, was redirected to a temp directory on 2026-08-17 after it was found deleting the
-  repository's tracked `data/memory.db` contents on every test run.
+  repository's tracked `data/memory.db` contents on every test run. **Note (2026-08-18):** the
+  `BARTH_DB_PATH` resolver added that day does **not** protect this script — it passes
+  `data_dir="./data"` explicitly, and explicit callers are deliberately left alone.
 - **(2026-08-15, second pass) Parking Brake read/write authority is split — known, deferred, and
   newly consequential under the authority-tier model.** Since Phase B stage **B6** the brake's
   write authority is `GovernanceStore` (`parking_brake_state`): `bartholomew/cli.py`'s
@@ -376,8 +440,9 @@
   to actually remove that code is a separate, future, unapproved decision — recorded here so it
   is not lost, and explicitly **not** placed ahead of Phase B/Stage 1/Stage 5 in priority merely
   because it exists.
-- **(2026-07-28) Cross-device auth threat model does not yet exist.** The hybrid local-first
-  deployment architecture (`DECISIONS.md`) explicitly rejects "simple token auth is sufficient" as
+- **(2026-07-28) Cross-device auth threat model does not yet exist.** The deployment architecture
+  (`DECISIONS.md`; originally the hybrid local-first entry, whose auth gate the 2026-08-17
+  server-centric entry carries forward unchanged) explicitly rejects "simple token auth is sufficient" as
   an assumption (see the corrected entry in `ASSUMPTIONS.md`) and requires a reviewed threat model
   before any remote/cross-device exposure of the local runtime. That threat model does not exist
   yet. This is a genuine open risk, not merely a documentation gap: any Stage 6 work that exposes

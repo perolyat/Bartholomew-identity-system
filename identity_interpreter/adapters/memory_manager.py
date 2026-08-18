@@ -149,22 +149,57 @@ class ConversationTurn:
         )
 
 
+def resolve_memory_dir() -> str:
+    """Directory this module stores `memory.db` in.
+
+    Follows `BARTH_DB_PATH` -- the environment variable the rest of the
+    runtime already uses to relocate its state -- and falls back to `./data`
+    when it is unset, which is the historical default and what an ordinary
+    local deployment gets.
+
+    This exists because the previous hardcoded `"./data"` default meant
+    `BARTH_DB_PATH` did **not** fully isolate a deployment: `MemoryManager`
+    ignored it and always touched the working directory's `data/`. Its
+    `_init_database()` runs `_cleanup_expired_memories()`, which DELETEs
+    every row past its TTL, so merely *constructing* one against the live
+    directory silently destroyed expired memories there.
+
+    That was not hypothetical. `ReflectionGenerator` builds a `ContextBuilder`,
+    which builds a `MemoryManager`; `conftest.py` installs a working in-memory
+    keyring for the whole session, so under pytest that construction succeeds
+    -- and `tests/test_reflection_generation.py` alone was measured emptying a
+    live `data/memory.db` (9 rows -> 0) while `BARTH_DB_PATH` pointed at a
+    temp file it never read. Honouring the variable fixes the test-isolation
+    leak and the deployment-isolation gap with one rule instead of two.
+
+    Callers passing an explicit `data_dir` are unaffected.
+    """
+    db_path = os.getenv("BARTH_DB_PATH", "").strip()
+    if db_path:
+        parent = Path(db_path).expanduser().parent
+        if str(parent):
+            return str(parent)
+    return "./data"
+
+
 class MemoryManager:
     """
     Comprehensive memory management system
     Handles all four memory modalities with encryption and retention policies
     """
 
-    def __init__(self, identity_config, data_dir: str = "./data"):
+    def __init__(self, identity_config, data_dir: str | None = None):
         """
         Initialize memory manager
 
         Args:
             identity_config: Identity configuration object
-            data_dir: Directory for memory storage
+            data_dir: Directory for memory storage. Defaults to the directory
+                holding `BARTH_DB_PATH` when that is set, else `./data` --
+                see `resolve_memory_dir()`.
         """
         self.identity = identity_config
-        self.data_dir = Path(data_dir)
+        self.data_dir = Path(data_dir) if data_dir is not None else Path(resolve_memory_dir())
         self.data_dir.mkdir(exist_ok=True)
 
         # Memory policy from Identity.yaml
