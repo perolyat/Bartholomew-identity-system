@@ -5,6 +5,26 @@
 > (S1.4's implemented-scope record), and to `COGNITIVE_RUNTIME.md`'s `awaiting_response` section,
 > which is the canonical requirement this design implements.
 >
+> **Post-Test #1 note (added 2026-08-20).** Real-World Test #1 raised
+> `PHASE-B-OPEN-QUESTION-008.md` — the tester could not tell what Awaiting Response was *for*. In
+> the approved Post-Test #1 Decision Register v2.2 that item (**B-Q008**) is **reclassified** from
+> "open architecture question" to a **confirmed comprehension finding against this existing
+> canonical purpose**. The distinction matters and is deliberate:
+>
+> - **The architecture is not in question.** `awaiting_response` **retains its canonical role as the
+>   durable external-reply obligation mechanism**, exactly as designed here and in
+>   `COGNITIVE_RUNTIME.md`. Decision **D2** names it as that mechanism, and safety gate **S1**
+>   exempts it from silent expiry and cap shedding. **Genuine obligations must never be silently
+>   dropped** — nothing in the post-test decisions permits triage, consolidation, deferral or
+>   queue-capacity shedding to discard one.
+> - **What Test #1 found is a legibility problem** in the ordinary-user surface, not an undefined
+>   concept. The work it implies is making the customer-facing purpose legible (Band C, product
+>   gates P1/P4, and Track 4 in `ROADMAP.md`'s "Post-Test #1 readiness bands").
+> - **What is deliberately *not* decided:** the **customer-facing label and location** for Awaiting
+>   Response remain on the register's §14 unresolved list — see `DECISIONS.md`'s "Post-Test #1 items
+>   that remain deliberately unresolved". Exact surface placement stays a UX decision, unmade. This
+>   note does not choose one, and neither may an implementer acting on it.
+>
 > **Status:** proposed 2026-08-05, approved and implemented 2026-08-05. See
 > `docs/STAGE_1_OVERVIEW.md`'s S1.4 section for what was actually built, including the one
 > implementation-time judgment call not fully resolved here (the `awaiting_response_check`

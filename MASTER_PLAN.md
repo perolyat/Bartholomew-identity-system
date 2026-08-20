@@ -2,7 +2,24 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-08-17 — **P0–P6 stabilisation merged (PR #56)** and the **server-centric
+> **Last updated:** 2026-08-20 — **Real-World Test #1 is complete and its Decision Register is
+> approved.** Taylor approved **Post-Test #1 Decision Register v2.2** on 2026-08-20 as the
+> authoritative Post-Test #1 Decision Register, establishing decisions D1–D15, safety gates S1–S11,
+> product gates P1–P9, readiness Bands 0/A/B/C/D and implementation Tracks 1–7 as project authority.
+> The Test #1 evidence freeze is commit **`854a8da7fd107db33a933c4bdb01bf3fd7eb69bd`** (merge commit
+> for PR #58) — **not** `main`. The register is preserved at `docs/evidence/test-1/`; the decisions
+> are in `DECISIONS.md`; the bands are in `ROADMAP.md`. **This authorises no implementation:** the
+> resulting changes are listed under "Pending (awaiting user approval)" and must clear the Approval
+> Gate before any implementation work package is proposed. The pass is documentation plus **one
+> separately approved CI-configuration change** (`279635f`, exempting `docs/evidence/` from two
+> whitespace hooks so preserved evidence is not rewritten) — corrected here 2026-08-20 after
+> independent review, which found this note's original "documentation-only" wording had become
+> false. No production code, tests, schemas, migrations or runtime configuration changed. The
+> Parking Brake scope count is corrected repository-wide from five to six (`training`), and
+> `RISKS.md`'s hydration entry is amended per D4 rather than duplicated. "Next 3 Moves" item 4 is
+> updated from "put slice 1 into real-world use" (now done) to the Approval-Gate review.
+>
+> **Previously (2026-08-17):** **P0–P6 stabilisation merged (PR #56)** and the **server-centric
 > deployment architecture recorded** in `DECISIONS.md`, superseding "hybrid local-first". The
 > stabilisation repaired the reflection model path (no reflection had ever been model-composed),
 > untracked two runtime databases the test suite was mutating, separated cloud *configured* from
@@ -82,7 +99,9 @@ Build a practical, privacy-preserving, consent-first cognitive architecture (“
 
 1. **Fail-closed governance**
    - No irreversible actions without an explicit gate.
-   - Parking-brake semantics for subsystems (skills/sight/voice/scheduler/global).
+   - Parking-brake semantics for subsystems (global/skills/sight/voice/scheduler/training).
+     *Corrected 2026-08-20: this line omitted `training`. `COGNITIVE_RUNTIME.md`'s "The kill-switch:
+     `ParkingBrake`" section is the canonical authority for the scope list and its semantics.*
 
 2. **Privacy-first data handling**
    - Redaction before storage where required.
@@ -133,6 +152,12 @@ prioritisation" entry.)
 - [CI.md](CI.md)
 - [TEST_MATRIX.md](TEST_MATRIX.md)
 - [PERF_BUDGETS.md](PERF_BUDGETS.md)
+
+**Not canonical, but load-bearing (added 2026-08-20):** `docs/evidence/test-1/` is the stable,
+referenceable **evidence location** for Real-World Test #1 — the preserved Post-Test #1 Decision
+Register v2.2, SHA-256 checksums, the Test #1 commit-provenance record, and an explicit inventory of
+the raw artifacts that are **absent**. **It is a location, not an authority**: the count above stays
+at 14, the decisions live in `DECISIONS.md`, and the readiness bands live in `ROADMAP.md`.
 
 Every other `*.md` in the repository (implementation notes, the rest of `docs/*`, `STATUS_*`,
 `README`s) is a **reference**, not an authority on project status. Where one contradicts a
@@ -252,6 +277,11 @@ Phase A, which made verification automatic and cross-platform rather than Linux-
 partly manual. See [ROADMAP.md](ROADMAP.md) for per-stage exit criteria.
 
 ## Backlog (prioritized, smallest safe slices)
+
+> **Identifier note (added 2026-08-20):** the `P0`–`P5` headings in this backlog are **priority
+> tiers** and are unrelated to the Post-Test #1 **product gates P1–P9** established by the register
+> approved 2026-08-20 (summarised in `ROADMAP.md`'s "Post-Test #1 readiness bands"). A bare `P3`
+> here means the priority tier, never the product gate. Qualify post-test references explicitly.
 
 > **Rule:** every item must have acceptance criteria + verification steps before it is started.
 
@@ -715,13 +745,34 @@ approval before work begins — this list records sequencing, not authorisation)
    completion record, `docs/POC_SLICE_1_MEMORY_CAPTURE_RECALL.md` for the as-implemented detail and
    known limitations, and `DECISIONS.md`'s "Usable POC slice 1 implementation approved" entry.
    **This is the first slice of the Usable POC, not its full boundary** — see item 5 below.
-4. **← NEXT: put slice 1 into real-world use.** Per `docs/TILT.md`'s time-to-real-use principle,
-   the next move is not more slice-1 engineering: it is the tester actually using the capability,
-   so slice 2 can be scoped from real feedback rather than designed ahead of it. Configuring
-   `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` and running the capture/recall loop against a real endpoint is
-   the concrete step. Further hardening of slice 1 competes with this and, per `docs/TILT.md`,
-   generally loses — unless a defect threatens safety, governance, privacy, data integrity,
-   architectural validity, or the validity of the experiment itself.
+4. ✅ **Done 2026-08-19/20. Real-World Test #1 was run.** Slice 1 went into real-world use, and
+   this step is complete. **Evidence freeze: commit `854a8da7fd107db33a933c4bdb01bf3fd7eb69bd`**
+   (the merge commit for PR #58) — **not** `main`, which **at the relevant review point (2026-08-15)**
+   was 25 commits behind at `d0c202f7b39f9244417f1954629f64f68dfbb341` and did not contain the tested
+   implementation. *(Clarified 2026-08-20: `main` has since advanced to the tested commit `854a8da…`
+   itself. That does not change the record — Test #1 still was not run against `main`; `main` caught
+   up afterwards. Dated snapshots are in `docs/evidence/test-1/README.md`.)* The
+   procedure is `docs/FIRST_REAL_WORLD_TEST.md`; the evidence location, provenance record and
+   absence inventory are `docs/evidence/test-1/`.
+   **Outcome:** 38 historical evidence items, adjudicated in **Post-Test #1 Decision Register
+   v2.2**, approved by Taylor 2026-08-20 — establishing decisions D1–D15, safety gates S1–S11,
+   product gates P1–P9, readiness Bands 0/A/B/C/D and implementation Tracks 1–7. The decisions are
+   in `DECISIONS.md`; the bands and gate summaries are in `ROADMAP.md`'s "Post-Test #1 readiness
+   bands"; the approval is in the ledger below.
+   **Headline finding, recorded because it governs what comes next:** the tester's own assessment
+   was that the current functionality was practically useless and the qualitative burden sat below
+   break-even — a burden finding, not a feature gap. That is what decision D1 and product gate P2
+   now exist to answer.
+
+4a. **← NEXT: Taylor reviews the Post-Test #1 documentation propagation under the Approval Gate.**
+   The documentation-only pass carrying the approved register into the canonical docs is listed
+   under "Pending (awaiting user approval)" below. **No implementation work package may be proposed
+   until that review completes** — that is the register's own approval sequence, not an extra step.
+   After it completes, work is proposed slice by slice as usual, sequenced by the readiness bands:
+   Band A before any further unattended testing, Band B before real ambient sensing, Band C before
+   full Real-World Test #2, with Band 0 attended localhost checkpoints and Band D safe parallel
+   prototyping available in the meantime. **Listing a band is not authorisation to start work in
+   it.**
 5. **Subsequent Usable POC vertical slices** (scope deliberately not fixed yet — see
    `docs/TILT.md`'s "Direction for later slices"): progressing toward proactive surfacing of
    something Bartholomew noticed, and at least one genuine governed action with a visible
@@ -784,11 +835,68 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
 > **Rule:** Never mark anything as committed without a commit hash.
 
 ### Pending (awaiting user approval)
+- 2026-08-20 — **Post-Test #1 documentation propagation** (no production code, tests, schemas,
+  migrations or runtime configuration touched; **one separately approved CI-configuration change** —
+  see below) — the canonical-doc changes that carry the approved Post-Test #1 Decision Register v2.2
+  into this repository: `DECISIONS.md` (sixteen new entries), `RISKS.md` (hydration entry amended per
+  D4, split-brake-authority entry amended per C6, scope-count correction, three new watchlist
+  entries), `ROADMAP.md` (new "Post-Test #1 readiness bands" section), `docs/TILT.md` (D7
+  reconciliation), `docs/SAFETY_PARKING_BRAKE.md` (five→six
+  scopes, with caveats), `COGNITIVE_RUNTIME.md`, `INTERFACES.md`, `CHECKLISTS.md`,
+  `docs/FIRST_REAL_WORLD_TEST.md`, `docs/S1_4_AWAITING_RESPONSE_DESIGN.md`,
+  `docs/EXPERIENCE_KERNEL_IMPLEMENTATION.md`, `QUICKSTART.md`,
+  `bartholomew_api_bridge_v0_1/README_API_BRIDGE.md`, this document, and the new
+  `docs/evidence/test-1/` evidence location.
+  **Original handoff commits on branch `claude/bartholomew-post-test-docs-f8xwr1`** (corrected
+  2026-08-20 after independent review; this entry previously read "Not yet committed", which was
+  stale, and then listed the two commits below under a heading that read as exhaustive, which it is
+  not):
+  - `a629ae4` — the documentation propagation itself (18 `.md` files).
+  - `279635f` — the separately approved CI exception: `exclude: ^docs/evidence/` on the
+    `end-of-file-fixer` and `trailing-whitespace` hooks in `.pre-commit-config.yaml`, because those
+    hooks were rewriting the preserved Post-Test #1 register and breaking its recorded SHA-256.
+    Approved by Taylor on its own merits as a standing rule: evidence intended to be immutable is not
+    touched by auto-formatters.
+
+  Those two are the **original handoff commits**, named here because each carries a distinct
+  authority: the propagation itself, and a separately approved CI exception. **Subsequent
+  review-only corrections are preserved in PR #59's commit history and are deliberately not
+  enumerated here** — they change wording, not authority, and listing each one would make this entry
+  need an edit for every future review fix. PR #59's commit log is the complete record.
+
+  **Still pending, and deliberately recorded as pending despite existing as commits.** Committing to
+  a branch is not approval. This pass **remains awaiting Taylor's review under the Approval Gate**
+  and has not been merged; it moves to the Approval Ledger below only once that review completes.
+  **No implementation work package may be proposed until then.**
 - 2026-07-27 — Planning-document reconciliation (documentation-only; no production code, tests,
   dependencies, workflows, configuration or schema touched) — **not yet committed**
 
 ### Approval Ledger
 Record of approved changes with commit tracking (most recent 5):
+
+- 2026-08-20 — **Post-Test #1 Decision Register v2.2 approved as the authoritative Post-Test #1
+  Decision Register** — Approved by Taylor — Commit: `a629ae4` on branch
+  `claude/bartholomew-post-test-docs-f8xwr1`, **not yet merged** (corrected 2026-08-20 after
+  independent review; this read "not yet committed", which was stale once the artifact was preserved
+  in `a629ae4`). This approval is of an **interpretation artifact, not of a diff** — the commit
+  records where the artifact is preserved, and the approval statement, not the commit, is what
+  establishes authority. The artifact is preserved unmodified at
+  `docs/evidence/test-1/interpretation/BARTHOLOMEW_POST_TEST_1_DECISION_REGISTER_v2_2_FINAL_APPROVAL_CANDIDATE.md`,
+  SHA-256 `ebc282bbdc19123310a070a6cd41a27d2c0bbd4cd7e0b323d5d0245ca24aa798`).
+  **What the approval establishes as project authority:** decisions **D1–D15**; safety gates
+  **S1–S11**; product gates **P1–P9**; readiness **Bands 0/A/B/C/D**; implementation **Tracks 1–7**;
+  the register's §5 evidence register and §6 finding→band map.
+  **Independent correction review:** confirmed that v2.2 resolved the issues raised against v2.1
+  without introducing new factual, arithmetic, provenance, classification, cross-reference or
+  internal-consistency errors, and without substantively changing D1–D15.
+  **Evidence-access limitation, still in force:** restored Test #1 case IDs and timestamps were
+  verified for **internal consistency only**, not independently against the raw Test #1 artifacts.
+  **The register's own front matter still reads "NOT YET APPROVED" and its filename still carries
+  `FINAL_APPROVAL_CANDIDATE`; both are deliberately unchanged.** The artifact is preserved
+  unmodified and this ledger entry — not an edit to the artifact — is the approval record. This
+  repository has no established approved-artifact renaming process that would require otherwise.
+  **The approval authorises documentation propagation only.** It does not authorise implementation
+  of any D1–D15 decision or any safety/product gate.
 
 - 2026-08-14 — AI-assisted development provenance & IP governance (`DECISIONS.md` new decision
   entry; `RISKS.md` three new tech-debt watchlist entries; `CHECKLISTS.md` one new PR-checklist

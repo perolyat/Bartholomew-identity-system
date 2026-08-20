@@ -8,6 +8,29 @@
 > **Deployment boundary:** this procedure describes a **personal development prototype running on
 > `localhost`**. See §0 before exposing anything to a network.
 >
+> **Test #1 has been run (added 2026-08-20).** This document remains the *procedure*. The test it
+> describes was executed 2026-08-19/20 against **commit
+> `854a8da7fd107db33a933c4bdb01bf3fd7eb69bd`** — the merge commit for PR #58, whose head branch
+> `claude/bartholomew-parking-brake-consent` **no longer resolves**. **The commit hash is
+> authoritative; the branch name is not.** That commit was **not** on `main`: `main`/`origin/main`
+> was `d0c202f7b39f9244417f1954629f64f68dfbb341` at the relevant review point, 25 commits behind and
+> **not containing the tested implementation**. Do not read §0's `a885e25` verification date, or any
+> later state of `main`, as the tested implementation.
+>
+> **Results, evidence and consequences live elsewhere:** the evidence location, provenance record
+> and absence inventory are `docs/evidence/test-1/`; the approved adjudication is Post-Test #1
+> Decision Register v2.2 (`docs/evidence/test-1/interpretation/`); the decisions are in
+> `DECISIONS.md`; the readiness bands that now gate any further testing are in `ROADMAP.md`'s
+> "Post-Test #1 readiness bands". **A future test must satisfy its band's prerequisites first — this
+> procedure alone is no longer sufficient authorisation to run one.** In particular, §0's
+> unauthenticated-API boundary is a *test condition*, not an architecture: decision D10 and safety
+> gate S8 now govern any move off localhost.
+>
+> **Raw evidence caveat:** none of Test #1's raw artifacts are present in this repository. They are
+> inventoried as **absent** in `docs/evidence/test-1/MANIFEST.md` §4, and the approved
+> evidence-access limitation — case IDs and timestamps verified for internal consistency only —
+> remains in force.
+>
 > **Consent path (corrected 2026-08-18):** §5 uses the **web/API consent inbox**, which already
 > exists and is the authoritative path for this runtime. The previous revision of this document
 > claimed the API path "never asks" and routed this step through `python chat.py`; that claim was

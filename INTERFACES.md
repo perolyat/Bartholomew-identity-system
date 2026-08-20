@@ -130,7 +130,14 @@ implemented"; a fresh database actually contains 37.)*
 
 ### Scope checks
 - Components must check before executing side effects.
-- Supported scopes: `global`, `skills`, `sight`, `voice`, `scheduler`.
+- Supported scopes: `global`, `skills`, `sight`, `voice`, `scheduler`, `training`.
+  **Corrected 2026-08-20:** this line listed five scopes and omitted `training`. The authoritative
+  allowlist in code is `VALID_SCOPES` in
+  `bartholomew_api_bridge_v0_1/services/api/routes/governance.py`;
+  `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`" section is the canonical authority for
+  scope semantics. Listing a scope here is an interface fact, **not** a claim that direct runtime
+  enforcement of every scope has been independently proven — see `docs/SAFETY_PARKING_BRAKE.md` for
+  the Test #1 coverage boundary and the open `sight`/`voice` brake-authority migration seam.
 
 **Failure mode:**
 - If engaged → fail closed (raise / early-return) with a structured error.

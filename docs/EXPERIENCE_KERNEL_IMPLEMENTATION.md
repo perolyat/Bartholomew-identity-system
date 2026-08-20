@@ -239,6 +239,11 @@ The Experience Kernel reads from Identity.yaml:
 
 ## Design Decisions
 
+> **Identifier note (added 2026-08-20):** the `D1`–`D3` labels below are **this document's own
+> 2026-01-20 design decisions**. They are unrelated to the Post-Test #1 decisions `D1`–`D15`
+> approved 2026-08-20 and recorded in `DECISIONS.md`. Qualify post-test references explicitly; no
+> renaming is proposed here.
+
 ### D1: Affect Model Choice (2026-01-20)
 
 **Decision:** Use valence-arousal-energy model for affect.
