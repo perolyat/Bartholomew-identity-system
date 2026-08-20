@@ -21,7 +21,9 @@
 > approved it separately, on its own merits, as a standing rule: **evidence intended to be immutable
 > is not touched by auto-formatters.** It is a two-hook, one-path-prefix exception; `black`, `ruff`,
 > `detect-private-key`, `check-yaml` and `check-added-large-files` are untouched, as is every path
-> outside `docs/evidence/`. It is **not** an implementation change and authorises nothing below. The approved register is preserved at
+> outside `docs/evidence/`. It is **not** an implementation change and authorises nothing below.
+>
+> The approved register is preserved at
 > `docs/evidence/test-1/interpretation/`; the readiness bands, safety gates and product gates it
 > establishes are propagated to `ROADMAP.md`, `docs/TILT.md`, `RISKS.md`, `CHECKLISTS.md`,
 > `INTERFACES.md`, `MASTER_PLAN.md`, `COGNITIVE_RUNTIME.md` and `docs/SAFETY_PARKING_BRAKE.md`.)
