@@ -43,13 +43,31 @@ back to the artifact it rests on. This directory is that location. It did not ex
 
 **Test #1 was not run against `main`.** Any document that says or implies otherwise is wrong.
 
-**Current repository state, recorded separately so it cannot be mistaken for the historical freeze
-(verified 2026-08-20):** the tested commit `854a8da…` is reachable from this documentation branch,
-`claude/bartholomew-post-test-docs-f8xwr1`, which is based directly on it; `main`/`origin/main` is
-still `d0c202f7b39f9244417f1954629f64f68dfbb341`, and `git merge-base main 854a8da…` returns
-`d0c202f…`, confirming the 25-commit relationship the register records. Later branch movement does
-**not** rewrite the historical record above: whatever branches come and go, the frozen tested
-implementation remains the commit hash.
+### Repository-state snapshots (not current state — dated observations)
+
+Recorded separately from the freeze so they cannot be mistaken for it. **Each entry is a dated
+snapshot, true when observed and never re-asserted as current.** Read them as history; to know where
+`main` points now, look at the repository, not at this file.
+
+| Observed | `main` / `origin/main` | Relationship to the tested commit `854a8da…` |
+|---|---|---|
+| 2026-08-15 (the Test #1 independent-review point) | `d0c202f7b39f9244417f1954629f64f68dfbb341` | **25 commits behind; did not contain it.** This is the historical fact the register records, and it does not change. |
+| 2026-08-20, earlier in the documentation pass | `d0c202f7b39f9244417f1954629f64f68dfbb341` | Unchanged from the review point; `git merge-base main 854a8da…` returned `d0c202f…`, confirming the 25-commit relationship. The tested commit was reachable only from the documentation branch `claude/bartholomew-post-test-docs-f8xwr1`, which is based directly on it. |
+| 2026-08-20, later the same day | **`854a8da7fd107db33a933c4bdb01bf3fd7eb69bd`** | **`main` advanced to the tested commit itself.** `main` now contains the tested implementation. |
+
+**This changes nothing about the Test #1 record.** Two things stay true regardless of where `main`
+points today:
+
+- **The evidence freeze is the commit hash `854a8da…`,** not a branch name and not "whatever `main`
+  is". That was the point of recording a hash.
+- **Test #1 was not run against `main`.** The register's statement that `main` was `d0c202f…` and
+  did not contain the tested implementation is a fact *about the review point*, and remains true as
+  such. `main` later moving onto the tested commit does not retroactively mean Test #1 ran on
+  `main` — it means `main` caught up afterwards.
+
+Later branch movement does **not** rewrite the historical record above. If a future reader finds
+these snapshots stale, the correct action is to **add a dated row**, never to edit an existing one
+or to restate a snapshot as current.
 
 ## Evidence-access limitation (approved, still in force)
 

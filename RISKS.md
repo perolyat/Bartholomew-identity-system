@@ -2,7 +2,7 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation, documentation-only). Three
+> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation). Three
 > changes, all in the tech-debt watchlist unless noted: (1) the existing **hydration/water-logging**
 > entry is **amended, not duplicated**, to record the approved D4 scope decision — Water/hydration is
 > outside the current active ordinary-user product/UI scope, existing historical data and models must
@@ -17,8 +17,19 @@
 > (recorded once, adjudicated by the approved register — not a second authority); the
 > `config/policy.yaml` `affected_components` four-scope list, **flagged and deliberately not
 > changed** by a documentation-only pass; and the absence of raw Test #1 evidence artifacts, with the
-> approved evidence-access limitation restated. No production code, tests, schemas, migrations,
-> runtime configuration or CI/workflows were changed.
+> approved evidence-access limitation restated. **No production code, tests, schemas, migrations or
+> runtime configuration were changed.**
+>
+> **One CI-configuration change, separately approved — corrected 2026-08-20 after independent
+> review.** This note first said no "CI/workflows" were changed. That became false: commit `279635f`
+> adds `exclude: ^docs/evidence/` to the `end-of-file-fixer` and `trailing-whitespace` hooks in
+> `.pre-commit-config.yaml`, because those hooks were rewriting the preserved Post-Test #1 register
+> and breaking its recorded SHA-256. Taylor approved it separately as a standing rule: evidence
+> intended to be immutable is not touched by auto-formatters. Two hooks, one path prefix; every other
+> hook and every path outside `docs/evidence/` is unaffected. **Note the distinction this document
+> depends on elsewhere:** that is *CI* configuration. `config/policy.yaml` is **runtime**
+> configuration and remains unchanged — the `affected_components` entry below is still flagged rather
+> than fixed, and this exception grants no authority over runtime configuration.
 >
 > **Previously (2026-08-18, second pass):** one new tech-debt item: the **repeated SQLite
 > contention/timing failures in the full-suite CI job**, now recorded as a known engineering issue

@@ -7,10 +7,21 @@
 > the fifteen decisions Taylor approved on 2026-08-20 as part of **Post-Test #1 Decision Register
 > v2.2**, plus one entry recording the register's §14 items that remain deliberately unresolved.
 > `D1`–`D15` are cross-reference identifiers only; each decision uses this document's existing
-> `## Decision: <title>` convention and names its register source in the body. Documentation-only —
-> no production code, tests, schemas, migrations, runtime configuration, or CI/workflows changed,
-> and **no decision below authorises implementation**; work packages are proposed and approved
-> separately under this document's "User Approval Gate" entry. The approved register is preserved at
+> `## Decision: <title>` convention and names its register source in the body. **No production code,
+> tests, schemas, migrations or runtime configuration changed**, and **no decision below authorises
+> implementation**; work packages are proposed and approved separately under this document's "User
+> Approval Gate" entry.
+>
+> **One CI-configuration change, separately approved — corrected 2026-08-20 after independent
+> review.** This note first said the pass changed no "CI/workflows". That became false: commit
+> `279635f` adds `exclude: ^docs/evidence/` to the `end-of-file-fixer` and `trailing-whitespace`
+> hooks in `.pre-commit-config.yaml`. The two hooks were rewriting the preserved Post-Test #1
+> register — 17 markdown hard line breaks original to the approved document — which corrupts an
+> artifact this pass exists to preserve byte-for-byte and breaks its recorded SHA-256. Taylor
+> approved it separately, on its own merits, as a standing rule: **evidence intended to be immutable
+> is not touched by auto-formatters.** It is a two-hook, one-path-prefix exception; `black`, `ruff`,
+> `detect-private-key`, `check-yaml` and `check-added-large-files` are untouched, as is every path
+> outside `docs/evidence/`. It is **not** an implementation change and authorises nothing below. The approved register is preserved at
 > `docs/evidence/test-1/interpretation/`; the readiness bands, safety gates and product gates it
 > establishes are propagated to `ROADMAP.md`, `docs/TILT.md`, `RISKS.md`, `CHECKLISTS.md`,
 > `INTERFACES.md`, `MASTER_PLAN.md`, `COGNITIVE_RUNTIME.md` and `docs/SAFETY_PARKING_BRAKE.md`.)
