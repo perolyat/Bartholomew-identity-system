@@ -14,8 +14,15 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # exclude: docs/evidence/ holds artifacts preserved byte-for-byte as
+      # immutable historical evidence. Auto-formatters must not touch them --
+      # rewriting a preserved artifact corrupts the evidence and breaks its
+      # recorded SHA-256. Approved by Taylor 2026-08-20 alongside the
+      # Post-Test #1 documentation propagation; see docs/evidence/test-1/README.md.
       - id: end-of-file-fixer
+        exclude: ^docs/evidence/
       - id: trailing-whitespace
+        exclude: ^docs/evidence/
       - id: detect-private-key
       - id: check-yaml
       - id: check-added-large-files
