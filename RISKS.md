@@ -2,7 +2,25 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-18 (second pass) — one new tech-debt item: the **repeated SQLite
+> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation, documentation-only). Three
+> changes, all in the tech-debt watchlist unless noted: (1) the existing **hydration/water-logging**
+> entry is **amended, not duplicated**, to record the approved D4 scope decision — Water/hydration is
+> outside the current active ordinary-user product/UI scope, existing historical data and models must
+> not be silently deleted because the feature left the UI, and any later cleanup or legacy-data
+> disposition remains a separate governed decision. That entry remains this repository's single
+> canonical hydration authority. (2) **R2's "all five live scopes"** claim is corrected: there are
+> **six** Parking Brake scopes (`training` was added later), and the 2026-07-21 coverage statement is
+> re-scoped to what it actually covered. (3) The existing **"Parking Brake read/write authority is
+> split"** entry is **amended, not duplicated**, to record that the approved register carries it
+> forward as constraint **C6** with a named gate (Band B / safety gate S5), and that Test #1's
+> configuration-state matrix neither closed nor tested it. (4) Three new entries: the Post-Test #1 confirmed risks
+> (recorded once, adjudicated by the approved register — not a second authority); the
+> `config/policy.yaml` `affected_components` four-scope list, **flagged and deliberately not
+> changed** by a documentation-only pass; and the absence of raw Test #1 evidence artifacts, with the
+> approved evidence-access limitation restated. No production code, tests, schemas, migrations,
+> runtime configuration or CI/workflows were changed.
+>
+> **Previously (2026-08-18, second pass):** one new tech-debt item: the **repeated SQLite
 > contention/timing failures in the full-suite CI job**, now recorded as a known engineering issue
 > rather than unrelated flakes, because three *distinct* tests have shown the same failure mode on
 > three commits. Demonstrated facts only — **no root cause is asserted**, and a dedicated
@@ -160,8 +178,14 @@
 - **Mitigation:** Ensure every “Act” path checks brake; keep Stage 1 strictly read/ack/dismiss; add integration tests.
 - **Status:** Controlled, and the "add integration tests" mitigation is well satisfied: `pytest
   -q tests/integration/test_parking_brake_integration.py tests/test_parking_brake_scoped_blocks.py
-  tests/unit/safety/test_parking_brake.py` (2026-07-21) covers all five live scopes
-  (`skills`, `scheduler`, `sight`, `voice`, `global`) both engaged and disengaged. As of item
+  tests/unit/safety/test_parking_brake.py` (2026-07-21) covers the five scopes that existed then
+  (`skills`, `scheduler`, `sight`, `voice`, `global`) both engaged and disengaged. **Corrected
+  2026-08-20:** this line previously said "all five live scopes". There are **six** —
+  `training` was added later and is enforced at `runtime_contract.py`'s training-ingestion seam
+  (`bartholomew/kernel/training.py`'s `TRAINING_BRAKE_SCOPE`); the coverage claim above is
+  accurate as a 2026-07-21 statement but is **not** a statement about `training`.
+  `COGNITIVE_RUNTIME.md`'s "The kill-switch: `ParkingBrake`" section remains the canonical
+  authority for the scope list. As of item
   11.21 (2026-07-24) the `sight`/`voice` paths are no longer brake-*only*: their governed seams
   (`runtime_contract.run_sight_/run_voice_through_runtime_contract()`, which the `start_capture()`/
   `start_stream()` adapters now delegate to exclusively) additionally consult the Identity Policy
@@ -342,6 +366,19 @@
   authorised or required, and the existing deferral stands. **The ordering constraint is the
   deliverable:** consolidate `sight`/`voice` onto `GovernanceStore` *before* introducing authority
   tiers or making those capabilities real, whichever comes first.
+  **Amended 2026-08-20 (Post-Test #1).** This entry is the canonical record of the split, and the
+  approved register carries it forward as constraint **C6** rather than restating it. Two additions,
+  neither changing the facts above:
+  - **The ordering constraint now has a named gate.** C6 consolidation is a **Band B** prerequisite
+    in `ROADMAP.md`'s "Post-Test #1 readiness bands" — it must be done **before real `sight`/`voice`
+    capability is enabled**, and it is also a precondition of safety gate **S5** (direct per-capability
+    brake enforcement). Band D work explicitly may not make `sight`/`voice` live before it.
+  - **Test #1 did not close it, and did not test it.** The Parking Brake configuration-state matrix
+    (64 combinations, 63 PASS / 1 PARTIAL PASS) validated configuration state, not direct
+    enforcement: it **did not independently execute or prove direct `sight`, `voice`, `scheduler`, or
+    `training` enforcement for every combination**. The "nothing real is ungated today" reasoning
+    above is unchanged and still rests on the capability being inert — **not** on Test #1 evidence.
+  The 2026-08-20 documentation pass deliberately did **not** implement the consolidation.
 - **(2026-08-15) `memories` is uniquely indexed on `(kind, key)` globally, with no ownership
   dimension.** `bartholomew/kernel/memory_store.py` declares
   `CREATE UNIQUE INDEX uq_memories_kind_key ON memories(kind, key)`. Correct and desirable for a
@@ -479,6 +516,32 @@
   to actually remove that code is a separate, future, unapproved decision — recorded here so it
   is not lost, and explicitly **not** placed ahead of Phase B/Stage 1/Stage 5 in priority merely
   because it exists.
+  **Amended 2026-08-20 (Post-Test #1 D4 reconciliation).** This entry remains the **single canonical
+  authority** for hydration/water in this repository; the approved Post-Test #1 decision explicitly
+  requires amending it rather than creating a parallel one, and `DECISIONS.md`'s "Water/hydration is
+  out of current ordinary-user product scope" entry records the decision and cross-references here
+  rather than restating this content. Four things are now settled, and one deliberately is not:
+  - **Scope (settled).** Water/hydration is **outside the current active ordinary-user product and
+    UI scope.** It is not a current product feature, and no canonical document may reintroduce it as
+    one. This is a scope decision, not a bug report.
+  - **Historical data (settled).** **Existing historical data and models must not be silently
+    deleted merely because the feature is removed from the ordinary UI.** The `water_logs` table's
+    2 rows of historical data are the user's data; removing a panel is not authority to dispose of
+    them.
+  - **Cleanup (still a separate governed decision, deliberately unmade).** Any later cleanup or
+    legacy-data disposition — dropping the table, removing the models, migrating or exporting the
+    rows — remains its own decision requiring its own approval. Nothing in the Post-Test #1 approval
+    authorises it.
+  - **Sequencing (settled).** Removing the ordinary UI panel is **Band D** work under `ROADMAP.md`'s
+    "Post-Test #1 readiness bands" — safe parallel cleanup, permitted before Band C readiness exists,
+    and still subject to Governance. It is not a blocker for any band.
+  **Test #1 evidence behind the amendment** (see `docs/evidence/test-1/`): register row **MF-F003**
+  recorded the FUNC-017 Water case — an enabled UI control calling an absent route, `GET
+  /api/water/today` returning 404, and the panel rendering `undefined ml`; register row **B-F005**
+  recorded the tester's independent product finding that Water should not be in the ordinary UI. The
+  2026-08-17 correction above is unchanged by this amendment and is preserved as written: it remains
+  the accurate account of what the code actually contains. The raw FUNC-017 artifact itself is
+  **absent** from this repository — see `docs/evidence/test-1/MANIFEST.md` §4.
 - **(2026-07-28) Cross-device auth threat model does not yet exist.** The deployment architecture
   (`DECISIONS.md`; originally the hybrid local-first entry, whose auth gate the 2026-08-17
   server-centric entry carries forward unchanged) explicitly rejects "simple token auth is sufficient" as
@@ -641,6 +704,69 @@
   before being relied on commercially, rather than assumed stable. **Risk category:**
   legal/IP. **Recommended before external beta** — cheap to produce (a short table, not a legal
   opinion) and closes a real commercial-diligence question.
+
+- **(2026-08-20) Post-Test #1 confirmed risks — recorded here, adjudicated by the approved
+  register.** Real-World Test #1 confirmed a set of operational, safety and data-integrity risks
+  that belong in this register as risks, while their decision authority, severity, readiness band
+  and closure criteria live in **Post-Test #1 Decision Register v2.2**
+  (`docs/evidence/test-1/interpretation/`) and its consequences live in `DECISIONS.md` and
+  `ROADMAP.md`'s "Post-Test #1 readiness bands". They are listed once, briefly, so a reader of this
+  document is not left unaware of them; **this list is not a second authority and must not be
+  extended into one.**
+  - **Audit writes can fail silently (register OP-W004, S0, Band A).** Two `Failed to log audit:
+    database is locked` warnings occurred during Test #1; the exact affected events are unknown and
+    the root cause is not established. Directly relevant to R1/R2 above: a governed action whose
+    audit did not persist must not be able to present as a full success. Safety gate S1/S2 territory.
+  - **Queue growth was self-sustaining (register B-F001 and NUDGE-F001, both S0, Band A).**
+    Queue-health warnings themselves became queue items, and semantically equivalent unresolved
+    prompts persisted as separate items. This is the concrete form of R2's over-automation risk seen
+    in an unattended run. Contained by safety gate S1 before any further unattended testing.
+  - **Sensitive-formatted values were echoed and retained (register SEC-F002a/SEC-F002b, both S0,
+    Band B).** Synthetic password-shaped values were echoed in output and remained in ordinary
+    working context. **No formal echo oracle existed**, so this is a confirmed behaviour with an
+    undefined expectation, not a proven policy breach — the investigation is which write path was
+    taken and what working-context TTL/redaction should be. Directly extends R1.
+  - **UI state can lag backend state (register UI-SYNC001a, S2, Band C; UI-SYNC001b, S0, Band B).**
+    A displayed nudge count lagged the backend by 3. Test #1 proves stale UI state is possible in
+    general; it does **not** prove that critical brake, sensor, consent or recording state was ever
+    stale. The safety requirement derived from it — explicit numeric freshness targets and fail-safe
+    stale-state behaviour for critical state — is the Band B item, and the exact numeric values
+    remain deliberately unresolved.
+  - **Chat failure paths could render untruthfully (register TECH-F001, S1, Band C).** A backend 503
+    carried `detail`; the UI read `reply` and displayed `undefined`. Truthful failure is a safety
+    property, not a cosmetic one, and safety gate S7 extends it to voice.
+  - **Test #1 ran on ephemeral dev keys (register OP-W001/002, Band B).** STANDARD and STRONG both
+    used per-process ephemeral development keys, so strongly-encrypted material from that run does
+    not survive a restart. Deliberate key provisioning, and the disposition of Test #1's
+    ephemeral-key data, are safety gate S3 prerequisites before any personal-data or ambient test.
+  - **Retrieval ran on a fallback embedder (register OP-W003, S1, Band C).** `sentence_transformers`
+    was unavailable and a deterministic fallback embedder was used. This compounds R3 above: the
+    risk is not the fallback itself but that retrieval mode and quality were not known and truthfully
+    reported at the time.
+
+- **(2026-08-20) `config/policy.yaml`'s `parking_brake.affected_components` lists four scopes, not
+  six — flagged, not changed.** The file reads `affected_components: [skills, sight, voice,
+  scheduler]`. The authoritative allowlist is
+  `bartholomew_api_bridge_v0_1/services/api/routes/governance.py`'s `VALID_SCOPES`
+  (`global`, `skills`, `sight`, `voice`, `scheduler`, `training`), and `training` enforcement runs
+  through `runtime_contract.py`'s training seam regardless of this list. **This was found during the
+  2026-08-20 documentation-only pass, which had no authority to change runtime configuration, and it
+  is therefore recorded rather than fixed.** Two things need deciding by someone who can change code
+  and configuration: whether `affected_components` is actually load-bearing anywhere, and if it is,
+  whether the omission of `training` (and of `global`) is a live defect rather than a stale list.
+  Until then, **do not** cite this file as evidence of the scope set — `COGNITIVE_RUNTIME.md`'s
+  "The kill-switch: `ParkingBrake`" section is the canonical authority.
+
+- **(2026-08-20) No raw Test #1 evidence artifacts exist in this repository.** A stable evidence
+  location now exists (`docs/evidence/test-1/`) with SHA-256 checksums for what is present, but every
+  raw artifact the register cites — logs, captures, finding records, the 64-combination Parking Brake
+  matrix sheet, the 17-function baseline sheet, the original 38-item handoff — is **absent**, and is
+  inventoried as absent in `docs/evidence/test-1/MANIFEST.md` §4. **Consequence:** no register case
+  ID or timestamp is currently independently traceable within this repository; they were verified for
+  internal consistency only. This is the approved evidence-access limitation, and it remains in
+  force. Nothing was invented and nothing was reconstructed from the register to close the gap —
+  doing so would produce a circular record that looks corroborated and is not. **Risk category:**
+  evidence/verification.
 
 ## Red-team focus areas
 

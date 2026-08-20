@@ -5,6 +5,11 @@
 > invocation throughout), removed a code sample importing the deleted `check_tool_allowed`
 > function, and reframed the legacy water-logging example endpoints as a minor example rather
 > than a headline feature. See `RISKS.md` finding F9 and `MASTER_PLAN.md` for current status.
+>
+> **Corrected 2026-08-20:** the water-logging endpoints listed under "Endpoints" are **removed from
+> that list** — they do not exist (no `api/water` route is registered; Real-World Test #1 observed a
+> 404), and hydration/water is outside the current active ordinary-user product and UI scope under
+> approved decision **D4**. `RISKS.md`'s hydration entry remains the single canonical authority.
 
 ## Installation
 
@@ -82,9 +87,17 @@ The API provides:
 - **`/api/liveness/self`** - Quick self-test snapshot for Brain Console
 - **`/metrics`** - Prometheus metrics endpoint
 - **`/api/chat`** - Chat with Bartholomew
-- **`/api/water/log`**, **`/api/water/today`** - a legacy Stage 0 example feature (hydration
-  logging), still live but not part of current active product direction — see `RISKS.md`'s
-  tech-debt watchlist for the pending, unapproved code-cleanup decision
+- ~~**`/api/water/log`**, **`/api/water/today`**~~ — **removed from this list 2026-08-20. These
+  endpoints do not exist.** This line described them as "still live"; a repository search for
+  `api/water` finds no route registration (`RISKS.md`, corrected 2026-08-17), and Real-World Test
+  #1's FUNC-017 case observed `GET /api/water/today` returning **404** while the UI panel rendered
+  `undefined ml` (register row MF-F003). Separately, **hydration/water is outside the current
+  active ordinary-user product and UI scope** per the approved decision D4 — see `DECISIONS.md`'s
+  "Water/hydration is out of current ordinary-user product scope" and, as the single canonical
+  hydration authority, `RISKS.md`'s hydration entry. What remains in code is the `water_logs` table
+  (2 rows of historical data, **not** to be deleted merely because the feature left the UI) and the
+  minimal UI panel; removing the panel is Band D cleanup, and disposing of the data is a separate
+  governed decision that has not been made.
 
 ### Liveness & Metrics Endpoints
 
@@ -203,8 +216,9 @@ ALLOWED_ORIGINS=http://localhost:3000,http://myapp.com TZ=Australia/Brisbane uvi
 ### Timezone Handling
 
 All timestamps are handled in **Australia/Brisbane** timezone:
-- Day-boundary ("today") calculations use Brisbane time (the legacy water-logging example
-  endpoints are one instance of this, not the reason for it)
+- Day-boundary ("today") calculations use Brisbane time (the legacy water-logging example was one
+  instance of this, not the reason for it — see the endpoint note above: those endpoints do not
+  exist, and hydration is out of current ordinary-user scope per D4)
 - ISO8601 timestamps are timezone-aware
 - Server exposes current timezone via `/api/health`
 

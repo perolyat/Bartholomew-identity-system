@@ -2,7 +2,20 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-15, second pass (one new decision added — "Parking Brake authority
+> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation — sixteen new entries added
+> under the new "Post-Test #1 decisions (approved 2026-08-20)" heading at the end of this document:
+> the fifteen decisions Taylor approved on 2026-08-20 as part of **Post-Test #1 Decision Register
+> v2.2**, plus one entry recording the register's §14 items that remain deliberately unresolved.
+> `D1`–`D15` are cross-reference identifiers only; each decision uses this document's existing
+> `## Decision: <title>` convention and names its register source in the body. Documentation-only —
+> no production code, tests, schemas, migrations, runtime configuration, or CI/workflows changed,
+> and **no decision below authorises implementation**; work packages are proposed and approved
+> separately under this document's "User Approval Gate" entry. The approved register is preserved at
+> `docs/evidence/test-1/interpretation/`; the readiness bands, safety gates and product gates it
+> establishes are propagated to `ROADMAP.md`, `docs/TILT.md`, `RISKS.md`, `CHECKLISTS.md`,
+> `INTERFACES.md`, `MASTER_PLAN.md`, `COGNITIVE_RUNTIME.md` and `docs/SAFETY_PARKING_BRAKE.md`.)
+>
+> **Previously (2026-08-15, second pass):** (one new decision added — "Parking Brake authority
 > tiers — Personal/User and Platform/Admin." A targeted follow-up to the same-day platform/personal-
 > identity decision: an independently enforceable per-user brake that never halts other users, plus
 > a separate higher-scope platform-wide brake a user cannot override and that does not require
@@ -1818,3 +1831,374 @@
     separate change against this entry rather than a new decision.
   - No new brake scope, no change to the authority tiers, no change to `VALID_SCOPES`.
 - **Date:** 2026-08-18
+
+---
+
+# Post-Test #1 decisions (approved 2026-08-20)
+
+> The fifteen entries below record the decisions Taylor approved on 2026-08-20 as part of
+> **Post-Test #1 Decision Register v2.2**
+> (`docs/evidence/test-1/interpretation/BARTHOLOMEW_POST_TEST_1_DECISION_REGISTER_v2_2_FINAL_APPROVAL_CANDIDATE.md`).
+>
+> **`D1`–`D15` are cross-reference identifiers only, not a heading format.** Each decision is
+> recorded here under this document's existing `## Decision: <title>` convention, with the register
+> cross-reference stated in the body. The register remains the authoritative *post-test decision
+> record*; this document is the canonical decision log, and the two are cross-referenced rather than
+> duplicated. Where the register's own wording is the substance of a decision, it is carried through
+> here rather than paraphrased into something narrower, broader, or softer.
+>
+> **Authority ordering (from the register §1, unchanged):** `CONSTITUTION.md` → canonical SSOT docs →
+> approved implemented subsystem designs → direct Test #1 evidence → approved post-test
+> interpretation/decisions → independent-review recommendations. No entry below silently narrows a
+> constitutional or canonical invariant.
+>
+> **These decisions do not authorise implementation.** They establish authority for what must be
+> true before particular classes of work proceed. Implementation work packages are proposed and
+> approved separately, slice by slice, under this document's existing "User Approval Gate" decision.
+> The readiness bands that sequence them are in `ROADMAP.md`'s "Post-Test #1 readiness bands"
+> section; the safety gates (S1–S11) and product gates (P1–P9) they reference are summarised in the
+> same place and defined in full in the register's §9 and §10.
+
+## Decision: Burden Reduction Principle
+- **Decision:** Bartholomew must reduce unnecessary cognitive, administrative, interaction,
+  supervision, cleanup, and recovery burden. Deliberate sovereignty-preserving burden — meaningful
+  consent, consequential approval, necessary safety/privacy decisions — is allowed, but must remain
+  proportionate and comprehensible. **ABR (the burden-reduction ratio) remains conceptual until
+  burden measurement is defined**; no numeric threshold is set by this entry, and none may be
+  assumed. Source: Post-Test #1 Decision Register v2.2, D1.
+- **Alternatives:** Treat burden as a UX quality attribute rather than a governing principle
+  (rejected: Test #1's Phase B finding was that the system's *net* effect on the tester was
+  negative, which a quality attribute would not have made decidable); set a numeric ABR target now
+  (rejected: a threshold without a defined measurement is a number that cannot be honestly
+  evaluated — see the deliberately-unresolved list at the end of this section).
+- **Why:** Test #1 produced two independent burden findings (B-F002, "practically useless" /
+  qualitative burden below break-even; B-F001, a queue whose health warnings grew the queue). Both
+  are burden failures rather than feature gaps, and neither is visible to a roadmap organised only
+  around capability.
+- **Consequences:** Burden instrumentation is a **Band C** prerequisite for full Real-World Test #2.
+  Deliberate burden must be justifiable as sovereignty-preserving, not merely traditional. A future
+  slice that adds capability while increasing net user management is a regression under this entry
+  even if every test passes.
+- **Date:** 2026-08-20
+
+## Decision: Internal triage does not justify interruption, and obligations are never silently lost
+- **Decision:** Internal activity does not automatically justify interrupting the user. Triage
+  evaluates: user need; whether consent, judgement, or action is actually required; urgency/risk;
+  confidence; duplicate/stale status; internal resolvability; interruption cost; quiet hours and
+  context. **Genuine obligations must never be silently dropped.** Deferred, consolidated, or
+  suppressed items remain durably represented and auditable where appropriate until resolved.
+  `awaiting_response` remains the canonical durable external-reply obligation mechanism — its
+  existing approved role in `docs/S1_4_AWAITING_RESPONSE_DESIGN.md` is preserved, not replaced.
+  Source: Post-Test #1 Decision Register v2.2, D2.
+- **Alternatives:** Suppress low-value items outright (rejected: silent suppression of a genuine
+  obligation is exactly the failure mode this entry exists to forbid — the burden reduction would be
+  bought with lost commitments); keep surfacing everything and rely on the user to filter (rejected:
+  that is the Test #1 behaviour, and B-F001/NUDGE-F001 are what it produced).
+- **Why:** Test #1 showed both halves of the problem at once: a curiosity prompt fired immediately
+  on startup with no user need behind it (START-N001), equivalent curiosity prompts persisted as
+  separate unresolved items (NUDGE-F001), and queue-health warnings themselves became queue items
+  (B-F001). The corrective for that must not become an excuse to drop things.
+- **Consequences:** Triage behaviour is gated by P6, whose evaluation set and pass target are frozen
+  before implementation. Suppression must be auditable. Cap-shedding may affect only policy-eligible
+  system-generated items and never a genuine obligation; `awaiting_response` is exempt from silent
+  expiry and cap shedding (see S1). Triage containment is a **Band A** prerequisite for further
+  unattended testing.
+- **Date:** 2026-08-20
+
+## Decision: Ordinary-user and diagnostic information architecture are separated
+- **Decision:** Separate the ordinary-user information architecture from the developer/admin
+  diagnostic one. **Safety-critical controls remain directly available to the ordinary user** — this
+  separation hides diagnostics, never safety. **The exact physical surface count and form remain
+  open** and are not decided by this entry. Source: Post-Test #1 Decision Register v2.2, D3.
+- **Alternatives:** One surface for everyone with progressive disclosure (not rejected — it remains
+  a permissible implementation of this entry; what is decided is the *separation of concerns*, not
+  the number of surfaces); simplify by removing diagnostic capability (rejected explicitly under P4:
+  simplicity may not be achieved by deleting useful capability).
+- **Why:** Test #1's ordinary-user findings cluster on diagnostic material leaking into the ordinary
+  surface — raw governance revision metadata shown without explanation (HU-F008), Valence/Arousal/
+  Top Drives/Attention presented in internal vocabulary (B-F003), Parking Brake scope semantics
+  unpredictable before operating them (HU-F006, HU-F007) — alongside a first-use finding that the
+  tester did not know where to begin (HU-F001).
+- **Consequences:** Ordinary/admin separation is a **Band C** prerequisite for full Test #2, gated
+  by P4 and, for the safety-control half, P1. Low-risk surface *concepts* may be prototyped under
+  Band D. The number and form of user/admin/expressive surfaces stays on the unresolved list below.
+- **Date:** 2026-08-20
+
+## Decision: Water/hydration is out of current ordinary-user product scope
+- **Decision:** Remove Water/hydration from the ordinary active product and UI. Implementation must
+  **amend and reconcile the existing canonical hydration/water entry in `RISKS.md`, not create a
+  competing authority**. Legacy data and model disposition is a **separate** decision and **must not
+  silently delete historical data**. Source: Post-Test #1 Decision Register v2.2, D4.
+- **Alternatives:** Fix the Water panel so it works (rejected: it is not in the product's current
+  scope, so making it work would be building the wrong thing correctly); delete the `water_logs`
+  table and models along with the UI (rejected: that conflates removing a feature from the ordinary
+  surface with disposing of a user's historical data, which is a governed decision in its own right).
+- **Why:** Test #1 FUNC-017 found enabled Water controls calling routes that do not exist, rendering
+  `undefined ml` (MF-F003), and the tester independently said Water should not be in the ordinary UI
+  (B-F005). `RISKS.md` has carried a hydration/water cleanup entry since 2026-07-28, corrected
+  2026-08-17; that entry is the existing authority and is amended rather than duplicated.
+- **Consequences:** `RISKS.md`'s hydration entry is amended to record the scope decision and the
+  data-disposition boundary. Removal of the ordinary UI panel is **Band D** work. No canonical
+  document may reintroduce hydration as an active current product feature. Whether the residual
+  `water_logs` table and models are ever removed remains a separate governed decision, unmade.
+- **Date:** 2026-08-20
+
+## Decision: Memory agency — inspect, correct, forget, export, with truthful derived-data accounting
+- **Decision:** Provide human-readable controls to inspect, correct, forget, export, and set
+  retention on stored personal understanding, with provenance where appropriate. **Correction does
+  not rewrite audit history.** **"Forget" must account truthfully for embeddings, FTS entries,
+  summaries, reflections, caches, and sensor-derived data**; residual limitations that cannot be
+  fully honoured must be **disclosed**, not quietly tolerated. Source: Post-Test #1 Decision Register
+  v2.2, D5.
+- **Alternatives:** Offer deletion that removes the primary record only (rejected: it would report a
+  forget that did not happen, which is the specific dishonesty this entry forbids); defer memory
+  agency until after Test #2 (rejected: see P5 — this is required *for* full Test #2, with no "if
+  durable memory participates" loophole).
+- **Why:** Test #1's B-F004: the tester expected to be able to inspect and edit what Bartholomew had
+  stored about them, and could not. `CONSTITUTION.md`'s data-portability invariant already requires
+  export; this entry makes the rest of the agency set explicit and ties truthful deletion to the
+  derived artifacts that make naive deletion a lie.
+- **Consequences:** Memory agency is gated by P5 and is a **Band C** requirement for full Test #2.
+  Memory UI may be prototyped against synthetic memories under Band D. Truthful derived-artifact
+  deletion also appears as an S4 requirement for sensitive content and a P9 requirement for
+  post-test data agency; those are the same obligation seen from three scopes, not three policies.
+- **Date:** 2026-08-20
+
+## Decision: Sleep/consolidation is approved as investigation and controlled prototype only
+- **Decision:** Approve **architecture investigation and controlled prototype only** — **not**
+  production sleep behaviour. Any investigation must define job eligibility, quiet-hours preference,
+  batching, resource use, interruption/resumption, crash safety, observability, availability,
+  Governance/Parking-Brake semantics, and the relationship to triage (D2). **Sleep cannot become a
+  suppression, capture, action, or notification bypass.** Source: Post-Test #1 Decision Register
+  v2.2, D6 — recorded there as **APPROVE AS INVESTIGATION**.
+- **Alternatives:** Approve sleep/consolidation as a production behaviour (rejected: nothing in Test
+  #1 evidences that it is safe to run unattended work on that basis, and P7 records that sleep is
+  not required at all); defer the investigation entirely (rejected: the architecture question is
+  real and Band D can carry it safely on test data).
+- **Why:** Phase B Vision Finding 009 raised consolidation as a direction. It is genuinely
+  interesting and genuinely capable of becoming an unattended-action path that bypasses triage and
+  governance if approved as behaviour rather than as investigation.
+- **Consequences:** Sleep architecture work on test data is **Band D**. **This entry does not
+  authorise any production sleep behaviour, any unattended consolidation job, or any change to
+  notification/suppression behaviour.** P7 is explicit that sleep is not required; if it is ever
+  enabled it must be interruptible, available, observable, crash-safe, governed, and must not create
+  a hidden backlog or dispose of obligations — otherwise it stays disabled. Sleep job algorithms
+  remain on the unresolved list below.
+- **Date:** 2026-08-20
+
+## Decision: Real-world testing standard — TILT reconciled, not weakened and not abandoned
+- **Decision:** Two clauses, both binding. **(a) Full Real-World Test #2 begins only when the
+  applicable safety and product gates pass.** **(b) Intermediate real-use checkpoints — attended,
+  localhost, text-only or similarly narrow slices — remain allowed and encouraged under
+  `docs/TILT.md` once a slice is "done enough to test", provided that specific slice has no
+  unresolved safety, governance, privacy, data-integrity, architectural-validity, or
+  experiment-validity blocker.** TILT is therefore **not** "finish everything before testing" and
+  **not** "test regardless of unresolved safety blockers". Source: Post-Test #1 Decision Register
+  v2.2, D7 (D7a, D7b).
+- **Recorded as post-test judgement, not as historical fact:** Taylor's post-Test #1 direction is
+  that continuing to operate the same low-capability experience is unlikely to yield proportionate
+  value, and that the next meaningful real-use checkpoint should unlock a **new useful slice**
+  rather than polish the existing one indefinitely.
+- **Alternatives:** Suspend real-world testing until Band C (rejected: it would repeat the
+  pre-2026-08-12 sequencing failure `docs/TILT.md` exists to correct); keep testing under TILT with
+  no additional gating (rejected: Test #1 surfaced S0-severity findings — OP-W004, NUDGE-F001,
+  B-F001, SEC-F002a/b, UI-SYNC001b — that make unattended and ambient testing a different risk class
+  from an attended localhost checkpoint).
+- **Why:** TILT's six exceptions were already the right rule; what Test #1 showed is that they need
+  to be applied *per test class*, because "the slice is safe enough to try attended on localhost"
+  and "the system is safe enough to run unattended with real sensors" are different questions with
+  different answers.
+- **Consequences:** `docs/TILT.md` gains the D7 reconciliation and cross-references the readiness
+  bands; `ROADMAP.md` gains the bands themselves. Band 0 is the operational form of clause (b).
+  Nothing in this entry lowers `docs/TILT.md`'s six exceptions or lets a checkpoint proceed past one.
+- **Date:** 2026-08-20
+
+## Decision: Ambient-sensing readiness — no real passive capture until the applicable gates pass
+- **Decision:** No real ambient or passive camera, microphone, or wearable capture until the
+  applicable gates pass. This decision is **subordinate to `CONSTITUTION.md`**, not an alternative to
+  it. The gate set includes: key lifecycle; audit integrity; privacy/retention; consent and
+  revocation; bystanders; jurisdiction; **direct** Parking Brake enforcement; independent emergency
+  shutdown; truthful state; teardown; sensitive-context handling; queue containment; and
+  authentication **if** the capability is remote. **Controlled synthetic bench development is
+  allowed** only where it captures no non-consenting person and performs no unattended real capture,
+  and where Governance is developed **alongside** the adapter rather than after it. Source:
+  Post-Test #1 Decision Register v2.2, D8.
+- **Alternatives:** Build the sensor adapters first and add Governance once they work (rejected
+  explicitly: it is how a capability arrives before the ability to stop it); block synthetic
+  development too (rejected: synthetic benches are how the adapters get built safely, and Band D
+  exists for exactly this).
+- **Why:** Ambient capture is the point at which Bartholomew starts taking in more of the world than
+  the user is present to supervise, and Test #1's configuration-state matrix did **not**
+  independently prove direct enforcement of every `sight`, `voice`, `scheduler`, or `training` case.
+- **Consequences:** Real ambient sensing is a **Band B** gate: everything applicable from Band A,
+  plus D8, D11, D12, D13, safety gates S3–S7 and S9–S11, the `sight`/`voice` brake-authority
+  consolidation, and consent/revocation/retention with no silent restart-resume. Synthetic and
+  pre-recorded work is Band D. Wearable-camera inclusion remains unresolved.
+- **Date:** 2026-08-20
+
+## Decision: Formal evidence standard for findings
+- **Decision:** Every formal finding carries: a stable ID; class; severity; band; status; phase/case/
+  step; timestamp or event; the exact artifact; the expected result **or** an explicit "no oracle
+  existed"; the actual result; the direct evidence; any inference recorded **separately** from the
+  evidence; impact; a closure criterion; and verification evidence. Evidence is stored with stable
+  paths and checksums where practical. Reclassifications and status/severity changes are recorded
+  rather than applied silently. Source: Post-Test #1 Decision Register v2.2, D9.
+- **Alternatives:** Keep findings as prose observations (rejected: the v1→v2.2 correction cycle
+  depended on being able to check arithmetic, provenance and classification, which prose does not
+  support); require the full field set retroactively for historical items (rejected: it would mean
+  editing historical evidence, which is forbidden — the register instead marks post-test
+  formalisations as `[POST-TEST]` and keeps the historical accounting visible).
+- **Why:** Test #1's own findings could only be corrected across register versions because they had
+  stable IDs and separable evidence-versus-inference. The one place this bit hardest — the absence of
+  preserved raw artifacts — is precisely the checksum clause.
+- **Consequences:** `docs/evidence/test-1/` is created as the stable evidence location, with SHA-256
+  checksums for what is present and an explicit absence inventory for what is not. Compact
+  presentation of E5/E6/E7 rows does not waive this standard: for E1–E3 findings the full field set
+  remains binding, and any compactly omitted field must be restored from the underlying source record
+  before closure evidence is accepted.
+- **Date:** 2026-08-20
+
+## Decision: Authentication / network exposure boundary, and consequential local device agency
+- **Decision:** The unauthenticated local proof-of-concept must not be silently extended to remote or
+  cross-device use. Before any real PC/phone remote, LAN, or non-localhost use: a reviewed threat
+  boundary, authentication and authorisation, device/session ownership, and brake/emergency
+  semantics. Local non-actuating prototypes may proceed. **Additionally, and independently of network
+  locality: any local adapter that can control keyboard, mouse, screen, or browser, launch actions,
+  or otherwise exercise consequential device agency also requires independent emergency shutdown
+  (D11) and its verification gate (S9).** Source: Post-Test #1 Decision Register v2.2, D10.
+- **Alternatives:** Treat "it's only localhost" as sufficient for device-control prototypes
+  (rejected: locality bounds *who can reach it*, not *what it can do to the machine* — a local
+  adapter with keyboard control needs a stop that works when the UI does not); accept simple token
+  auth for remote use (rejected already by the existing deployment-architecture entry, and carried
+  forward unchanged here).
+- **Why:** `docs/FIRST_REAL_WORLD_TEST.md` §0 records that at the tested implementation an
+  unauthenticated `curl` could engage **and disengage** the Parking Brake. Test #1 was run bound to
+  `127.0.0.1` for that reason. That containment is a test condition, not an architecture.
+- **Consequences:** Authentication (S8) becomes applicable at **Band B only when remote phone,
+  wearable, or non-localhost capability is involved** — it is **not** mandatory for a purely local
+  Band B scenario, and must not be recorded as if it were. The D11/S9 requirement for consequential
+  local device agency is **not** conditional on network exposure. Remote phone capability sits behind
+  D10/S8 in the implementation tracks. Production authentication architecture remains unresolved.
+- **Date:** 2026-08-20
+
+## Decision: Independent emergency shutdown before unattended sensing or device agency
+- **Decision:** Before unattended real sensing or consequential device agency, provide an
+  **independently enforceable emergency stop that works outside Bartholomew's ordinary UI and
+  without its in-process cooperation.** Source: Post-Test #1 Decision Register v2.2, D11; carries
+  forward the register's C1 constraint and `CONSTITUTION.md`'s locally-enforceable-halt requirement.
+- **Alternatives:** Rely on the existing Parking Brake UI and API (rejected: both are in-process and
+  reachable only while the ordinary surface works — an emergency stop that requires the system to
+  cooperate is not an emergency stop); rely on killing the process (not sufficient on its own: a
+  restart must not silently resume capture, which is why S9 requires the restart-after-emergency to
+  be deliberate).
+- **Why:** The Parking Brake is a *governance* control that the running system enforces. Unattended
+  sensing and device agency are exactly the conditions under which the running system may be the
+  thing that needs stopping.
+- **Consequences:** Gated by S9: outside the ordinary UI; works with the ordinary UI unavailable;
+  works despite relevant normal-surface control or interference where applicable; terminates capture,
+  output, and device agency; independent of in-process goodwill; restart after an emergency stop is
+  deliberate. Required at **Band B** for ambient sensing, and required for consequential local device
+  agency under D10 regardless of network exposure. **This entry does not authorise building it now.**
+- **Date:** 2026-08-20
+
+## Decision: Test #2 personal-data handling must be defined before any real personal-data capture
+- **Decision:** Before real personal-data capture, define: the captured data classes; storage;
+  raw-data retention; retention duration; derived artifacts; consent; deletion and revocation;
+  encryption class; post-test retention; and the distinction between test-created data and durable
+  memory. **S11 verifies this policy rather than restating a separate one** — there is one policy,
+  with a verification gate, not two policies that can drift apart. Source: Post-Test #1 Decision
+  Register v2.2, D12.
+- **Alternatives:** Define data handling during the test (rejected: retention and consent decisions
+  made while data is already being captured are not decisions, they are ratifications); write a
+  second policy inside the safety gate (rejected explicitly — hence S11's verification-only framing).
+- **Why:** Test #1 ran with ephemeral dev keys for both STANDARD and STRONG classes (OP-W001/002),
+  and sensitive-formatted values reached ordinary working context and output (SEC-F002a/b) with no
+  echo oracle defined. Both are the shape of "we will work out the data rules later".
+- **Consequences:** A **Band B** prerequisite for ambient sensing and part of the **Band C** Test #2
+  package. S11 passes only when every D12 field is instantiated for the selected Test #2 scenario and
+  capabilities, storage locations are enumerated, test-created data is distinguishable from durable
+  memory, a post-test inventory can be generated, the user can inspect retained data, deletion and
+  retention execution is recordable, and retained *evidence* is distinguished from retained *personal
+  content*. Test #1's own ephemeral-key data disposition is recorded under S3.
+- **Date:** 2026-08-20
+
+## Decision: Bystander and third-party privacy before shared-home or public ambient capture
+- **Decision:** Before shared-home or public ambient capture, define: bystander/household policy;
+  jurisdiction, notice, and consent implications; private and sensitive zones and their suppression;
+  truthful capture indicators; and stop/revocation. **Primary-user consent does not automatically
+  authorise capturing everyone nearby.** Source: Post-Test #1 Decision Register v2.2, D13; carries
+  forward the register's C2 constraint and `CONSTITUTION.md`'s capture-and-recording-safety
+  invariant.
+- **Alternatives:** Treat the primary user's consent as covering the household (rejected in the
+  decision itself: the people captured are not the people consenting); defer bystander policy to a
+  later compliance workstream (rejected: the capture happens at Band B, so the policy is needed at
+  Band B).
+- **Why:** `RISKS.md` has recorded since 2026-07-28 that no jurisdictional analysis exists for any
+  future microphone or camera capability. Ambient capture in a shared home is the first point at
+  which that gap becomes other people's problem rather than the project's.
+- **Consequences:** A **Band B** prerequisite, verified through S6 (per-sensor opt-in; truthful
+  state; OS/hardware-level indicator where available, with availability assessed and recorded per
+  sensor before the test; immediate revocation; brake terminates capture and prevents new capture;
+  ungated teardown; fail-safe retention defaults; captured-data deletion and revocation treatment;
+  bystander/household policy; jurisdiction and private-versus-public assessment; and no silent resume
+  on reconnect or restart). A global legal-compliance system is explicitly **not** in scope and
+  remains unresolved.
+- **Date:** 2026-08-20
+
+## Decision: Tester and usability validation — Taylor is primary, independence must be labelled
+- **Decision:** Taylor remains the primary tester and product authority. **Strong independent
+  first-use discoverability claims require a naive or proxy tester.** **Band C may proceed with
+  Taylor-only P1 evidence if a naive tester is genuinely unavailable — but that result must be
+  labelled designer-tested / not independently validated, and may not later be cited as independent
+  discoverability proof.** Source: Post-Test #1 Decision Register v2.2, D14.
+- **Alternatives:** Require a naive tester as a hard Band C blocker (rejected: it would stall Test #2
+  on tester availability rather than on readiness); accept designer testing as equivalent to
+  independent validation (rejected: the designer cannot un-know where the controls are, which is the
+  entire content of a first-use finding).
+- **Why:** HU-F001 — "I don't even know where to begin" — is a genuine first-use finding precisely
+  because it was spontaneous. That property does not survive a second exposure to the same surface.
+- **Consequences:** P1's five clauses must all pass, and the record must state which tester class
+  produced the evidence. A designer-tested P1 result is a valid Band C input and an invalid citation
+  for independent discoverability. Time-to-first-useful-action is recorded either way.
+- **Date:** 2026-08-20
+
+## Decision: Abort criteria, evidence freeze, and closure are predefined for Test #2
+- **Decision:** Predefine, before Test #2 runs: abort criteria; the exact evidence freeze covering
+  repository, configuration, model, data, capability, consent, and brake state; and closure —
+  orderly shutdown, a final data inventory, the unresolved findings, post-test data disposition, and
+  an explicit phase boundary. Source: Post-Test #1 Decision Register v2.2, D15.
+- **Alternatives:** Decide when to abort while the test is running (rejected: an abort criterion
+  invented mid-test is indistinguishable from a rationalisation); record the freeze as a branch name
+  (rejected on direct Test #1 evidence — PR #58's head branch no longer resolves, and only the commit
+  hash survived).
+- **Why:** Test #1's own freeze had to be reconstructed after the fact, and the reconstruction is why
+  the register carries a corrected provenance section at all. Test #1 also ended with a logging gap
+  at shutdown (OP-W005) that had to be substituted with process/port/state evidence.
+- **Consequences:** A **Band C** prerequisite and Track 7 content. The evidence freeze is recorded as
+  a **commit hash**, never as a branch name. Closure is gated jointly with P9's post-test data
+  agency. `docs/evidence/test-1/` is the pattern the Test #2 freeze should follow.
+- **Date:** 2026-08-20
+
+## Decision: Post-Test #1 items that remain deliberately unresolved
+- **Decision:** The following are **not** decided by the Post-Test #1 approval, and must not be
+  frozen by documentation, implementation planning, or an agent acting on the register: the number
+  and form of user/admin/expressive surfaces; expressive avatar form; the customer-facing label and
+  location for Awaiting Response; customer terminology for Affect/Attention/Drives; exact nudge caps
+  and rates; exact critical-state freshness values; final P3 and P6 numeric targets before the
+  scenario freeze; sleep job algorithms; wearable-camera inclusion; production authentication
+  architecture; a global legal-compliance system; the numeric ABR threshold; and the final
+  multi-user/server implementation. Source: Post-Test #1 Decision Register v2.2, §14.
+- **Alternatives:** Resolve them now to unblock planning (rejected: several of them — the numeric
+  targets in particular — are only meaningful once the scenarios they measure are frozen, and
+  deciding them early would set a bar to be tuned toward rather than met); leave them unlisted
+  (rejected: an unlisted open question is one an implementer resolves by accident).
+- **Why:** Recording them as a decision is what makes premature closure visible. If a future
+  document or diff appears to settle one of these, that is a change against this entry and needs
+  Taylor, not an inference.
+- **Consequences:** Each item stays open until decided explicitly. Where existing documentation
+  appears to freeze one prematurely, it is flagged for Taylor rather than reinterpreted. As at
+  2026-08-20 this documentation pass found **no** canonical document that prematurely freezes any of
+  the thirteen; the one adjacent case is noted in `RISKS.md`'s Parking Brake configuration entry
+  (`config/policy.yaml`'s `affected_components` list, a runtime configuration file this
+  documentation-only pass did not change).
+- **Date:** 2026-08-20

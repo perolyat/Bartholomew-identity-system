@@ -2,7 +2,19 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-17 — two changes, neither altering any stage's scope, sequencing or
+> **Last updated:** 2026-08-20 — **Post-Test #1 readiness bands added** (documentation-only). One
+> new section, "Post-Test #1 readiness bands (approved 2026-08-20)", sits between the Usable POC
+> section and the stage gates. It records the Test #1 evidence-freeze provenance (the commit hash,
+> not a branch name), the Band 0/A/B/C/D readiness structure, summaries of safety gates S1–S11 and
+> product gates P1–P9, and implementation tracks 1–7, all sourced from **Post-Test #1 Decision
+> Register v2.2** (approved by Taylor 2026-08-20; preserved at `docs/evidence/test-1/`). **No
+> stage's scope, sequencing, exit criteria or status changed**, and nothing in the new section
+> authorises implementation — the bands are prerequisite relationships, not a schedule and not an
+> approval. The "Current execution priority" note below is amended to point at the new section
+> alongside `docs/TILT.md`. Decisions D1–D15 live in `DECISIONS.md`; no competing authority is
+> created here.
+>
+> **Previously (2026-08-17):** two changes, neither altering any stage's scope, sequencing or
 > status. **(1)** One line added to "What we will not do yet": native device agents and a
 > device-capability protocol are **FUTURE PLATFORM WORK** under `DECISIONS.md`'s new server-centric
 > deployment entry — TARGET architecture, nothing of it exists, and the Usable POC / TILT priority
@@ -406,11 +418,18 @@ approved to be planned — not in advance for later stages.
 - verification commands
 - rollback notes
 
-**Current execution priority (added 2026-08-12):** the stage gates below remain the architectural
-record of what exists and why, but near-term sequencing is currently governed by
+**Current execution priority (added 2026-08-12; amended 2026-08-20):** the stage gates below remain
+the architectural record of what exists and why, but near-term sequencing is currently governed by
 **[docs/TILT.md](docs/TILT.md)** — the canonical Usable POC / time-to-real-use priority. See the
 "Usable POC — progressive vertical slices" section immediately below for how that priority applies
 to this roadmap specifically.
+
+**Amended 2026-08-20:** TILT priority now operates **within** the approved Post-Test #1 readiness
+bands — see "Post-Test #1 readiness bands" below. The two are complementary, not competing:
+`docs/TILT.md` decides *what is worth doing next and when it is done enough to test*; the bands
+decide *what class of real-world exposure that test may take*. Real-world testing remains preferred
+once a slice is sufficiently useful to test, **unless** an unresolved safety, governance, privacy,
+data-integrity, architectural-validity or experiment-validity issue blocks that specific test.
 
 ## Usable POC — progressive vertical slices (established 2026-08-12)
 
@@ -491,6 +510,212 @@ ahead of it. See `docs/TILT.md`'s "Direction for later slices."
 **Effect on Stage 5 S5.4–S5.7:** deferred, not abandoned. See each sub-stage's row in the Stage 5
 table below and `docs/TILT.md`'s "What is deferred" section for the complete list and reasons.
 
+## Post-Test #1 readiness bands (approved 2026-08-20)
+
+> **Authority.** This section is the roadmap-level sequencing authority for the readiness bands
+> established by **Post-Test #1 Decision Register v2.2**, approved by Taylor on 2026-08-20 and
+> preserved at
+> `docs/evidence/test-1/interpretation/BARTHOLOMEW_POST_TEST_1_DECISION_REGISTER_v2_2_FINAL_APPROVAL_CANDIDATE.md`.
+> The decisions themselves (`D1`–`D15`) are recorded in `DECISIONS.md` under this project's own
+> `## Decision: <title>` convention; the register remains the authoritative *post-test decision
+> record* and holds the full text of safety gates S1–S11 (§9), product gates P1–P9 (§10), the
+> evidence register (§5), and the finding→band map (§6). **This section summarises and sequences;
+> it does not restate the register, and it is not a competing source of truth.** Where a gate's
+> wording matters, the register governs.
+>
+> **Nothing in this section authorises implementation.** A band says what must be true before a
+> class of work may proceed. Each work package is still proposed and approved separately under
+> `DECISIONS.md`'s "User Approval Gate" decision.
+>
+> **Bands are not severities and not a schedule.** Band membership is a prerequisite relationship
+> only. A Band D item is not "less important" than a Band A item; it is *safe to do in parallel*.
+>
+> **Identifier collision warning — read this before citing a `P#` or `D#`.** Two pre-existing
+> identifier schemes in this repository reuse these letters for entirely unrelated things:
+> `MASTER_PLAN.md`'s backlog uses **`P0`–`P5` as priority tiers** (P0 = packaging, P3 = developing
+> agency, …), and `docs/EXPERIENCE_KERNEL_IMPLEMENTATION.md` uses **`D1`–`D3` for its own 2026-01-20
+> design decisions**. Neither has anything to do with the Post-Test #1 product gates or decisions.
+> **Always qualify the reference** — "Post-Test #1 P2", "register D6" — and never assume a bare `P3`
+> or `D1` means the post-test one. No renaming is proposed here: renaming an established identifier
+> scheme is a change to existing records, not a documentation correction.
+
+### Test #1 evidence freeze — provenance
+
+**The commit hash is authoritative. The branch name is not.**
+
+| Fact | Value |
+|---|---|
+| Authoritative tested implementation | `854a8da7fd107db33a933c4bdb01bf3fd7eb69bd` |
+| What it is | The **merge commit for PR #58** |
+| PR #58 head branch | `claude/bartholomew-parking-brake-consent` — **no longer resolves** |
+| Reachable from, at independent-review time | `claude/bartholomew-test1-review-rfukzi` |
+| `main`/`origin/main` at the relevant review point | `d0c202f7b39f9244417f1954629f64f68dfbb341` (2026-08-15) |
+| Did that `main` contain the tested implementation? | **No** — 25 commits behind it |
+
+**Test #1 was not run against `main`.** The deleted PR head branch must not be described as the
+current authoritative branch; it is a historical fact about how the tested commit was produced.
+Current repository state is recorded separately in `docs/evidence/test-1/README.md` so that later
+branch movement cannot be mistaken for, or used to rewrite, the historical freeze.
+
+**Evidence-access limitation, still in force:** restored Test #1 case IDs and timestamps were
+verified for **internal consistency only**, not independently against the raw Test #1 artifacts —
+which are **absent** from this repository and inventoried as absent in
+`docs/evidence/test-1/MANIFEST.md` §4.
+
+### Band 0 — attended localhost text-only real-use checkpoint
+
+Operationalises `docs/TILT.md` under decision D7b. **May occur before Band A**, provided every one
+of the following holds:
+
+- attended by Taylor;
+- localhost / single-machine;
+- **no** ambient sensors;
+- **no** device-control actuation;
+- **no** remote companion or network exposure;
+- **no** unattended scheduler-driven real-world action;
+- existing Governance and Parking Brake remain active;
+- the specific vertical slice has **no known unresolved defect that would invalidate its result**.
+
+**Purpose:** get real feedback early on a newly useful slice without waiting for ambient or full
+Test #2 readiness.
+
+> **Measurement clarification (approved, and easy to lose).** If a Band 0 checkpoint is intended to
+> **measure burden or usefulness**, unresolved queue recursion and duplicate behaviour must not
+> contaminate the measurement. Safety gate **S1 containment must pass first** whenever
+> scheduler/queue behaviour can influence what is being measured — *or* that behaviour must be
+> deliberately disabled/excluded within the governed test envelope, with the exclusion recorded. A
+> burden measurement taken while the queue is still growing itself is not a measurement of the
+> slice; it is a measurement of B-F001.
+
+### Band A — before any further unattended testing
+
+Required:
+
+- **B-F001 / NUDGE-F001 containment** — no self-sustaining queue growth, no semantically duplicate
+  unresolved items absent explicit escalation;
+- **D2 obligation preservation** — deferral, consolidation and suppression never silently drop a
+  genuine obligation;
+- **safety gate S1** (queue/interruption containment);
+- **OP-W004 investigation** plus **S2** audit failure semantics for any governed action relied upon;
+- relevant **truthful failure handling**;
+- **reliable evidence/logging** — Test #1's own shutdown-capture gap (OP-W005) must not recur.
+
+**Permitted unattended envelope at Band A** — this is a restricted envelope, not general unattended
+operation: **no** camera or microphone capture, **no** keyboard/mouse/device-control actuation,
+**no** remote companion, and **no** consequential outbound governed action unless the additional
+applicable S9 / S11 / action-specific gates have also passed. Notification, queue and scheduler
+observation may run within this envelope.
+
+### Band B — before real ambient sensing
+
+Everything applicable from Band A, plus:
+
+- decisions **D8** (ambient-sensing readiness), **D11** (independent emergency shutdown), **D12**
+  (Test #2 personal-data handling), **D13** (bystander/third-party privacy);
+- safety gates **S3–S7** and **S9–S11**;
+- **C6 brake consolidation** — `sight`/`voice` brake authority consolidated onto the authoritative
+  Governance path *before* those real capabilities are enabled;
+- consent, revocation and retention handling, with **no silent restart/resume** contrary to policy.
+
+> **S8 is conditional, and must stay conditional.** Authentication / network-exposure gate **S8**
+> (and decision **D10**'s remote clause) becomes **additionally** applicable **only when remote
+> phone, wearable, or other non-localhost capability is involved**. A purely local Band B scenario
+> does **not** require S8. Do not record S8 as a blanket Band B prerequisite.
+>
+> **What is *not* conditional:** D10's other clause. **Any local adapter that can control keyboard,
+> mouse, screen or browser, launch actions, or otherwise exercise consequential device agency
+> requires D11 and S9 regardless of network locality** — a localhost-only device-control prototype
+> still needs an emergency stop that works when the ordinary UI does not.
+
+### Band C — before full Real-World Test #2
+
+Everything applicable from Bands A and B, plus:
+
+- **D1** burden instrumentation;
+- **D3** ordinary-user / admin separation;
+- **D5 / P5 memory agency — required.** There is no "if durable memory participates" loophole;
+- product gates **P1–P6** and **P8–P9**;
+- **D15** abort criteria, evidence freeze and closure;
+- **PT-F001** startup/readiness closure — a supported fresh start reaches ready through canonical
+  host/config, with no manual process override;
+- **OP-W003** retrieval-mode decision — intended embedder enabled, or fallback explicitly approved
+  with measured quality and degraded-state reporting;
+- technical defect closure where relevant: **TECH-F001**, **MF-F001**, **MF-F002**,
+  **PB-F001** / **PB-F002**, and the **UI-SYNC001** critical-state issues;
+- **HU-F002** conversational quality addressed — relevance, non-repetition, truthful failure;
+- **P2's full scenario passes**: at least one scenario combining **proactive/relevant surfacing**
+  *and* a **genuine governed action** *and* a **visible real-world result**. All three in one
+  scenario; two out of three is not a pass.
+
+### Band D — safe parallel prototyping / low-risk cleanup
+
+Allowed **before** full Band C readiness exists, precisely so that useful work is not blocked on
+readiness it does not need:
+
+synthetic / pre-recorded camera; synthetic microphone/audio; TTS; non-actuating localhost PC
+protocol; expressive presence; customer UI concepts; triage simulation; sleep architecture **on test
+data** (investigation only — see D6); memory UI **on synthetic memories**; Water ordinary-UI cleanup
+(see the hydration entry in `RISKS.md`); microcopy, slider and testability refinements.
+
+**Band D must not be used to bypass anything.** It may not bypass Governance, capture non-consenting
+people, enable real unattended capture, expose the unauthenticated runtime remotely, or make
+`sight`/`voice` live before C6 consolidation. **Band D is permission to build safely in parallel; it
+is not permission to pretend Band C readiness exists.**
+
+### Safety gates S1–S11 (summary — full text in the register §9)
+
+| Gate | One-line scope | First required at |
+|---|---|---|
+| **S1** | Queue/interruption containment: no warning whose only effect is another queue item; zero equivalent unresolved duplicates absent explicit escalation; bounded capacity; shedding only of policy-eligible system-generated items and always auditable; `awaiting_response` exempt from silent expiry/cap shedding | Band A (and Band 0 when burden/usefulness is being measured) |
+| **S2** | Audit integrity and failure semantics: OP-W004 root cause **or** a compensating design that makes silent loss impossible; deliberate failure injection; a governed action cannot present full success if required audit persistence failed; **minimum tamper floor** — no normal application path updates or deletes historical audit rows | Band A for governed actions relied upon; mandatory before ambient |
+| **S3** | Key lifecycle: deliberate STANDARD/STRONG provisioning; no key material in logs/evidence; encrypt→restart→decrypt; missing/invalid/mismatched keys fail visibly and safely; Test #1 ephemeral-key data disposition documented | Band B |
+| **S4** | Sensitive-context handling: adversarial cases beyond password formats; full trace from working context through governed write, consent, long-term memory, reflections/summaries, embeddings/FTS and logs; no unnecessary later echo; working-context TTL/redaction; truthful derived-artifact deletion | Band B |
+| **S5** | **Direct** Parking Brake enforcement per selected capability: allowed when the scope does not apply, blocked when scope/global does, fail **closed** if the brake is unreadable, mid-stream engagement terminates in-flight capability, and **stop/teardown/disengage is never treated as a new gated start**. Precondition: C6 consolidation before real `sight`/`voice` | Band B |
+| **S6** | Ambient consent/capture/bystander: per-sensor opt-in; truthful state; OS/hardware indicator **where available, with availability assessed and recorded per sensor before the test**; immediate revocation; brake terminates and prevents capture; ungated teardown; retention defaults; bystander/household policy; jurisdiction assessment; no silent resume | Band B |
+| **S7** | Truthful critical state and output: an explicit **numeric** freshness target per critical state (brake, emergency readiness, sensor, recording, consent, governed action) defined **before scenario freeze**; stale state visibly marked; no undefined/blank/fabricated success; applies to voice; selected/configured distinguished from reachable/ready | Band B |
+| **S8** | Authentication / network exposure: reviewed threat model; device/client auth; correct personal-context authorisation; session/token/key lifecycle; replay and unauthorised-brake-change tests; a remote client cannot weaken local Governance; **no unreviewed "a simple token is enough" assumption** | **Conditional** — only when remote phone/wearable/non-localhost is involved |
+| **S9** | Independent emergency shutdown: outside the ordinary UI; works with the ordinary UI unavailable; works despite relevant normal-surface interference where applicable; terminates capture, output and device agency; independent of in-process goodwill; restart after emergency is deliberate | Band B; **and** for consequential local device agency under D10 regardless of network locality |
+| **S10** | Unattended failure/resource behaviour across crash/restart, sensor disconnect, disk pressure, DB unavailable or locked, network loss, model unavailable, companion disconnect: no silent continuation under uncertainty; no unsafe automatic resumption; no recursive burden under resource failure; observable failure; recovery preserves Governance and data integrity | Band B |
+| **S11** | **Verification of the D12 test-data policy** — not a second policy. Passes only when every D12 field is instantiated for the selected Test #2 scenario and capabilities, storage locations enumerated, test-created data distinguishable from durable memory, a post-test inventory generable, retained data inspectable, deletion/retention execution recordable, and retained evidence distinguished from retained personal content | Band B / Band C |
+
+### Product gates P1–P9 (summary — full text in the register §10)
+
+| Gate | One-line scope | First required at |
+|---|---|---|
+| **P1** | First-use and safety-control legibility — **all five clauses required**: identify the interaction method; initiate a useful task; understand listen/observe/act state; locate stop/privacy controls; and **predict the effect of each reachable safety control before operating it**, including scope/global semantics. Record time-to-first-useful-action. A Taylor-only result is **designer-tested** unless a D14 naive tester is used | Band C |
+| **P2** | Useful Assistance Proof — freeze **three scenarios plus manual baselines before scenario-specific implementation**; all 3 complete in rehearsal; ≥2 reduce active user steps; ≥1 by ≥50%; a materially wrong outcome never counts; failure is truthful; cleanup never exceeds the work removed; **≥1 scenario includes proactive surfacing *and* a genuine governed action *and* a visible real-world result** | Band C |
+| **P3** | Conversational-primary control — routine initiation is conversational; the admin console is unnecessary for routine use; visual panels only where useful; unsupported commands fail explicitly; **no silent non-action reported as success**. Evaluation set and target frozen at the **same pre-implementation freeze event as P2** | Band C |
+| **P4** | User/admin separation is *useful* — the ordinary surface contains everything needed for normal use and safety, diagnostics hidden by default, and **simplicity may not be achieved by deleting useful capability** | Band C |
+| **P5** | Memory agency (**required for full Test #2**): inspect human-readable memory; provenance where appropriate; correct; forget/delete where permitted; privacy/retention; export; inspect/delete sensor-derived memory where such data exists; truthful derived-artifact handling | Band C |
+| **P6** | Triage behaviour across interrupt / log-only / duplicate / stale / genuine-obligation / urgent-safety cases: not every concern nudges; **genuine obligations are never silently lost**; false suppression is auditable; surfaced items are useful enough to avoid obvious spam. Targets frozen at the same event as P2 — **no post-hoc tuning of the pass bar** | Band C |
+| **P7** | Sleep boundary — **not required**. If ever enabled: interruptible, available, observable, crash-safe, governed, with no hidden backlog and no obligation disposal. Otherwise disabled | n/a (constraint, not a prerequisite) |
+| **P8** | Capability rehearsal — per selected capability, define correctness, latency, failure, brake, consent, indicator, teardown and restart criteria **before real use**. Candidates: local camera, local mic, TTS, local PC, remote phone (only after D10/S8), expressive presence, conversational invocation. Expressive presence may be concept-validation rather than safety-critical rehearsal | Band C |
+| **P9** | Post-test data agency, before Test #2 is declared complete: human-readable inventory; sensor-derived retained data inspectable; retention/deletion executable; **evidence retention distinguished from user-content retention**; unavoidable residuals disclosed | Band C |
+
+### Implementation dependency tracks 1–7
+
+Dependency order **within** a track; tracks may progress in parallel where their bands allow.
+**Listing a track does not authorise starting it.**
+
+| Track | Content |
+|---|---|
+| **1 — immediate unattended blockers** | nudge recursion/duplicates → D2 triage/obligations → OP-W004 investigation → audit failure semantics → unattended truthfulness/logging |
+| **2 — governance seams for richer capability** | C6 brake consolidation → mid-stream brake/teardown → emergency shutdown → ambient consent/state → keys → sensitive-context investigation |
+| **3 — data truthfulness** | MF-F002 → MF-F001 → PB/UI sync → chat truthful errors → Water ordinary-UI cleanup |
+| **4 — customer/product** | ordinary/admin separation → Awaiting Response legibility → memory agency → conversational flow/quality → first-use → bulk pending work |
+| **5 — controlled capability prototypes** | camera / mic / TTS / local non-actuating PC / expressive presence; **remote phone only after D10/S8**. Governance enforcement is built **with** each adapter, not after it |
+| **6 — real capability rehearsal** | only after the applicable safety gate |
+| **7 — full Test #2 freeze/run** | freeze P2/P3/P6 scenarios and targets, plus repo/config/data policy/abort/evidence; execute; close per D15 and P9 |
+
+### Relationship to the stage gates below
+
+The stage gates that follow remain the architectural record of what exists and why. The bands are
+**orthogonal** to them: a stage gate says *what was built*, a band says *what must be true before a
+class of real-world exposure is attempted*. Where a stage's remaining work is also a band
+prerequisite, the band is the binding constraint on testing, and the stage gate is the record of
+delivery.
+
+
 ## Stage gates
 
 ### Stage 0 — Kernel alive, stable, dreaming ✅ (Complete)
@@ -503,10 +728,18 @@ table below and `docs/TILT.md`'s "What is deferred" section for the complete lis
 - Kernel lifecycle start/stop cleanly.
 - Water logging works. *(Note added 2026-07-28: hydration/water logging was Stage 0's original,
   simplest example feature and is not part of current active product direction or
-  `ExperienceKernel`'s governed drives — see `CONSTITUTION.md`'s consumer-value gate. The
-  underlying endpoints/table/UI panel still exist in code as a legacy, working feature; removing
-  them is an unapproved future code-cleanup decision, not scheduled ahead of current architectural
-  work. This line records what Stage 0 verified historically; it is not forward guidance.)*
+  `ExperienceKernel`'s governed drives — see `CONSTITUTION.md`'s consumer-value gate. This line
+  records what Stage 0 verified historically; it is not forward guidance.)*
+  *(Corrected 2026-08-20: the 2026-07-28 note also said "the underlying endpoints/table/UI panel
+  still exist in code as a legacy, working feature." **The endpoints do not exist** — `RISKS.md`'s
+  2026-08-17 correction found no `api/water` route registration anywhere, and Test #1's FUNC-017
+  case observed `GET /api/water/today` returning 404 with the panel rendering `undefined ml`
+  (register row MF-F003). What remains is the `water_logs` table with 2 rows of historical data and
+  the minimal UI panel. Under approved decision **D4**, hydration/water is **outside the current
+  active ordinary-user product and UI scope**; removing the panel is **Band D** cleanup, the
+  historical data must not be silently deleted because the feature left the UI, and any legacy-data
+  disposition remains a separate governed decision. `RISKS.md`'s hydration entry is the single
+  canonical authority.)*
 - Nudge pipeline persists and respects cadence/quiet-hours.
 - Daily + weekly reflection generation persists + exports.
 

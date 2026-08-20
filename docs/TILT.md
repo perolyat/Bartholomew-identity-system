@@ -6,8 +6,16 @@
 > non-authoritative reference — this specific document governs near-term execution sequencing and
 > is binding, the same way `ROADMAP.md` and `DECISIONS.md` are.
 >
-> **Last updated:** 2026-08-14 (slice 1 implemented — see "First vertical slice" below; its
-> acceptance-bar wording clarified in the same pass, wording only, no behaviour change).
+> **Last updated:** 2026-08-20 — **D7 reconciliation added** (documentation-only). One new section,
+> "Reconciliation with the Post-Test #1 readiness bands (D7)", records the reconciliation Taylor
+> approved on 2026-08-20 as part of Post-Test #1 Decision Register v2.2. **The principle below is
+> unchanged and is not weakened**: what is added is the distinction between a narrow attended
+> real-use checkpoint and unattended, ambient, or full-Test-#2 activity, which carry stricter
+> prerequisites. Nothing here turns TILT into "finish everything before testing", and nothing here
+> permits testing past an unresolved safety blocker.
+>
+> **Previously (2026-08-14):** slice 1 implemented — see "First vertical slice" below; its
+> acceptance-bar wording clarified in the same pass, wording only, no behaviour change.
 >
 > **Previously (2026-08-12):** reconciled into `CONSTITUTION.md`, same day as creation.
 > `CONSTITUTION.md`'s "Development Philosophy" section now states this document's principle
@@ -46,6 +54,57 @@ underneath that constitutional principle, not a document straining against it.
 Those six exceptions are the only legitimate reasons to hold a shippable slice back. "It could be
 cleaner," "it doesn't yet handle a case that hasn't occurred," "a future stage might need it
 differently," and "the design isn't fully written up" are not on that list.
+
+## Reconciliation with the Post-Test #1 readiness bands (D7)
+
+> **Added 2026-08-20.** Source: Post-Test #1 Decision Register v2.2, **D7** (clauses D7a and D7b),
+> approved by Taylor 2026-08-20. The decision is recorded in `DECISIONS.md` as "Real-world testing
+> standard — TILT reconciled, not weakened and not abandoned"; the bands it references are defined
+> in `ROADMAP.md`'s "Post-Test #1 readiness bands". This section states what the reconciliation
+> means **for this document**, and does not restate either of those.
+
+Real-World Test #1 produced findings of a kind this document's six exceptions were always meant to
+catch — audit writes that failed silently, a queue that grew itself, sensitive-formatted values
+echoed with no defined oracle. What it also showed is that the six exceptions have to be applied
+**per test class**, because "this slice is safe enough to try, attended, on localhost" and "this
+system is safe enough to run unattended with real sensors" are different questions that can have
+different answers on the same day.
+
+**The reconciliation, in one sentence:**
+
+> **Real-world testing remains preferred once a slice is sufficiently useful to test — unless an
+> unresolved safety, governance, privacy, data-integrity, architectural-validity, or
+> experiment-validity issue blocks *that specific test*.**
+
+That is the same rule as "The principle" above, with "that specific test" made explicit. It is
+**not** either of the two failure modes it sits between:
+
+| Not this | Why not |
+|---|---|
+| **"Finish everything before testing."** | That is the pre-2026-08-12 sequencing failure this document exists to correct. Band 0 exists precisely so a narrow attended checkpoint does not have to wait for ambient or Test #2 readiness. |
+| **"Test regardless of unresolved safety blockers."** | The six exceptions are not advisory. A blocker that would invalidate *this* test, or make it unsafe, still stops it — and the stricter classes of testing carry additional prerequisites that are not optional. |
+
+**Both halves are preserved:**
+
+- **Band 0 narrow real-use checkpoints remain allowed and encouraged.** Attended, localhost,
+  text-only or similarly narrow slices, under existing Governance and Parking Brake, with no ambient
+  sensors, no device-control actuation, no remote/network exposure, and no unattended
+  scheduler-driven real-world action — provided the specific slice has no unresolved blocker that
+  would invalidate its result. One clarification worth carrying here because it is easy to lose: **if
+  the checkpoint is being used to measure burden or usefulness, unresolved queue recursion and
+  duplicate behaviour must not contaminate the measurement** — safety gate S1 containment must pass
+  first where scheduler/queue behaviour could influence it, or that behaviour must be deliberately
+  excluded within the governed envelope and the exclusion recorded.
+- **Unattended, ambient, and full Test #2 activity carry stricter prerequisites** — Bands A, B and C
+  respectively. `ROADMAP.md` holds them. This document does not restate them and does not soften
+  them.
+
+**Post-test direction, recorded as judgement rather than as fact.** Taylor's post-Test #1 direction
+is that simply continuing to operate the same low-capability experience is unlikely to yield
+proportionate value: **the next meaningful real-use checkpoint should unlock a new useful slice
+rather than polish the existing one indefinitely.** That is a judgement about what to build next,
+consistent with "Direction for later slices" below — not a change to the principle, and not a
+finding from Test #1.
 
 ## The prioritisation test (apply to all near-term work)
 
