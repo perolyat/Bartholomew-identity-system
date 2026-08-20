@@ -839,21 +839,30 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
   migrations or runtime configuration touched; **one separately approved CI-configuration change** —
   see below) — the canonical-doc changes that carry the approved Post-Test #1 Decision Register v2.2
   into this repository: `DECISIONS.md` (sixteen new entries), `RISKS.md` (hydration entry amended per
-  D4, scope-count correction, three new watchlist entries), `ROADMAP.md` (new "Post-Test #1 readiness
-  bands" section), `docs/TILT.md` (D7 reconciliation), `docs/SAFETY_PARKING_BRAKE.md` (five→six
+  D4, split-brake-authority entry amended per C6, scope-count correction, three new watchlist
+  entries), `ROADMAP.md` (new "Post-Test #1 readiness bands" section), `docs/TILT.md` (D7
+  reconciliation), `docs/SAFETY_PARKING_BRAKE.md` (five→six
   scopes, with caveats), `COGNITIVE_RUNTIME.md`, `INTERFACES.md`, `CHECKLISTS.md`,
   `docs/FIRST_REAL_WORLD_TEST.md`, `docs/S1_4_AWAITING_RESPONSE_DESIGN.md`,
   `docs/EXPERIENCE_KERNEL_IMPLEMENTATION.md`, `QUICKSTART.md`,
   `bartholomew_api_bridge_v0_1/README_API_BRIDGE.md`, this document, and the new
   `docs/evidence/test-1/` evidence location.
-  **Commits on branch `claude/bartholomew-post-test-docs-f8xwr1` (corrected 2026-08-20 after
-  independent review; this entry previously read "Not yet committed", which was stale):**
+  **Original handoff commits on branch `claude/bartholomew-post-test-docs-f8xwr1`** (corrected
+  2026-08-20 after independent review; this entry previously read "Not yet committed", which was
+  stale, and then listed the two commits below under a heading that read as exhaustive, which it is
+  not):
   - `a629ae4` — the documentation propagation itself (18 `.md` files).
   - `279635f` — the separately approved CI exception: `exclude: ^docs/evidence/` on the
     `end-of-file-fixer` and `trailing-whitespace` hooks in `.pre-commit-config.yaml`, because those
     hooks were rewriting the preserved Post-Test #1 register and breaking its recorded SHA-256.
     Approved by Taylor on its own merits as a standing rule: evidence intended to be immutable is not
     touched by auto-formatters.
+
+  Those two are the **original handoff commits**, named here because each carries a distinct
+  authority: the propagation itself, and a separately approved CI exception. **Subsequent
+  review-only corrections are preserved in PR #59's commit history and are deliberately not
+  enumerated here** — they change wording, not authority, and listing each one would make this entry
+  need an edit for every future review fix. PR #59's commit log is the complete record.
 
   **Still pending, and deliberately recorded as pending despite existing as commits.** Committing to
   a branch is not approval. This pass **remains awaiting Taylor's review under the Approval Gate**

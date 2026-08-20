@@ -2,8 +2,8 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation). Three
-> changes, all in the tech-debt watchlist unless noted: (1) the existing **hydration/water-logging**
+> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation). **Four groups of
+> changes**, all in the tech-debt watchlist unless noted: (1) the existing **hydration/water-logging**
 > entry is **amended, not duplicated**, to record the approved D4 scope decision — Water/hydration is
 > outside the current active ordinary-user product/UI scope, existing historical data and models must
 > not be silently deleted because the feature left the UI, and any later cleanup or legacy-data
