@@ -241,6 +241,14 @@ async def _run_accelerated(
     store = SchedulerStore(db_path)
     ctx = _MinimalCtx(db_path, store)
 
+    # Pin the cadence speed factor. tests/test_stage0_alive.py sets
+    # BARTH_SPEED_FACTOR=0.01 at module import time and never restores it, so
+    # whether this soak simulates 144 self-checks or 14,392 of them would
+    # otherwise depend on collection order. Both outcomes pass -- the
+    # invariants hold identically at 100x density -- but the reported
+    # generation counts are evidence, and evidence has to be reproducible.
+    monkeypatch.setenv("BARTH_SPEED_FACTOR", "1.0")
+
     monkeypatch.setattr(loop_mod, "time", _FakeTime)
     monkeypatch.setattr(loop_mod, "asyncio", _FakeAsyncio)
     monkeypatch.setattr(drives_mod, "time", _FakeTime)
