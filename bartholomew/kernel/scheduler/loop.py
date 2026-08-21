@@ -9,7 +9,6 @@ import asyncio
 import logging
 import os
 import time
-from contextlib import suppress
 from typing import Any
 
 from . import cadence as cadence_module
@@ -183,7 +182,51 @@ async def run_scheduler(ctx: Any) -> None:
                 # Execute drive with timeout and exception guard
                 drive_fn = drives.REGISTRY[task_id]["fn"]
                 nudge, success = await _run_drive(ctx, task_id, drive_fn)
-                result_meta = {}
+                result_meta: dict[str, Any] = {}
+
+                # Persist the nudge (if any) BEFORE the tick, so the tick can
+                # record truthfully what became of it. WP-A1 requirement E:
+                # this used to be wrapped in contextlib.suppress(Exception),
+                # which meant a locked or failing database discarded a queued
+                # item while the run still reported success -- indistinguish-
+                # able from "there was nothing to persist". A dropped
+                # obligation nobody can detect is exactly what D2 forbids,
+                # and it makes the S1 queue-integrity invariant untestable.
+                if nudge:
+                    try:
+                        outcome = await store.insert_nudge_contained(
+                            nudge.kind,
+                            nudge.message,
+                            nudge.actions,
+                            nudge.reason,
+                            nudge.created_ts,
+                            getattr(nudge, "escalation", None),
+                        )
+                        result_meta["nudge"] = outcome
+                    except Exception as e:
+                        # Visible and safe: the tick is recorded as a FAILURE
+                        # carrying the error, and the failure is logged at
+                        # ERROR. Nothing here infers that the item was a
+                        # duplicate, was already represented, or is
+                        # disposable -- the only claim made is that
+                        # persistence did not happen.
+                        success = 0
+                        result_meta["nudge"] = {
+                            "outcome": "persistence_failed",
+                            "kind": nudge.kind,
+                            "reason": nudge.reason,
+                            "error": f"{type(e).__name__}: {e}",
+                        }
+                        log.error(
+                            "[Scheduler] Nudge persistence FAILED for %s "
+                            "(kind=%s reason=%s): %s -- the emitted item was "
+                            "NOT queued and is not assumed to be represented",
+                            task_id,
+                            nudge.kind,
+                            nudge.reason,
+                            e,
+                        )
+                        print(f"[Scheduler] Nudge persistence FAILED for {task_id}: {e}")
 
                 finished_ts = int(time.time())
                 dur_ms = (finished_ts - started_ts) * 1000
@@ -202,17 +245,6 @@ async def run_scheduler(ctx: Any) -> None:
                     # If insert fails due to duplicate key, that's OK
                     if "unique" not in str(e).lower():
                         print(f"[Scheduler] Error inserting tick for {task_id}: {e}")
-
-                # Persist nudge if emitted
-                if nudge:
-                    with suppress(Exception):
-                        await store.insert_nudge(
-                            nudge.kind,
-                            nudge.message,
-                            nudge.actions,
-                            nudge.reason,
-                            nudge.created_ts,
-                        )
 
                 # Compute next run time
                 next_ts, new_window_state = cadence_module.compute_next_run(

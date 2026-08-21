@@ -47,6 +47,13 @@ class Nudge:
     actions: list[dict[str, Any]]
     reason: str
     created_ts: int  # UTC epoch seconds
+    # WP-A1 / NUDGE-F001: an explicit escalation label. Part of the
+    # containment equivalence key (see scheduler/containment.py), so an
+    # emission a drive deliberately marks as a distinct escalation becomes
+    # its own unresolved item, while an ordinary repeat firing does not.
+    # Optional and defaulted so every existing construction site is
+    # unaffected; no drive sets it today.
+    escalation: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -56,6 +63,7 @@ class Nudge:
             "actions": self.actions,
             "reason": self.reason,
             "created_ts": self.created_ts,
+            "escalation": self.escalation,
         }
 
 

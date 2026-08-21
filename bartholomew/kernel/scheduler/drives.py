@@ -11,7 +11,7 @@ from typing import Any
 
 from bartholomew.kernel.blocking_executor import run_off_loop
 
-from .health import check_drift
+from .health import SELF_CHECK_DRIFT_REASON, check_drift
 from .models import Nudge
 
 # Drive function signature
@@ -26,6 +26,15 @@ async def drive_self_check(ctx: Any) -> Nudge | None:
     - Database accessibility
     - Pending nudges accumulation
     - Stale daily reflections
+
+    WP-A1 / B-F001. This drive's nudge lands in the very queue whose size
+    it reports, which in Test #1 made the warning self-sustaining. Two
+    things stop that now, neither of which touches this drive's cadence or
+    threshold: `check_drift()` counts only pending items this drive did not
+    itself create (see scheduler/health.py), and the persisted nudge
+    carries a containment equivalence key so repeated executions above the
+    threshold cannot add a second unresolved copy (see
+    scheduler/containment.py). The condition itself stays reported.
 
     Args:
         ctx: Context object (typically KernelDaemon instance). Must have
@@ -46,7 +55,7 @@ async def drive_self_check(ctx: Any) -> Nudge | None:
             kind="system_health",
             message=f"System drift detected: {drift}",
             actions=[],
-            reason="self_check_drift",
+            reason=SELF_CHECK_DRIFT_REASON,
             created_ts=int(time.time()),
         )
 
@@ -58,6 +67,15 @@ async def drive_curiosity_probe(ctx: Any) -> Nudge | None:
     Curiosity probe drive: occasionally prompt reflection or exploration.
 
     Emits gentle nudges to encourage user engagement with memory/journal.
+
+    WP-A1 / NUDGE-F001. The rotating prompt strings below are presentation,
+    not distinct obligations: an unanswered invitation to reflect is one
+    open item however it is worded. Persistence therefore keys every
+    emission from this drive to a single equivalence key (see
+    scheduler/containment.py), so an ordinary repeat firing cannot leave a
+    second equivalent unresolved item behind while the first is still open,
+    and answering or dismissing the open one frees the key for the next
+    genuinely eligible occurrence.
 
     Args:
         ctx: Context object (typically KernelDaemon instance)

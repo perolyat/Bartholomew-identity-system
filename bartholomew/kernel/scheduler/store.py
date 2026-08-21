@@ -131,6 +131,48 @@ class SchedulerStore:
             created_ts,
         )
 
+    async def insert_nudge_contained(
+        self,
+        kind: str,
+        message: str,
+        actions: list[dict[str, Any]],
+        reason: str,
+        created_ts: int,
+        escalation: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        WP-A1 containment-aware nudge persistence (B-F001 / NUDGE-F001, S1).
+
+        Same off-event-loop discipline as every other method here -- the
+        containment decision happens inside the one worker thread, inside
+        one SQLite transaction, so it can neither block the loop nor race a
+        second writer. See `persistence.insert_nudge_contained()` for the
+        invariant it enforces and what it deliberately never does.
+        """
+        return await self._call(
+            persistence.insert_nudge_contained,
+            self.db_path,
+            kind,
+            message,
+            actions,
+            reason,
+            created_ts,
+            escalation,
+        )
+
+    async def list_containment_events(
+        self,
+        limit: int = 100,
+        dedup_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read the append-only containment evidence log."""
+        return await self._call(
+            persistence.list_containment_events,
+            self.db_path,
+            limit,
+            dedup_key,
+        )
+
     async def update_next_run(
         self,
         task_id: str,
