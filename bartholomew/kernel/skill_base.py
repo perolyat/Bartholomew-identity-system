@@ -61,9 +61,48 @@ class SkillResult:
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    #: WP-A2 / safety gate S2. True when the action itself completed but a
+    #: **required** audit write for it did not persist.
+    #:
+    #: This is deliberately a separate axis from `status`, not a new status
+    #: value. The approved semantics are that an action which genuinely
+    #: passed every pre-action gate and genuinely executed must not be
+    #: reported as having failed just because its audit row was lost -- so
+    #: `status` stays SUCCESS and stays truthful about the real-world
+    #: effect. What must *also* be truthful is that the audit is missing,
+    #: which is what these two fields carry. Together they say both things
+    #: at once, which is exactly what S2 requires and what "full success"
+    #: would not.
+    audit_degraded: bool = False
+
+    #: The audit failure(s), verbatim, when `audit_degraded` is True.
+    audit_error: str | None = None
+
     @property
     def success(self) -> bool:
         return self.status == SkillResultStatus.SUCCESS
+
+    @property
+    def fully_successful(self) -> bool:
+        """True only for an action that succeeded *and* was fully audited.
+
+        Callers that need to assert "this completed cleanly" should use this
+        rather than `success`, which deliberately stays True in the degraded
+        case so a genuinely-performed action is never reported as failed.
+        """
+        return self.success and not self.audit_degraded
+
+    def mark_audit_degraded(self, error: str) -> SkillResult:
+        """Record that a required audit write for this action failed.
+
+        Additive and idempotent-by-accumulation: multiple failed audit
+        writes for one action are all retained, so the record says how much
+        was lost rather than only that something was. Never changes
+        `status` -- see `audit_degraded`.
+        """
+        self.audit_degraded = True
+        self.audit_error = error if self.audit_error is None else f"{self.audit_error}; {error}"
+        return self
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +111,8 @@ class SkillResult:
             "message": self.message,
             "error": self.error,
             "metadata": self.metadata,
+            "audit_degraded": self.audit_degraded,
+            "audit_error": self.audit_error,
         }
 
     @classmethod

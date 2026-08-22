@@ -95,3 +95,103 @@ def test_mute_and_unmute_round_trip(client):
     settings = client.get("/api/notifications/settings").json()
     assert settings["muted"] is False
     assert settings["effective_muted"] is False
+
+
+# ---------------------------------------------------------------------------
+# WP-A2 / safety gate S2 -- degraded-audit surfacing at the HTTP boundary
+# ---------------------------------------------------------------------------
+
+
+def _fail_writes_to(table: str):
+    """Make inserts into one audit table fail, via a real SQLite trigger.
+
+    Genuine failure injection against the live app's own database -- the
+    production INSERT runs and is aborted by SQLite, rather than an
+    exception being monkeypatched in.
+    """
+    import contextlib
+
+    from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
+
+    @contextlib.contextmanager
+    def _ctx():
+        def run(sql: str) -> None:
+            conn = connect(_DB_PATH)
+            try:
+                set_wal_pragmas(conn)
+                conn.execute(sql)
+                conn.commit()
+            finally:
+                conn.close()
+
+        run(
+            f"CREATE TRIGGER notif_block_{table} BEFORE INSERT ON {table} "
+            f"BEGIN SELECT RAISE(ABORT, 'injected audit failure'); END",
+        )
+        try:
+            yield
+        finally:
+            run(f"DROP TRIGGER IF EXISTS notif_block_{table}")
+
+    return _ctx()
+
+
+def test_healthy_quiet_hours_response_is_not_marked_degraded(client):
+    """The degraded marker must appear only when something actually failed."""
+    response = client.put(
+        "/api/notifications/quiet-hours",
+        json={"start": "21:00", "end": "08:00"},
+    )
+    assert response.status_code == 200
+    assert "audit_degraded" not in response.json()
+
+
+def test_lost_audit_write_is_reported_without_failing_the_action(client):
+    """S2 at the HTTP boundary.
+
+    The setting really is changed, so the response must not claim failure;
+    a required audit row really was lost, so it must not claim full success
+    either. Both facts appear in one response.
+    """
+    with _fail_writes_to("skill_action_audit"):
+        response = client.put(
+            "/api/notifications/quiet-hours",
+            json={"start": "23:15", "end": "06:45"},
+        )
+
+    # Fact 1: the action succeeded, and is described normally.
+    assert response.status_code == 200, (
+        "an action that genuinely executed must not be reported as failed "
+        "because its audit write was lost"
+    )
+    body = response.json()
+    assert body["start"] == "23:15"
+    assert body["end"] == "06:45"
+
+    # Fact 2: required audit persistence failed, explicitly.
+    assert body["audit_degraded"] is True
+    assert "skill_action_audit" in body["audit_error"]
+
+    # The change is real and durable -- this is a degraded success, not a
+    # silent rollback dressed up as one.
+    settings = client.get("/api/notifications/settings").json()
+    assert settings["quiet_hours"]["start"] == "23:15"
+
+
+def test_quiet_hours_failure_reports_its_reason(client):
+    """Regression-diagnosis aid.
+
+    `test_set_quiet_hours_updates_settings` asserted only a status code, so
+    when it failed intermittently in CI the log recorded `assert 400 == 200`
+    and nothing about the cause -- which is why the root cause had to be
+    reproduced from scratch rather than read off the failure. Any non-200
+    from this route now surfaces the reason it carried.
+    """
+    response = client.put(
+        "/api/notifications/quiet-hours",
+        json={"start": "07:30", "end": "22:30"},
+    )
+    assert response.status_code == 200, (
+        f"quiet-hours update failed: {response.status_code} "
+        f"detail={response.json().get('detail')!r}"
+    )
