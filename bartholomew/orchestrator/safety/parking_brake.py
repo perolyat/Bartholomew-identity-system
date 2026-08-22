@@ -8,12 +8,25 @@ Fail-closed: when engaged, gated components refuse to start/execute.
 
 import asyncio
 import json
-import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from bartholomew.kernel.blocking_executor import run_off_loop
+from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
+
+
+def _brake_connection(db_path: str):
+    """Open a brake-state connection through the kernel connection authority.
+
+    WP-A2. `sqlite3.Connection` is its own context manager (committing or
+    rolling back on exit), which is the behaviour the two call sites below
+    already relied on, so this keeps `with ... as conn:` meaning exactly what
+    it meant before -- only the connection's configuration changes.
+    """
+    conn = connect(db_path)
+    set_wal_pragmas(conn)
+    return conn
 
 
 @dataclass(frozen=True)
@@ -53,7 +66,13 @@ class BrakeStorage:
         Returns:
             JSON string value or None if not found
         """
-        with sqlite3.connect(self.db_path) as conn:
+        # WP-A2: the brake's own state I/O goes through the kernel
+        # connection authority like every other governance read/write.
+        # A bare connect never asserts WAL, so under a rollback-journal
+        # database a concurrent writer could make the brake state
+        # unreadable. Fail-closed behaviour on an unreadable brake is
+        # unchanged and is the caller's contract, not this method's.
+        with _brake_connection(self.db_path) as conn:
             cursor = conn.execute("SELECT value FROM system_flags WHERE key = ?", (key,))
             row = cursor.fetchone()
             return row[0] if row else None
@@ -67,7 +86,13 @@ class BrakeStorage:
             value: JSON string value
             updated_at: Unix timestamp (epoch seconds)
         """
-        with sqlite3.connect(self.db_path) as conn:
+        # WP-A2: the brake's own state I/O goes through the kernel
+        # connection authority like every other governance read/write.
+        # A bare connect never asserts WAL, so under a rollback-journal
+        # database a concurrent writer could make the brake state
+        # unreadable. Fail-closed behaviour on an unreadable brake is
+        # unchanged and is the caller's contract, not this method's.
+        with _brake_connection(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO system_flags(key, value, updated_at) "
                 "VALUES (?, ?, ?) "

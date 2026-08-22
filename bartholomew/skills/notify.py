@@ -22,7 +22,7 @@ from typing import Any
 import requests
 
 from bartholomew.kernel.blocking_executor import run_off_loop
-from bartholomew.kernel.db_ctx import set_wal_pragmas
+from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 from bartholomew.kernel.skill_base import (
     SkillBase,
     SkillContext,
@@ -217,7 +217,10 @@ class NotifySkill(SkillBase):
             return
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        # WP-A2: through _get_connection() so schema creation cannot be the
+        # thing that leaves this shared database in rollback-journal mode
+        # (see _get_connection()'s note).
+        conn = self._get_connection()
         try:
             conn.executescript(self.SCHEMA)
             conn.commit()
@@ -249,7 +252,12 @@ class NotifySkill(SkillBase):
         """
         if not self._db_path:
             raise RuntimeError("No database configured")
-        conn = sqlite3.connect(self._db_path)
+        # WP-A2: `db_ctx.connect()` rather than a bare `sqlite3.connect()`.
+        # This connection already called set_wal_pragmas() and was already
+        # correct in effect; going through the connection authority as well
+        # is what makes "no module opens the shared DB directly" a property
+        # that can be asserted structurally instead of reviewed by eye.
+        conn = connect(self._db_path)
         conn.row_factory = sqlite3.Row
         set_wal_pragmas(conn)
         return conn

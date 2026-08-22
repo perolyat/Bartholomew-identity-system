@@ -22,13 +22,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import policy_engine
+from .db_ctx import connect, set_wal_pragmas
 from .memory.privacy_guard import get_consent_handler
 from .redaction_engine import redact_pii
 from .reflection import ActionReflection, record_action_reflection
 from .runtime_contract import CandidateAction, Interpretation, Observation
 from .skill_base import SkillBase, SkillContext, SkillResult, SkillState
 from .skill_manifest import SkillManifest, discover_manifests
-from .skill_permissions import PERMISSION_CATEGORIES, PermissionChecker, get_permission_checker
+from .skill_permissions import (
+    PERMISSION_CATEGORIES,
+    PermissionChecker,
+    collect_permission_audit_failures,
+    drain_permission_audit_failures,
+    get_permission_checker,
+)
 
 if TYPE_CHECKING:
     from identity_interpreter.identity_context import IdentityContext
@@ -201,7 +208,7 @@ class SkillRegistry:
             return
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        conn = self._get_connection()
         try:
             conn.executescript(self.SCHEMA)
             conn.commit()
@@ -209,10 +216,36 @@ class SkillRegistry:
             conn.close()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get database connection."""
+        """
+        Get a database connection configured by the kernel's single
+        connection authority (`bartholomew.kernel.db_ctx`).
+
+        WP-A2 / register OP-W004. This was a bare ``sqlite3.connect()``,
+        the same pattern `bartholomew/skills/notify.py` documents having
+        already been found to raise ``sqlite3.OperationalError: database is
+        locked`` under concurrent writers to this shared database file. Two
+        concrete consequences were reproduced directly against this module
+        before the change:
+
+        * an unconfigured connection never asserts WAL, so whichever
+          component creates the database file first decides its journal
+          mode -- and this class is constructed during ``KernelDaemon
+          .__init__()``, *before* ``MemoryStore.init()`` runs, so on a fresh
+          install it created the file in rollback-journal mode, where
+          readers and writers block each other;
+        * the resulting failures reached this module's ``skill_action_audit``
+          write, which swallowed them (see ``_audit_execution``).
+
+        ``set_wal_pragmas()`` brings this connection in line with the rest
+        of the kernel -- WAL, ``synchronous=NORMAL``, ``foreign_keys=ON``,
+        ``busy_timeout=5000``. It does not, and cannot, remove write
+        contention itself; making the resulting failure *truthful* is
+        ``_audit_execution``'s job, not this method's.
+        """
         if not self._db_path:
             raise RuntimeError("No database configured")
-        conn = sqlite3.connect(self._db_path)
+        conn = connect(self._db_path)
+        set_wal_pragmas(conn)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -556,6 +589,28 @@ class SkillRegistry:
         params: dict[str, Any] | None = None,
     ) -> SkillResult:
         """
+        Execute an action on a loaded skill, with S2 audit accounting.
+
+        WP-A2: this thin wrapper exists only to scope the per-action
+        collector that carries failed `permission_audit` writes from inside
+        the skill's own permission checks back to `_finish()` (see
+        `bartholomew.kernel.skill_permissions
+        .collect_permission_audit_failures`). The scope is opened here, at
+        the outermost boundary of one governed action, so that every audit
+        write attributable to that action -- authorisation and execution
+        alike -- lands in one verdict. All behaviour is in
+        `_execute_action_inner`, unchanged.
+        """
+        with collect_permission_audit_failures():
+            return await self._execute_action_inner(skill_id, action, params)
+
+    async def _execute_action_inner(
+        self,
+        skill_id: str,
+        action: str,
+        params: dict[str, Any] | None = None,
+    ) -> SkillResult:
+        """
         Execute an action on a loaded skill.
 
         This is the single choke-point every skill execution flows through
@@ -819,7 +874,7 @@ class SkillRegistry:
         # previously called directly here on every single skill action.
         from .blocking_executor import run_off_loop
 
-        await run_off_loop(
+        audit_error = await run_off_loop(
             self._audit_execution,
             skill_id,
             action,
@@ -827,6 +882,17 @@ class SkillRegistry:
             result,
             executor=self._blocking_executor,
         )
+        if audit_error:
+            result.mark_audit_degraded(audit_error)
+
+        # WP-A2: permission-audit writes that failed while this action was
+        # being authorised are collected per-action (see
+        # `_collect_permission_audit_failures`) and folded in here, at the
+        # same single chokepoint, so one action yields one truthful verdict
+        # rather than two partial ones.
+        for permission_audit_error in drain_permission_audit_failures():
+            result.mark_audit_degraded(permission_audit_error)
+
         await self._record_reflection(observation, skill_id, action, params, result)
         return result
 
@@ -863,13 +929,29 @@ class SkillRegistry:
         action: str,
         params: dict[str, Any] | None,
         result: SkillResult,
-    ) -> None:
+    ) -> str | None:
         """
         Persist an audit record for every execute_action() attempt --
         success, failure, permission denial, or parking-brake block alike.
+
+        Returns ``None`` when the row persisted, or the failure text when it
+        did not.
+
+        WP-A2 / safety gate S2 / register OP-W004. This used to end in a
+        bare ``except Exception: logger.exception(...)``, so a governed
+        action whose audit row was lost returned an unqualified success --
+        the exact condition S2 forbids, and the exact condition Test #1
+        observed twice as ``Failed to log audit: database is locked``.
+
+        It still does not raise. Per the approved S2 semantics an action
+        that genuinely passed every pre-action gate and genuinely executed
+        must not be reported as having failed, and must not be retried,
+        merely because its audit write did not persist. The caller
+        (`_finish`) turns this return value into a truthful degraded result
+        instead.
         """
         if not self._db_path:
-            return
+            return None
 
         # Redact PII from top-level string param values before persisting --
         # this table has no consent-gate/redaction pipeline of its own,
@@ -902,8 +984,18 @@ class SkillRegistry:
                 conn.commit()
             finally:
                 conn.close()
-        except Exception:
-            logger.exception("Failed to write skill action audit record")
+        except Exception as e:
+            # ERROR, not the previous silent-ish exception log: a lost audit
+            # row for a governed action is a safety-relevant event, not a
+            # background warning.
+            logger.error(
+                "REQUIRED AUDIT WRITE FAILED for %s.%s (skill_action_audit): %s",
+                skill_id,
+                action,
+                e,
+            )
+            return f"skill_action_audit write failed: {e}"
+        return None
 
     def get_action_audit_log(
         self,

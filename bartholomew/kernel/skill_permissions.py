@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from .db_ctx import connect, set_wal_pragmas
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +97,62 @@ class PermissionRequest:
         )
 
 
+# ---------------------------------------------------------------------------
+# WP-A2: per-action collection of failed permission-audit writes
+# ---------------------------------------------------------------------------
+#
+# Safety gate S2 requires that a governed action cannot present full success
+# when a required audit write failed. The `skill_action_audit` row is written
+# by `SkillRegistry._finish()`, which can report its own failure directly. The
+# `permission_audit` rows are different: they are written from inside
+# `PermissionChecker.check()`, which is reached through the skill's own
+# `SkillContext.has_permission` closure while the action is executing -- there
+# is no return path from there to the action's SkillResult.
+#
+# A ContextVar bridges exactly that gap and nothing more. It is per-asyncio-task
+# (so two concurrent actions cannot contaminate each other's verdict), it holds
+# only in-memory strings for the lifetime of one action, and it is NOT a second
+# audit store: nothing is persisted here and nothing here is a record of what
+# happened -- it carries the fact that a record was *lost* back to the one place
+# that can report it truthfully.
+#
+# Outside a governed action no collector is installed. In that case a failed
+# permission-audit write is logged at ERROR and not collected, because there is
+# no action result for it to degrade.
+
+_permission_audit_failures: ContextVar[list[str] | None] = ContextVar(
+    "bartholomew_permission_audit_failures",
+    default=None,
+)
+
+
+@contextmanager
+def collect_permission_audit_failures() -> Iterator[None]:
+    """Install a fresh per-action collector for failed permission-audit writes."""
+    token = _permission_audit_failures.set([])
+    try:
+        yield
+    finally:
+        _permission_audit_failures.reset(token)
+
+
+def record_permission_audit_failure(message: str) -> None:
+    """Record a failed required permission-audit write against the current action."""
+    sink = _permission_audit_failures.get()
+    if sink is not None:
+        sink.append(message)
+
+
+def drain_permission_audit_failures() -> list[str]:
+    """Return and clear the permission-audit failures collected for this action."""
+    sink = _permission_audit_failures.get()
+    if not sink:
+        return []
+    drained = list(sink)
+    sink.clear()
+    return drained
+
+
 @dataclass
 class PermissionResult:
     """Result of a permission check."""
@@ -102,6 +163,12 @@ class PermissionResult:
     reason: str = ""
     expires_at: str | None = None
 
+    #: WP-A2 / S2: set when this check's required `permission_audit` write
+    #: did not persist. The check's own verdict (`granted`) is unaffected --
+    #: authorisation is decided by policy, never by whether the audit row
+    #: was written -- but the loss is no longer invisible to the caller.
+    audit_error: str | None = None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "granted": self.granted,
@@ -109,6 +176,7 @@ class PermissionResult:
             "permission": self.permission,
             "reason": self.reason,
             "expires_at": self.expires_at,
+            "audit_error": self.audit_error,
         }
 
 
@@ -183,7 +251,7 @@ class PermissionChecker:
             return
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        conn = self._get_connection()
         try:
             conn.executescript(self.SCHEMA)
             conn.commit()
@@ -191,10 +259,36 @@ class PermissionChecker:
             conn.close()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get database connection."""
+        """
+        Get a database connection configured by the kernel's single
+        connection authority (`bartholomew.kernel.db_ctx`).
+
+        WP-A2 / register OP-W004. This was a bare ``sqlite3.connect()``,
+        the same pattern `bartholomew/skills/notify.py` documents having
+        already been found to raise ``sqlite3.OperationalError: database is
+        locked`` under concurrent writers to this shared database file. Two
+        concrete consequences were reproduced directly against this module
+        before the change:
+
+        * an unconfigured connection never asserts WAL, so whichever
+          component creates the database file first decides its journal
+          mode -- and this class is constructed during ``KernelDaemon
+          .__init__()``, *before* ``MemoryStore.init()`` runs, so on a fresh
+          install it created the file in rollback-journal mode, where
+          readers and writers block each other;
+        * the resulting failures reached this module's audit write, which
+          swallowed them (see ``_log_audit``).
+
+        ``set_wal_pragmas()`` brings this connection in line with the rest
+        of the kernel -- WAL, ``synchronous=NORMAL``, ``foreign_keys=ON``,
+        ``busy_timeout=5000``. It does not, and cannot, remove write
+        contention itself; making the resulting failure *truthful* is
+        ``_log_audit``'s job, not this method's.
+        """
         if not self._db_path:
             raise RuntimeError("No database configured")
-        conn = sqlite3.connect(self._db_path)
+        conn = connect(self._db_path)
+        set_wal_pragmas(conn)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -220,23 +314,25 @@ class PermissionChecker:
         # 1. Check auto-granted permissions
         auto_perms = self._auto_permissions.get(skill_id, [])
         if permission in auto_perms:
-            self._log_audit(skill_id, permission, "check", "granted_auto", now)
+            audit_error = self._log_audit(skill_id, permission, "check", "granted_auto", now)
             return PermissionResult(
                 granted=True,
                 status=PermissionStatus.GRANTED,
                 permission=permission,
                 reason="Auto-granted by manifest",
+                audit_error=audit_error,
             )
 
         # 2. Check session grants
         session_perms = self._session_grants.get(skill_id, set())
         if permission in session_perms:
-            self._log_audit(skill_id, permission, "check", "granted_session", now)
+            audit_error = self._log_audit(skill_id, permission, "check", "granted_session", now)
             return PermissionResult(
                 granted=True,
                 status=PermissionStatus.GRANTED,
                 permission=permission,
                 reason="Granted for session",
+                audit_error=audit_error,
             )
 
         # 3. Check persistent grants (database)
@@ -246,30 +342,45 @@ class PermissionChecker:
                 # Check expiration
                 if db_grant.expires_at:
                     if db_grant.expires_at > now:
-                        self._log_audit(skill_id, permission, "check", "granted_db", now)
+                        audit_error = self._log_audit(
+                            skill_id,
+                            permission,
+                            "check",
+                            "granted_db",
+                            now,
+                        )
                         return PermissionResult(
                             granted=True,
                             status=PermissionStatus.GRANTED,
                             permission=permission,
                             reason="Persistent grant",
                             expires_at=db_grant.expires_at,
+                            audit_error=audit_error,
                         )
                 else:
-                    self._log_audit(skill_id, permission, "check", "granted_db", now)
+                    audit_error = self._log_audit(
+                        skill_id,
+                        permission,
+                        "check",
+                        "granted_db",
+                        now,
+                    )
                     return PermissionResult(
                         granted=True,
                         status=PermissionStatus.GRANTED,
                         permission=permission,
                         reason="Persistent grant",
+                        audit_error=audit_error,
                     )
 
         # 4. Permission not granted
-        self._log_audit(skill_id, permission, "check", "denied", now)
+        audit_error = self._log_audit(skill_id, permission, "check", "denied", now)
         return PermissionResult(
             granted=False,
             status=PermissionStatus.DENIED,
             permission=permission,
             reason="Not granted",
+            audit_error=audit_error,
         )
 
     def _check_db_grant(self, skill_id: str, permission: str) -> PermissionRequest | None:
@@ -487,7 +598,7 @@ class PermissionChecker:
         action: str,
         result: str,
         timestamp: str,
-    ) -> None:
+    ) -> str | None:
         """Log permission action to audit trail."""
         if not self._db_path:
             return
@@ -507,7 +618,20 @@ class PermissionChecker:
             finally:
                 conn.close()
         except Exception as e:
-            logger.warning("Failed to log audit: %s", e)
+            # WP-A2 / register OP-W004 / safety gate S2. This was
+            # `logger.warning("Failed to log audit: %s", e)` and nothing
+            # else -- the exact line Test #1 emitted twice as "Failed to log
+            # audit: database is locked", after which the governed action
+            # reported unqualified success. The write still must not raise
+            # (a lost audit row must not fail an action that legitimately
+            # executed, per the approved S2 semantics), but it is now
+            # reported: at ERROR, and to the current action so `_finish()`
+            # can mark the result degraded.
+            message = f"permission_audit write failed for {skill_id}/{permission}: {e}"
+            logger.error("REQUIRED AUDIT WRITE FAILED: %s", message)
+            record_permission_audit_failure(message)
+            return message
+        return None
 
     def get_audit_log(
         self,

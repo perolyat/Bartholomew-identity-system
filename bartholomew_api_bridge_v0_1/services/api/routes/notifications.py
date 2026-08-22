@@ -61,7 +61,24 @@ async def _execute(kernel, action: str, params: dict) -> dict:
         raise HTTPException(400, result.error or "Notification action failed")
     if result.status.value == "permission_denied":
         raise HTTPException(403, result.error or "Permission denied")
-    return result.data or {}
+
+    data = result.data or {}
+
+    # WP-A2 / safety gate S2. The action genuinely passed every pre-action
+    # gate and genuinely executed, so reporting it as a failure would be
+    # untrue -- the status stays 2xx and the real effect is described
+    # normally. What must not happen is presenting it as *full* success when
+    # a required audit write for it was lost, so the response says both
+    # things explicitly. A client that ignores these fields still gets a
+    # truthful account of the action itself; a client that reads them can
+    # tell the user the action is not fully accounted for.
+    if result.audit_degraded:
+        data = {
+            **data,
+            "audit_degraded": True,
+            "audit_error": result.audit_error,
+        }
+    return data
 
 
 @router.get("/settings")

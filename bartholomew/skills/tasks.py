@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 from bartholomew.kernel.skill_base import (
     SkillBase,
     SkillContext,
@@ -153,7 +154,10 @@ class TasksSkill(SkillBase):
             return
 
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        # WP-A2: through _get_connection() so schema creation cannot be the
+        # thing that leaves this shared database in rollback-journal mode
+        # (see _get_connection()'s note).
+        conn = self._get_connection()
         try:
             conn.executescript(self.SCHEMA)
             conn.commit()
@@ -161,10 +165,22 @@ class TasksSkill(SkillBase):
             conn.close()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get database connection."""
+        """
+        Get a database connection configured by the kernel's single
+        connection authority (`bartholomew.kernel.db_ctx`).
+
+        WP-A2 / register OP-W004: this was a bare ``sqlite3.connect()``
+        against the shared database file. `bartholomew/skills/notify.py`
+        documents that exact pattern being confirmed to raise
+        ``sqlite3.OperationalError: database is locked`` here; the fix was
+        applied there and not propagated. WAL, ``synchronous=NORMAL``,
+        ``foreign_keys=ON`` and ``busy_timeout=5000`` now match the rest of
+        the kernel.
+        """
         if not self._db_path:
             raise RuntimeError("No database configured")
-        conn = sqlite3.connect(self._db_path)
+        conn = connect(self._db_path)
+        set_wal_pragmas(conn)
         conn.row_factory = sqlite3.Row
         return conn
 
