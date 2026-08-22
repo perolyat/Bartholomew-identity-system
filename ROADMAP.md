@@ -600,6 +600,20 @@ Required:
 - relevant **truthful failure handling**;
 - **reliable evidence/logging** — Test #1's own shutdown-capture gap (OP-W005) must not recur.
 
+> **Band A status (2026-08-22, documentation reconciliation; the register remains the authority
+> on formal closure).** Discharged by merged, approved work packages:
+> **B-F001 / NUDGE-F001 containment** and **safety gate S1's queue-containment portion** — WP-A1
+> (PR #60, merge `2e3a340`), with **D2 obligation preservation** by construction and the
+> accelerated soak as the representative unattended test; **the OP-W004 investigation** (root
+> cause established, two combined defects) and **S2's audit-failure semantics** for governed skill
+> actions, with deliberate failure injection — WP-A2 (PR #61, merge `6c3fb8a`). Still open in this
+> band: **reliable evidence/logging** (OP-W005 — Test #1's shutdown-capture gap must not recur;
+> a test-process property, not yet demonstrated), the **residual truthful-failure items** relied on
+> unattended, and — outside this band's letter but adjacent — the provenance-bearing Reflection
+> surfaces pending **WP-A2b** (`DECISIONS.md`, "One Reflection sink, two semantic roles"). Nothing
+> in this note authorises unattended testing; each work package and each test still requires its
+> own approval.
+
 **Permitted unattended envelope at Band A** — this is a restricted envelope, not general unattended
 operation: **no** camera or microphone capture, **no** keyboard/mouse/device-control actuation,
 **no** remote companion, and **no** consequential outbound governed action unless the additional

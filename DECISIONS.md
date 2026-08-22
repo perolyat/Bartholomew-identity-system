@@ -2215,3 +2215,102 @@
   (`config/policy.yaml`'s `affected_components` list, a runtime configuration file this
   documentation-only pass did not change).
 - **Date:** 2026-08-20
+
+## Decision: A lost required audit write yields a truthful degraded result — never a false failure, never full success
+- **Decision:** When a governed skill action passes every pre-action gate and genuinely executes,
+  but a **required audit write** for it (`skill_action_audit`, or a `permission_audit` row written
+  during its authorisation) fails to persist, the action's result keeps `status = SUCCESS` — a
+  performed real-world action is never falsely reported as failed — **and** carries
+  `audit_degraded = True` with every lost write named in `audit_error`, so it is never presented as
+  full success either (`fully_successful` is the property that asserts "completed *and* fully
+  audited"). The already-successful action is **never automatically retried** because its audit
+  failed. Failed **pre-action** gates (Parking Brake, consent, authorisation, Identity policy)
+  remain fail-closed and the action does not execute — the degraded path exists only for actions
+  that genuinely ran. Notably, an *unreadable* Parking Brake under write contention fails closed and
+  refuses the action; that is pinned by test so no future reading of this entry can convert it into
+  a degraded success. No second durable audit mechanism exists: the per-action collector that
+  carries permission-audit failures to the result is in-memory, per-action, and persists nothing.
+  Approved by Taylor as option (b) of the WP-A2 escalation, 2026-08-22; implemented in **WP-A2**
+  (PR #61, merge commit `6c3fb8a`, implementation head `60c109c`), which also established OP-W004's
+  root cause: bare `sqlite3.connect()` use outside the `kernel/db_ctx.py` connection authority
+  (leaving a fresh database in rollback-journal mode, since `PermissionChecker`/`SkillRegistry` are
+  constructed before `MemoryStore.init()`), combined with audit writes that swallowed their own
+  failures.
+- **Alternatives:** Fail the whole action when its audit write fails (rejected: reports a
+  genuinely-performed real-world action as failed — untruthful in the opposite direction — and
+  turns a logging failure into a new denial path); a compensating durable audit record (permitted
+  by the register as an alternative to root-causing, rejected here: the root cause *was*
+  established, and a second durable audit store would be a second authority for one concern).
+- **Why:** Register **OP-W004** (S0, Band A) recorded two `Failed to log audit: database is locked`
+  warnings during Test #1 with unknown affected events; safety gate **S2** forbids a governed
+  action presenting full success when required audit persistence failed. Both reproduced
+  deterministically before the fix was designed.
+- **Consequences:** S2's audit-failure-semantics half is discharged for governed skill actions,
+  with deliberate failure-injection tests (`tests/test_audit_write_integrity.py` — a held writer
+  lock, a SQLite ABORT trigger, an unopenable path; nothing monkeypatched). Consumers that need
+  "completed cleanly" must read `fully_successful`, not `success`. HTTP surfaces include
+  `audit_degraded`/`audit_error` only when degradation actually occurred. The connection-authority
+  invariant is enforced structurally (an `ast`-parsed test over the covered modules).
+- **Date:** 2026-08-22
+
+## Decision: One Reflection sink, two semantic roles — additive stream vs sole required provenance
+- **Decision:** `record_action_reflection()` (the shared Reflection sink,
+  `bartholomew/kernel/reflection.py`) serves **two different semantic roles depending on the
+  calling surface**, and the two must never be collapsed by a future refactor. Where another
+  authoritative durable record of the same event exists and the Reflection is explicitly the
+  additive cross-surface stream — the **skill** surface (`skill_action_audit` is the compliance
+  record), the **awaiting_response** surface (`awaiting_response_audit` is the per-entry detail
+  view), and the **scheduler** surface (tick rows carry `ok`/`result_meta`) — a Reflection-write
+  failure does **not** by itself require degraded action status. Where the Reflection is the **sole
+  durable record required to reconstruct a governed decision or action** — the **chat** surface
+  (S5.3 Decision E.2's explanation-grade applied-competency/personal-fact context: "a decision
+  cannot be reconstructed after the fact"), the **training** surface (supersession provenance per
+  S5.2 §10 / Sec.13.4: overwriting a record's current state must not lose the superseded claim's
+  provenance), and the **sight/voice** device seams (the only persisted record of a start attempt's
+  governance outcome) — its persistence is **required provenance**, and failure must not permit
+  full-success reporting. Approved by Taylor 2026-08-22 on repository evidence, explicitly
+  rejecting a blanket classification in either direction.
+- **Alternatives:** Classify every invocation as required audit persistence (rejected: contradicts
+  the sink's own design — `reflection.py` states the surface-specific stores are unchanged and the
+  skill Reflection is "deliberately additive" — and would mark actions degraded whose actual
+  required record persisted fine); keep every invocation best-effort (rejected: silently loses
+  sole-record provenance on chat, training, and the device seams).
+- **Why:** WP-A2's decision-2 verification traced all seven production call sites and found the
+  classification splits per surface; forcing either uniform reading onto the wrong surfaces is
+  exactly the mis-scoping the escalation instruction guarded against.
+- **Consequences:** **WP-A2b — provenance-bearing Reflection surfaces** is approved in principle
+  as the next bounded package (design-first checkpoint required before implementation): make the
+  sink's persistence failure observable, propagate it through the chat/training/device result
+  contracts only, and leave the three additive surfaces unchanged. Until WP-A2b lands, the
+  provenance surfaces remain best-effort — recorded as a known gap in `RISKS.md`'s tech-debt
+  watchlist, not presented as fixed.
+- **Date:** 2026-08-22
+
+## Decision: WP-A1 curiosity equivalence — prompts are presentation; the unresolved item is the unit of containment
+- **Decision:** Three rotating curiosity prompts may feed **one bounded unresolved curiosity
+  item**, rather than creating three simultaneously unresolved items. **The number of prompt
+  sources does not define the permitted amount of outstanding autonomous work; the containment
+  boundary applies to the unresolved work/identity scope, not independently to each prompt.** The
+  companion semantic is recorded with it: WP-A1 answers S1's bounded-capacity requirement by
+  **bounding the system-generated queue by identity** (the finite set of deterministic equivalence
+  keys) **rather than by shedding** — no delete, auto-resolve, expiry, or cap-shedding path exists;
+  resolving an item frees its key so a later genuinely eligible occurrence is representable again,
+  and an explicit `escalation` label creates a distinct item by construction. Approved by Taylor
+  2026-08-22, recording the previously missing WP-A1 decision explicitly rather than leaving it
+  silently inferred from merged implementation.
+- **Alternatives:** One unresolved item per distinct prompt string (rejected: the rotating wording
+  makes every rewording a "new" obligation — NUDGE-F001's unbounded growth exactly; the bound would
+  be three-per-drive by accident of copywriting rather than one by identity); semantic/embedding/LLM
+  equivalence matching (rejected in WP-A1 and reaffirmed here: a wrong merge silently collapses two
+  genuine commitments — over-separating is a nuisance, over-merging loses an obligation).
+- **Why:** PR #60 (§9, known limitation 1) named the curiosity-equivalence scope "the single design
+  point in the package most worth a second opinion" and recommended a `DECISIONS.md` entry after
+  approval; the entry was never written, leaving merged code as unrecorded product-semantics
+  authority. This entry closes that gap with the second opinion given.
+- **Consequences:** `scheduler/containment.py`'s drive-scoped `_curiosity_identity` is the approved
+  behaviour, not a provisional accident. The queue's steady state under repeated firings is one
+  unresolved curiosity item and one queue-health item, with every suppression auditable in
+  `nudge_containment_events` and emission frequency preserved in `occurrence_count`. Changing
+  curiosity equivalence to per-prompt granularity is a change **against this entry** and needs
+  Taylor, not an inference.
+- **Date:** 2026-08-22 (decision recorded; implementation merged 2026-08-21, PR #60, `2e3a340`)
