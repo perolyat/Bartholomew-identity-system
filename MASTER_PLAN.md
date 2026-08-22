@@ -764,7 +764,16 @@ approval before work begins — this list records sequencing, not authorisation)
    break-even — a burden finding, not a feature gap. That is what decision D1 and product gate P2
    now exist to answer.
 
-4a. **← NEXT: Taylor reviews the Post-Test #1 documentation propagation under the Approval Gate.**
+4a. ✅ **Done 2026-08-20/22.** The documentation-propagation review completed (PR #59 merged by
+   Taylor 2026-08-20, `54431ba`), and the first two band-sequenced implementation work packages
+   were proposed, separately approved, and merged: **WP-A1** (queue containment, Band A / Track 1,
+   PR #60, `2e3a340`) and **WP-A2** (audit-write integrity / S2 semantics, Band A, PR #61,
+   `6c3fb8a`). Band A's remaining prerequisites are evidence/logging reliability (OP-W005 class)
+   and the residual truthful-failure items — see `ROADMAP.md`'s Band A section. Next in flight:
+   **WP-A2b** (provenance-bearing Reflection surfaces, approved in principle, design-first) and the
+   documentation reconciliation pass. The original text of this step is preserved below.
+
+   **← NEXT (as written 2026-08-20): Taylor reviews the Post-Test #1 documentation propagation under the Approval Gate.**
    The documentation-only pass carrying the approved register into the canonical docs is listed
    under "Pending (awaiting user approval)" below. **No implementation work package may be proposed
    until that review completes** — that is the register's own approval sequence, not an extra step.
@@ -864,16 +873,45 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
   enumerated here** — they change wording, not authority, and listing each one would make this entry
   need an edit for every future review fix. PR #59's commit log is the complete record.
 
-  **Still pending, and deliberately recorded as pending despite existing as commits.** Committing to
-  a branch is not approval. This pass **remains awaiting Taylor's review under the Approval Gate**
-  and has not been merged; it moves to the Approval Ledger below only once that review completes.
-  **No implementation work package may be proposed until then.**
+  **Resolved 2026-08-20 — recorded here 2026-08-22.** The paragraph below is preserved as the
+  record of what this entry required; it is no longer the current state:
+
+  > **Still pending, and deliberately recorded as pending despite existing as commits.** Committing to
+  > a branch is not approval. This pass **remains awaiting Taylor's review under the Approval Gate**
+  > and has not been merged; it moves to the Approval Ledger below only once that review completes.
+  > **No implementation work package may be proposed until then.**
+
+  That review completed: **Taylor merged PR #59 on 2026-08-20** (merge commit `54431ba`) — the
+  review-and-merge act this entry was waiting on — and subsequently approved and merged the first
+  two implementation work packages proposed under the readiness bands (WP-A1, PR #60; WP-A2,
+  PR #61), which could not have been proposed had the gate still been closed. Moved to the
+  Approval Ledger below. *(This correction records repository history; it does not retroactively
+  change what the entry required at the time it was written.)*
 - 2026-07-27 — Planning-document reconciliation (documentation-only; no production code, tests,
   dependencies, workflows, configuration or schema touched) — **not yet committed**
 
 ### Approval Ledger
 Record of approved changes with commit tracking (most recent 5):
 
+- 2026-08-22 — **WP-A2: audit-write integrity and truthful governed-action failure** (register
+  OP-W004 root cause established; safety gate S2's audit-failure semantics implemented as the
+  approved option (b) degraded-result contract; production SQLite access routed through the
+  `kernel/db_ctx.py` connection authority; 24 new failure-injection tests; WP-A1 containment
+  invariants verified unchanged) — Approved by Taylor (scope 2026-08-22, merge approval 2026-08-22,
+  pinned to implementation head `60c109c`) — Commit: `6c3fb8a` (merge of PR #61). The S2 semantics
+  and the per-surface Reflection classification are recorded in `DECISIONS.md` (2026-08-22
+  entries).
+- 2026-08-21 — **WP-A1: scheduler queue containment and obligation-safe deduplication** (B-F001 /
+  NUDGE-F001 closed; safety gate S1's queue-containment portion discharged; D2 obligation
+  preservation by construction; 34 new tests including the accelerated soak) — Approved by Taylor —
+  Commit: `2e3a340` (merge of PR #60, implementation head `5113ef8`). The curiosity-equivalence
+  decision PR #60 flagged for a second opinion was approved and recorded 2026-08-22 — see
+  `DECISIONS.md`, "WP-A1 curiosity equivalence".
+- 2026-08-20 — **Post-Test #1 documentation propagation** (the canonical-doc changes carrying the
+  approved Decision Register v2.2 into this repository — see the resolved entry under "Pending
+  Approvals" above for scope) — Approved by Taylor via review and merge of PR #59 — Commit:
+  `54431ba` (merge of PR #59; propagation commit `a629ae4`, separately approved CI exception
+  `279635f`).
 - 2026-08-20 — **Post-Test #1 Decision Register v2.2 approved as the authoritative Post-Test #1
   Decision Register** — Approved by Taylor — Commit: `a629ae4` on branch
   `claude/bartholomew-post-test-docs-f8xwr1`, **not yet merged** (corrected 2026-08-20 after

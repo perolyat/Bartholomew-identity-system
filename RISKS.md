@@ -2,7 +2,19 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation). **Four groups of
+> **Last updated:** 2026-08-22 (WP-A2 reconciliation). Changes in this pass: (1) the
+> **OP-W004 bullet** in the Post-Test #1 confirmed-risks entry is **amended, not duplicated** — the
+> root cause is now established and the S2 audit-failure semantics are implemented and merged
+> (WP-A2, PR #61, merge `6c3fb8a`); the historical Test #1 statement is preserved as written.
+> (2) **Four new tech-debt watchlist entries**: the effective 5-second SQLite busy timeout (a
+> decided, retained behaviour — recorded, not fixed); the startup-window governed-action
+> `database is locked` defect with its measured rate; the permission-checker singleton's
+> `db_path`-ignoring behaviour; and the best-effort Reflection persistence remaining on the
+> provenance-bearing surfaces pending WP-A2b. **No production code, tests, schemas, migrations or
+> runtime configuration are changed by this pass**, and no entry below claims a runtime discrepancy
+> is fixed because it is documented.
+>
+> **Previously (2026-08-20, Post-Test #1 documentation propagation):** **Four groups of
 > changes**, all in the tech-debt watchlist unless noted: (1) the existing **hydration/water-logging**
 > entry is **amended, not duplicated**, to record the approved D4 scope decision — Water/hydration is
 > outside the current active ordinary-user product/UI scope, existing historical data and models must
@@ -728,6 +740,19 @@
     database is locked` warnings occurred during Test #1; the exact affected events are unknown and
     the root cause is not established. Directly relevant to R1/R2 above: a governed action whose
     audit did not persist must not be able to present as a full success. Safety gate S1/S2 territory.
+    **Amended 2026-08-22 (WP-A2, PR #61, merge `6c3fb8a`): root cause established and the S2
+    audit-failure semantics implemented.** Two combined defects, both reproduced deterministically
+    against the live application before the fix: bare `sqlite3.connect()` use outside the
+    `kernel/db_ctx.py` connection authority (a fresh database was created in rollback-journal mode
+    because `PermissionChecker`/`SkillRegistry` are constructed before `MemoryStore.init()`), and
+    audit writes that swallowed their own failures — `skill_permissions.py`'s `_log_audit` was the
+    literal source of Test #1's warning text. A governed skill action now reports a lost required
+    audit write truthfully: never as a false failure of the performed action, never as full success
+    (`DECISIONS.md`, "A lost required audit write yields a truthful degraded result"). The
+    register's closure criterion (root cause established, failure injection passes) is met by
+    `tests/test_audit_write_integrity.py`; the register remains the authority on formally recording
+    closure. The historical statement above is preserved as written — Test #1's *specific* affected
+    events remain unknown, because the raw artifacts remain absent.
   - **Queue growth was self-sustaining (register B-F001 and NUDGE-F001, both S0, Band A).**
     Queue-health warnings themselves became queue items, and semantically equivalent unresolved
     prompts persisted as separate items. This is the concrete form of R2's over-automation risk seen
@@ -778,6 +803,57 @@
   force. Nothing was invented and nothing was reconstructed from the register to close the gap —
   doing so would produce a circular record that looks corroborated and is not. **Risk category:**
   evidence/verification.
+
+- **(2026-08-22) The effective SQLite lock timeout is 5 seconds, and the connection authority's
+  30-second parameter is dead in practice — decided and retained, not fixed.**
+  `kernel/db_ctx.py`'s `connect()` documents and passes `timeout=30.0`, but `set_wal_pragmas()`
+  then executes `PRAGMA busy_timeout = 5000`, which **overrides** the connection timeout — so every
+  connection configured by the authority (which, after WP-A2, is every production connection to the
+  shared database) waits at most 5 seconds for a writer lock. **Taylor decided 2026-08-22 to retain
+  the existing effective 5-second behaviour for now**; this entry records the discrepancy so the
+  30s parameter is not mistaken for live behaviour. Changing either value is a repository-wide
+  behaviour change requiring its own decision — it is the natural companion to the startup-window
+  defect below. **Risk category:** reliability/configuration.
+
+- **(2026-08-22) Startup-window governed actions can fail with a raw `database is locked`.**
+  During the scheduler's startup write burst (every drive immediately due), a user-facing governed
+  action's own state write can exhaust the effective 5s busy timeout. Measured during WP-A2 against
+  a live app: 3–4 failures per 1200 quiet-hours updates, **always within the first ~8 requests
+  after process start**, surfacing to the user as HTTP 400 `database is locked`. This is the root
+  cause of the known intermittent CI failure `tests/test_notifications_api.py::
+  test_set_quiet_hours_updates_settings` (`assert 400 == 200`) — which is why a passing run of that
+  test must **not** be read as WP-A2 having fixed this: WP-A2 measured the rate before and after
+  (4/1200 → 3/1200, statistically unchanged) and deliberately did not change it, because the
+  failing write is the action's real state write, not an audit write, and an action whose real
+  write failed *should* report failure. A truthful-degraded response is **not** the fix here; the
+  fix is a bounded package addressing the timeout/startup-burst interaction (see the entry above).
+  **Risk category:** reliability/product.
+
+- **(2026-08-22) `get_permission_checker()` is a process-global singleton that ignores `db_path`
+  after first construction.** `kernel/skill_permissions.py`'s module-level `_checker` is created
+  once; every later `get_permission_checker(db_path=...)` call returns the cached instance bound to
+  the *first* caller's path. Reproduced during WP-A2's root-cause work: constructing the singleton
+  against a temp path, deleting that directory, then booting the real app leaves the app's
+  `SkillRegistry` auditing against a nonexistent file (`unable to open database file` on every
+  permission audit) while the rest of the runtime uses `BARTH_DB_PATH`. Four test modules
+  (`test_skill_registry.py`, `test_skill_runtime_contract_seam.py`,
+  `test_end_to_end_tasks_and_audit.py`, `test_runtime_convergence_policy.py`) reset it; other
+  suites do not, so collection
+  order determines which database the singleton is bound to. A live test-isolation hazard, and a
+  runtime hazard for any future multi-registry or path-switching configuration. **Deliberately not
+  fixed in WP-A2** (Taylor, 2026-08-22): repository-wide test/runtime behaviour could shift;
+  requires its own bounded investigation. **Risk category:** tech debt/test isolation.
+
+- **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
+  pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
+  **chat**, **training**, and **sight/voice** surfaces, the shared Reflection sink is the sole
+  durable record needed to reconstruct a governed decision (S5.3 E.2 explanation-grade context;
+  S5.2 supersession provenance; device governance outcomes), yet `record_action_reflection()`
+  still swallows persistence failures — a lost write on those surfaces is currently invisible to
+  the caller and to the user. WP-A2b (approved in principle, design-first) closes this for exactly
+  those surfaces. The **skill**, **awaiting_response**, and **scheduler** surfaces are *not* a gap:
+  each has its own authoritative durable record, and their Reflection stream is additive by design.
+  **Risk category:** auditability/provenance.
 
 ## Red-team focus areas
 
