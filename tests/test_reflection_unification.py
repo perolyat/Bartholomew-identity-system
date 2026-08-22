@@ -71,7 +71,11 @@ def test_summary_and_string_details_are_redacted():
 @pytest.mark.asyncio
 async def test_record_is_noop_without_store():
     reflection = ActionReflection("chat", "chat_response", "responded", "hi")
-    assert await record_action_reflection(None, reflection) is None
+    # WP-A2b: the sink reports what happened instead of returning a bare row
+    # id. No store means no write attempted -- neither persisted nor errored.
+    outcome = await record_action_reflection(None, reflection)
+    assert outcome.row_id is None
+    assert outcome.error is None
 
 
 # =============================================================================

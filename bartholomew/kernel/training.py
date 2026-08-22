@@ -200,6 +200,19 @@ class TrainingRuntimeResult:
     outcomes: list[TrainingRecordOutcome] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
+    #: WP-A2b. True when this submission's Reflection failed to persist. On
+    #: the training surface the Reflection is required provenance -- it is
+    #: where supersession history lives (design Sec.13.4), so a lost write
+    #: silently loses a superseded claim's provenance forever. Per-record
+    #: `outcomes` are unaffected (the stores they describe really were
+    #: written), and nothing is retried -- but the submission must not
+    #: present as full success. See `DECISIONS.md`, "One Reflection sink,
+    #: two semantic roles".
+    provenance_degraded: bool = False
+
+    #: The reflection-write failure, verbatim, when `provenance_degraded`.
+    provenance_error: str | None = None
+
     def count(self, outcome: str) -> int:
         return sum(1 for item in self.outcomes if item.outcome == outcome)
 
@@ -222,6 +235,8 @@ class TrainingRuntimeResult:
             "governance_reason": self.governance_reason,
             "outcomes": [item.to_dict() for item in self.outcomes],
             "errors": list(self.errors),
+            "provenance_degraded": self.provenance_degraded,
+            "provenance_error": self.provenance_error,
             "summary": {
                 "stored": self.stored_count,
                 "queued_for_consent": self.queued_count,

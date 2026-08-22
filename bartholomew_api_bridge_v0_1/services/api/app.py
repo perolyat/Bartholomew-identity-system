@@ -571,7 +571,15 @@ async def chat(body: ChatIn):
         if not result.governance_allowed:
             raise HTTPException(503, result.governance_reason or "Blocked by governance")
         raw = result.response
+        # WP-A2b: carry a lost chat-provenance record (see RuntimeContract
+        # Result.provenance_degraded) out to the response. Only the governed
+        # kernel path can degrade -- the no-kernel fallback below records no
+        # Reflection at all and predates this contract.
+        provenance_degraded = result.provenance_degraded
+        provenance_error = result.provenance_error
     else:
+        provenance_degraded = False
+        provenance_error = None
         # No _kernel (startup/shutdown window): no shared instance exists to
         # gate through, so handle_input()'s own check is the sole gate here
         # (skip_governance_check defaults to False). Its synchronous
@@ -589,7 +597,13 @@ async def chat(body: ChatIn):
     reply, tone, emotion = _parse_reply(raw)
     if not reply:
         reply = str(raw)
-    return ChatOut(reply=reply, tone=tone, emotion=emotion)
+    return ChatOut(
+        reply=reply,
+        tone=tone,
+        emotion=emotion,
+        audit_degraded=True if provenance_degraded else None,
+        audit_error=provenance_error,
+    )
 
 
 @app.get("/api/conversation/recent", response_model=ConversationList)

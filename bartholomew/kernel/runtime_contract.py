@@ -47,7 +47,7 @@ from .competency_reasoning import (
     select_relevant,
 )
 from .memory.privacy_guard import get_consent_handler
-from .reflection import ActionReflection, record_action_reflection
+from .reflection import ActionReflection, ReflectionWriteOutcome, record_action_reflection
 
 if TYPE_CHECKING:
     from identity_interpreter.identity_context import IdentityContext
@@ -152,6 +152,21 @@ class RuntimeContractResult:
     #: Empty when the turn proposed none, or when governance denied the turn.
     #: Defaulted so existing construction sites are unaffected.
     personal_facts_captured: list[dict[str, Any]] = field(default_factory=list)
+
+    #: WP-A2b. True when this turn's Reflection -- on the chat surface the
+    #: sole durable record of the governed decision context (S5.3 Decision
+    #: E.2's explanation-grade applied-competency/personal-fact record) --
+    #: failed to persist. The turn's own outcome (`governance_allowed`,
+    #: `response`) is unaffected: a genuinely-produced response is never
+    #: reported as failed because its provenance record was lost, and a
+    #: turn is never re-run for it -- but it must not present as *full*
+    #: success either. Defaulted so existing construction sites are
+    #: unaffected. See `DECISIONS.md`, "One Reflection sink, two semantic
+    #: roles".
+    provenance_degraded: bool = False
+
+    #: The reflection-write failure, verbatim, when `provenance_degraded`.
+    provenance_error: str | None = None
 
 
 def _build_interpretation(
@@ -722,10 +737,13 @@ async def run_chat_through_runtime_contract(
     # per-action Reflection into the single shared Memory sink
     # (MemoryStore.reflections) that skill execution also writes -- the same
     # Reflection shape through one sink, for every outcome (responded or
-    # denied), closing Exit Gate #4. Best-effort: never breaks the turn.
-    # Working Memory's own durability stays its concern
+    # denied), closing Exit Gate #4. Never breaks the turn -- but on this
+    # surface the Reflection is required provenance (S5.3 E.2: "a decision
+    # cannot be reconstructed after the fact"), so WP-A2b: a lost write is
+    # carried on the result instead of being swallowed in the sink. Working
+    # Memory's own durability stays its concern
     # (WorkingMemoryManager.persist_snapshot() on KernelDaemon.stop()).
-    await record_action_reflection(daemon.mem, reflection)
+    reflection_outcome = await record_action_reflection(daemon.mem, reflection)
 
     return RuntimeContractResult(
         observation=observation,
@@ -736,6 +754,8 @@ async def run_chat_through_runtime_contract(
         response=response,
         working_memory_item_id=working_memory_item_id,
         personal_facts_captured=captured_facts,
+        provenance_degraded=reflection_outcome.error is not None,
+        provenance_error=reflection_outcome.error,
     )
 
 
@@ -946,6 +966,18 @@ class DeviceRuntimeResult:
     reason: str | None
     result: Any
 
+    #: WP-A2b. True when this start attempt's Reflection -- the *only*
+    #: persisted record of the governance outcome on the sight/voice
+    #: surfaces -- failed to persist. `started`/`outcome` are unaffected: a
+    #: capability that genuinely started is never reported as failed for a
+    #: lost provenance record, and nothing is retried -- but the attempt
+    #: must not present as fully recorded. Defaulted so existing
+    #: construction sites are unaffected.
+    provenance_degraded: bool = False
+
+    #: The reflection-write failure, verbatim, when `provenance_degraded`.
+    provenance_error: str | None = None
+
 
 def _resolve_device_db_path(db_path: str | None) -> str | None:
     """The db path used for the parking-brake read and the Reflection write.
@@ -968,21 +1000,30 @@ async def _record_device_reflection(
     kind: str,
     outcome: str,
     reason: str | None,
-) -> None:
+) -> ReflectionWriteOutcome:
     """Exactly one ActionReflection into the shared Memory sink for a
     voice/sight start attempt -- every outcome (started or any denial/error).
-    Best-effort: `record_action_reflection` swallows and logs any failure, so
-    a missing/uninitialised store never breaks the surface (same posture as
-    `_record_drive_reflection`)."""
+
+    Never raises and never breaks the surface -- but on these surfaces the
+    Reflection is the *sole* persisted record of the governance outcome, so
+    WP-A2b: what became of the write is returned for the seam to carry on
+    its `DeviceRuntimeResult` instead of being swallowed. Because this
+    function owns constructing its own store, a store-construction failure
+    is a persistence failure of that sole record and is reported as one; a
+    caller that passed no `db_path` at all (duck-typed test configuration)
+    attempted no persistence and gets a clean outcome, same as before.
+    """
     mem = None
     if db_path:
         try:
             from .memory_store import MemoryStore
 
             mem = MemoryStore(db_path)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to construct MemoryStore for device reflection")
-            mem = None
+            return ReflectionWriteOutcome(
+                error=f"reflection write failed ({surface}): store construction failed: {exc}",
+            )
     reflection = ActionReflection(
         surface=surface,
         action=kind,
@@ -990,7 +1031,7 @@ async def _record_device_reflection(
         summary=f"{surface.capitalize()} {kind}: {outcome}",
         details={"reason": reason} if reason else {},
     )
-    await record_action_reflection(mem, reflection)
+    return await record_action_reflection(mem, reflection)
 
 
 async def _resolve_device_consent(device_label: str) -> tuple[bool, str, str | None]:
@@ -1107,7 +1148,7 @@ async def run_sight_through_runtime_contract(
             logger.exception("Sight capture failed after governance approval")
             outcome, reason, started = "error", str(exc), False
 
-    await _record_device_reflection(
+    device_reflection = await _record_device_reflection(
         resolved_db_path,
         "sight",
         candidate_action.kind,
@@ -1122,6 +1163,8 @@ async def run_sight_through_runtime_contract(
         started=started,
         outcome=outcome,
         reason=reason,
+        provenance_degraded=device_reflection.error is not None,
+        provenance_error=device_reflection.error,
         result=capture_result,
     )
 
@@ -1200,7 +1243,7 @@ async def run_voice_through_runtime_contract(
             logger.exception("Voice stream failed after governance approval")
             outcome, reason, started = "error", str(exc), False
 
-    await _record_device_reflection(
+    device_reflection = await _record_device_reflection(
         resolved_db_path,
         "voice",
         candidate_action.kind,
@@ -1215,6 +1258,8 @@ async def run_voice_through_runtime_contract(
         started=started,
         outcome=outcome,
         reason=reason,
+        provenance_degraded=device_reflection.error is not None,
+        provenance_error=device_reflection.error,
         result=stream_result,
     )
 
@@ -1616,7 +1661,7 @@ async def _record_training_reflection(
     candidate_action: CandidateAction,
     outcome: str,
     details: dict[str, Any] | None = None,
-) -> None:
+) -> ReflectionWriteOutcome:
     """Reflection -> Memory tail for one training submission (Exit Gate #4's
     shared sink, extended to the training surface).
 
@@ -1632,7 +1677,7 @@ async def _record_training_reflection(
         summary=f"Training ingestion ({candidate_action.kind}): {outcome}",
         details=details or {},
     )
-    await record_action_reflection(getattr(daemon, "mem", None), reflection)
+    return await record_action_reflection(getattr(daemon, "mem", None), reflection)
 
 
 async def _classify_not_stored(
@@ -1770,12 +1815,17 @@ async def run_training_through_runtime_contract(
                     detail=result.governance_reason,
                 ),
             )
-        await _record_training_reflection(
+        blocked_reflection = await _record_training_reflection(
             daemon,
             candidate_action,
             "blocked_by_governance",
             {"competency_id": submission.competency_id, "reason": result.governance_reason},
         )
+        # A blocked submission is not a success of any kind, so there is no
+        # "full success" for a lost reflection to contradict -- but the loss
+        # is still reported truthfully rather than swallowed.
+        result.provenance_degraded = blocked_reflection.error is not None
+        result.provenance_error = blocked_reflection.error
         return result
 
     result.governance_allowed = True
@@ -1893,7 +1943,7 @@ async def run_training_through_runtime_contract(
                 ),
             )
 
-    await _record_training_reflection(
+    ingest_reflection = await _record_training_reflection(
         daemon,
         candidate_action,
         "ingested",
@@ -1906,5 +1956,12 @@ async def run_training_through_runtime_contract(
             "supersessions": supersessions,
         },
     )
+    # WP-A2b: this Reflection is where supersession provenance lives
+    # (design Sec.13.4) -- losing it silently loses the superseded claim's
+    # history. The per-record outcomes above stand (those writes really
+    # happened, and are not retried), but the submission must say the
+    # provenance record did not persist.
+    result.provenance_degraded = ingest_reflection.error is not None
+    result.provenance_error = ingest_reflection.error
 
     return result

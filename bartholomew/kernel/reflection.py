@@ -97,30 +97,77 @@ class ActionReflection:
         }
 
 
+@dataclass
+class ReflectionWriteOutcome:
+    """What became of one Reflection write through the shared sink.
+
+    WP-A2b. `row_id` is the persisted `reflections` row id; `error` is the
+    verbatim failure when the write was attempted and did not persist. The
+    two are mutually exclusive; both are None when no store was wired in
+    (an accepted configuration for duck-typed contexts, not a failure).
+
+    Which callers must *act* on `error` is a per-surface decision, recorded
+    in `DECISIONS.md` ("One Reflection sink, two semantic roles"): on the
+    provenance-bearing surfaces (chat, training, sight/voice) the Reflection
+    is the sole durable record of the governed decision, so a lost write
+    must reach the caller's result contract; on the additive surfaces
+    (skill, awaiting_response, scheduler) another authoritative durable
+    record exists and ignoring this outcome is the approved behaviour.
+    """
+
+    row_id: int | None = None
+    error: str | None = None
+
+    @property
+    def persisted(self) -> bool:
+        return self.error is None
+
+
 async def record_action_reflection(
     memory_store: MemoryStore | None,
     reflection: ActionReflection,
-) -> int | None:
+) -> ReflectionWriteOutcome:
     """
     Persist a Reflection through the single shared Memory sink
-    (`MemoryStore.reflections`). Returns the row id, or None if there is no
-    store wired in.
+    (`MemoryStore.reflections`), and report what happened.
 
-    Best-effort by design: a reflection-write failure must never break the
-    action that produced it (mirrors `SkillRegistry._audit_execution`'s own
-    swallow-and-log posture), so any exception is logged and swallowed.
+    Never raises: a reflection-write failure must never break the action
+    that produced it, on any surface. What changed in WP-A2b is only the
+    *silence* — the failure used to be logged and discarded here, which on
+    the provenance-bearing surfaces meant the sole durable record of a
+    governed decision could be lost with the caller none the wiser. The
+    outcome now says truthfully whether the row persisted; each surface's
+    seam decides (per the recorded per-surface classification) whether that
+    outcome must reach its result contract.
+
+    A ``memory_store`` of None is reported as neither persisted-with-id nor
+    errored — no write was attempted. That is the pre-existing accepted
+    configuration for duck-typed test contexts; a provenance surface that
+    can reach this state with real data at stake should treat constructing
+    its store as part of its own persistence responsibility (see
+    `_record_device_reflection`).
     """
     if memory_store is None:
-        return None
+        return ReflectionWriteOutcome()
 
     row = reflection.to_memory_row()
     try:
-        return await memory_store.insert_reflection(
+        row_id = await memory_store.insert_reflection(
             kind=row["kind"],
             content=row["content"],
             meta=row["meta"],
             ts=row["ts"],
         )
-    except Exception:
-        logger.exception("Failed to record action reflection")
-        return None
+    except Exception as exc:
+        # ERROR naming surface and action: on the provenance surfaces this
+        # is a lost sole record, not a background hiccup.
+        logger.error(
+            "REFLECTION WRITE FAILED for surface=%s action=%s: %s",
+            reflection.surface,
+            reflection.action,
+            exc,
+        )
+        return ReflectionWriteOutcome(
+            error=f"reflection write failed ({reflection.surface}): {exc}",
+        )
+    return ReflectionWriteOutcome(row_id=row_id)
