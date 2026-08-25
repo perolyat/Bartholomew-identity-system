@@ -116,12 +116,24 @@ class SkillResult:
         }
 
     @classmethod
-    def ok(cls, data: Any = None, message: str = "") -> SkillResult:
-        """Create a successful result."""
+    def ok(
+        cls,
+        data: Any = None,
+        message: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> SkillResult:
+        """Create a successful result.
+
+        `metadata` is the existing per-result side-channel (see the field
+        above) -- for facts about the action that are not the action's own
+        return value. Optional and defaulted, so every existing call site is
+        unaffected.
+        """
         return cls(
             status=SkillResultStatus.SUCCESS,
             data=data,
             message=message,
+            metadata=metadata or {},
         )
 
     @classmethod

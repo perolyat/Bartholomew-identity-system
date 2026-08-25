@@ -456,6 +456,48 @@ tool_use:
     # docstring), so it needs its own allowlist entry to ever run against
     # this Identity.yaml.
     - "awaiting_response_check"
+    # Usable POC slice 2 (docs/POC_SLICE_2_PROACTIVE_REMINDERS.md): the
+    # scheduler drive that notices stored date-bearing facts falling due and
+    # sends one governed reminder for each. Follows the same recorded
+    # precedent as awaiting_response_check immediately above -- deliberately
+    # NOT in _SELF_MAINTENANCE_DRIVES, because a reminder is genuine outbound
+    # contact about specific user content rather than kernel housekeeping, so
+    # without this entry evaluate_tool_policy() denies the drive outright.
+    #
+    # This entry does not by itself make Bartholomew proactive: the drive is
+    # only registered when config/kernel.yaml's proactive.schedule_reminders
+    # is true (default false). Both are required.
+    - "schedule_reminder_check"
+    # Conversational task control: a user typing "add a task to renew the
+    # rego" now routes to the tasks skill through the governed
+    # Planner -> Runtime Contract -> SkillRegistry.execute_action() path.
+    # execute_action() evaluates tool_use.allowlist at the skill_id grain
+    # (candidate_action.kind = skill_id), so without this entry every task
+    # operation is denied outright -- the same blocking discovery S1.3's
+    # "notify" entry above resolved, for the same reason: the skill is
+    # already enabled (config/skills/tasks.yaml) and permission-level "auto"
+    # (low-risk local storage), just previously unreachable through the
+    # governed path.
+    #
+    # Scope note: this authorises create/list/complete/update, which is what
+    # the conversational recogniser can express. Deletion is deliberately not
+    # reachable from conversation at all (see
+    # bartholomew/kernel/task_intents.py), so this entry does not put a
+    # destructive operation behind an ordinary sentence.
+    - "tasks"
+    # Local spoken output (text-to-speech). Output only: this authorises one
+    # utterance out of this machine's own speaker and authorises no capture
+    # of any kind -- there is no microphone, listening or wake-word code
+    # behind it. Deliberately a separate entry from any future
+    # "voice_stream_start", which is the opposite direction through the same
+    # device family; allowing Bartholomew to speak must never read as
+    # allowing it to listen.
+    #
+    # This entry does not by itself make Bartholomew speak: the capability is
+    # only reached when config/kernel.yaml's voice.spoken_output is true
+    # (default false), and the `voice` Parking Brake scope silences it
+    # regardless. All three must line up.
+    - "voice_speak"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]

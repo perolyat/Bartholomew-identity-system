@@ -46,6 +46,16 @@ def resolve_cadences(ctx: Any) -> dict:
     """
     Resolve cadence overrides from env > config > registry defaults.
 
+    Iterates `drives.resolve_registry(ctx)`, not `drives.REGISTRY`, so an
+    optional drive whose consent flag is off is not merely left at its
+    default cadence -- it is absent, and therefore never scheduled at all
+    (Usable POC slice 2's default-OFF requirement).
+
+    Note the two `config/kernel.yaml` blocks are different things and are not
+    interchangeable: `drives:` is a **cadence-override map** consulted below,
+    while registration is decided by `resolve_registry()` from the
+    `proactive:` block. Omitting a drive from `drives:` disables nothing.
+
     Args:
         ctx: Context object (KernelDaemon instance)
 
@@ -54,7 +64,7 @@ def resolve_cadences(ctx: Any) -> dict:
     """
     resolved = {}
 
-    for task_id, config in drives.REGISTRY.items():
+    for task_id, config in drives.resolve_registry(ctx).items():
         # Start with registry default
         resolved_cadence = config["cadence"]
 
@@ -115,7 +125,11 @@ async def run_scheduler(ctx: Any) -> None:
         print("[Scheduler] Initializing schema...")
         await store.ensure_schema()
 
-        # Resolve cadences from config/env
+        # Resolve which drives this context runs at all (always-on plus any
+        # optional drive whose consent flag is on), then their cadences.
+        # Resolved ONCE here, so one loop iteration cannot see a different
+        # registry from the next.
+        registry = drives.resolve_registry(ctx)
         resolved_cadences = resolve_cadences(ctx)
         print(f"[Scheduler] Resolved cadences: {resolved_cadences}")
 
@@ -126,7 +140,7 @@ async def run_scheduler(ctx: Any) -> None:
 
         # Build tasks dict with resolved cadences
         tasks_config = {}
-        for task_id in drives.REGISTRY.keys():
+        for task_id in registry:
             tasks_config[task_id] = {"cadence": resolved_cadences[task_id]}
 
         # Upsert scheduled tasks
@@ -176,11 +190,39 @@ async def run_scheduler(ctx: Any) -> None:
                     # If check fails, proceed anyway (idempotency in INSERT)
                     pass
 
+                # A scheduled_tasks row can outlive its registration: an
+                # optional drive that was turned on, ran, and was then turned
+                # off again leaves its row behind (nothing here deletes
+                # scheduler state). Skip it and push its next run forward, so
+                # a de-registered drive neither executes nor spins the loop.
+                # Deliberately not a deletion: the row is a record of what was
+                # scheduled, and turning the flag back on should resume it.
+                if task_id not in registry:
+                    log.info(
+                        "[Scheduler] Skipping %s: scheduled but not registered "
+                        "for this context (its consent flag is off)",
+                        task_id,
+                    )
+                    next_ts, new_window_state = cadence_module.compute_next_run(
+                        last_run_ts=scheduled_ts,
+                        scheduled_ts=scheduled_ts,
+                        cadence_str=cadence_str,
+                        now_ts=now_ts,
+                        window_state=due_task["window_state"],
+                    )
+                    await store.update_next_run(
+                        task_id,
+                        next_ts,
+                        scheduled_ts,
+                        new_window_state,
+                    )
+                    continue
+
                 # Record tick start
                 started_ts = int(time.time())
 
                 # Execute drive with timeout and exception guard
-                drive_fn = drives.REGISTRY[task_id]["fn"]
+                drive_fn = registry[task_id]["fn"]
                 nudge, success = await _run_drive(ctx, task_id, drive_fn)
                 result_meta: dict[str, Any] = {}
 
@@ -201,6 +243,7 @@ async def run_scheduler(ctx: Any) -> None:
                             nudge.reason,
                             nudge.created_ts,
                             getattr(nudge, "escalation", None),
+                            getattr(nudge, "dedup_identity", None),
                         )
                         result_meta["nudge"] = outcome
                     except Exception as e:

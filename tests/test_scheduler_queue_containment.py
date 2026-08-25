@@ -351,8 +351,15 @@ class TestDistinctObligationsStayDistinct:
         assert a is not None and b is not None and a != b
 
     def test_policy_eligibility_is_an_allowlist_not_a_default(self):
+        # Exact set, deliberately: the allowlist growing is a decision, and it
+        # should have to be made here as well as in containment.py. The third
+        # entry is Usable POC slice 2's schedule reminders, approved
+        # 2026-08-25 (docs/POC_SLICE_2_PROACTIVE_REMINDERS.md) -- recurring,
+        # system-generated, user-facing material of exactly the kind WP-A1's
+        # policy exists for. The property this test is really about is
+        # unchanged and is asserted below: anything NOT listed is ineligible.
         assert containment.eligible_reasons() == frozenset(
-            {"curiosity_probe", SELF_CHECK_DRIFT_REASON},
+            {"curiosity_probe", SELF_CHECK_DRIFT_REASON, "schedule_reminder"},
         )
         for reason in [None, "", "user_task", "awaiting_response", "notify", "reminder"]:
             assert not containment.is_policy_eligible(reason)

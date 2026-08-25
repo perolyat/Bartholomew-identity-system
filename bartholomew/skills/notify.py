@@ -395,12 +395,13 @@ class NotifySkill(SkillBase):
 
         # Actually send -- real outbound delivery when a webhook is configured
         # (Usable POC slice 1), log-only otherwise.
-        await self._deliver_notification(notification)
+        delivered = await self._deliver_notification(notification)
 
         logger.info("Sent notification: %s", notification.id)
         return SkillResult.ok(
             data=notification.to_dict(),
             message="Notification sent",
+            metadata=self._delivery_metadata(delivered),
         )
 
     async def _action_queue(self, params: dict[str, Any]) -> SkillResult:
@@ -679,6 +680,37 @@ class NotifySkill(SkillBase):
         except Exception:
             logger.exception("Notification webhook delivery failed for %s", payload.get("id"))
             return False
+
+    def _delivery_metadata(self, delivered: bool) -> dict[str, Any]:
+        """
+        Report truthfully what happened to an outbound delivery.
+
+        Usable POC slice 2, approval point 8.4. `_action_send()`'s
+        `SkillResult` has always said "Notification sent", which is true of
+        the *notification* -- it was created, persisted and dispatched -- but
+        says nothing about whether anything reached the user's device. That
+        was adequate while every caller notified *about* a record that had
+        already committed. Slice 2's schedule reminder is different: the
+        delivery **is** the governed action, so its caller must be able to
+        tell "delivered" from "nothing left the machine" without inferring it.
+
+        This is additive and changes no existing behaviour: `status` stays
+        SUCCESS, the message stays the same, and a caller that ignores
+        `metadata` behaves exactly as before. It only makes the difference
+        *sayable*.
+
+        `channel` distinguishes the two shapes of `delivered=False` that
+        `_deliver_notification()` deliberately collapses into one return
+        value: "no outbound channel is configured" and "the configured
+        channel was tried and failed" are not the same claim.
+        """
+        return {
+            "delivery": {
+                "attempted": bool(self._webhook_url),
+                "delivered": bool(delivered),
+                "channel": "webhook" if self._webhook_url else "local",
+            },
+        }
 
     async def _deliver_notification(self, notification: Notification) -> bool:
         """

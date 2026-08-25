@@ -221,6 +221,36 @@ conversation without the user restating the fact, and without bypassing consent/
 > is relevant, without the user restating it. The implementation behaves that way; only the
 > wording changed.
 
+## Second vertical slice: Proactive Schedule Reminders
+
+**Implemented 2026-08-25**, per `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md` (approved as planning
+and as implementation on the same day, under Taylor's Capability Acceleration Sprint instruction —
+a deliberate one-off exception to the sequencing discipline below, which it does not abolish). That
+note is the detailed record, including the four approval points as decided and what was actually
+delivered against what was predicted.
+
+**What it adds**, all through the existing Runtime Contract seam and existing Governance, with no
+new architecture: an opt-in (**default OFF**) scheduler drive notices stored date-bearing
+`user_schedule`/birthday facts falling due inside a look-ahead window and surfaces exactly one
+reminder per `(fact, due date)` — a WP-A1-contained nudge in the existing queue, plus one governed
+`NotifySkill` delivery to the real outbound webhook. That delivery is the slice's Action and its
+visible real-world result, and the delivery outcome is recorded on the nudge so the queue
+distinguishes *noticed and delivered* from *noticed and not delivered*.
+
+**This is the right-hand side of the loop this document's diagram describes**: proactive surfacing
+of something noticed, plus one genuine governed action with a visible real-world result. Slice 1
+covered memory and retrieval; between them the two slices have now demonstrated the loop end to
+end — which is the condition this document's "Sunset condition" names for revisiting its own
+tactical content.
+
+**Still explicitly not authorised by it:** unattended operation. Running the reminder loop
+unattended would put a recurring outbound governed action inside Band A's restricted envelope and
+needs its own recorded decision. The Band 0 attended checkpoint is what this slice supports.
+
+Delivered alongside it in the same sprint, and *not* part of this slice: conversational task
+control (an ordinary sentence now performs a real `TasksSkill` operation through the same governed
+chokepoint) and a default-OFF local spoken-output prototype.
+
 ## Direction for later slices (deliberately not specified yet)
 
 Per the principle above, slice 2+ scope is **not** designed now — designing it ahead of real
