@@ -209,5 +209,21 @@ def test_layout_adapts_to_a_narrow_screen(ui_source: str):
     assert "@media (max-width" in ui_source
 
 
+def test_long_unbroken_values_cannot_stretch_the_page(ui_source: str):
+    """
+    Regression. A queued consent entry holding an encryption envelope -- one
+    unbroken ~2000-character string -- set the width of the whole document:
+    measured at 2200px inside a 420px viewport, with every card stretched
+    off-screen and a horizontal scrollbar on the body. Any long token can do
+    this: a backend error string, a URL, a ciphertext blob.
+    """
+    assert "overflow-wrap: anywhere" in ui_source
+    rule = ui_source[ui_source.index("overflow-wrap: anywhere") - 400 :]
+    rule = rule[: rule.index("overflow-wrap: anywhere") + 30]
+    for holder in (".nudge-msg", ".memory-value", ".turn-body"):
+        assert holder in rule, f"{holder} can receive a long unbroken value and must wrap"
+    assert "overflow-x: hidden" in ui_source, "the document itself must never scroll sideways"
+
+
 def _uncommented(source: str) -> str:
     return re.sub(r"<!--.*?-->", "", source, flags=re.S)

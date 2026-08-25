@@ -17,6 +17,18 @@
        indication of where they were -- several controls here engage or
        release a safety halt, and one deletes a memory permanently. */
     :focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; border-radius: 6px; }
+    /* F4: any of these can receive a long unbroken string -- an encryption
+       envelope queued in the consent inbox, a stack-trace-ish backend error,
+       a URL. Without this the whole page grew a horizontal scrollbar and
+       every card stretched off-screen (observed at 2200px wide in a 420px
+       viewport). Wrap mid-token rather than letting one value set the page
+       width. */
+    .nudge-msg, .memory-value, .turn-body, .episode-narrative,
+    .memory-key, .nudge-kind { overflow-wrap: anywhere; }
+    /* Belt and braces: nothing may make the document itself scroll sideways.
+       Wide content scrolls inside its own container instead. */
+    body { overflow-x: hidden; }
+    .mono, .reflection-content { overflow-x: auto; }
     button, select { min-height: 34px; }
     a { color: #60a5fa; }
     button.ack { border-color: #059669; color: #10b981; }
