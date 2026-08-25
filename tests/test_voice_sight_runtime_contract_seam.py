@@ -713,13 +713,26 @@ class TestMutationNonVacuity:
         monkeypatch,
     ):
         """Mirror of test_parking_brake_denied_never_executes: with the brake
-        engaged the capability must NOT run. Here we force is_blocked to False
+        engaged the capability must NOT run. Here we neutralise the brake read
         while engaged -- the capability runs, proving the brake really gated
-        it."""
+        it.
+
+        The neutralised target is `governance_store.is_blocked_fail_closed_
+        off_loop`, which is what these seams now read. It used to be
+        `ParkingBrake.is_blocked`; that mutation stopped being non-vacuous
+        when the seams were moved onto GovernanceStore -- the authority both
+        brake writers (`bartholomew brake on`, the API's engage route)
+        actually write. See tests/test_device_seam_brake_authority.py."""
         set_consent_handler(_approving_handler())
+        from bartholomew.orchestrator.safety import governance_store
+
         brake = ParkingBrake(BrakeStorage(db_path))
         brake.engage(scope)
-        monkeypatch.setattr(ParkingBrake, "is_blocked", lambda self, s: False)
+
+        async def _not_blocked(*args, **kwargs):
+            return False
+
+        monkeypatch.setattr(governance_store, "is_blocked_fail_closed_off_loop", _not_blocked)
         try:
             spy = Spy([], "capability")
             result = await seam(db_path=db_path, identity_context=ALLOW_CONTEXT, **{cap_kw: spy})

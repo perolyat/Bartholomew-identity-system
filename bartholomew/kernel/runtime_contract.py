@@ -1327,8 +1327,12 @@ async def run_sight_through_runtime_contract(
 
     Governance runs three gates, all strictly before `capture_fn` is ever
     called:
-      1. ParkingBrake("sight") -- unchanged from the pre-existing stub's own
-         check, including its `except ImportError: pass` tolerance.
+      1. ParkingBrake("sight") -- read through `GovernanceStore`, the same
+         authority chat/scheduler/skill execution read, and fail-closed on
+         an unreadable gate. (This gate previously read the legacy
+         `system_flags` row, which nothing has written since Phase B6
+         retired the dual-check bridge -- so engaging the brake did not
+         stop this seam. See the gate's own comment below.)
       2. Identity Policy Decision (`evaluate_tool_policy`, kind
          "sight_capture_start"). Additive: skipped when no `IdentityContext`
          is wired in, matching chat/scheduler/skill. Under real `Identity.yaml`
@@ -1360,25 +1364,39 @@ async def run_sight_through_runtime_contract(
     outcome = "started"
     reason: str | None = None
 
-    # Governance gate 1: ParkingBrake("sight"), preserving the pre-existing
-    # ImportError tolerance exactly.
+    # Governance gate 1: ParkingBrake("sight"), read through GovernanceStore.
+    #
+    # This used to be `ParkingBrake(BrakeStorage(...))`, which reads the
+    # legacy `system_flags` "parking_brake" row. Phase B6 retired the
+    # dual-check bridge that kept that row in step with the real state, and
+    # both writers -- `bartholomew brake on` and the API's
+    # /governance/brake/engage route -- write GovernanceStore only. This gate
+    # was therefore reading a value nothing updates any more: engaging the
+    # brake did not stop this seam. It now reads the same authority chat,
+    # scheduler drives and skill execution read.
+    #
+    # Fails closed on any error: an unreadable safety gate must deny a device
+    # start, never wave it through. The previous `except ImportError: pass`
+    # tolerance deliberately does not survive -- it existed for a module that
+    # might not be importable, and silently continuing past an unreadable
+    # brake is not a tolerance a device surface can afford.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import (
-            BrakeStorage,
-            construct_parking_brake_off_loop,
+        from bartholomew.orchestrator.safety.governance_store import (
+            is_blocked_fail_closed_off_loop,
         )
 
-        if resolved_db_path is not None:
-            # No owning daemon instance here -- construct_parking_brake_off_loop
-            # falls back to a one-off asyncio.to_thread() (see
-            # run_off_loop()'s docstring), still off the event loop.
-            brake = await construct_parking_brake_off_loop(BrakeStorage(resolved_db_path))
-            if brake.is_blocked("sight"):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = "Blocked by parking brake (scope=sight)"
-    except ImportError:
-        pass
+        if resolved_db_path is not None and await is_blocked_fail_closed_off_loop(
+            "sight",
+            resolved_db_path,
+        ):
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Blocked by parking brake (scope=sight)"
+    except Exception:
+        logger.exception("Brake check failed for scope=sight; failing closed")
+        allowed = False
+        outcome = "parking_brake_denied"
+        reason = "Parking brake check errored"
 
     # Governance gate 2: Identity Policy Decision (additive; see docstring).
     if allowed and identity_context is not None:
@@ -1456,24 +1474,39 @@ async def run_voice_through_runtime_contract(
     outcome = "started"
     reason: str | None = None
 
-    # Governance gate 1: ParkingBrake("voice"), preserving ImportError tolerance.
+    # Governance gate 1: ParkingBrake("voice"), read through GovernanceStore.
+    #
+    # This used to be `ParkingBrake(BrakeStorage(...))`, which reads the
+    # legacy `system_flags` "parking_brake" row. Phase B6 retired the
+    # dual-check bridge that kept that row in step with the real state, and
+    # both writers -- `bartholomew brake on` and the API's
+    # /governance/brake/engage route -- write GovernanceStore only. This gate
+    # was therefore reading a value nothing updates any more: engaging the
+    # brake did not stop this seam. It now reads the same authority chat,
+    # scheduler drives and skill execution read.
+    #
+    # Fails closed on any error: an unreadable safety gate must deny a device
+    # start, never wave it through. The previous `except ImportError: pass`
+    # tolerance deliberately does not survive -- it existed for a module that
+    # might not be importable, and silently continuing past an unreadable
+    # brake is not a tolerance a device surface can afford.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import (
-            BrakeStorage,
-            construct_parking_brake_off_loop,
+        from bartholomew.orchestrator.safety.governance_store import (
+            is_blocked_fail_closed_off_loop,
         )
 
-        if resolved_db_path is not None:
-            # No owning daemon instance here -- construct_parking_brake_off_loop
-            # falls back to a one-off asyncio.to_thread() (see
-            # run_off_loop()'s docstring), still off the event loop.
-            brake = await construct_parking_brake_off_loop(BrakeStorage(resolved_db_path))
-            if brake.is_blocked("voice"):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = "Blocked by parking brake (scope=voice)"
-    except ImportError:
-        pass
+        if resolved_db_path is not None and await is_blocked_fail_closed_off_loop(
+            "voice",
+            resolved_db_path,
+        ):
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Blocked by parking brake (scope=voice)"
+    except Exception:
+        logger.exception("Brake check failed for scope=voice; failing closed")
+        allowed = False
+        outcome = "parking_brake_denied"
+        reason = "Parking brake check errored"
 
     # Governance gate 2: Identity Policy Decision (additive; see sight docstring).
     if allowed and identity_context is not None:
@@ -1594,14 +1627,10 @@ async def run_spoken_output_through_runtime_contract(
 
     # Governance gate 2: ParkingBrake("voice"), read through GovernanceStore.
     #
-    # Deliberately `is_blocked_fail_closed_off_loop()` -- the same read chat,
-    # scheduler drives and skill execution use -- and deliberately NOT the
-    # `ParkingBrake(BrakeStorage(...))` shape the two older device seams above
-    # still use. Those read the legacy `system_flags` value, and Phase B6
-    # retired the bridge that used to keep it in step with the real state, so
-    # `bartholomew brake on --scope voice` (which writes GovernanceStore) is
-    # invisible to that path. A new capability must not inherit a brake check
-    # that cannot see the brake.
+    # `is_blocked_fail_closed_off_loop()` -- the same read chat, scheduler
+    # drives, skill execution and (since this defect was found and fixed) the
+    # sight/voice-stream seams above all use. One brake authority, read the
+    # same way everywhere.
     #
     # Fails closed on any error: for a capability whose whole effect is
     # audible, an unreadable safety gate must mean silence.
