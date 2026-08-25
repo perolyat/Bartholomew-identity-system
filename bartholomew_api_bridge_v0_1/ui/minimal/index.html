@@ -107,6 +107,14 @@
     .brake-scope-row label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
     .brake-scope-row input { width:auto; flex:none; }
 
+    .chat-compose { display:flex; gap:8px; align-items:flex-end; }
+    .chat-compose textarea { flex:1 1 auto; resize:vertical; min-height:44px; max-height:220px;
+                             line-height:1.5; font-family:inherit; font-size:15px; }
+    .chat-hint { font-size:11px; color:#4b5563; margin-top:6px; }
+    .chat-attention { background:#1c2432; border:1px solid #2d3b52; border-radius:10px;
+                      padding:10px 12px; margin-bottom:12px; font-size:13px; color:#cbd5e1; }
+    .chat-attention a { color:#60a5fa; }
+
     .memory-summary { font-size:12px; color:#6b7280; margin-bottom:10px; }
     .memory-item { background:#141b26; border:1px solid #263041; border-radius:10px;
                    padding:12px; margin-bottom:8px; }
@@ -265,22 +273,30 @@
   <section id="view-home" role="tabpanel" aria-labelledby="tab-home">
 
   <!-- Chat -->
+  <!-- The conversation is the primary way to use Bartholomew, so it is the
+       first and largest thing on the page. This session owns the human-facing
+       interaction surface only: what the backend can actually do is decided
+       by the runtime contract, and this panel must never imply more than that.
+       If a message cannot be answered, it says so (see sendMsg). -->
   <div class="card" id="chat-card">
     <h3>💬 Talk to Bartholomew</h3>
+    <div id="chat-attention" class="chat-attention" style="display:none"></div>
     <div id="chatlog" aria-live="polite" aria-label="Conversation transcript"></div>
     <div id="chat-thinking" class="thinking" style="display:none">
       <span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>
       <span>Bartholomew is thinking…</span>
     </div>
-    <div class="row">
-      <input id="msg" placeholder="Tell Bartholomew what you need…"
-             aria-label="Message to Bartholomew"
-             onkeydown="if(event.key==='Enter'){sendMsg()}"/>
+    <div class="chat-compose">
+      <textarea id="msg" rows="2"
+                placeholder="Tell Bartholomew what you need…"
+                aria-label="Message to Bartholomew"
+                onkeydown="chatKeydown(event)"></textarea>
       <button id="chat-send" class="primary" onclick="sendMsg()">Send</button>
     </div>
+    <div class="chat-hint">Enter sends · Shift+Enter starts a new line</div>
   </div>
 
-  <h2 class="section-heading">Needs your attention</h2>
+  <h2 class="section-heading" id="needs-attention">Needs your attention</h2>
 
   <!-- Consent-handler fix: Pending Memory Consent.
        Sits directly under the conversation, because a pending write is a
@@ -989,6 +1005,7 @@
         const j = await r.json();
         const entries = j.entries || [];
         setConsentAttention(entries.length);
+        setChatAttention('consent', entries.length);
 
         if(entries.length === 0){
           el.innerHTML = '<div class="empty-state">No memories awaiting consent. You\'re all caught up! ✨</div>';
@@ -1055,6 +1072,7 @@
         }
         const j = await r.json();
         const entries = (j.entries || []).filter(e => e.status !== 'resolved');
+        setChatAttention('awaiting', entries.length);
 
         if(entries.length === 0){
           el.innerHTML = '<div class="empty-state">Nothing awaiting a reply. You\'re all caught up! ✨</div>';
@@ -1522,6 +1540,8 @@
         const r = await fetch(API + "/api/nudges/pending");
         const j = await r.json();
 
+        setChatAttention('nudges', (j.nudges || []).length);
+
         if(!j.nudges || j.nudges.length === 0){
           listEl.innerHTML = '<div class="empty-state">No pending nudges. You\'re all caught up! ✨</div>';
           return;
@@ -1614,6 +1634,14 @@
     }
 
     // === Chat ===
+    //
+    // Cross-sprint seam. appendChatTurn() takes a role, so a real action
+    // result from the parallel capability sprint (a task that ran, a reminder
+    // that fired) can be rendered as its own turn once /api/chat actually
+    // reports one -- the styling and the transcript structure are already
+    // here. Nothing is rendered speculatively: this UI shows only fields the
+    // response really carries, so until that backend exists there is nothing
+    // to display and no placeholder pretending otherwise.
     // TECH-F001. This used to be:
     //
     //     const j = await r.json();
@@ -1705,6 +1733,56 @@
       }
       const status = `HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`;
       return detail ? `${prefix} — ${detail} (${status})` : `${prefix} — ${status}`;
+    }
+
+    // Enter sends, Shift+Enter is a newline. The input used to be a single
+    // <input>, so anything longer than a sentence scrolled sideways inside a
+    // one-line box and a newline was impossible -- which quietly discourages
+    // saying anything substantial to him.
+    function chatKeydown(event){
+      if(event.key === 'Enter' && !event.shiftKey && !event.isComposing){
+        event.preventDefault();
+        sendMsg();
+      }
+    }
+
+    // Routine interaction should not require hunting through panels to notice
+    // that something is waiting. This line summarises what the ordinary view
+    // already loaded, next to the conversation, and links to it.
+    //
+    // Counts only -- it does not restate or act on the items, so it cannot
+    // drift out of step with the panels that own them.
+    const chatAttentionCounts = { consent: 0, nudges: 0, awaiting: 0 };
+
+    function setChatAttention(key, count){
+      chatAttentionCounts[key] = count;
+      renderChatAttention();
+    }
+
+    function renderChatAttention(){
+      const el = document.getElementById("chat-attention");
+      if(!el) return;
+      const parts = [];
+      const { consent, nudges, awaiting } = chatAttentionCounts;
+      if(consent) parts.push(`${consent} ${consent === 1 ? 'memory' : 'memories'} waiting for your consent`);
+      if(nudges) parts.push(`${nudges} ${nudges === 1 ? 'nudge' : 'nudges'} from Bartholomew`);
+      if(awaiting) parts.push(`${awaiting} ${awaiting === 1 ? 'reply' : 'replies'} you are waiting on`);
+
+      if(parts.length === 0){
+        el.style.display = "none";
+        el.textContent = "";
+        return;
+      }
+      el.style.display = "block";
+      el.innerHTML = `Waiting for you: ${escapeHtml(parts.join(' · '))} — ` +
+        `<a href="#needs-attention" onclick="scrollToAttention(event)">see what needs attention</a>`;
+    }
+
+    function scrollToAttention(event){
+      event.preventDefault();
+      showView('home');
+      const el = document.getElementById("needs-attention");
+      if(el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
     // A transcript of typed turns rather than one appended text blob.
@@ -2144,6 +2222,13 @@
     // === Initial Load ===
     showView(viewFromHash());
     renderPresence();
+    // The conversation is where an ordinary session starts, so the caret
+    // starts there. Only on the ordinary view -- stealing focus while someone
+    // is reading Workshop would be wrong.
+    if(viewFromHash() === "home"){
+      const msgEl = document.getElementById("msg");
+      if(msgEl) msgEl.focus();
+    }
     refreshHealth();
     refreshBrake();
     refreshAudit();
