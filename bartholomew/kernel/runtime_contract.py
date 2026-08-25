@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from . import personal_facts, policy_engine, training
+from . import personal_facts, policy_engine, task_intents, training
 from .blocking_executor import run_off_loop
 from .competency_reasoning import (
     EMPTY_CONTEXT,
@@ -152,6 +152,14 @@ class RuntimeContractResult:
     #: Empty when the turn proposed none, or when governance denied the turn.
     #: Defaulted so existing construction sites are unaffected.
     personal_facts_captured: list[dict[str, Any]] = field(default_factory=list)
+
+    #: Conversational task control: what this turn's explicit task instruction
+    #: actually did, or None when the turn contained none (the common case).
+    #: Records the recognised operation, the governed skill outcome, and
+    #: whether anything changed -- so a caller, an audit reader and the
+    #: Reflection all see the same account of it. Defaulted so existing
+    #: construction sites are unaffected.
+    task_action: dict[str, Any] | None = None
 
     #: WP-A2b. True when this turn's Reflection -- on the chat surface the
     #: sole durable record of the governed decision context (S5.3 Decision
@@ -569,6 +577,224 @@ async def _capture_personal_facts(
     return outcomes
 
 
+TASK_OUTCOME_EXECUTED = "executed"
+TASK_OUTCOME_NOT_FOUND = "not_found"
+TASK_OUTCOME_AMBIGUOUS = "ambiguous"
+TASK_OUTCOME_UNSUPPORTED = "unsupported"
+TASK_OUTCOME_FAILED = "failed"
+TASK_OUTCOME_UNAVAILABLE = "unavailable"
+
+
+async def _run_task_action(
+    daemon: KernelDaemon,
+    action: str,
+    params: dict[str, Any],
+) -> Any:
+    """
+    Run one task operation through the existing governed skill path.
+
+    `Planner.handle_skill_request()` is the production route into skill
+    execution: it validates that the skill and action really exist, then calls
+    `run_skill_through_runtime_contract()` ->
+    `SkillRegistry.execute_action()`, the single chokepoint where the parking
+    brake (`skills` scope), the Identity Context -> Policy Decision on
+    `skill_id="tasks"`, "ask"-level consent resolution, the
+    `skill_action_audit` row and the unified Reflection all live.
+
+    Nothing here reaches around that. There is no second executor, no direct
+    `TasksSkill` call, and no path that skips a gate -- which is why this
+    function is three lines long and the interesting code is all in the
+    recogniser and the reply rendering.
+    """
+    planner = getattr(daemon, "planner", None)
+    if planner is None:
+        return None
+    return await planner.handle_skill_request(task_intents.TASKS_SKILL_ID, action, params)
+
+
+async def _resolve_subject(
+    daemon: KernelDaemon,
+    intent: task_intents.TaskIntent,
+) -> tuple[task_intents.TaskResolution | None, Any]:
+    """
+    Turn the task title the user spoke into a real stored task.
+
+    The candidate list is read through the governed `list` action, not by
+    reading the skill's table -- so the read is gated, permission-checked and
+    audited exactly like the write that may follow it. A failed read is
+    returned as-is; the caller reports it rather than guessing.
+    """
+    listing = await _run_task_action(daemon, "list", {"status": "all", "limit": 200})
+    if listing is None or not getattr(listing, "success", False):
+        return None, listing
+
+    tasks = listing.data if isinstance(listing.data, list) else []
+    return task_intents.resolve_task(intent.subject or "", tasks), listing
+
+
+async def _handle_task_intent(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> dict[str, Any] | None:
+    """
+    Conversational task control: carry out an explicit task instruction the
+    user gave in ordinary conversation, and report truthfully what happened.
+
+    Returns None when the utterance contained no explicit task instruction --
+    the overwhelmingly common case -- and the turn then proceeds exactly as it
+    did before this existed. When it returns a dict, the `reply` in it is the
+    turn's response: built from what the governed skill actually returned, not
+    from what was asked for, so the model is never in a position to narrate an
+    action that did not happen.
+
+    **Why the turn's own CandidateAction stays `chat_response`.** The task
+    operation is a *nested* governed action, evaluated for real at
+    `execute_action()`'s Governance stage against `kind="tasks"` -- the exact
+    grain `Identity.yaml`'s `tool_use.allowlist` uses. Re-evaluating the same
+    decision at the chat gate as well would not add a gate; it would replace a
+    truthful "I'm not permitted to do that, and nothing changed" reply with a
+    denial of the whole conversation turn, which is both less informative and
+    the blast radius that item 11.2's first attempt at drive gating produced.
+    The brake is unaffected either way: chat's own Governance stage already
+    fails closed on the `skills` scope before this function is ever reached,
+    so a braked system answers nothing at all.
+
+    **Never raises.** Task routing must not be able to break a chat turn. But
+    it also never silently swallows: an unexpected failure becomes a truthful
+    "it didn't go through" reply rather than a fall-through to the model,
+    because falling through is precisely how a fabricated confirmation would
+    reach the user.
+    """
+    try:
+        intent = task_intents.parse_intent(observation.raw_content or "")
+        if intent is None:
+            return None
+
+        record: dict[str, Any] = {
+            "requested": intent.described_as,
+            "action": intent.action,
+            "changed": False,
+        }
+
+        # Recognised only so it can be declined truthfully. Nothing is
+        # executed, and the reply says so plainly.
+        if intent.action == task_intents.INTENT_UNSUPPORTED:
+            record["outcome"] = TASK_OUTCOME_UNSUPPORTED
+            record["reply"] = task_intents.render_unsupported(intent.described_as)
+            return record
+
+        if getattr(daemon, "planner", None) is None:
+            record["outcome"] = TASK_OUTCOME_UNAVAILABLE
+            record["reply"] = task_intents.render_failure(
+                intent.described_as,
+                "task management is not available in this session",
+            )
+            return record
+
+        if intent.action == task_intents.INTENT_CREATE:
+            result = await _run_task_action(daemon, "create", dict(intent.params))
+            if result is not None and result.success and isinstance(result.data, dict):
+                record["outcome"] = TASK_OUTCOME_EXECUTED
+                record["changed"] = True
+                record["task_id"] = result.data.get("id")
+                record["reply"] = task_intents.render_created(result.data)
+            else:
+                record["outcome"] = TASK_OUTCOME_FAILED
+                record["error"] = _task_error(result)
+                record["reply"] = task_intents.render_failure(
+                    intent.described_as,
+                    record["error"],
+                )
+            return record
+
+        if intent.action == task_intents.INTENT_LIST:
+            status = intent.params.get("status", "pending")
+            result = await _run_task_action(
+                daemon,
+                "list",
+                {"status": status, "limit": 50},
+            )
+            if result is not None and result.success and isinstance(result.data, list):
+                record["outcome"] = TASK_OUTCOME_EXECUTED
+                record["count"] = len(result.data)
+                record["reply"] = task_intents.render_list(result.data, status)
+            else:
+                record["outcome"] = TASK_OUTCOME_FAILED
+                record["error"] = _task_error(result)
+                record["reply"] = task_intents.render_failure(
+                    intent.described_as,
+                    record["error"],
+                )
+            return record
+
+        # complete / update: both need a real task_id, which nobody says out
+        # loud. Resolution can decline, and declining is not an action.
+        resolution, listing = await _resolve_subject(daemon, intent)
+        if resolution is None:
+            record["outcome"] = TASK_OUTCOME_FAILED
+            record["error"] = _task_error(listing)
+            record["reply"] = task_intents.render_failure(intent.described_as, record["error"])
+            return record
+
+        if resolution.outcome == task_intents.NOT_FOUND:
+            record["outcome"] = TASK_OUTCOME_NOT_FOUND
+            record["reply"] = task_intents.render_not_found(intent.subject or "")
+            return record
+
+        if resolution.outcome == task_intents.AMBIGUOUS:
+            record["outcome"] = TASK_OUTCOME_AMBIGUOUS
+            record["candidates"] = [task.get("title") for task in resolution.candidates]
+            record["reply"] = task_intents.render_ambiguous(
+                intent.subject or "",
+                resolution.candidates,
+            )
+            return record
+
+        task_id = (resolution.task or {}).get("id")
+        params = {"task_id": task_id, **intent.params}
+        result = await _run_task_action(daemon, intent.action, params)
+        record["task_id"] = task_id
+
+        if result is not None and result.success and isinstance(result.data, dict):
+            record["outcome"] = TASK_OUTCOME_EXECUTED
+            record["changed"] = True
+            if intent.action == task_intents.INTENT_COMPLETE:
+                record["reply"] = task_intents.render_completed(result.data)
+            else:
+                record["reply"] = task_intents.render_updated(result.data, intent.params)
+        else:
+            record["outcome"] = TASK_OUTCOME_FAILED
+            record["error"] = _task_error(result)
+            record["reply"] = task_intents.render_failure(intent.described_as, record["error"])
+        return record
+    except Exception:
+        logger.exception("Conversational task routing failed; reporting it rather than hiding it")
+        return {
+            "requested": "carry out a task instruction",
+            "action": "unknown",
+            "outcome": TASK_OUTCOME_FAILED,
+            "changed": False,
+            "error": "an internal error interrupted the task operation",
+            "reply": task_intents.render_failure(
+                "carry out that task instruction",
+                "an internal error interrupted it",
+            ),
+        }
+
+
+def _task_error(result: Any) -> str | None:
+    """The verbatim reason a task operation did not succeed, or None.
+
+    Deliberately reports the governed path's own words (a brake block, an
+    Identity policy denial, a permission refusal) rather than paraphrasing
+    them into something friendlier: a user told "I'm not permitted to do
+    that" needs to be able to find out why.
+    """
+    if result is None:
+        return "the task capability is not available"
+    return getattr(result, "error", None) or getattr(result, "message", None) or None
+
+
 async def run_chat_through_runtime_contract(
     daemon: KernelDaemon,
     user_input: str,
@@ -676,9 +902,24 @@ async def run_chat_through_runtime_contract(
     working_memory_item_id: str | None = None
     captured_facts: list[dict[str, Any]] = []
 
+    task_action: dict[str, Any] | None = None
+
     if governance_allowed:
-        # Stage 5+6: Capability + Execution
-        response = await respond_fn(interpretation.prompt)
+        # Stage 5+6: Capability + Execution.
+        #
+        # Conversational task control: an utterance that is an *explicit* task
+        # instruction is carried out through the governed skill path, and its
+        # real outcome becomes the turn's reply. The model is deliberately not
+        # asked for one in that case -- a generated sentence about an action
+        # that has already happened (or has just been refused) could contradict
+        # it, and the user would have no way to tell which was true. Anything
+        # that is not an explicit instruction returns None here and the turn
+        # proceeds exactly as it always has.
+        task_action = await _handle_task_intent(daemon, observation)
+        if task_action is not None:
+            response = task_action["reply"]
+        else:
+            response = await respond_fn(interpretation.prompt)
 
         # Stage 7: Reflection -- record the interaction in Working Memory
         # (chat's short-term context buffer; feeds get_context_string()).
@@ -708,6 +949,14 @@ async def run_chat_through_runtime_contract(
         captured_facts = await _capture_personal_facts(daemon, observation)
         if captured_facts:
             details["personal_facts_captured"] = captured_facts
+        if task_action is not None:
+            # Explanation-grade, same posture as the competency/personal-fact
+            # records above: what was asked for, what the governed path did,
+            # and whether anything actually changed. The skill's own
+            # `skill_action_audit` row and Reflection still exist and are
+            # unchanged -- this is the chat surface's record that the turn
+            # routed to one.
+            details["task_action"] = task_action
 
         reflection = ActionReflection(
             surface="chat",
@@ -754,6 +1003,7 @@ async def run_chat_through_runtime_contract(
         response=response,
         working_memory_item_id=working_memory_item_id,
         personal_facts_captured=captured_facts,
+        task_action=task_action,
         provenance_degraded=reflection_outcome.error is not None,
         provenance_error=reflection_outcome.error,
     )

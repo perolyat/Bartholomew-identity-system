@@ -468,6 +468,23 @@ tool_use:
     # only registered when config/kernel.yaml's proactive.schedule_reminders
     # is true (default false). Both are required.
     - "schedule_reminder_check"
+    # Conversational task control: a user typing "add a task to renew the
+    # rego" now routes to the tasks skill through the governed
+    # Planner -> Runtime Contract -> SkillRegistry.execute_action() path.
+    # execute_action() evaluates tool_use.allowlist at the skill_id grain
+    # (candidate_action.kind = skill_id), so without this entry every task
+    # operation is denied outright -- the same blocking discovery S1.3's
+    # "notify" entry above resolved, for the same reason: the skill is
+    # already enabled (config/skills/tasks.yaml) and permission-level "auto"
+    # (low-risk local storage), just previously unreachable through the
+    # governed path.
+    #
+    # Scope note: this authorises create/list/complete/update, which is what
+    # the conversational recogniser can express. Deletion is deliberately not
+    # reachable from conversation at all (see
+    # bartholomew/kernel/task_intents.py), so this entry does not put a
+    # destructive operation behind an ordinary sentence.
+    - "tasks"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]
