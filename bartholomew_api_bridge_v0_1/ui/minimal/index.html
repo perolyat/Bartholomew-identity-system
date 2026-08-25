@@ -26,7 +26,26 @@
     .badge { border:1px solid #374151; padding:4px 8px; border-radius:999px; font-size:12px; }
     .badge.kernel-online { border-color: #059669; color: #10b981; }
     .badge.kernel-offline { border-color: #dc2626; color: #ef4444; }
-    #chatlog { max-height: 40vh; overflow:auto; white-space:pre-wrap; }
+    #chatlog { max-height: 40vh; overflow:auto; }
+    #chatlog:empty::after { content: "Nothing said yet. Ask Bartholomew something."; color:#6b7280; font-style:italic; }
+    .turn { border-radius:10px; padding:10px 12px; margin-bottom:8px; white-space:pre-wrap; line-height:1.5; }
+    .turn-who { font-size:11px; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; color:#9ca3af; }
+    .turn-meta { font-size:11px; color:#6b7280; margin-top:6px; }
+    .turn-user { background:#111f33; border:1px solid #1e3a5f; }
+    .turn-user .turn-who { color:#60a5fa; }
+    .turn-bartholomew { background:#141b26; border:1px solid #263041; }
+    .turn-bartholomew .turn-who { color:#a5b4fc; }
+    /* A failure must not look like a reply. TECH-F001. */
+    .turn-error { background:#2a1113; border:1px solid #7f1d1d; }
+    .turn-error .turn-who { color:#f87171; }
+    .turn-warn { background:#2a2011; border:1px solid #92400e; }
+    .turn-warn .turn-who { color:#fbbf24; }
+    .turn-system { background:#161b22; border:1px solid #30363d; }
+    .thinking { display:flex; align-items:center; gap:6px; color:#9ca3af; font-size:13px; margin:4px 0 10px; }
+    .thinking-dot { width:6px; height:6px; border-radius:50%; background:#60a5fa; animation: blink 1.2s infinite ease-in-out; }
+    .thinking-dot:nth-child(2){ animation-delay:.2s } .thinking-dot:nth-child(3){ animation-delay:.4s }
+    @keyframes blink { 0%,80%,100%{opacity:.25} 40%{opacity:1} }
+    @media (prefers-reduced-motion: reduce) { .thinking-dot { animation: none; opacity: .6; } }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px;}
     .nudge-item { background: #1f2937; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
     .nudge-kind { color: #60a5fa; font-weight: 600; }
@@ -37,6 +56,8 @@
     .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; background: #1f2937; }
     .tab.active { background: #374151; }
     .empty-state { color: #6b7280; font-style: italic; padding: 12px; }
+    .brake-checked { font-size:11px; color:#6b7280; margin-top:8px; }
+    .brake-checked-stale { color:#f87171; }
 
     /* Stage 3 UI Styles */
     .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
@@ -144,12 +165,18 @@
   </div>
 
   <!-- Chat -->
-  <div class="card">
-    <h3>💬 Chat</h3>
-    <div id="chatlog" class="mono"></div>
+  <div class="card" id="chat-card">
+    <h3>💬 Talk to Bartholomew</h3>
+    <div id="chatlog" aria-live="polite" aria-label="Conversation transcript"></div>
+    <div id="chat-thinking" class="thinking" style="display:none">
+      <span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>
+      <span>Bartholomew is thinking…</span>
+    </div>
     <div class="row">
-      <input id="msg" placeholder="Say something…" onkeydown="if(event.key==='Enter'){sendMsg()}"/>
-      <button onclick="sendMsg()">Send</button>
+      <input id="msg" placeholder="Tell Bartholomew what you need…"
+             aria-label="Message to Bartholomew"
+             onkeydown="if(event.key==='Enter'){sendMsg()}"/>
+      <button id="chat-send" class="primary" onclick="sendMsg()">Send</button>
     </div>
   </div>
 
@@ -209,7 +236,28 @@
       <button class="ack" onclick="disengageBrake()">✓ Disengage</button>
       <button onclick="refreshBrake()">Refresh</button>
     </div>
+    <div id="brake-checked" class="brake-checked">state not yet read</div>
     <div id="brake-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;color:#9ca3af;font-size:13px">What do these scopes stop?</summary>
+      <div style="font-size:13px;color:#9ca3af;margin-top:8px;line-height:1.6">
+        Ticking no box and pressing Engage applies the brake <strong>globally</strong>.
+        Ticking boxes restricts it to those areas only.
+        <ul style="margin:8px 0 0;padding-left:20px">
+          <li><strong>global</strong> — everything below, together.</li>
+          <li><strong>skills</strong> — Bartholomew stops running skills/tools.</li>
+          <li><strong>sight</strong> — visual input paths.</li>
+          <li><strong>voice</strong> — voice input/output paths.</li>
+          <li><strong>scheduler</strong> — his own background activity stops.</li>
+          <li><strong>training</strong> — no new material is taken in.</li>
+        </ul>
+        <p style="margin:8px 0 0">
+          The brake is enforced in Governance, not here. This panel reads and sets it;
+          if the reading cannot be taken it says <em>UNKNOWN</em> rather than showing
+          &ldquo;disengaged&rdquo;.
+        </p>
+      </div>
+    </details>
   </div>
 
   <!-- Stage 1 (S1.3): Notification Settings -->
@@ -398,24 +446,23 @@
     <div id="reflection-weekly" class="reflection-content mono" style="display:none"></div>
   </div>
 
-  <!-- Water (existing legacy panel).
-       Labelled unavailable because it is: this panel calls /api/water/today
-       and /api/water/log, and neither endpoint exists in the API bridge --
-       both 404 on every load. RISKS.md's hydration/water-logging tech-debt
-       entry describes them as "live, working, legacy code", which is
-       inaccurate; only the panel is real. Left in place and labelled rather
-       than removed, because removing the legacy water code is a separate,
-       explicitly unapproved decision recorded in that same entry, and
-       implementing the missing endpoints is out of scope for this slice. -->
-  <div class="card">
-    <h3>💧 Water <span class="badge" style="color:#f87171;border-color:#7f1d1d">endpoints not implemented</span></h3>
-    <div class="row">
-      <button onclick="addWater(250)">+250ml</button>
-      <button onclick="addWater(500)">+500ml</button>
-      <span id="total" class="badge">today: … ml</span>
-      <button onclick="refreshWater()">Refresh</button>
-    </div>
-  </div>
+  <!-- Water/hydration: ordinary controls removed (D4 / MF-F003 / B-F005).
+       This panel offered enabled +250ml / +500ml buttons and a running
+       total. The two hydration endpoints it called do not exist in the API
+       bridge and never did -- every click 404'd and the total rendered
+       "today: undefined ml". Labelling the panel "endpoints not implemented"
+       while leaving the buttons clickable still presented a dead feature as
+       an ordinary-user control.
+
+       Decision D4 puts Water/hydration outside current ordinary scope, so
+       the controls are gone rather than repaired. Scope discipline: D4 also
+       requires that the canonical RISKS.md hydration entry be amended rather
+       than a competing authority created, and that legacy data/model
+       disposition is handled separately and must not silently delete
+       historical data. This change does neither of those things -- it removes
+       ordinary-user controls only. No table is dropped, no row is deleted, no
+       risk entry is rewritten here, and the two absent endpoints stay absent.
+       See the sprint handoff for the residual D4 items. -->
 
   </details>
 
@@ -473,6 +520,52 @@
       }
     }
 
+    // PB-F002. Engaging or releasing the brake changes what other governed
+    // panels are reporting -- notifications, the consent inbox, the
+    // awaiting-response queue, the audit log, drives. Those panels each
+    // refreshed only on their own timer or their own Refresh button, so
+    // after a brake transition the page showed a mix of post-transition and
+    // pre-transition state, and the stale half looked exactly as
+    // authoritative as the fresh half. The Test #1 matrix hit this in all 48
+    // cases containing `global` or `skills`.
+    //
+    // The mechanism is deliberately the smallest one this architecture
+    // supports: the brake endpoint already returns a monotonic `revision`,
+    // and this page already polls it on a 15s safety cadence. So whenever
+    // the observed revision differs from the one we last rendered against,
+    // re-read the dependent panels. That covers a transition made from this
+    // page, from another tab, from the CLI, or from curl -- none of which a
+    // "refresh after my own button click" fix would catch.
+    //
+    // This sets no numeric freshness *policy*. UI-SYNC001b deliberately
+    // leaves the critical-state freshness/fail-safe bound unresolved, and
+    // nothing here decides it: the existing 15s poll is reused as-is, and
+    // the reading is stamped with the time it was taken (below) so a user
+    // can see how old it is rather than being told it is current.
+    let brakeRevisionRendered = null;
+
+    async function revalidateBrakeDependents(){
+      // Fire-and-report: one panel failing must not stop the others, and each
+      // of these already renders its own failure truthfully.
+      await Promise.allSettled([
+        refreshNotificationSettings(),
+        refreshPendingConsent(),
+        refreshAwaitingResponse(),
+        refreshAudit(),
+        refreshNudges(),
+        refreshSelfState(),
+        refreshHealth(),
+      ]);
+    }
+
+    function stampBrakeReading(ok){
+      const el = document.getElementById("brake-checked");
+      if(!el) return;
+      const now = new Date().toLocaleTimeString();
+      el.textContent = ok ? `state read at ${now}` : `last read attempt failed at ${now}`;
+      el.className = ok ? "brake-checked" : "brake-checked brake-checked-stale";
+    }
+
     async function refreshBrake(){
       try{
         const r = await fetch(API + "/api/governance/brake");
@@ -481,6 +574,21 @@
         }
         const j = await r.json();
         brakeRevision = j.revision;
+        stampBrakeReading(true);
+
+        // Revision moved (including the very first read) -> dependent
+        // governed state may no longer be what those panels are showing.
+        if(brakeRevisionRendered !== j.revision){
+          const isFirstRead = brakeRevisionRendered === null;
+          brakeRevisionRendered = j.revision;
+          if(!isFirstRead){
+            appendChatTurn('system',
+              j.engaged
+                ? `Parking Brake ENGAGED (${j.scopes && j.scopes.length ? j.scopes.join(', ') : 'global'}). Refreshing dependent state.`
+                : "Parking Brake released. Refreshing dependent state.");
+          }
+          revalidateBrakeDependents();
+        }
 
         const el = document.getElementById("brake-status");
         if(j.engaged){
@@ -498,6 +606,8 @@
         document.getElementById("brake-status").textContent = "brake: UNKNOWN (status unreachable)";
         document.getElementById("brake-status").className = "badge kernel-offline";
         document.getElementById("brake-detail").textContent = String(e);
+        stampBrakeReading(false);
+        setPresence("unknown");
       }
     }
 
@@ -518,7 +628,7 @@
           return;
         }
         await refreshBrake();
-        await refreshAudit();
+        await revalidateBrakeDependents();
       }catch(e){
         alert("Failed to engage brake: " + e);
       }
@@ -545,7 +655,7 @@
           return;
         }
         await refreshBrake();
-        await refreshAudit();
+        await revalidateBrakeDependents();
       }catch(e){
         alert("Failed to disengage brake: " + e);
       }
@@ -944,11 +1054,21 @@
         updateAffect('arousal', affect.arousal || 0);
         updateAffect('energy', affect.energy || 0);
 
-        // Update attention
+        // Update attention.
+        //
+        // MF-F001: these read `attention.target` / `.type` / `.intensity`,
+        // but AttentionState.to_dict() has always emitted `focus_target`,
+        // `focus_type` and `focus_intensity`. Every field missed, so the
+        // panel silently rendered its fallbacks -- "idle", "diffuse", 0.00 --
+        // no matter what the kernel was actually attending to. The old names
+        // are kept as a secondary fallback so this stays correct if the
+        // serialiser is ever widened.
         const attention = snap.attention || {};
-        document.getElementById("attention-target").textContent = attention.target || 'idle';
-        document.getElementById("attention-type").textContent = attention.type || 'diffuse';
-        const intensity = attention.intensity || 0;
+        const focusTarget = attention.focus_target ?? attention.target;
+        const focusType = attention.focus_type ?? attention.type;
+        document.getElementById("attention-target").textContent = focusTarget || 'idle';
+        document.getElementById("attention-type").textContent = focusType || 'diffuse';
+        const intensity = attention.focus_intensity ?? attention.intensity ?? 0;
         document.getElementById("attention-intensity-val").textContent = intensity.toFixed(2);
         document.getElementById("attention-intensity-fill").style.width = (intensity * 100) + '%';
 
@@ -1000,6 +1120,29 @@
       }
     }
 
+    // MF-F001: the API now serialises `effective_activation` (the clamped
+    // current_activation + context_boost the kernel actually sorts on). The
+    // old code read that name off a payload that never carried it and fell
+    // through `|| 0`, rendering five drives as 0.00 while the kernel held
+    // 0.57/0.54/0.51/0.51/0.48. Recomputing from the stored fields is the
+    // fallback, so an older API build still renders truthfully rather than
+    // as zero -- and `0` is only shown when the value really is zero.
+    function driveActivation(d){
+      if(typeof d.effective_activation === 'number') return d.effective_activation;
+      if(typeof d.current_activation === 'number'){
+        return Math.max(0, Math.min(1, d.current_activation + (d.context_boost || 0)));
+      }
+      if(typeof d.activation === 'number') return d.activation;
+      return 0;
+    }
+
+    // Drive ids are snake_case internals ("protect_user_wellbeing").
+    // Presented to an ordinary reader they should look like words.
+    function driveLabel(id){
+      if(!id) return 'unknown';
+      return String(id).replace(/_/g, ' ');
+    }
+
     async function refreshDrives(){
       try{
         const r = await fetch(API + "/api/self/drives/top?limit=5");
@@ -1011,17 +1154,19 @@
           return;
         }
 
-        document.getElementById("drives-list").innerHTML = drives.map(d => `
+        document.getElementById("drives-list").innerHTML = drives.map(d => {
+          const act = driveActivation(d);
+          return `
           <div class="drive-item">
             <div class="drive-header">
-              <span class="drive-name">${escapeHtml(d.drive_id || d.id)}</span>
-              <span class="drive-value">${(d.effective_activation || d.activation || 0).toFixed(2)}</span>
+              <span class="drive-name">${escapeHtml(driveLabel(d.drive_id || d.id))}</span>
+              <span class="drive-value">${act.toFixed(2)}</span>
             </div>
             <div class="drive-bar">
-              <div class="drive-fill" style="width:${Math.min(100, (d.effective_activation || d.activation || 0) * 100)}%"></div>
+              <div class="drive-fill" style="width:${Math.min(100, act * 100)}%"></div>
             </div>
           </div>
-        `).join('');
+        `;}).join('');
       }catch(e){
         console.error("Drives refresh failed:", e);
       }
@@ -1272,53 +1417,178 @@
     }
 
     // === Chat ===
+    // TECH-F001. This used to be:
+    //
+    //     const j = await r.json();
+    //     appendChat(j.reply + ...)
+    //
+    // with no `r.ok` check. fetch() only rejects on a network failure, so an
+    // HTTP 503 -- exactly what /api/chat returns when the model backend is
+    // unreachable, carrying a truthful `detail` naming backend, model and
+    // reason -- resolved normally, `j.reply` was absent, and the user was
+    // shown the literal string `undefined` in the transcript. Under a
+    // Governance block the same path produced the same thing. The backend was
+    // telling the truth the whole time; the UI was throwing it away.
+    //
+    // Nothing here changes backend failure semantics. It reads the failure
+    // the API already reports and renders it as a failure.
     async function sendMsg(){
       const el = document.getElementById("msg");
       const val = el.value.trim();
       if(!val) return;
       el.value = "";
-      appendChat("> " + val);
+      appendChatTurn('user', val);
+      setThinking(true);
       try{
         const r = await fetch(API + "/api/chat", {
           method: "POST",
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({message: val})
         });
-        const j = await r.json();
-        appendChat(j.reply + (j.tone ? `\n[tone:${j.tone}]` : "") + (j.emotion? ` [emotion:${j.emotion}]` : ""));
+
+        if(!r.ok){
+          appendChatTurn('error', await describeHttpFailure(r, "Bartholomew could not answer"));
+          return;
+        }
+
+        let j;
+        try{
+          j = await r.json();
+        }catch(parseErr){
+          appendChatTurn('error', "Bartholomew could not answer — the response was not readable JSON.");
+          return;
+        }
+
+        // A 2xx with no reply field is itself a defect, not a blank message.
+        // Say so rather than printing "undefined" or nothing at all.
+        if(typeof j.reply !== 'string' || j.reply === ''){
+          appendChatTurn('error', "Bartholomew returned an empty reply. This is a defect, not an answer.");
+          return;
+        }
+
+        const meta = [];
+        if(j.tone) meta.push(`tone: ${j.tone}`);
+        if(j.emotion) meta.push(`emotion: ${j.emotion}`);
+        appendChatTurn('bartholomew', j.reply, meta.join(' · '));
+
+        // WP-A2b: the API reports a lost provenance record on an otherwise
+        // successful reply. That is a degraded state the user is entitled to
+        // see -- the answer is real, its audit trail is not.
+        if(j.audit_degraded){
+          appendChatTurn('warn',
+            "This reply was delivered, but its audit/provenance record was not written" +
+            (j.audit_error ? ` (${j.audit_error})` : "") + ".");
+        }
       }catch(e){
-        appendChat("! chat failed: " + e);
+        // Genuine network/transport failure -- the request never got an
+        // answer. Distinct from an answered request that failed.
+        appendChatTurn('error', "Could not reach Bartholomew: " + (e && e.message ? e.message : String(e)));
+      }finally{
+        setThinking(false);
       }
     }
 
-    function appendChat(t){
+    // Turn a non-2xx Response into the truthful sentence behind it.
+    // FastAPI's HTTPException bodies are {"detail": "..."}; a validation
+    // error's detail is a list of objects, which must not be stringified
+    // into "[object Object]".
+    async function describeHttpFailure(r, prefix){
+      let detail = "";
+      try{
+        const j = await r.json();
+        if(typeof j.detail === 'string'){
+          detail = j.detail;
+        }else if(Array.isArray(j.detail)){
+          detail = j.detail.map(d => d && d.msg ? d.msg : JSON.stringify(d)).join('; ');
+        }else if(j.detail){
+          detail = JSON.stringify(j.detail);
+        }
+      }catch(e){
+        try{ detail = (await r.text()).slice(0, 400); }catch(e2){ detail = ""; }
+      }
+      const status = `HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`;
+      return detail ? `${prefix} — ${detail} (${status})` : `${prefix} — ${status}`;
+    }
+
+    // A transcript of typed turns rather than one appended text blob.
+    //
+    // The old renderer was `el.textContent += "\n" + t` on a single <pre>-ish
+    // div: every line -- your message, his reply, and a backend failure --
+    // arrived in identical monospace with no visual difference between them.
+    // TECH-F001 needs a failure to *look* like a failure, which a shared text
+    // node cannot express. `role` is one of user / bartholomew / error /
+    // warn / system.
+    function appendChatTurn(role, text, meta){
       const el = document.getElementById("chatlog");
-      el.textContent += (el.textContent ? "\n" : "") + t;
+      const wrap = document.createElement("div");
+      wrap.className = "turn turn-" + role;
+
+      const who = document.createElement("div");
+      who.className = "turn-who";
+      who.textContent = ({
+        user: "You",
+        bartholomew: "Bartholomew",
+        error: "⚠ Failed",
+        warn: "⚠ Degraded",
+        system: "System",
+      })[role] || role;
+
+      const body = document.createElement("div");
+      body.className = "turn-body";
+      // textContent, not innerHTML -- a reply, or a backend error string, is
+      // never markup here.
+      body.textContent = text;
+
+      wrap.appendChild(who);
+      wrap.appendChild(body);
+      if(meta){
+        const m = document.createElement("div");
+        m.className = "turn-meta";
+        m.textContent = meta;
+        wrap.appendChild(m);
+      }
+      el.appendChild(wrap);
       el.scrollTop = el.scrollHeight;
     }
 
-    // === Water ===
-    async function refreshWater(){
-      try{
-        const r = await fetch(API + "/api/water/today");
-        const j = await r.json();
-        document.getElementById("total").textContent = `today: ${j.total_ml} ml`;
-      }catch(e){
-        document.getElementById("total").textContent = "today: n/a";
-      }
+    // A request in flight is a state the user should be able to see, and it
+    // must end whether the request succeeded or failed (hence the `finally`
+    // in sendMsg). Truthful: it reflects an actual outstanding fetch, not a
+    // timer.
+    function setThinking(on){
+      const ind = document.getElementById("chat-thinking");
+      if(ind) ind.style.display = on ? "flex" : "none";
+      const btn = document.getElementById("chat-send");
+      if(btn) btn.disabled = on;
+      setPresence(on ? "thinking" : null);
     }
 
-    async function addWater(ml){
-      try{
-        await fetch(API + "/api/water/log", {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ml})
-        });
-        await refreshWater();
-      }catch(e){
-        console.error("Water log failed:", e);
-      }
+    // === Water ===
+    // The hydration panel's two functions were removed with it (D4/MF-F003).
+    // They were the only callers of the two absent hydration endpoints; the
+    // "today" reader rendered `undefined ml` from the 404 body, and the
+    // logger swallowed its failure into console.error, so a click looked
+    // like it had worked.
+
+    // === Presence ===
+    // Bartholomew's current state, kept in one place. Capability A only uses
+    // it to reflect "thinking" (a real outstanding request) and "unknown" (a
+    // safety reading that could not be taken); the presence area itself is
+    // built out later. Guarded so it is inert until that element exists, and
+    // it never invents a state the system cannot actually distinguish.
+    let presenceOverride = null;
+
+    function setPresence(state){
+      presenceOverride = state;
+      renderPresence();
+    }
+
+    function renderPresence(){
+      const el = document.getElementById("presence-state");
+      if(!el) return;
+      const state = presenceOverride || "available";
+      el.dataset.state = state;
+      el.textContent = state;
     }
 
     // === Helpers ===
@@ -1349,7 +1619,6 @@
     refreshEpisodes();
     refreshNudges();
     refreshReflections();
-    refreshWater();
 
     // === Auto-refresh ===
     setInterval(refreshSelfState, 30000);  // Self-state every 30s
