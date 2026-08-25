@@ -13,6 +13,12 @@
     .card-attention { border-color:#d97706; background:#1c1917; }
     button { border-radius:10px; border:1px solid #374151; background:#111827; color:#e8f0fe; padding:8px 12px; cursor:pointer; }
     button:hover { background:#1f2937; }
+    /* F4: keyboard users could tab through this entire page with no visible
+       indication of where they were -- several controls here engage or
+       release a safety halt, and one deletes a memory permanently. */
+    :focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; border-radius: 6px; }
+    button, select { min-height: 34px; }
+    a { color: #60a5fa; }
     button.ack { border-color: #059669; color: #10b981; }
     button.ack:hover { background: #064e3b; }
     button.dismiss { border-color: #dc2626; color: #ef4444; }
@@ -27,7 +33,11 @@
     .badge.kernel-online { border-color: #059669; color: #10b981; }
     .badge.kernel-offline { border-color: #dc2626; color: #ef4444; }
     #chatlog { max-height: 40vh; overflow:auto; }
-    #chatlog:empty::after { content: "Nothing said yet. Ask Bartholomew something."; color:#6b7280; font-style:italic; }
+    .first-use { border:1px dashed #2d3b52; border-radius:10px; padding:14px 16px;
+                 color:#9ca3af; font-size:13px; line-height:1.7; }
+    .first-use strong { color:#e8f0fe; }
+    .first-use ul { margin:8px 0 0; padding-left:20px; }
+    .first-use a { color:#60a5fa; }
     .turn { border-radius:10px; padding:10px 12px; margin-bottom:8px; white-space:pre-wrap; line-height:1.5; }
     .turn-who { font-size:11px; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; color:#9ca3af; }
     .turn-meta { font-size:11px; color:#6b7280; margin-top:6px; }
@@ -137,6 +147,9 @@
     .chat-attention { background:#1c2432; border:1px solid #2d3b52; border-radius:10px;
                       padding:10px 12px; margin-bottom:12px; font-size:13px; color:#cbd5e1; }
     .chat-attention a { color:#60a5fa; }
+
+    .await-warn { color:#fbbf24; }
+    .await-alert { color:#f87171; font-weight:600; }
 
     .memory-summary { font-size:12px; color:#6b7280; margin-bottom:10px; }
     .memory-item { background:#141b26; border:1px solid #263041; border-radius:10px;
@@ -327,6 +340,29 @@
     <h3>💬 Talk to Bartholomew</h3>
     <div id="chat-attention" class="chat-attention" style="display:none"></div>
     <div id="chatlog" aria-live="polite" aria-label="Conversation transcript"></div>
+    <!-- F3: first-use orientation, in the one place a new user is already
+         looking. Deliberately not an onboarding wizard and not a modal --
+         the page previously opened with a full-screen deployment-guidance
+         modal over it before anything had been said, which had to be
+         dismissed before the app could be used at all.
+
+         It removes itself on the first message rather than needing to be
+         dismissed, and it states only what is actually true right now:
+         his live state comes from the presence strip, and the capability
+         line is filled in from /api/health rather than asserted here. -->
+    <div id="first-use" class="first-use">
+      <strong>This is where you talk to Bartholomew.</strong> Type below and press Enter.
+      <ul>
+        <li id="first-use-capability">Checking what he can currently do…</li>
+        <li>His current state is always shown at the top of the page, next to his name —
+            including whether the <strong>Parking Brake</strong> is on, which halts him.</li>
+        <li>What he remembers about you is under
+            <a href="#needs-attention" onclick="scrollToAttention(event)">What Bartholomew remembers</a>,
+            where you can correct or delete any of it.</li>
+        <li>Engineering internals live under
+            <a href="#/workshop" onclick="showView('workshop')">Workshop</a>. You do not need them.</li>
+      </ul>
+    </div>
     <div id="chat-thinking" class="thinking" style="display:none">
       <span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>
       <span>Bartholomew is thinking…</span>
@@ -1124,25 +1160,80 @@
           return;
         }
 
-        el.innerHTML = entries.map(e => `
-          <div class="nudge-item">
-            <div class="row" style="justify-content:space-between">
-              <span class="nudge-kind">${escapeHtml(e.status)} · ${escapeHtml(e.origin_surface)}</span>
-              <div class="row">
-                <button class="dismiss" onclick="resolveAwaitingResponse(${e.id})">✕ Resolve</button>
-              </div>
-            </div>
-            <div class="nudge-msg">${escapeHtml(e.subject)}</div>
-            <div class="nudge-ts">
-              opened: ${escapeHtml(e.opened_at)} ·
-              due: ${escapeHtml(e.due_at || '—')} ·
-              reminders: ${e.reminder_count}
-            </div>
-          </div>
-        `).join('');
+        // Overdue first, then soonest-due, then oldest. These are durable
+        // obligations: the one that has already slipped is the one that
+        // needs the eye, and it used to be wherever the store happened to
+        // return it.
+        entries.sort((a, b) => {
+          const da = dueMillis(a), db = dueMillis(b);
+          if(da !== db) return da - db;
+          return String(a.opened_at).localeCompare(String(b.opened_at));
+        });
+
+        el.innerHTML = entries.map(renderAwaitingItem).join('');
       }catch(e){
         el.innerHTML = `<div class="empty-state">Failed to load awaiting-response queue: ${escapeHtml(e.message)}</div>`;
       }
+    }
+
+    // F1: this queue is a durable obligation record with an approved role.
+    // Its *authority* is untouched here; only how it reads. Previously each
+    // item led with a raw status enum and an origin-surface token, and
+    // printed two ISO timestamps -- so "reminded · chat" over an ISO string
+    // was doing the work of telling someone they were three days late
+    // replying to something.
+    const AWAITING_STATUS = {
+      open:      { label: "waiting",       cls: "" },
+      reminded:  { label: "reminded you",  cls: "await-warn" },
+      escalated: { label: "escalated",     cls: "await-alert" },
+    };
+
+    function dueMillis(e){
+      // No due date sorts last, not first: absence of a deadline is not
+      // urgency. Number.MAX_SAFE_INTEGER rather than Infinity so the
+      // subtraction in the comparator stays a real number.
+      if(!e.due_at) return Number.MAX_SAFE_INTEGER;
+      const t = Date.parse(e.due_at);
+      return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
+    }
+
+    // Plain language for a deadline, in either direction.
+    function describeDue(e){
+      if(!e.due_at) return { text: "no date set", cls: "" };
+      const t = Date.parse(e.due_at);
+      if(Number.isNaN(t)) return { text: `due ${e.due_at}`, cls: "" };
+      const days = Math.round((t - Date.now()) / 86400000);
+      if(days < 0) return { text: `overdue by ${Math.abs(days)} ${Math.abs(days) === 1 ? 'day' : 'days'}`, cls: "await-alert" };
+      if(days === 0) return { text: "due today", cls: "await-warn" };
+      if(days === 1) return { text: "due tomorrow", cls: "await-warn" };
+      return { text: `due in ${days} days`, cls: "" };
+    }
+
+    function renderAwaitingItem(e){
+      const status = AWAITING_STATUS[e.status] || { label: e.status, cls: "" };
+      const due = describeDue(e);
+      const reminders = e.reminder_count
+        ? ` · reminded ${e.reminder_count} ${e.reminder_count === 1 ? 'time' : 'times'}`
+        : '';
+
+      return `
+        <div class="nudge-item">
+          <div class="row" style="justify-content:space-between">
+            <span class="nudge-kind ${status.cls}">${escapeHtml(status.label)}</span>
+            <div class="row">
+              <button class="ack" onclick="resolveAwaitingResponse(${e.id}, 'reply_received')"
+                      title="You got the reply you were waiting for.">✓ Got a reply</button>
+              <button class="dismiss" onclick="resolveAwaitingResponse(${e.id}, 'user_dismissed')"
+                      title="You no longer need this reply.">✕ No longer needed</button>
+            </div>
+          </div>
+          <div class="nudge-msg">${escapeHtml(e.subject)}</div>
+          <div class="nudge-ts">
+            <span class="${due.cls}">${escapeHtml(due.text)}</span> ·
+            opened ${escapeHtml(formatTimeAgo(e.opened_at) || e.opened_at)}${escapeHtml(reminders)}
+          </div>
+        </div>
+      `;
     }
 
     async function openAwaitingResponse(){
@@ -1166,12 +1257,16 @@
       }
     }
 
-    async function resolveAwaitingResponse(id){
+    // The store already distinguishes reply_received from user_dismissed, and
+    // that distinction is the difference between an obligation that was met
+    // and one that was dropped. Every resolution used to be recorded as
+    // user_dismissed regardless, so the record could not tell them apart.
+    async function resolveAwaitingResponse(id, resolution){
       try{
         const r = await fetch(API + `/api/awaiting-response/${id}/resolve`, {
           method: "POST",
           headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ resolution: "user_dismissed", actor: "user" })
+          body: JSON.stringify({ resolution: resolution || "user_dismissed", actor: "user" })
         });
         if(!r.ok){
           alert("Failed to resolve: HTTP " + r.status);
@@ -1838,8 +1933,30 @@
     // TECH-F001 needs a failure to *look* like a failure, which a shared text
     // node cannot express. `role` is one of user / bartholomew / error /
     // warn / system.
+    // Truthful capability line: says what /api/health actually reports, not
+    // what the product would like to claim.
+    function renderFirstUseCapability(){
+      const el = document.getElementById("first-use-capability");
+      if(!el) return;
+      const h = presenceHealth;
+      if(h === null){
+        el.textContent = "Checking what he can currently do…";
+      } else if(h.kernel_online === false){
+        el.textContent = "He is not running right now, so he cannot answer.";
+      } else if(h.model_status && h.model_status !== "ready"){
+        el.textContent =
+          `He is running, but cannot think right now (${h.model_status}), so messages will fail until that is fixed.`;
+      } else {
+        el.textContent = "He can hold a conversation and remember things you tell him.";
+      }
+    }
+
     function appendChatTurn(role, text, meta){
       const el = document.getElementById("chatlog");
+      // The orientation panel has served its purpose once there is a
+      // transcript. It goes away on its own rather than needing dismissal.
+      const firstUse = document.getElementById("first-use");
+      if(firstUse) firstUse.remove();
       const wrap = document.createElement("div");
       wrap.className = "turn turn-" + role;
 
@@ -2249,6 +2366,8 @@
 
       // Brake state is safety information: it is repeated in the header so it
       // is visible from the Workshop view too, not only beside its control.
+      renderFirstUseCapability();
+
       const safetyEl = document.getElementById("presence-safety");
       if(safetyEl){
         if(presenceBrake && presenceBrake.unreachable){
