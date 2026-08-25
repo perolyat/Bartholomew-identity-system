@@ -14,7 +14,7 @@ from typing import Any
 from bartholomew.kernel import schedule_noticing
 from bartholomew.kernel.blocking_executor import run_off_loop
 
-from . import persistence
+from . import containment, persistence
 from .health import SELF_CHECK_DRIFT_REASON, check_drift
 from .models import Nudge
 
@@ -479,7 +479,36 @@ async def drive_schedule_reminder_check(ctx: Any) -> Nudge | None:
     persistence_failures: list[str] = []
 
     for reminder in reminders:
-        dedup_key = f"{schedule_noticing.REMINDER_KIND}:{schedule_noticing.REMINDER_REASON}:{reminder.identity}"
+        # Asked of the containment policy rather than formatted here, so this
+        # read and the key `insert_nudge_contained()` will write are computed
+        # by the same authority. Hand-building the format would mean a later
+        # change to it (it has already grown an escalation suffix once)
+        # silently stops the after-ack check from matching -- and "silently
+        # stops matching" here means re-reminding the user about things they
+        # have already dealt with, which is exactly the nagging Sec 4 exists
+        # to prevent.
+        dedup_key = containment.dedup_key_for(
+            schedule_noticing.REMINDER_KIND,
+            reminder.message,
+            schedule_noticing.REMINDER_REASON,
+            None,
+            reminder.identity,
+        )
+        if dedup_key is None:
+            # Only reachable if the reason were removed from the containment
+            # allowlist. Unkeyed reminders would accumulate one row per tick,
+            # so refuse rather than flood the queue.
+            persistence_failures.append(
+                f"{reminder.identity}: reason {schedule_noticing.REMINDER_REASON!r} "
+                "is not containment-eligible",
+            )
+            log.error(
+                "[Scheduler] Schedule reminder reason %r is not containment-eligible; "
+                "no reminder was raised (an unkeyed reminder would accumulate one "
+                "unresolved row per tick)",
+                schedule_noticing.REMINDER_REASON,
+            )
+            continue
 
         # §4 after-ack courtesy: one reminder per (fact, due date), not
         # re-raised once the user has acted on it. Read-only, and safe in the

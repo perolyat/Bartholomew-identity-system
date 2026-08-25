@@ -477,6 +477,31 @@ class TestNotNagging:
         assert len(_reminders(mem.db_path)) == 1
         assert len(recorder.received) == 1
 
+    async def test_the_after_ack_check_and_the_stored_key_agree(
+        self,
+        mem,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """The key the drive looks up must be the key the insert wrote.
+
+        Both are computed by `containment`, not formatted by hand at either
+        site -- so a later change to the key format (it has already grown an
+        escalation suffix once) cannot leave the after-ack check silently
+        failing to match, which would show up as re-reminding the user about
+        things they had already dealt with.
+        """
+        server, _recorder = webhook_server
+        await _store_schedule_fact(mem, "car_rego", _due_in(2))
+        registry = await _registry(mem, monkeypatch, _url(server))
+
+        await drive_schedule_reminder_check(_Ctx(mem, scheduler_store, registry))
+
+        row = _reminders(mem.db_path)[0]
+        assert row["dedup_key"], "the reminder was persisted unkeyed"
+        assert await scheduler_store.nudge_exists_for_dedup_key(row["dedup_key"]) is True
+
     async def test_the_reminder_reason_is_containment_eligible(self):
         assert containment.is_policy_eligible(sn.REMINDER_REASON)
         assert sn.REMINDER_REASON in containment.eligible_reasons()
