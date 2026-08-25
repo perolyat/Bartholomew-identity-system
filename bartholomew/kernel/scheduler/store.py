@@ -139,6 +139,7 @@ class SchedulerStore:
         reason: str,
         created_ts: int,
         escalation: str | None = None,
+        identity: str | None = None,
     ) -> dict[str, Any]:
         """
         WP-A1 containment-aware nudge persistence (B-F001 / NUDGE-F001, S1).
@@ -158,6 +159,44 @@ class SchedulerStore:
             reason,
             created_ts,
             escalation,
+            identity,
+        )
+
+    async def nudge_exists_for_dedup_key(self, dedup_key: str) -> bool:
+        """Usable POC slice 2 §4's after-ack courtesy check -- see
+        `persistence.nudge_exists_for_dedup_key()` for what it is and,
+        importantly, what it is not."""
+        return await self._call(
+            persistence.nudge_exists_for_dedup_key,
+            self.db_path,
+            dedup_key,
+        )
+
+    async def record_nudge_delivery(
+        self,
+        nudge_id: int,
+        status: str,
+        detail: str | None,
+        ts: int,
+    ) -> None:
+        """Record the outcome of the governed notification a nudge
+        represents (Usable POC slice 2, approval point 8.4 option (b)).
+        Same off-event-loop discipline as every other method here."""
+        await self._call(
+            persistence.record_nudge_delivery,
+            self.db_path,
+            nudge_id,
+            status,
+            detail,
+            ts,
+        )
+
+    async def get_nudge_delivery(self, nudge_id: int) -> dict[str, Any] | None:
+        """Read one nudge's recorded delivery outcome."""
+        return await self._call(
+            persistence.get_nudge_delivery,
+            self.db_path,
+            nudge_id,
         )
 
     async def list_containment_events(

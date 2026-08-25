@@ -1,6 +1,13 @@
 # Usable POC — Slice 2 Planning Note: Proactive Schedule Reminders
 
-**Status: DRAFT — awaiting Taylor's approval under the User Approval Gate. Not implemented.**
+**Status: APPROVED and IMPLEMENTED.**
+
+> **Approved 2026-08-25** by Taylor, under the User Approval Gate, as part of the Capability
+> Acceleration Sprint instruction — which is the authorising instrument for the implementation, and
+> is separate from this note. This note as originally committed (2026-08-22, `707d355`/`f9f1b28`)
+> was a draft and authorised nothing; that history is preserved deliberately. §8's four approval
+> points were decided as recorded in §8 below, and §10 records what was actually built against
+> what §9 predicted.
 
 > One right-sized planning note per `docs/TILT.md`'s vertical-slice discipline: what it notices,
 > what it surfaces, which governance gates apply, and what "done enough to test" looks like —
@@ -156,7 +163,39 @@ governed action inside Band A's restricted envelope and needs its own recorded d
 | Reminders per tick | cap 3, closest-due first | overflow stays represented as nudges, undelivered ones surface next tick |
 | Date patterns | explicit dates + a small relative set | same provisional posture as slice 1's extractor |
 
-## 8. Approval points inside this note
+## 8. Approval points inside this note — **all four decided 2026-08-25**
+
+> **Decisions, as approved by Taylor on 2026-08-25.** The alternatives each point weighed are left
+> in place below, unedited, so the decision can be read against what it was chosen over.
+>
+> 1. **Approved as scoped.** The governed delivery *is* this slice's Action and visible real-world
+>    result. No separate approve-then-act step is folded in.
+> 2. **Approved as scoped.** One reminder per `(fact, due date)` in the relevant window; once
+>    acknowledged or dismissed, it is not re-raised merely because the scheduler fired again.
+> 3. **Approved as scoped.** `config/kernel.yaml`'s `proactive.schedule_reminders`, default **OFF**.
+>    When off the drive is not registered, so there are no ticks and no queue impact.
+> 4. **Option (b) approved,** with two constraints made explicit:
+>    - Record the delivery outcome where the obligation already lives — implemented as three
+>      columns on the `nudges` row (`delivery_status`, `delivery_detail`, `delivery_ts`), so the
+>      queue distinguishes *noticed + delivered* from *noticed + not delivered*. Delivery success
+>      is never falsely reported.
+>    - **No automatic retry-until-delivered in this sprint.** A failed delivery stays recorded and
+>      visible rather than being silently lost or endlessly re-attempted; a bounded retry policy
+>      may be designed later from real-use evidence. §4's after-ack rule therefore needs no
+>      carve-out, and the interaction the note flagged is settled by not retrying.
+>    - A failed notification must never raise out through the drive and destabilise the scheduler
+>      loop.
+>
+> **What "delivered" is allowed to mean.** Option (b) is only worth having if the recorded value is
+> a real claim, so the implementation records five distinct outcomes rather than a success/failure
+> bit: `delivered` (the governed send completed **and** the configured webhook confirmed it — the
+> only value claiming the reminder left the machine), `sent_local_only` (send completed, no
+> outbound channel configured, nothing left the machine), `deferred` (quiet hours or mute; queued
+> by NotifySkill, not yet delivered), `failed` (attempted, did not succeed), and `not_attempted`.
+> A nudge that represents no delivery at all leaves the column NULL, which is deliberately not the
+> same claim as `failed`.
+
+
 
 1. **The scope judgement in §6:** governed delivery *is* this slice's governed action; the
    approve-then-act two-step is slice 3. (Alternative: fold the two-step in now — roughly doubles
@@ -207,3 +246,55 @@ a test, (c) adds a result-contract field and its route plumbing on top of that.
 
 No canonical document is edited by the implementation; the DECISIONS/ROADMAP records follow as the
 usual separate documentation step after delivery.
+
+> **Two factual corrections to the table above, made 2026-08-25 before implementation.** Both were
+> already identified on PR #64 and are corrections of fact, not new design scope.
+>
+> - **File paths.** The table wrote `scheduler/drives.py` / `scheduler/containment.py`. The real
+>   paths are under `bartholomew/kernel/scheduler/`.
+> - **Where conditional registration lives.** `config/kernel.yaml`'s `drives:` block is a **cadence
+>   override map**, not a registration list — it names 3 of the 5 always-on drives, so omitting a
+>   drive from it disables nothing. Registration is decided in the actual scheduler registration
+>   path: `drives.resolve_registry(ctx)`, which `scheduler/loop.py` uses for cadence resolution,
+>   for the `scheduled_tasks` upsert, and for the drive-function lookup. A drive absent from that
+>   mapping is never scheduled and never executed.
+
+## 10. What was actually built (2026-08-25)
+
+Recorded against §9's prediction, so the estimate can be checked rather than assumed.
+
+| Area | Files | Note |
+|---|---|---|
+| Noticing logic (pure) | `bartholomew/kernel/schedule_noticing.py` (new) | As scoped |
+| Drive + conditional registration | `kernel/scheduler/drives.py`, `kernel/scheduler/loop.py` | `resolve_registry()` is the registration path; the loop also skips a scheduled-but-deregistered task instead of crashing on it |
+| Containment eligibility | `kernel/scheduler/containment.py`, `kernel/scheduler/models.py` | One reason plus an explicit-identity mechanism — see below |
+| Delivery-outcome record (§8.4b) | `kernel/scheduler/persistence.py`, `kernel/scheduler/store.py`, `skills/notify.py`, `kernel/skill_base.py` | Three nudge columns, plus truthful delivery reporting out of NotifySkill |
+| Memory read | `kernel/memory_store.py` | `list_memories_by_kind()`, documented as consent-ungated and gated by the caller |
+| Config + Identity | `config/kernel.yaml`, `Identity.yaml` | Flag (default off) and one allowlist entry |
+| Tests | `tests/test_schedule_noticing.py`, `tests/test_schedule_reminder_drive.py` | 92 tests |
+
+**Three implementation decisions worth reading before reviewing the diff.**
+
+1. **Containment identity is explicit, not derived from the message.** §4's dedup identity is
+   `(fact kind, fact key, due date)`. The two existing policies derive identity from the nudge
+   message, which is right for them; for a reminder it is not, because restating the underlying
+   fact rewords the message in place (`upsert_memory()`) without creating a second commitment.
+   `Nudge` therefore gained an optional `dedup_identity`, consulted only by a policy that asks for
+   it and only for an allowlisted `reason` — it cannot make an ineligible nudge eligible. Existing
+   behaviour is unchanged and pinned by test.
+2. **Relative date forms are deliberately not implemented.** §1 anticipated "explicit dates and a
+   small relative set". Only absolute forms are parsed. A stored fact's text is a frozen quotation
+   of what the user said at capture time, so resolving "on Friday" against *notice-time* today
+   would silently drift and produce reminders for dates the user never named. Resolving against the
+   row's capture timestamp is possible (the row carries `ts`) and is real future work; it is not
+   guessed at here. A fact that cannot be parsed is simply not noticed, and stays recallable by
+   asking.
+3. **The drive reads through the existing consent authority.** Rows are read via `MemoryStore` and
+   then passed through the existing `ConsentGate.filter_memory_ids()` — the same filter the
+   retrieval layer applies — because this drive decides what goes into an outbound notification. A
+   row the gate excludes, or marks `context_only`, never becomes a reminder. Consent-queued content
+   remains structurally out of reach, as slice 1 established.
+
+**Still true and unchanged:** no unattended operation is authorised by this slice; the constants in
+§7 remain provisional; the startup-burst condition in §6 remains a recorded known condition rather
+than a blocker.

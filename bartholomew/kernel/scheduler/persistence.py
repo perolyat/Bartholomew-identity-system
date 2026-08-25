@@ -60,6 +60,24 @@ ALTER TABLE reflections ADD COLUMN ts_s INTEGER;
 ALTER TABLE nudges ADD COLUMN dedup_key TEXT;
 ALTER TABLE nudges ADD COLUMN occurrence_count INTEGER;
 ALTER TABLE nudges ADD COLUMN last_occurrence_ts INTEGER;
+
+-- Usable POC slice 2, approval point 8.4 option (b): the outcome of the
+-- governed notification delivery a nudge represents, recorded where the
+-- obligation already lives rather than on a new surface.
+--
+-- Only slice 2's schedule reminders write these. For every other nudge they
+-- stay NULL, which reads as "this nudge does not represent a delivery" --
+-- deliberately distinct from `delivery_status='failed'`, which is a positive
+-- claim that a delivery was attempted and did not succeed. The queue can
+-- therefore distinguish "noticed and delivered" from "noticed, not
+-- delivered", which is the whole point of the approval: a reminder whose
+-- delivery never left the machine must not present as one that arrived.
+--   delivery_status  one of persistence.DELIVERY_* below, or NULL.
+--   delivery_detail  the verbatim failure/context string, or NULL.
+--   delivery_ts      when the outcome was recorded (UTC epoch seconds).
+ALTER TABLE nudges ADD COLUMN delivery_status TEXT;
+ALTER TABLE nudges ADD COLUMN delivery_detail TEXT;
+ALTER TABLE nudges ADD COLUMN delivery_ts INTEGER;
 """
 
 # Statements that must run after the ALTERs above have added their columns.
@@ -96,6 +114,40 @@ CREATE INDEX IF NOT EXISTS idx_nudge_containment_events_key
 OUTCOME_INSERTED = "inserted"
 OUTCOME_SUPPRESSED_DUPLICATE = "suppressed_duplicate"
 OUTCOME_INSERTED_NOT_ELIGIBLE = "inserted_not_eligible"
+
+# Delivery outcomes recorded in `nudges.delivery_status` (Usable POC slice 2,
+# approval point 8.4 option (b)). Each is a distinct, checkable claim; none of
+# them is a synonym for another, and none of them is inferred:
+#   DELIVERED        the governed send completed AND the configured outbound
+#                    webhook confirmed delivery. The only value that claims
+#                    the reminder left this machine.
+#   SENT_LOCAL_ONLY  the governed send completed, but no outbound channel is
+#                    configured, so nothing left this machine. Not a failure,
+#                    and deliberately not reported as a delivery.
+#   DEFERRED         quiet hours or mute were in force; NotifySkill queued the
+#                    notification for later. The obligation is intact and
+#                    delivery has not happened yet.
+#   FAILED           a delivery was attempted and did not succeed (governance
+#                    denial, skill error, or the webhook POST failing).
+#   NOT_ATTEMPTED    no delivery was attempted at all (e.g. no skill registry
+#                    wired into the scheduler context).
+DELIVERY_DELIVERED = "delivered"
+DELIVERY_SENT_LOCAL_ONLY = "sent_local_only"
+DELIVERY_DEFERRED = "deferred"
+DELIVERY_FAILED = "failed"
+DELIVERY_NOT_ATTEMPTED = "not_attempted"
+
+#: The delivery statuses that do NOT amount to "the user was told". Read by
+#: tests and by anything reporting on the queue, so the distinction cannot
+#: drift between call sites.
+DELIVERY_STATUSES_NOT_DELIVERED = frozenset(
+    {
+        DELIVERY_SENT_LOCAL_ONLY,
+        DELIVERY_DEFERRED,
+        DELIVERY_FAILED,
+        DELIVERY_NOT_ATTEMPTED,
+    },
+)
 
 
 def ensure_schema(db_path: str) -> None:
@@ -322,6 +374,7 @@ def insert_nudge_contained(
     reason: str,
     created_ts: int,
     escalation: str | None = None,
+    identity: str | None = None,
 ) -> dict[str, Any]:
     """
     Insert a nudge under WP-A1 queue containment (B-F001 / NUDGE-F001, S1).
@@ -357,6 +410,10 @@ def insert_nudge_contained(
         escalation: Optional explicit escalation label. When set it is part
             of the equivalence key, so an explicitly distinct escalation is
             always a distinct unresolved item.
+        identity: Optional explicit equivalence identity from the emitting
+            drive, for material whose identity is not its message text (see
+            `containment._explicit_identity`). Cannot make an ineligible
+            reason eligible.
 
     Returns:
         Dict with:
@@ -367,7 +424,7 @@ def insert_nudge_contained(
                    suppressed, else None
           dedup_key: the equivalence key, or None when not policy-eligible
     """
-    dedup_key = containment.dedup_key_for(kind, message, reason, escalation)
+    dedup_key = containment.dedup_key_for(kind, message, reason, escalation, identity)
     actions_json = json.dumps(actions)
 
     # Convert epoch seconds to ISO string for legacy column
@@ -484,6 +541,99 @@ def insert_nudge_contained(
         except Exception:
             conn.rollback()
             raise
+
+
+def nudge_exists_for_dedup_key(db_path: str, dedup_key: str) -> bool:
+    """
+    True if ANY nudge row -- pending, acked or dismissed -- already carries
+    this equivalence key.
+
+    Usable POC slice 2 §4's after-ack courtesy check. Acking or dismissing a
+    nudge frees its key from the partial UNIQUE index by design, so without
+    this a resolved reminder would be re-raised on the very next tick. This
+    is deliberately application-level and deliberately *not* the safety
+    invariant: its failure direction is safe in D2's terms (worst case, a
+    reminder the user already dealt with is not re-sent), while a race's
+    worst case -- a second unresolved row -- stays prevented by the index,
+    which remains the invariant.
+
+    A read failure raises. Nothing here interprets one as "already
+    represented"; that inference is exactly the silent obligation loss D2
+    forbids, and the caller is responsible for making the failure visible.
+    """
+    with wal_db(db_path, timeout=5.0, label="nudge_exists_for_dedup_key") as conn:
+        conn.execute("PRAGMA busy_timeout = 3000")
+        row = conn.execute(
+            "SELECT 1 FROM nudges WHERE dedup_key = ? LIMIT 1",
+            (dedup_key,),
+        ).fetchone()
+    return row is not None
+
+
+def record_nudge_delivery(
+    db_path: str,
+    nudge_id: int,
+    status: str,
+    detail: str | None,
+    ts: int,
+) -> None:
+    """
+    Record what became of the governed notification a nudge represents
+    (Usable POC slice 2, approval point 8.4 option (b)).
+
+    Writes only the three delivery columns, on one row, by id. It never
+    touches `status`, never resolves or deletes the nudge, and never retries
+    a delivery -- the obligation is untouched by how its delivery went. A
+    failure to write raises rather than being swallowed: an unrecorded
+    delivery outcome would leave the queue claiming nothing about a delivery
+    that did happen, or nothing about one that did not, and both are the
+    silent-loss shape WP-A2 removed from the audit path.
+
+    Args:
+        db_path: Path to SQLite database
+        nudge_id: The nudge whose delivery this describes
+        status: One of the DELIVERY_* constants above
+        detail: Verbatim failure/context string, or None
+        ts: When the outcome was observed (UTC epoch seconds)
+    """
+    with wal_db(db_path, timeout=30.0, label="record_nudge_delivery") as conn:
+        conn.execute("PRAGMA busy_timeout = 3000")
+        conn.execute(
+            """UPDATE nudges
+               SET delivery_status = ?, delivery_detail = ?, delivery_ts = ?
+               WHERE id = ?""",
+            (status, detail, ts, nudge_id),
+        )
+        conn.commit()
+
+
+def get_nudge_delivery(db_path: str, nudge_id: int) -> dict[str, Any] | None:
+    """Read one nudge's recorded delivery outcome, or None if there is no
+    such nudge. A row that exists with `delivery_status` NULL is a nudge that
+    does not represent a delivery at all -- returned as-is, never defaulted
+    into a status."""
+    with wal_db(db_path, timeout=5.0, label="get_nudge_delivery") as conn:
+        conn.execute("PRAGMA busy_timeout = 3000")
+        row = conn.execute(
+            """SELECT id, kind, reason, status, dedup_key, occurrence_count,
+                      delivery_status, delivery_detail, delivery_ts
+               FROM nudges WHERE id = ?""",
+            (nudge_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "kind": row[1],
+        "reason": row[2],
+        "status": row[3],
+        "dedup_key": row[4],
+        "occurrence_count": row[5],
+        "delivery_status": row[6],
+        "delivery_detail": row[7],
+        "delivery_ts": row[8],
+    }
 
 
 def list_containment_events(

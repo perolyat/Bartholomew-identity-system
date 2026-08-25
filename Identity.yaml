@@ -456,6 +456,18 @@ tool_use:
     # docstring), so it needs its own allowlist entry to ever run against
     # this Identity.yaml.
     - "awaiting_response_check"
+    # Usable POC slice 2 (docs/POC_SLICE_2_PROACTIVE_REMINDERS.md): the
+    # scheduler drive that notices stored date-bearing facts falling due and
+    # sends one governed reminder for each. Follows the same recorded
+    # precedent as awaiting_response_check immediately above -- deliberately
+    # NOT in _SELF_MAINTENANCE_DRIVES, because a reminder is genuine outbound
+    # contact about specific user content rather than kernel housekeeping, so
+    # without this entry evaluate_tool_policy() denies the drive outright.
+    #
+    # This entry does not by itself make Bartholomew proactive: the drive is
+    # only registered when config/kernel.yaml's proactive.schedule_reminders
+    # is true (default false). Both are required.
+    - "schedule_reminder_check"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]

@@ -49,7 +49,33 @@ dreaming:
     weekday: "Sun"
     time: "21:30"
 
+# Cadence OVERRIDES only. This block does not register or de-register
+# anything -- it names 3 of the 5 always-on drives, and a drive omitted here
+# simply runs at its registry default. Registration lives in
+# bartholomew/kernel/scheduler/drives.py's resolve_registry().
 drives:
   self_check: "every:900"
   curiosity_probe: "window:3600:2"
   reflection_micro: "every:7200"
+
+# Consent to be proactive (Usable POC slice 2 --
+# docs/POC_SLICE_2_PROACTIVE_REMINDERS.md).
+#
+# schedule_reminders: DEFAULT OFF. When false, the schedule_reminder_check
+# drive is not registered at all: no ticks, no queue impact, no outbound
+# notifications, no behaviour change of any kind. Turning it on is a
+# deliberate operator act, and it is the ONLY switch -- there is deliberately
+# no environment-variable override, so there is exactly one authority over
+# whether Bartholomew may contact you unprompted.
+#
+# When on, Bartholomew scans stored date-bearing facts hourly and, for each
+# item falling due inside look_ahead_days, raises one nudge and sends one
+# governed notification. Governance, the parking brake, Identity policy and
+# quiet hours/mute all apply unchanged.
+#
+# look_ahead_days / max_per_tick are provisional POC constants (planning note
+# section 7) -- tuned from real use, not frozen here.
+proactive:
+  schedule_reminders: false
+  look_ahead_days: 3
+  max_per_tick: 3
