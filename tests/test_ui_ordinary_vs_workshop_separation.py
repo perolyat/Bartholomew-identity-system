@@ -86,12 +86,12 @@ def test_engineering_internals_are_not_in_the_ordinary_view(ui_source: str):
     """
     home = _section(ui_source, "view-home")
     for internal in (
-        'id="drives-list"',       # raw drive activations
+        'id="drives-list"',  # raw drive activations
         'id="affect-valence-fill"',  # affect sliders
-        'id="episodes-list"',     # episode instrumentation
-        'id="persona-list"',      # persona switching
-        'id="health"',            # raw health JSON
-        'id="audit-list"',        # governance event log
+        'id="episodes-list"',  # episode instrumentation
+        'id="persona-list"',  # persona switching
+        'id="health"',  # raw health JSON
+        'id="audit-list"',  # governance event log
     ):
         assert internal not in home, f"{internal} belongs in Workshop, not the ordinary view"
 

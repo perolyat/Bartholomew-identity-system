@@ -144,7 +144,8 @@ def test_first_use_guidance_is_in_the_conversation_not_a_modal(ui_source: str):
     script = re.search(r"<script>(.*)</script>", ui_source, re.S).group(1)
     script = re.sub(r"^\s*//.*$", "", script, flags=re.M)
     calls = [
-        m for m in re.finditer(r"maybeShowOnboardingModal\(\)", script)
+        m
+        for m in re.finditer(r"maybeShowOnboardingModal\(\)", script)
         if not script[: m.start()].rstrip().endswith("function")
     ]
     assert not calls, "the first-run modal must not open over the page on load"
@@ -196,7 +197,9 @@ def test_interactive_controls_are_labelled(ui_source: str):
 
 def test_live_regions_announce_changing_state(ui_source: str):
     assert 'id="chatlog"' in ui_source
-    chatlog = ui_source[ui_source.index('id="chatlog"') - 60 : ui_source.index('id="chatlog"') + 120]
+    chatlog = ui_source[
+        ui_source.index('id="chatlog"') - 60 : ui_source.index('id="chatlog"') + 120
+    ]
     assert "aria-live" in chatlog
     presence = ui_source[ui_source.index('id="presence"') : ui_source.index('id="presence"') + 200]
     assert "aria-live" in presence or 'role="status"' in presence
