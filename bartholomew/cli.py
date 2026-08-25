@@ -483,6 +483,83 @@ def train(
         )
 
 
+@app.command("say")
+def say(
+    text: str = typer.Argument(..., help="What Bartholomew should say out loud"),
+    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    config: str = typer.Option("config/kernel.yaml", help="Path to kernel config"),
+    identity: str = typer.Option("Identity.yaml", help="Path to Identity file"),
+):
+    """
+    Say something out loud on this machine (local text-to-speech).
+
+    Output only: this opens no microphone, records nothing, and reaches no
+    device other than this machine's own audio output.
+
+    Three things must line up before a sound is made, and this command tells
+    you which one stopped it if none is:
+
+      1. config/kernel.yaml's `voice.spoken_output` is true (default false);
+      2. the `voice` Parking Brake scope is not engaged;
+      3. Identity.yaml's tool_use.allowlist contains "voice_speak".
+
+    A machine with no local speech binary installed reports "no engine"
+    rather than silently appearing to have spoken.
+    """
+    import asyncio
+
+    import yaml
+
+    from bartholomew.kernel import spoken_output
+    from bartholomew.kernel.runtime_contract import (
+        run_spoken_output_through_runtime_contract,
+    )
+
+    try:
+        cfg = yaml.safe_load(open(config, encoding="utf-8")) or {}
+    except OSError as exc:
+        console.print(f"[red]Could not read {config}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    identity_context = None
+    try:
+        from identity_interpreter.identity_context import build_identity_context
+        from identity_interpreter.loader import load_identity
+
+        identity_context = build_identity_context(load_identity(identity))
+    except Exception:
+        # Same posture as every other surface: an Identity Context that
+        # cannot be built is simply not consulted (the check is additive),
+        # rather than being treated as an allow.
+        console.print(f"[yellow]Could not load {identity}; Identity policy not consulted.[/yellow]")
+
+    result = asyncio.run(
+        run_spoken_output_through_runtime_contract(
+            text,
+            enabled=spoken_output.enabled_for(cfg),
+            db_path=db,
+            identity_context=identity_context,
+        ),
+    )
+
+    if result.started:
+        engine = getattr(result.result, "engine", None) or "unknown engine"
+        console.print(f"[green]Spoken via {engine}.[/green]")
+        return
+
+    console.print(f"[yellow]Nothing was spoken: {result.reason or result.outcome}[/yellow]")
+    if not spoken_output.enabled_for(cfg):
+        console.print(
+            f"[dim]Set `voice.spoken_output: true` in {config} to allow spoken output.[/dim]",
+        )
+    elif spoken_output.available_engine() is None:
+        console.print(
+            "[dim]No local speech binary found. On Debian/Ubuntu: "
+            "`sudo apt-get install espeak-ng`. On macOS, `say` is built in.[/dim]",
+        )
+    raise typer.Exit(code=1)
+
+
 def main():
     """Entry point for CLI"""
     app()

@@ -1583,6 +1583,58 @@ class MemoryStore:
         )
         return await self.delete_memory(kind, key)
 
+    async def list_memories_by_kind(
+        self,
+        kinds: list[str],
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """
+        Read stored memories of the given kinds, newest first. Read-only.
+
+        Added for the Usable POC's slice 2 scheduler drive, which has to scan
+        stored date-bearing facts without a search query to drive retrieval
+        with: it is looking for *everything currently due*, not for the
+        records most similar to something a user just said. That read belongs
+        here for the same reason `get_memory()`'s does -- `MemoryStore` is the
+        single memory authority, and the alternative is a scheduler drive
+        opening its own connection to the memories table.
+
+        **This applies no consent gating of its own and must not be used to
+        choose what to surface.** It is the same posture, and the same
+        warning, as `get_memory()` and `get_memories_by_ids()` carry. The
+        slice 2 drive passes every row it gets back through the existing
+        `ConsentGate` before any of it can reach a notification; anything
+        else reading kinds in bulk must do the same or use the
+        `ConsentGate`-filtered retrieval layer instead.
+
+        Values encrypted at rest are decrypted here, matching `get_memory()`.
+        """
+        if not kinds:
+            return []
+
+        placeholders = ",".join("?" for _ in kinds)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT id, kind, key, value, summary, ts FROM memories "  # noqa: S608 - placeholders are generated, not interpolated user input
+                f"WHERE kind IN ({placeholders}) ORDER BY id DESC LIMIT ?",
+                (*kinds, limit),
+            )
+            rows = await cursor.fetchall()
+
+        entries: list[dict[str, Any]] = []
+        for row in rows:
+            entry = dict(row)
+            entry["value"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                entry["value"],
+            )
+            if entry.get("summary"):
+                entry["summary"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
+                    entry["summary"],
+                )
+            entries.append(entry)
+        return entries
+
     async def delete_memory(self, kind: str, key: str) -> bool:
         """
         Delete a memory and its FTS index in a single transaction.

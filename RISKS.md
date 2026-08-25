@@ -402,6 +402,36 @@
     `training` enforcement for every combination**. The "nothing real is ungated today" reasoning
     above is unchanged and still rests on the capability being inert — **not** on Test #1 evidence.
   The 2026-08-20 documentation pass deliberately did **not** implement the consolidation.
+  **Amended 2026-08-25 — the consolidation is now IMPLEMENTED; this half of the entry is closed.**
+  `run_sight_through_runtime_contract()` and `run_voice_through_runtime_contract()` now read
+  `is_blocked_fail_closed_off_loop()` (`GovernanceStore`), the same authority `skills`, `scheduler`
+  and chat read. Both gates also now fail closed on an unreadable brake; the previous
+  `except ImportError: pass` let an unreadable gate fall through to *allowed*. Done in the
+  Capability Acceleration Sprint (2026-08-25), commit `1a6025a`.
+  - **Why now, against the "no code change is authorised" position above.** The ordering constraint
+    this entry names as its deliverable is "consolidate before introducing authority tiers **or
+    making those capabilities real, whichever comes first**". The same sprint made a real
+    `voice`-scope capability (local spoken output, default OFF — see
+    `bartholomew/kernel/spoken_output.py`), so the constraint's own trigger condition fired. The
+    repair was local — two brake reads — and is the deliverable this entry already specified, not a
+    new design decision. **Recorded as a judgement made inside the sprint's stretch-repair
+    authorisation, open to Taylor overruling it.**
+  - **The facts above are unchanged and are not retro-edited.** The split was known, recorded and
+    deliberately deferred by B4, B6 and the 2026-08-20 pass; it was not discovered by this sprint.
+    What the sprint did was encounter it, verify it directly (a `GovernanceStore` engage leaves
+    `ParkingBrake(BrakeStorage(...)).is_blocked()` False), and close it.
+  - **Why the existing suite did not fail.** As this entry already noted, R1's brake-coverage tests
+    exercise the legacy path directly. `tests/test_voice_sight_runtime_contract_seam.py` engages the
+    brake through `ParkingBrake(BrakeStorage(...))` — the same store the seams read — so test and
+    code shared the same store and the split could not surface as a failure.
+    `tests/test_device_seam_brake_authority.py` now engages the way the CLI and API do, and pins the
+    two stores' continued disconnection as a recorded fact rather than an assumption.
+  - **What is NOT closed by this.** Constraint **C6** is broader than these two reads: the legacy
+    `ParkingBrake`/`BrakeStorage` pair still exists and still backs `system_flags`, and the
+    Personal/Platform tier awareness this entry warns about is still unwritten. Band B / safety gate
+    **S5** (direct per-capability brake enforcement) is **not** satisfied by this change, and nothing
+    here authorises real `sight`/`voice` **capture**. The capability behind both capture seams
+    remains inert.
 - **(2026-08-15) `memories` is uniquely indexed on `(kind, key)` globally, with no ownership
   dimension.** `bartholomew/kernel/memory_store.py` declares
   `CREATE UNIQUE INDEX uq_memories_kind_key ON memories(kind, key)`. Correct and desirable for a

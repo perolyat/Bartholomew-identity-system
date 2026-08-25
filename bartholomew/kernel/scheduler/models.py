@@ -54,6 +54,13 @@ class Nudge:
     # Optional and defaulted so every existing construction site is
     # unaffected; no drive sets it today.
     escalation: str | None = None
+    # Usable POC slice 2: an explicit containment equivalence identity, for
+    # material whose obligation identity is not its message text (see
+    # scheduler/containment.py's `_explicit_identity`). Consulted only by a
+    # policy that asks for it, and only for an allowlisted `reason` -- it
+    # cannot make an ineligible nudge eligible. Optional and defaulted so
+    # every existing construction site is unaffected.
+    dedup_identity: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -64,6 +71,7 @@ class Nudge:
             "reason": self.reason,
             "created_ts": self.created_ts,
             "escalation": self.escalation,
+            "dedup_identity": self.dedup_identity,
         }
 
 

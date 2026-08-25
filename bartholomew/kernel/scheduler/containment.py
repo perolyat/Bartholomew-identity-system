@@ -55,6 +55,12 @@ Scope discipline (D2 / S1 / requirement C of WP-A1):
 Escalation: a `Nudge` may carry an explicit `escalation` label. It is part
 of the equivalence key, so an explicitly distinct escalation is a distinct
 unresolved item by construction -- while an ordinary repeat firing is not.
+
+Explicit identity: a `Nudge` may also carry a `dedup_identity`. It does not
+widen eligibility -- only an allowlisted `reason` is ever keyed at all -- and
+only a policy that asks for it consults it. It exists for material whose
+obligation identity is genuinely not the message text, which is the case for
+Usable POC slice 2's schedule reminders (see `_explicit_identity`).
 """
 
 from __future__ import annotations
@@ -70,6 +76,15 @@ from typing import Any
 # inherit containment.
 _CURIOSITY_PROBE = "curiosity_probe"
 _SELF_CHECK_DRIFT = "self_check_drift"
+# Usable POC slice 2. A proactive schedule reminder is recurring,
+# system-generated, user-facing material of exactly the kind this policy
+# exists for: the drive re-notices the same upcoming commitment on every
+# firing until it is acted on, and two unresolved copies of "your rego is
+# due on the 5th" is NUDGE-F001, not two obligations. Unlike the two
+# reasons above, its identity is not derivable from the message text --
+# see `_explicit_identity` and `bartholomew.kernel.schedule_noticing
+# .NoticedReminder.identity`.
+_SCHEDULE_REMINDER = "schedule_reminder"
 
 # A self-check drift string is "<class>" or "<class>:<detail>", where the
 # detail is a volatile measurement (a count, an age in hours). Equivalence
@@ -79,7 +94,7 @@ _SELF_CHECK_DRIFT = "self_check_drift"
 _DRIFT_CLASS_RE = re.compile(r"^([a-z_]+)")
 
 
-def _drift_class(message: str, reason: str) -> str:
+def _drift_class(message: str, reason: str, identity: str | None = None) -> str:
     """
     Extract the stable drift class from a self-check nudge.
 
@@ -95,7 +110,7 @@ def _drift_class(message: str, reason: str) -> str:
     return match.group(1) if match else reason
 
 
-def _curiosity_identity(message: str, reason: str) -> str:
+def _curiosity_identity(message: str, reason: str, identity: str | None = None) -> str:
     """
     Equivalence for the curiosity probe.
 
@@ -113,11 +128,40 @@ def _curiosity_identity(message: str, reason: str) -> str:
     return reason
 
 
-# reason -> (kind_scope, identity_fn). `kind_scope` is included in the key
-# so a reason accidentally reused under a different kind cannot collide.
-_POLICY: dict[str, Callable[[str, str], str]] = {
+def _explicit_identity(message: str, reason: str, identity: str | None = None) -> str:
+    """
+    Equivalence for material whose identity the emitting drive states outright.
+
+    The two policies above derive identity from the message because for them
+    the message genuinely *is* the obligation's identity. A schedule reminder
+    is different: its obligation is "(this stored fact, this due date)", and
+    its message is a rendering of that fact's current text. Restating the
+    underlying fact rewords the message (`upsert_memory()` updates the row in
+    place) without creating a second commitment, so keying on the message
+    would let one commitment occupy two unresolved queue slots -- exactly the
+    NUDGE-F001 shape this module removes.
+
+    The fallback when no identity is supplied is the message itself: still
+    deterministic, still collapsing ordinary repeats, and never *merging* two
+    items that a supplied identity would have kept apart. Nothing here
+    invents an identity, and only reasons listed in `_POLICY` reach it, so a
+    caller cannot key an arbitrary nudge by passing one.
+    """
+    return identity or message
+
+
+# reason -> identity_fn. The nudge `kind` is included in the key alongside
+# the reason, so a reason accidentally reused under a different kind cannot
+# collide.
+#
+# Each function takes (message, reason, explicit_identity). The third
+# argument is the `dedup_identity` the emitting drive set on its `Nudge`
+# (see `scheduler/models.py`); policies that derive identity from the
+# message ignore it.
+_POLICY: dict[str, Callable[[str, str, str | None], str]] = {
     _CURIOSITY_PROBE: _curiosity_identity,
     _SELF_CHECK_DRIFT: _drift_class,
+    _SCHEDULE_REMINDER: _explicit_identity,
 }
 
 
@@ -137,6 +181,7 @@ def dedup_key_for(
     message: str,
     reason: str | None,
     escalation: str | None = None,
+    identity: str | None = None,
 ) -> str | None:
     """
     Deterministic equivalence key for a nudge, or None if the nudge is not
@@ -150,6 +195,12 @@ def dedup_key_for(
         escalation: Optional explicit escalation label. When set, it is
             part of the key, so an explicitly distinct escalation is
             always a distinct unresolved item.
+        identity: Optional explicit equivalence identity supplied by the
+            emitting drive, for material whose identity is not derivable
+            from the message text (see `_explicit_identity`). Ignored by
+            policies that derive their own, and ignored entirely for a
+            reason that is not on the allowlist -- it can never make an
+            ineligible nudge eligible.
 
     Returns:
         A stable key string, or None when containment does not apply.
@@ -157,8 +208,8 @@ def dedup_key_for(
     if reason is None or reason not in _POLICY:
         return None
 
-    identity = _POLICY[reason](message, reason)
-    key = f"{kind}:{reason}:{identity}"
+    resolved_identity = _POLICY[reason](message, reason, identity)
+    key = f"{kind}:{reason}:{resolved_identity}"
     if escalation:
         key = f"{key}#escalation:{escalation}"
     return key
@@ -166,10 +217,12 @@ def dedup_key_for(
 
 def dedup_key_for_nudge(nudge: Any) -> str | None:
     """`dedup_key_for()` applied to a `models.Nudge` (or any object with
-    the same `kind`/`message`/`reason`/`escalation` attributes)."""
+    the same `kind`/`message`/`reason`/`escalation`/`dedup_identity`
+    attributes)."""
     return dedup_key_for(
         nudge.kind,
         nudge.message,
         nudge.reason,
         getattr(nudge, "escalation", None),
+        getattr(nudge, "dedup_identity", None),
     )

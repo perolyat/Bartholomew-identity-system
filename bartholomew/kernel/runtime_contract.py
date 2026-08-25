@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from . import personal_facts, policy_engine, training
+from . import personal_facts, policy_engine, spoken_output, task_intents, training
 from .blocking_executor import run_off_loop
 from .competency_reasoning import (
     EMPTY_CONTEXT,
@@ -152,6 +152,14 @@ class RuntimeContractResult:
     #: Empty when the turn proposed none, or when governance denied the turn.
     #: Defaulted so existing construction sites are unaffected.
     personal_facts_captured: list[dict[str, Any]] = field(default_factory=list)
+
+    #: Conversational task control: what this turn's explicit task instruction
+    #: actually did, or None when the turn contained none (the common case).
+    #: Records the recognised operation, the governed skill outcome, and
+    #: whether anything changed -- so a caller, an audit reader and the
+    #: Reflection all see the same account of it. Defaulted so existing
+    #: construction sites are unaffected.
+    task_action: dict[str, Any] | None = None
 
     #: WP-A2b. True when this turn's Reflection -- on the chat surface the
     #: sole durable record of the governed decision context (S5.3 Decision
@@ -569,6 +577,224 @@ async def _capture_personal_facts(
     return outcomes
 
 
+TASK_OUTCOME_EXECUTED = "executed"
+TASK_OUTCOME_NOT_FOUND = "not_found"
+TASK_OUTCOME_AMBIGUOUS = "ambiguous"
+TASK_OUTCOME_UNSUPPORTED = "unsupported"
+TASK_OUTCOME_FAILED = "failed"
+TASK_OUTCOME_UNAVAILABLE = "unavailable"
+
+
+async def _run_task_action(
+    daemon: KernelDaemon,
+    action: str,
+    params: dict[str, Any],
+) -> Any:
+    """
+    Run one task operation through the existing governed skill path.
+
+    `Planner.handle_skill_request()` is the production route into skill
+    execution: it validates that the skill and action really exist, then calls
+    `run_skill_through_runtime_contract()` ->
+    `SkillRegistry.execute_action()`, the single chokepoint where the parking
+    brake (`skills` scope), the Identity Context -> Policy Decision on
+    `skill_id="tasks"`, "ask"-level consent resolution, the
+    `skill_action_audit` row and the unified Reflection all live.
+
+    Nothing here reaches around that. There is no second executor, no direct
+    `TasksSkill` call, and no path that skips a gate -- which is why this
+    function is three lines long and the interesting code is all in the
+    recogniser and the reply rendering.
+    """
+    planner = getattr(daemon, "planner", None)
+    if planner is None:
+        return None
+    return await planner.handle_skill_request(task_intents.TASKS_SKILL_ID, action, params)
+
+
+async def _resolve_subject(
+    daemon: KernelDaemon,
+    intent: task_intents.TaskIntent,
+) -> tuple[task_intents.TaskResolution | None, Any]:
+    """
+    Turn the task title the user spoke into a real stored task.
+
+    The candidate list is read through the governed `list` action, not by
+    reading the skill's table -- so the read is gated, permission-checked and
+    audited exactly like the write that may follow it. A failed read is
+    returned as-is; the caller reports it rather than guessing.
+    """
+    listing = await _run_task_action(daemon, "list", {"status": "all", "limit": 200})
+    if listing is None or not getattr(listing, "success", False):
+        return None, listing
+
+    tasks = listing.data if isinstance(listing.data, list) else []
+    return task_intents.resolve_task(intent.subject or "", tasks), listing
+
+
+async def _handle_task_intent(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> dict[str, Any] | None:
+    """
+    Conversational task control: carry out an explicit task instruction the
+    user gave in ordinary conversation, and report truthfully what happened.
+
+    Returns None when the utterance contained no explicit task instruction --
+    the overwhelmingly common case -- and the turn then proceeds exactly as it
+    did before this existed. When it returns a dict, the `reply` in it is the
+    turn's response: built from what the governed skill actually returned, not
+    from what was asked for, so the model is never in a position to narrate an
+    action that did not happen.
+
+    **Why the turn's own CandidateAction stays `chat_response`.** The task
+    operation is a *nested* governed action, evaluated for real at
+    `execute_action()`'s Governance stage against `kind="tasks"` -- the exact
+    grain `Identity.yaml`'s `tool_use.allowlist` uses. Re-evaluating the same
+    decision at the chat gate as well would not add a gate; it would replace a
+    truthful "I'm not permitted to do that, and nothing changed" reply with a
+    denial of the whole conversation turn, which is both less informative and
+    the blast radius that item 11.2's first attempt at drive gating produced.
+    The brake is unaffected either way: chat's own Governance stage already
+    fails closed on the `skills` scope before this function is ever reached,
+    so a braked system answers nothing at all.
+
+    **Never raises.** Task routing must not be able to break a chat turn. But
+    it also never silently swallows: an unexpected failure becomes a truthful
+    "it didn't go through" reply rather than a fall-through to the model,
+    because falling through is precisely how a fabricated confirmation would
+    reach the user.
+    """
+    try:
+        intent = task_intents.parse_intent(observation.raw_content or "")
+        if intent is None:
+            return None
+
+        record: dict[str, Any] = {
+            "requested": intent.described_as,
+            "action": intent.action,
+            "changed": False,
+        }
+
+        # Recognised only so it can be declined truthfully. Nothing is
+        # executed, and the reply says so plainly.
+        if intent.action == task_intents.INTENT_UNSUPPORTED:
+            record["outcome"] = TASK_OUTCOME_UNSUPPORTED
+            record["reply"] = task_intents.render_unsupported(intent.described_as)
+            return record
+
+        if getattr(daemon, "planner", None) is None:
+            record["outcome"] = TASK_OUTCOME_UNAVAILABLE
+            record["reply"] = task_intents.render_failure(
+                intent.described_as,
+                "task management is not available in this session",
+            )
+            return record
+
+        if intent.action == task_intents.INTENT_CREATE:
+            result = await _run_task_action(daemon, "create", dict(intent.params))
+            if result is not None and result.success and isinstance(result.data, dict):
+                record["outcome"] = TASK_OUTCOME_EXECUTED
+                record["changed"] = True
+                record["task_id"] = result.data.get("id")
+                record["reply"] = task_intents.render_created(result.data)
+            else:
+                record["outcome"] = TASK_OUTCOME_FAILED
+                record["error"] = _task_error(result)
+                record["reply"] = task_intents.render_failure(
+                    intent.described_as,
+                    record["error"],
+                )
+            return record
+
+        if intent.action == task_intents.INTENT_LIST:
+            status = intent.params.get("status", "pending")
+            result = await _run_task_action(
+                daemon,
+                "list",
+                {"status": status, "limit": 50},
+            )
+            if result is not None and result.success and isinstance(result.data, list):
+                record["outcome"] = TASK_OUTCOME_EXECUTED
+                record["count"] = len(result.data)
+                record["reply"] = task_intents.render_list(result.data, status)
+            else:
+                record["outcome"] = TASK_OUTCOME_FAILED
+                record["error"] = _task_error(result)
+                record["reply"] = task_intents.render_failure(
+                    intent.described_as,
+                    record["error"],
+                )
+            return record
+
+        # complete / update: both need a real task_id, which nobody says out
+        # loud. Resolution can decline, and declining is not an action.
+        resolution, listing = await _resolve_subject(daemon, intent)
+        if resolution is None:
+            record["outcome"] = TASK_OUTCOME_FAILED
+            record["error"] = _task_error(listing)
+            record["reply"] = task_intents.render_failure(intent.described_as, record["error"])
+            return record
+
+        if resolution.outcome == task_intents.NOT_FOUND:
+            record["outcome"] = TASK_OUTCOME_NOT_FOUND
+            record["reply"] = task_intents.render_not_found(intent.subject or "")
+            return record
+
+        if resolution.outcome == task_intents.AMBIGUOUS:
+            record["outcome"] = TASK_OUTCOME_AMBIGUOUS
+            record["candidates"] = [task.get("title") for task in resolution.candidates]
+            record["reply"] = task_intents.render_ambiguous(
+                intent.subject or "",
+                resolution.candidates,
+            )
+            return record
+
+        task_id = (resolution.task or {}).get("id")
+        params = {"task_id": task_id, **intent.params}
+        result = await _run_task_action(daemon, intent.action, params)
+        record["task_id"] = task_id
+
+        if result is not None and result.success and isinstance(result.data, dict):
+            record["outcome"] = TASK_OUTCOME_EXECUTED
+            record["changed"] = True
+            if intent.action == task_intents.INTENT_COMPLETE:
+                record["reply"] = task_intents.render_completed(result.data)
+            else:
+                record["reply"] = task_intents.render_updated(result.data, intent.params)
+        else:
+            record["outcome"] = TASK_OUTCOME_FAILED
+            record["error"] = _task_error(result)
+            record["reply"] = task_intents.render_failure(intent.described_as, record["error"])
+        return record
+    except Exception:
+        logger.exception("Conversational task routing failed; reporting it rather than hiding it")
+        return {
+            "requested": "carry out a task instruction",
+            "action": "unknown",
+            "outcome": TASK_OUTCOME_FAILED,
+            "changed": False,
+            "error": "an internal error interrupted the task operation",
+            "reply": task_intents.render_failure(
+                "carry out that task instruction",
+                "an internal error interrupted it",
+            ),
+        }
+
+
+def _task_error(result: Any) -> str | None:
+    """The verbatim reason a task operation did not succeed, or None.
+
+    Deliberately reports the governed path's own words (a brake block, an
+    Identity policy denial, a permission refusal) rather than paraphrasing
+    them into something friendlier: a user told "I'm not permitted to do
+    that" needs to be able to find out why.
+    """
+    if result is None:
+        return "the task capability is not available"
+    return getattr(result, "error", None) or getattr(result, "message", None) or None
+
+
 async def run_chat_through_runtime_contract(
     daemon: KernelDaemon,
     user_input: str,
@@ -676,9 +902,24 @@ async def run_chat_through_runtime_contract(
     working_memory_item_id: str | None = None
     captured_facts: list[dict[str, Any]] = []
 
+    task_action: dict[str, Any] | None = None
+
     if governance_allowed:
-        # Stage 5+6: Capability + Execution
-        response = await respond_fn(interpretation.prompt)
+        # Stage 5+6: Capability + Execution.
+        #
+        # Conversational task control: an utterance that is an *explicit* task
+        # instruction is carried out through the governed skill path, and its
+        # real outcome becomes the turn's reply. The model is deliberately not
+        # asked for one in that case -- a generated sentence about an action
+        # that has already happened (or has just been refused) could contradict
+        # it, and the user would have no way to tell which was true. Anything
+        # that is not an explicit instruction returns None here and the turn
+        # proceeds exactly as it always has.
+        task_action = await _handle_task_intent(daemon, observation)
+        if task_action is not None:
+            response = task_action["reply"]
+        else:
+            response = await respond_fn(interpretation.prompt)
 
         # Stage 7: Reflection -- record the interaction in Working Memory
         # (chat's short-term context buffer; feeds get_context_string()).
@@ -708,6 +949,14 @@ async def run_chat_through_runtime_contract(
         captured_facts = await _capture_personal_facts(daemon, observation)
         if captured_facts:
             details["personal_facts_captured"] = captured_facts
+        if task_action is not None:
+            # Explanation-grade, same posture as the competency/personal-fact
+            # records above: what was asked for, what the governed path did,
+            # and whether anything actually changed. The skill's own
+            # `skill_action_audit` row and Reflection still exist and are
+            # unchanged -- this is the chat surface's record that the turn
+            # routed to one.
+            details["task_action"] = task_action
 
         reflection = ActionReflection(
             surface="chat",
@@ -754,6 +1003,7 @@ async def run_chat_through_runtime_contract(
         response=response,
         working_memory_item_id=working_memory_item_id,
         personal_facts_captured=captured_facts,
+        task_action=task_action,
         provenance_degraded=reflection_outcome.error is not None,
         provenance_error=reflection_outcome.error,
     )
@@ -945,6 +1195,14 @@ async def run_skill_through_runtime_contract(
 _SIGHT_CAPTURE_KIND = "sight_capture_start"
 _VOICE_STREAM_KIND = "voice_stream_start"
 
+# Spoken output. Deliberately NOT suffixed "_start" and deliberately a
+# separate kind from `_VOICE_STREAM_KIND`: the two are opposite directions
+# through the same physical device family, and conflating them would let an
+# allowlist entry for speaking read as one for listening. This kind
+# authorises one utterance out of this machine's speaker. It authorises no
+# capture of any kind -- there is no capture code behind it to authorise.
+_VOICE_SPEAK_KIND = "voice_speak"
+
 
 @dataclass
 class DeviceRuntimeResult:
@@ -1069,8 +1327,12 @@ async def run_sight_through_runtime_contract(
 
     Governance runs three gates, all strictly before `capture_fn` is ever
     called:
-      1. ParkingBrake("sight") -- unchanged from the pre-existing stub's own
-         check, including its `except ImportError: pass` tolerance.
+      1. ParkingBrake("sight") -- read through `GovernanceStore`, the same
+         authority chat/scheduler/skill execution read, and fail-closed on
+         an unreadable gate. (This gate previously read the legacy
+         `system_flags` row, which nothing has written since Phase B6
+         retired the dual-check bridge -- so engaging the brake did not
+         stop this seam. See the gate's own comment below.)
       2. Identity Policy Decision (`evaluate_tool_policy`, kind
          "sight_capture_start"). Additive: skipped when no `IdentityContext`
          is wired in, matching chat/scheduler/skill. Under real `Identity.yaml`
@@ -1102,25 +1364,39 @@ async def run_sight_through_runtime_contract(
     outcome = "started"
     reason: str | None = None
 
-    # Governance gate 1: ParkingBrake("sight"), preserving the pre-existing
-    # ImportError tolerance exactly.
+    # Governance gate 1: ParkingBrake("sight"), read through GovernanceStore.
+    #
+    # This used to be `ParkingBrake(BrakeStorage(...))`, which reads the
+    # legacy `system_flags` "parking_brake" row. Phase B6 retired the
+    # dual-check bridge that kept that row in step with the real state, and
+    # both writers -- `bartholomew brake on` and the API's
+    # /governance/brake/engage route -- write GovernanceStore only. This gate
+    # was therefore reading a value nothing updates any more: engaging the
+    # brake did not stop this seam. It now reads the same authority chat,
+    # scheduler drives and skill execution read.
+    #
+    # Fails closed on any error: an unreadable safety gate must deny a device
+    # start, never wave it through. The previous `except ImportError: pass`
+    # tolerance deliberately does not survive -- it existed for a module that
+    # might not be importable, and silently continuing past an unreadable
+    # brake is not a tolerance a device surface can afford.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import (
-            BrakeStorage,
-            construct_parking_brake_off_loop,
+        from bartholomew.orchestrator.safety.governance_store import (
+            is_blocked_fail_closed_off_loop,
         )
 
-        if resolved_db_path is not None:
-            # No owning daemon instance here -- construct_parking_brake_off_loop
-            # falls back to a one-off asyncio.to_thread() (see
-            # run_off_loop()'s docstring), still off the event loop.
-            brake = await construct_parking_brake_off_loop(BrakeStorage(resolved_db_path))
-            if brake.is_blocked("sight"):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = "Blocked by parking brake (scope=sight)"
-    except ImportError:
-        pass
+        if resolved_db_path is not None and await is_blocked_fail_closed_off_loop(
+            "sight",
+            resolved_db_path,
+        ):
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Blocked by parking brake (scope=sight)"
+    except Exception:
+        logger.exception("Brake check failed for scope=sight; failing closed")
+        allowed = False
+        outcome = "parking_brake_denied"
+        reason = "Parking brake check errored"
 
     # Governance gate 2: Identity Policy Decision (additive; see docstring).
     if allowed and identity_context is not None:
@@ -1198,24 +1474,39 @@ async def run_voice_through_runtime_contract(
     outcome = "started"
     reason: str | None = None
 
-    # Governance gate 1: ParkingBrake("voice"), preserving ImportError tolerance.
+    # Governance gate 1: ParkingBrake("voice"), read through GovernanceStore.
+    #
+    # This used to be `ParkingBrake(BrakeStorage(...))`, which reads the
+    # legacy `system_flags` "parking_brake" row. Phase B6 retired the
+    # dual-check bridge that kept that row in step with the real state, and
+    # both writers -- `bartholomew brake on` and the API's
+    # /governance/brake/engage route -- write GovernanceStore only. This gate
+    # was therefore reading a value nothing updates any more: engaging the
+    # brake did not stop this seam. It now reads the same authority chat,
+    # scheduler drives and skill execution read.
+    #
+    # Fails closed on any error: an unreadable safety gate must deny a device
+    # start, never wave it through. The previous `except ImportError: pass`
+    # tolerance deliberately does not survive -- it existed for a module that
+    # might not be importable, and silently continuing past an unreadable
+    # brake is not a tolerance a device surface can afford.
     try:
-        from bartholomew.orchestrator.safety.parking_brake import (
-            BrakeStorage,
-            construct_parking_brake_off_loop,
+        from bartholomew.orchestrator.safety.governance_store import (
+            is_blocked_fail_closed_off_loop,
         )
 
-        if resolved_db_path is not None:
-            # No owning daemon instance here -- construct_parking_brake_off_loop
-            # falls back to a one-off asyncio.to_thread() (see
-            # run_off_loop()'s docstring), still off the event loop.
-            brake = await construct_parking_brake_off_loop(BrakeStorage(resolved_db_path))
-            if brake.is_blocked("voice"):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = "Blocked by parking brake (scope=voice)"
-    except ImportError:
-        pass
+        if resolved_db_path is not None and await is_blocked_fail_closed_off_loop(
+            "voice",
+            resolved_db_path,
+        ):
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Blocked by parking brake (scope=voice)"
+    except Exception:
+        logger.exception("Brake check failed for scope=voice; failing closed")
+        allowed = False
+        outcome = "parking_brake_denied"
+        reason = "Parking brake check errored"
 
     # Governance gate 2: Identity Policy Decision (additive; see sight docstring).
     if allowed and identity_context is not None:
@@ -1261,6 +1552,165 @@ async def run_voice_through_runtime_contract(
         provenance_degraded=device_reflection.error is not None,
         provenance_error=device_reflection.error,
         result=stream_result,
+    )
+
+
+async def run_spoken_output_through_runtime_contract(
+    text: str,
+    *,
+    enabled: bool = False,
+    db_path: str | None = None,
+    identity_context: IdentityContext | None = None,
+    speak_fn: Callable[[str], Any] | None = None,
+    blocking_executor: Any | None = None,
+) -> DeviceRuntimeResult:
+    """
+    Say one thing out loud, through the Runtime Contract seam.
+
+    The same shape as the two device seams above -- Observation ->
+    Interpretation -> Executive -> Governance -> Capability -> Execution ->
+    Reflection -> Memory, one `ActionReflection` into the shared sink for
+    every outcome, `DeviceRuntimeResult` returned -- reusing their helpers
+    rather than growing a parallel path. There is no second Governance
+    authority here and no second reflection sink.
+
+    Governance runs three gates, all strictly before anything is spoken:
+
+      1. **Enablement.** `config/kernel.yaml`'s `voice.spoken_output`, default
+         `false`, read in exactly one place (`spoken_output.enabled_for()`)
+         and passed in here. Off means silence, and `enabled` defaults to
+         `False` so a caller that forgets to pass it gets silence too.
+      2. **ParkingBrake("voice")** -- the same scope the voice stream seam
+         uses, with the same `ImportError` tolerance. An engaged voice brake
+         silences spoken output completely, which is the behaviour the
+         sprint's boundaries require.
+      3. **Identity Policy Decision** on `_VOICE_SPEAK_KIND` -- additive and
+         skipped when no `IdentityContext` is wired in, matching every other
+         surface.
+
+    **Why there is no device-consent gate here, and why that is not a
+    weakening.** The sight and voice-stream seams always require interactive
+    device consent because they *capture*: they are exactly `policy.yaml`'s
+    "record audio/video without explicit approval" category. This seam
+    captures nothing -- no microphone is opened, no audio is recorded, no
+    sensor is read. Reusing `_resolve_device_consent()` would put the words
+    "Bartholomew requests to start microphone streaming" in front of a user
+    when no microphone is involved, which would be a false statement about
+    what the system is doing. What speaking aloud *does* risk is broadcasting
+    an answer into a room, and the control for that is gate 1: an operator
+    turning `voice.spoken_output` on for this machine, revocable at any time
+    and overridable instantly by the brake.
+
+    `speak_fn` is injected, like `capture_fn`/`stream_fn`, so this seam owns
+    Governance while `spoken_output.py` owns the capability -- and so the
+    capability is reachable only through this path in production.
+
+    Never raises: a speech engine that fails, times out or does not exist
+    becomes an "error" outcome with a reason, never an exception into a chat
+    turn or a CLI command.
+    """
+    observation = Observation(source="voice_output", raw_content=_VOICE_SPEAK_KIND)
+    interpretation = Interpretation(observation=observation, prompt=observation.raw_content)
+    candidate_action = CandidateAction(kind=_VOICE_SPEAK_KIND, interpretation=interpretation)
+    resolved_db_path = _resolve_device_db_path(db_path)
+
+    allowed = True
+    outcome = "started"
+    reason: str | None = None
+
+    # Governance gate 1: enablement. Deliberately first and deliberately
+    # cheap -- a disabled capability should not even read the brake.
+    if not enabled:
+        allowed = False
+        outcome = "governance_denied"
+        reason = "Spoken output is disabled (config/kernel.yaml: voice.spoken_output)"
+
+    # Governance gate 2: ParkingBrake("voice"), read through GovernanceStore.
+    #
+    # `is_blocked_fail_closed_off_loop()` -- the same read chat, scheduler
+    # drives, skill execution and (since this defect was found and fixed) the
+    # sight/voice-stream seams above all use. One brake authority, read the
+    # same way everywhere.
+    #
+    # Fails closed on any error: for a capability whose whole effect is
+    # audible, an unreadable safety gate must mean silence.
+    if allowed:
+        try:
+            from bartholomew.orchestrator.safety.governance_store import (
+                is_blocked_fail_closed_off_loop,
+            )
+
+            if resolved_db_path is not None and await is_blocked_fail_closed_off_loop(
+                "voice",
+                resolved_db_path,
+                executor=blocking_executor,
+            ):
+                allowed = False
+                outcome = "parking_brake_denied"
+                reason = "Blocked by parking brake (scope=voice)"
+        except Exception:
+            logger.exception("Voice brake check failed; failing closed (staying silent)")
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Parking brake check errored"
+
+    # Governance gate 3: Identity Policy Decision (additive; see sight docstring).
+    if allowed and identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, candidate_action.kind)
+        if not decision.allowed:
+            allowed = False
+            outcome = "governance_denied"
+            reason = f"Denied by Identity policy: {decision.reason}"
+
+    # Capability + Execution -- reached only after all three gates allowed.
+    governance_allowed = allowed
+    started = False
+    speech_result: Any = None
+    if governance_allowed:
+        try:
+            if speak_fn is not None:
+                speech_result = speak_fn(text)
+                if inspect.isawaitable(speech_result):
+                    speech_result = await speech_result
+            else:
+                # Blocking subprocess work, off the event loop (B2/B8).
+                speech_result = await run_off_loop(
+                    spoken_output.speak_text,
+                    text,
+                    executor=blocking_executor,
+                )
+            spoken = bool(getattr(speech_result, "spoken", False))
+            if spoken:
+                outcome, reason, started = "started", None, True
+            else:
+                # The engine did not speak. That is an outcome, not a
+                # success with a caveat: reporting it as "started" would put
+                # a silent machine and a talking one in the same bucket.
+                outcome = "error"
+                reason = getattr(speech_result, "detail", None) or "speech did not occur"
+                started = False
+        except Exception as exc:
+            logger.exception("Spoken output failed after governance approval")
+            outcome, reason, started = "error", str(exc), False
+
+    device_reflection = await _record_device_reflection(
+        resolved_db_path,
+        "voice_output",
+        candidate_action.kind,
+        outcome,
+        reason,
+    )
+
+    return DeviceRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=governance_allowed,
+        started=started,
+        outcome=outcome,
+        reason=reason,
+        provenance_degraded=device_reflection.error is not None,
+        provenance_error=device_reflection.error,
+        result=speech_result,
     )
 
 
