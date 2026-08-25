@@ -79,3 +79,21 @@ proactive:
   schedule_reminders: false
   look_ahead_days: 3
   max_per_tick: 3
+
+# Local spoken output (text-to-speech).
+#
+# spoken_output: DEFAULT OFF. When false, Bartholomew never makes a sound --
+# nothing speaks, and the speech adapter is never reached. Turning it on lets
+# an answer be spoken aloud through whatever local speech binary this machine
+# already has (espeak-ng, espeak, spd-say, or macOS say); if none is present
+# that is reported as "no engine", never as speech that happened.
+#
+# This is OUTPUT ONLY. There is no microphone capture, no listening, no
+# wake-word monitoring and no ambient audio anywhere behind this flag -- none
+# of it is implemented. The `voice` Parking Brake scope silences spoken output
+# regardless of this setting.
+#
+# This flag is the only enablement switch: BARTH_TTS_COMMAND selects WHICH
+# speech binary is used and cannot turn speaking on.
+voice:
+  spoken_output: false

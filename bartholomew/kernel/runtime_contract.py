@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from . import personal_facts, policy_engine, task_intents, training
+from . import personal_facts, policy_engine, spoken_output, task_intents, training
 from .blocking_executor import run_off_loop
 from .competency_reasoning import (
     EMPTY_CONTEXT,
@@ -1195,6 +1195,14 @@ async def run_skill_through_runtime_contract(
 _SIGHT_CAPTURE_KIND = "sight_capture_start"
 _VOICE_STREAM_KIND = "voice_stream_start"
 
+# Spoken output. Deliberately NOT suffixed "_start" and deliberately a
+# separate kind from `_VOICE_STREAM_KIND`: the two are opposite directions
+# through the same physical device family, and conflating them would let an
+# allowlist entry for speaking read as one for listening. This kind
+# authorises one utterance out of this machine's speaker. It authorises no
+# capture of any kind -- there is no capture code behind it to authorise.
+_VOICE_SPEAK_KIND = "voice_speak"
+
 
 @dataclass
 class DeviceRuntimeResult:
@@ -1511,6 +1519,169 @@ async def run_voice_through_runtime_contract(
         provenance_degraded=device_reflection.error is not None,
         provenance_error=device_reflection.error,
         result=stream_result,
+    )
+
+
+async def run_spoken_output_through_runtime_contract(
+    text: str,
+    *,
+    enabled: bool = False,
+    db_path: str | None = None,
+    identity_context: IdentityContext | None = None,
+    speak_fn: Callable[[str], Any] | None = None,
+    blocking_executor: Any | None = None,
+) -> DeviceRuntimeResult:
+    """
+    Say one thing out loud, through the Runtime Contract seam.
+
+    The same shape as the two device seams above -- Observation ->
+    Interpretation -> Executive -> Governance -> Capability -> Execution ->
+    Reflection -> Memory, one `ActionReflection` into the shared sink for
+    every outcome, `DeviceRuntimeResult` returned -- reusing their helpers
+    rather than growing a parallel path. There is no second Governance
+    authority here and no second reflection sink.
+
+    Governance runs three gates, all strictly before anything is spoken:
+
+      1. **Enablement.** `config/kernel.yaml`'s `voice.spoken_output`, default
+         `false`, read in exactly one place (`spoken_output.enabled_for()`)
+         and passed in here. Off means silence, and `enabled` defaults to
+         `False` so a caller that forgets to pass it gets silence too.
+      2. **ParkingBrake("voice")** -- the same scope the voice stream seam
+         uses, with the same `ImportError` tolerance. An engaged voice brake
+         silences spoken output completely, which is the behaviour the
+         sprint's boundaries require.
+      3. **Identity Policy Decision** on `_VOICE_SPEAK_KIND` -- additive and
+         skipped when no `IdentityContext` is wired in, matching every other
+         surface.
+
+    **Why there is no device-consent gate here, and why that is not a
+    weakening.** The sight and voice-stream seams always require interactive
+    device consent because they *capture*: they are exactly `policy.yaml`'s
+    "record audio/video without explicit approval" category. This seam
+    captures nothing -- no microphone is opened, no audio is recorded, no
+    sensor is read. Reusing `_resolve_device_consent()` would put the words
+    "Bartholomew requests to start microphone streaming" in front of a user
+    when no microphone is involved, which would be a false statement about
+    what the system is doing. What speaking aloud *does* risk is broadcasting
+    an answer into a room, and the control for that is gate 1: an operator
+    turning `voice.spoken_output` on for this machine, revocable at any time
+    and overridable instantly by the brake.
+
+    `speak_fn` is injected, like `capture_fn`/`stream_fn`, so this seam owns
+    Governance while `spoken_output.py` owns the capability -- and so the
+    capability is reachable only through this path in production.
+
+    Never raises: a speech engine that fails, times out or does not exist
+    becomes an "error" outcome with a reason, never an exception into a chat
+    turn or a CLI command.
+    """
+    observation = Observation(source="voice_output", raw_content=_VOICE_SPEAK_KIND)
+    interpretation = Interpretation(observation=observation, prompt=observation.raw_content)
+    candidate_action = CandidateAction(kind=_VOICE_SPEAK_KIND, interpretation=interpretation)
+    resolved_db_path = _resolve_device_db_path(db_path)
+
+    allowed = True
+    outcome = "started"
+    reason: str | None = None
+
+    # Governance gate 1: enablement. Deliberately first and deliberately
+    # cheap -- a disabled capability should not even read the brake.
+    if not enabled:
+        allowed = False
+        outcome = "governance_denied"
+        reason = "Spoken output is disabled (config/kernel.yaml: voice.spoken_output)"
+
+    # Governance gate 2: ParkingBrake("voice"), read through GovernanceStore.
+    #
+    # Deliberately `is_blocked_fail_closed_off_loop()` -- the same read chat,
+    # scheduler drives and skill execution use -- and deliberately NOT the
+    # `ParkingBrake(BrakeStorage(...))` shape the two older device seams above
+    # still use. Those read the legacy `system_flags` value, and Phase B6
+    # retired the bridge that used to keep it in step with the real state, so
+    # `bartholomew brake on --scope voice` (which writes GovernanceStore) is
+    # invisible to that path. A new capability must not inherit a brake check
+    # that cannot see the brake.
+    #
+    # Fails closed on any error: for a capability whose whole effect is
+    # audible, an unreadable safety gate must mean silence.
+    if allowed:
+        try:
+            from bartholomew.orchestrator.safety.governance_store import (
+                is_blocked_fail_closed_off_loop,
+            )
+
+            if resolved_db_path is not None and await is_blocked_fail_closed_off_loop(
+                "voice",
+                resolved_db_path,
+                executor=blocking_executor,
+            ):
+                allowed = False
+                outcome = "parking_brake_denied"
+                reason = "Blocked by parking brake (scope=voice)"
+        except Exception:
+            logger.exception("Voice brake check failed; failing closed (staying silent)")
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Parking brake check errored"
+
+    # Governance gate 3: Identity Policy Decision (additive; see sight docstring).
+    if allowed and identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, candidate_action.kind)
+        if not decision.allowed:
+            allowed = False
+            outcome = "governance_denied"
+            reason = f"Denied by Identity policy: {decision.reason}"
+
+    # Capability + Execution -- reached only after all three gates allowed.
+    governance_allowed = allowed
+    started = False
+    speech_result: Any = None
+    if governance_allowed:
+        try:
+            if speak_fn is not None:
+                speech_result = speak_fn(text)
+                if inspect.isawaitable(speech_result):
+                    speech_result = await speech_result
+            else:
+                # Blocking subprocess work, off the event loop (B2/B8).
+                speech_result = await run_off_loop(
+                    spoken_output.speak_text,
+                    text,
+                    executor=blocking_executor,
+                )
+            spoken = bool(getattr(speech_result, "spoken", False))
+            if spoken:
+                outcome, reason, started = "started", None, True
+            else:
+                # The engine did not speak. That is an outcome, not a
+                # success with a caveat: reporting it as "started" would put
+                # a silent machine and a talking one in the same bucket.
+                outcome = "error"
+                reason = getattr(speech_result, "detail", None) or "speech did not occur"
+                started = False
+        except Exception as exc:
+            logger.exception("Spoken output failed after governance approval")
+            outcome, reason, started = "error", str(exc), False
+
+    device_reflection = await _record_device_reflection(
+        resolved_db_path,
+        "voice_output",
+        candidate_action.kind,
+        outcome,
+        reason,
+    )
+
+    return DeviceRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=governance_allowed,
+        started=started,
+        outcome=outcome,
+        reason=reason,
+        provenance_degraded=device_reflection.error is not None,
+        provenance_error=device_reflection.error,
+        result=speech_result,
     )
 
 
