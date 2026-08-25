@@ -107,6 +107,26 @@
     .brake-scope-row label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
     .brake-scope-row input { width:auto; flex:none; }
 
+    .memory-summary { font-size:12px; color:#6b7280; margin-bottom:10px; }
+    .memory-item { background:#141b26; border:1px solid #263041; border-radius:10px;
+                   padding:12px; margin-bottom:8px; }
+    .memory-head { display:flex; justify-content:space-between; align-items:flex-start;
+                   gap:10px; flex-wrap:wrap; }
+    .memory-key { font-weight:600; color:#e8f0fe; }
+    .memory-kind { font-size:11px; color:#9ca3af; }
+    .memory-value { margin:8px 0; line-height:1.5; white-space:pre-wrap; }
+    .memory-value-unreadable { color:#fbbf24; font-style:italic; }
+    .memory-tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .memory-tag { font-size:11px; border-radius:999px; padding:2px 8px;
+                  border:1px solid #374151; color:#9ca3af; }
+    .memory-tag-keep { border-color:#3b82f6; color:#93c5fd; }
+    .memory-tag-privacy { border-color:#92400e; color:#fbbf24; }
+    .memory-edit { width:100%; margin:8px 0; min-height:64px; }
+    .memory-note { font-size:12px; margin-top:8px; padding:8px 10px; border-radius:8px; }
+    .memory-note-ok { background:#062e21; color:#6ee7b7; }
+    .memory-note-warn { background:#2a2011; color:#fbbf24; }
+    .memory-note-err { background:#2a1113; color:#f87171; }
+
     .brake-checked { font-size:11px; color:#6b7280; margin-top:8px; }
     .brake-checked-stale { color:#f87171; }
 
@@ -297,6 +317,34 @@
       <button onclick="openAwaitingResponse()">+ Add</button>
     </div>
     <div id="awaiting-response-list"></div>
+  </div>
+
+  <h2 class="section-heading">What Bartholomew remembers</h2>
+
+  <!-- Memory Agency. The user can see, correct and delete what is stored
+       about them. Every action here goes through the existing single memory
+       authority via /api/memory -- nothing in this panel decides what may be
+       stored, kept or shown. Deleting is explicit and confirmed; nothing is
+       ever inferred from conversational text. -->
+  <div class="card" id="memory-card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🧾 Memories</h3>
+      <div class="row">
+        <a id="memory-export" href="#" onclick="exportMemories(event)"
+           style="color:#60a5fa;font-size:13px">Download a copy</a>
+        <button onclick="refreshMemories()">Refresh</button>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <input id="memory-search" placeholder="Search what he remembers…"
+             aria-label="Search memories"
+             onkeydown="if(event.key==='Enter'){refreshMemories()}"/>
+      <select id="memory-kind" aria-label="Filter memories by type" onchange="refreshMemories()">
+        <option value="">All types</option>
+      </select>
+    </div>
+    <div id="memory-summary" class="memory-summary"></div>
+    <div id="memory-list"></div>
   </div>
 
   <h2 class="section-heading">Safety &amp; privacy</h2>
@@ -687,6 +735,7 @@
         refreshNudges(),
         refreshSelfState(),
         refreshHealth(),
+        refreshMemories(),
       ]);
     }
 
@@ -1750,6 +1799,244 @@
 
     window.addEventListener("hashchange", () => showView(viewFromHash()));
 
+    // === Memory Agency ===
+    //
+    // Read, correct and forget what Bartholomew has stored about you. Every
+    // call goes to /api/memory, which is a thin translation layer over the
+    // single memory authority -- nothing here decides what may be stored,
+    // kept, or shown, and nothing here bypasses consent, retention or
+    // provenance.
+    //
+    // Deleting is deliberately awkward in the one way that matters: it is a
+    // named record, an explicit button, and a confirmation, and the API
+    // itself refuses without confirm=true. Nothing in this sprint infers a
+    // deletion from conversational text.
+    let memoryKindsLoaded = false;
+
+    async function refreshMemories(){
+      const listEl = document.getElementById("memory-list");
+      const summaryEl = document.getElementById("memory-summary");
+      if(!listEl) return;
+
+      const search = (document.getElementById("memory-search").value || "").trim();
+      const kind = document.getElementById("memory-kind").value;
+      const params = new URLSearchParams({ limit: "200" });
+      if(search) params.set("search", search);
+      if(kind) params.set("kind", kind);
+
+      try{
+        const r = await fetch(API + "/api/memory?" + params.toString());
+        if(!r.ok){
+          listEl.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load memories"))}</div>`;
+          summaryEl.textContent = "";
+          return;
+        }
+        const j = await r.json();
+        const entries = j.entries || [];
+
+        // Truthful count: with a search active the total is the unfiltered
+        // store size, so do not present the filtered page as the whole.
+        summaryEl.textContent = j.filtered
+          ? `${entries.length} shown · ${j.total} stored in total`
+          : `${j.total} ${j.total === 1 ? 'memory' : 'memories'} stored`;
+
+        if(entries.length === 0){
+          listEl.innerHTML = search || kind
+            ? '<div class="empty-state">Nothing stored matches that.</div>'
+            : '<div class="empty-state">Bartholomew has not stored anything about you yet.</div>';
+          return;
+        }
+
+        listEl.innerHTML = entries.map(renderMemoryItem).join('');
+        if(!memoryKindsLoaded) loadMemoryKinds();
+      }catch(e){
+        listEl.innerHTML = `<div class="empty-state">Could not load memories: ${escapeHtml(e.message)}</div>`;
+        summaryEl.textContent = "";
+      }
+    }
+
+    function renderMemoryItem(m){
+      const id = `${m.kind}/${m.key}`;
+      const tags = [];
+      if(m.always_keep){
+        // Honest wording. always_keep is a *recall* policy: it means he will
+        // always bring this up, not that it is protected from deletion. No
+        // delete prohibition exists in this codebase, and implying one would
+        // be inventing a protection the user does not actually have.
+        tags.push('<span class="memory-tag memory-tag-keep" title="Bartholomew will always recall this. It can still be deleted, and deletion is permanent.">always recalled</span>');
+      }
+      if(m.privacy_class){
+        tags.push(`<span class="memory-tag memory-tag-privacy">${escapeHtml(m.privacy_class)}</span>`);
+      }
+      // `always_keep` already has its own, better-worded tag above; showing
+      // the raw category name beside it just repeats it in rule-engine terms.
+      if(m.category && m.category !== 'uncategorised' && m.category !== 'always_keep'){
+        tags.push(`<span class="memory-tag">${escapeHtml(String(m.category).replace(/_/g, ' '))}</span>`);
+      }
+
+      const provenance = m.consent_at
+        ? `you approved this on ${escapeHtml(new Date(m.consent_at).toLocaleString())}${m.consent_source ? ` (${escapeHtml(m.consent_source)})` : ''}`
+        : 'no explicit consent decision recorded';
+
+      const value = m.readable === false
+        ? `<div class="memory-value memory-value-unreadable">${escapeHtml(m.unreadable_reason || 'Stored encrypted; cannot be displayed.')}</div>`
+        : `<div class="memory-value">${escapeHtml(m.value)}</div>`;
+
+      // A record this process cannot read must not offer an edit box: saving
+      // one would overwrite content nobody has actually seen.
+      const editable = m.readable !== false;
+
+      return `
+        <div class="memory-item" data-memory="${escapeHtml(id)}">
+          <div class="memory-head">
+            <div>
+              <div class="memory-key">${escapeHtml(m.key)}</div>
+              <div class="memory-kind">${escapeHtml(m.kind)} · remembered ${escapeHtml(formatTimeAgo(m.ts) || m.ts)}</div>
+            </div>
+            <div class="row">
+              ${editable ? `<button onclick="beginEditMemory('${escapeAttr(m.kind)}','${escapeAttr(m.key)}')">Correct</button>` : ''}
+              <button class="dismiss" onclick="forgetMemory('${escapeAttr(m.kind)}','${escapeAttr(m.key)}')">Forget</button>
+            </div>
+          </div>
+          ${value}
+          <div class="memory-tags">${tags.join('')}</div>
+          <div class="nudge-ts" style="margin-top:6px">${provenance}</div>
+          <div class="memory-editor" style="display:none"></div>
+          <div class="memory-status"></div>
+        </div>
+      `;
+    }
+
+    function memoryNode(kind, key){
+      return document.querySelector(`.memory-item[data-memory="${CSS.escape(kind + '/' + key)}"]`);
+    }
+
+    function beginEditMemory(kind, key){
+      const node = memoryNode(kind, key);
+      if(!node) return;
+      const current = node.querySelector(".memory-value").textContent;
+      const editor = node.querySelector(".memory-editor");
+      editor.style.display = "block";
+      editor.innerHTML = `
+        <textarea class="memory-edit" aria-label="Corrected value"></textarea>
+        <div class="row">
+          <button class="ack" data-act="save">Save correction</button>
+          <button data-act="cancel">Cancel</button>
+        </div>
+      `;
+      const box = editor.querySelector("textarea");
+      box.value = current;
+      box.focus();
+      editor.querySelector('[data-act="save"]').onclick = () => saveMemory(kind, key, box.value);
+      editor.querySelector('[data-act="cancel"]').onclick = () => { editor.style.display = "none"; };
+    }
+
+    function setMemoryStatus(kind, key, cls, text){
+      const node = memoryNode(kind, key);
+      if(!node) return;
+      const el = node.querySelector(".memory-status");
+      el.className = "memory-status memory-note " + cls;
+      el.textContent = text;
+    }
+
+    async function saveMemory(kind, key, value){
+      if(!value || !value.trim()){
+        setMemoryStatus(kind, key, "memory-note-err", "A memory cannot be blank. Use Forget to remove it.");
+        return;
+      }
+      try{
+        const r = await fetch(API + `/api/memory/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`, {
+          method: "PUT",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ value })
+        });
+        if(!r.ok){
+          setMemoryStatus(kind, key, "memory-note-err",
+            await describeHttpFailure(r, "The correction was not saved"));
+          return;
+        }
+        const j = await r.json();
+        if(j.stored){
+          setMemoryStatus(kind, key, "memory-note-ok", j.detail || "Memory updated.");
+          await refreshMemories();
+          return;
+        }
+        // Governed non-success. It must not look like it worked: the stored
+        // value is unchanged either way, and a queued correction is waiting
+        // in the consent inbox rather than applied.
+        setMemoryStatus(kind, key, "memory-note-warn", j.detail || "The correction was not stored.");
+        if(j.queued_for_consent) await refreshPendingConsent();
+      }catch(e){
+        setMemoryStatus(kind, key, "memory-note-err", "The correction was not saved: " + e.message);
+      }
+    }
+
+    async function forgetMemory(kind, key){
+      // Explicit and confirmed. The API refuses without confirm=true as well,
+      // so this is a second gate rather than the only one.
+      const ok = confirm(
+        `Permanently forget "${key}"?\n\n` +
+        "This deletes it from Bartholomew's memory. It cannot be undone."
+      );
+      if(!ok) return;
+      try{
+        const r = await fetch(
+          API + `/api/memory/${encodeURIComponent(kind)}/${encodeURIComponent(key)}?confirm=true`,
+          { method: "DELETE" }
+        );
+        if(!r.ok){
+          setMemoryStatus(kind, key, "memory-note-err",
+            await describeHttpFailure(r, "It was not forgotten"));
+          return;
+        }
+        await refreshMemories();
+      }catch(e){
+        setMemoryStatus(kind, key, "memory-note-err", "It was not forgotten: " + e.message);
+      }
+    }
+
+    async function loadMemoryKinds(){
+      try{
+        const r = await fetch(API + "/api/memory/kinds");
+        if(!r.ok) return;
+        const j = await r.json();
+        const sel = document.getElementById("memory-kind");
+        const current = sel.value;
+        sel.innerHTML = '<option value="">All types</option>' + (j.kinds || []).map(k =>
+          `<option value="${escapeAttr(k.kind)}">${escapeHtml(k.kind)} (${k.count})</option>`
+        ).join('');
+        sel.value = current;
+        memoryKindsLoaded = true;
+      }catch(e){
+        // A missing filter control is not worth an error banner; the list
+        // itself renders and reports its own failures.
+      }
+    }
+
+    async function exportMemories(event){
+      event.preventDefault();
+      // Fetched rather than a plain link so a failure is reported instead of
+      // navigating the page to an error body.
+      try{
+        const r = await fetch(API + "/api/memory/export");
+        if(!r.ok){
+          alert(await describeHttpFailure(r, "The export could not be produced"));
+          return;
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "bartholomew-memories.json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }catch(e){
+        alert("The export could not be produced: " + e.message);
+      }
+    }
+
     // === Presence ===
     // Bartholomew's current state in one place, in the header, on every view.
     //
@@ -1843,6 +2130,12 @@
     }
 
     // === Helpers ===
+    // escapeHtml() is for text nodes. Values interpolated into a quoted
+    // inline handler need the quote forms escaped too.
+    function escapeAttr(str){
+      return escapeHtml(str).replace(/'/g, "&#39;");
+    }
+
     function escapeHtml(str){
       if(!str) return '';
       return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -1857,6 +2150,8 @@
     refreshNotificationSettings();
     refreshPendingConsent();
     refreshAwaitingResponse();
+    refreshMemories();
+    loadMemoryKinds();
     refreshOnboardingGuide();
     // maybeShowOnboardingModal() is deliberately not called on load.
     //
@@ -1882,6 +2177,7 @@
     setInterval(refreshNotificationSettings, 30000);  // Notification settings every 30s
     setInterval(refreshPendingConsent, 30000);        // Pending memory consent every 30s
     setInterval(refreshAwaitingResponse, 30000);       // Awaiting-response queue every 30s
+    setInterval(refreshMemories, 60000);               // Stored memories every 60s
   </script>
 </body>
 </html>

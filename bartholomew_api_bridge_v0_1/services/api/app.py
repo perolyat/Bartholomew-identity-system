@@ -44,6 +44,7 @@ from .routes import (
     consent,
     governance,
     liveness,
+    memory,
     metrics,
     notifications,
     onboarding,
@@ -82,6 +83,7 @@ app.include_router(self_state.router)
 app.include_router(governance.router)
 app.include_router(notifications.router)
 app.include_router(consent.router)
+app.include_router(memory.router)
 app.include_router(awaiting_response.router)
 app.include_router(onboarding.router)
 app.include_router(training.router)
