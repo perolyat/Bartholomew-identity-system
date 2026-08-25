@@ -159,6 +159,27 @@ async def _registry(mem, monkeypatch, webhook_url: str | None, identity=REAL_ALL
         identity_context=identity,
     )
     await registry.load_skill("notify")
+
+    # Pin the suppression state, because it is otherwise read from the wall
+    # clock. `NotifySkill`'s default quiet hours are 22:00-07:00 local
+    # (S1.3), and during them a send is correctly *deferred* rather than
+    # delivered -- so every test below that asserts a delivery actually
+    # happened silently depended on what time of day it ran. This suite went
+    # green at 18:29 UTC and red at 23:08 UTC on byte-identical code before
+    # this was pinned; the production behaviour was right both times.
+    #
+    # An empty window (start == end) is never active, so this exercises the
+    # real `_is_quiet_hours()` predicate rather than replacing it -- and the
+    # assertion below makes that self-verifying instead of assumed. Tests
+    # that are *about* deferral override these per-instance afterwards.
+    notify = registry._loaded["notify"].instance
+    notify._quiet_hours_start = "00:00"
+    notify._quiet_hours_end = "00:00"
+    notify._muted = False
+    notify._muted_until = None
+    assert not notify._is_quiet_hours(), "quiet hours were not successfully pinned off"
+    assert not notify._is_muted(), "mute was not successfully pinned off"
+
     return registry
 
 
