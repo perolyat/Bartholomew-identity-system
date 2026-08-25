@@ -62,6 +62,20 @@ Per due fact, exactly two effects, both through existing machinery:
 only schema-adjacent change is one new row *value* (`reason="schedule_reminder"`) in the existing
 `nudges` table and one new entry in `containment.py`'s explicit eligibility allowlist.
 
+**What happens when the delivery fails is deliberately left open — approval point §8.4.** The two
+existing call sites (`_notify_fact_captured()`, `_notify_awaiting_response()`) treat delivery as
+best-effort: a failure is logged and swallowed. That is correct *for them*, because each notifies
+*about* a durable record that has already committed — the notification is a courtesy, and losing it
+loses nothing but the courtesy. Here the delivery is not a courtesy about the action; it **is** the
+action, and its arrival is this slice's entire visible real-world result. Inheriting best-effort
+semantics unexamined would mean an unreachable webhook produces a slice that silently does nothing:
+the nudge row still stands, so no obligation is lost in D2's terms, but nothing tells the user that
+the reminder they were relying on never left the machine. That is the same silent-loss shape WP-A2
+removed from the audit path and WP-A2b removed from the provenance-bearing Reflection surfaces, and
+it should be decided here rather than inherited by default. The options are set out in §8.4. Under
+every one of them, the drive must **never** raise into the scheduler loop: a delivery failure is
+recorded, not propagated.
+
 ## 3. Governance, consent, and the register's constraints
 
 - **Default OFF.** Proactive reminding is consent-to-be-proactive (the S5.5 material, right-sized):
@@ -119,9 +133,19 @@ governed action inside Band A's restricted envelope and needs its own recorded d
 - No recurring-event logic (birthdays surface via their stored date only as parsed).
 - No changes to curiosity/self-check drives, S5.3 retrieval, or anything in WP-A1/A2/A2b.
 - No sight/voice involvement — the C6 device-identity split is untouched and is not a blocker.
-- The busy-timeout/startup-burst defect is untouched and is not a blocker: the drive's first run
-  sits on the normal cadence, not the startup instant; for the Band 0 checkpoint it remains a
-  recorded known condition, as already catalogued in `RISKS.md`.
+- The busy-timeout/startup-burst defect is untouched, and remains a **recorded known condition**
+  rather than a blocker — but the reason is narrower than "the drive never runs at startup", and
+  the narrower version is the one that should be recorded. A *newly registered* drive is scheduled
+  at `now + interval` (`kernel/scheduler/cadence.py`'s `compute_next_run()` with
+  `last_run_ts=None`), so the first-ever start after enabling the flag is genuinely clear of the
+  burst. On a **restart after downtime longer than the cadence**, however, the drive's stored
+  `next_run_ts` is already in the past and it is due immediately, alongside every other overdue
+  drive — and unlike the drives already in that burst, its effects include a governed outbound
+  action rather than housekeeping. For an *attended* Band 0 checkpoint that is acceptable and
+  observable, and it is one more reason this slice authorises no unattended operation. It belongs
+  in the checkpoint's recorded known conditions rather than being discovered during it. See the
+  two 2026-08-22 `RISKS.md` entries (the effective 5s busy timeout; the startup-window
+  `database is locked` defect).
 
 ## 7. Provisional constants (POC scaffolding — tuned from real use, never frozen here)
 
@@ -141,6 +165,32 @@ governed action inside Band A's restricted envelope and needs its own recorded d
    after ack. (Alternative: re-remind daily until due — noisier, closer to a task manager.)
 3. **The §3 consent placement:** a `config/kernel.yaml` operator flag, default off. (Alternative:
    an `Identity.yaml` field — more visible, but Identity edits are heavier-weight.)
+4. **The §2 delivery-failure semantics.** When the governed notify call fails or the webhook is
+   unreachable, what is the user's evidence that the reminder did not arrive? Three options, none
+   of which lets the drive raise:
+   - **(a) Best-effort, as the existing call sites do** — log and continue. Simplest and consistent
+     with slice 1, but the slice can silently do nothing, which is the failure mode this project
+     has twice decided is not acceptable for the sole record of a governed outcome.
+   - **(b) Record the delivery outcome where the obligation already lives** — on the nudge row or
+     as a containment event, so the queue distinguishes "noticed and delivered" from "noticed, not
+     delivered". No new user surface; visible to anyone reading the queue, and to the Band 0
+     checkpoint's evidence.
+   - **(c) Surface it as its own degraded-state signal**, on WP-A2b's
+     `provenance_degraded` / `provenance_error` pattern. Truest to the WP-A2 posture, and the
+     largest addition to this slice's surface area — note there is no request/response contract to
+     degrade here, since a scheduler drive has no caller waiting on it.
+
+   **Recommendation: (b).** It keeps the slice's surface area fixed, puts the record where the
+   obligation already is, and leaves (c) available later without rework.
+
+   **Interaction to settle with it (whichever option is chosen):** §4's after-ack courtesy check
+   skips a `(fact, due date)` that already has *any* nudge row. A reminder whose delivery failed
+   has a nudge row, so under that rule a failed delivery is never retried on the next tick. If
+   retry-until-delivered is wanted, the skip rule needs an explicit carve-out for "nudge exists,
+   delivery not confirmed" — and that carve-out, not the skip rule, then needs its own bound so a
+   permanently-unreachable webhook cannot produce an unbounded retry loop. If retry is *not*
+   wanted, the current rule is already correct and the failure record from (b)/(c) is the whole
+   remedy.
 
 ## 9. Expected implementation scope (for the approval, not begun)
 
@@ -151,6 +201,9 @@ governed action inside Band A's restricted envelope and needs its own recorded d
 | Containment eligibility | `scheduler/containment.py` (one reason + identity fn) | ~25 |
 | Config + Identity | `config/kernel.yaml` (flag), `Identity.yaml` (one allowlist entry) | ~10 |
 | Tests | `tests/test_schedule_noticing.py`, `tests/test_schedule_reminder_drive.py` (parsing table; default-off; window selection; dedup + after-ack; quiet-hours defer; brake block at both gates; Identity-denied when allowlist entry absent; loopback-webhook end-to-end; WP-A1 soak unaffected) | ~500 |
+
+Approval point §8.4 adds to this: option (a) adds nothing, (b) adds roughly 20 production lines and
+a test, (c) adds a result-contract field and its route plumbing on top of that.
 
 No canonical document is edited by the implementation; the DECISIONS/ROADMAP records follow as the
 usual separate documentation step after delivery.
