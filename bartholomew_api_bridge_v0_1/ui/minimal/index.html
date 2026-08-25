@@ -56,6 +56,57 @@
     .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; background: #1f2937; }
     .tab.active { background: #374151; }
     .empty-state { color: #6b7280; font-style: italic; padding: 12px; }
+    .app-header { margin-bottom: 20px; }
+    .app-header h1 { margin: 0 0 10px 0; }
+    .section-heading { font-size:13px; text-transform:uppercase; letter-spacing:1px;
+                       color:#6b7280; margin: 26px 0 10px; font-weight:600; }
+    .viewnav { display:flex; gap:6px; }
+    .viewtab { padding:10px 18px; font-size:14px; }
+    .viewtab.active { background:#1e3a5f; border-color:#3b82f6; color:#dbeafe; }
+
+    .presence { display:flex; align-items:center; gap:12px; }
+    .presence-avatar { width:34px; height:34px; border-radius:50%; flex:0 0 34px;
+                       border:2px solid #374151; background:#1f2937;
+                       transition: background .4s ease, border-color .4s ease; }
+    .presence-line { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+    .presence-state { font-size:14px; font-weight:600; text-transform:lowercase; }
+    .presence-detail { font-size:12px; color:#9ca3af; }
+    .presence-safety { font-size:11px; color:#6b7280; margin-top:2px; }
+    .presence-safety-alert { color:#f87171; font-weight:600; }
+
+    /* One palette, keyed off the resolved state, used by both the dot and the
+       label so they can never disagree. */
+    .presence-state[data-state="available"] { color:#10b981; }
+    .presence-avatar[data-state="available"] { background:#065f46; border-color:#10b981; }
+    .presence-state[data-state="thinking"] { color:#60a5fa; }
+    .presence-avatar[data-state="thinking"] { background:#1e3a5f; border-color:#60a5fa;
+                                              animation: presence-pulse 1.6s ease-in-out infinite; }
+    .presence-state[data-state="paused"] { color:#fbbf24; }
+    .presence-avatar[data-state="paused"] { background:#78350f; border-color:#fbbf24; }
+    .presence-state[data-state="degraded"] { color:#fb923c; }
+    .presence-avatar[data-state="degraded"] { background:#7c2d12; border-color:#fb923c; }
+    .presence-state[data-state="unknown"] { color:#9ca3af; }
+    .presence-avatar[data-state="unknown"] { background:#1f2937; border-color:#6b7280; }
+    @keyframes presence-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+    @media (prefers-reduced-motion: reduce) { .presence-avatar { animation: none !important; } }
+
+    /* Narrow screens: the header stacks rather than squeezing the nav. */
+    @media (max-width: 640px) {
+      body { margin: 14px; }
+      .app-header .row { flex-direction: column; gap: 14px; }
+      .viewnav { width: 100%; }
+      .viewtab { flex: 1; }
+    }
+
+    /* `input { width:100% }` (above) made every text input consume its whole
+       flex row, pushing the adjacent button onto its own line -- the Send
+       button sat under the chat box rather than beside it, and the brake
+       scope labels stacked their checkbox above their text. Give the inputs
+       a flex basis instead of a fixed 100%. */
+    .row > input[type="text"], .row > input:not([type]) { flex: 1 1 220px; width: auto; min-width: 0; }
+    .brake-scope-row label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+    .brake-scope-row input { width:auto; flex:none; }
+
     .brake-checked { font-size:11px; color:#6b7280; margin-top:8px; }
     .brake-checked-stale { color:#f87171; }
 
@@ -136,7 +187,49 @@
   </style>
 </head>
 <body>
-  <h1>Bartholomew <span class="badge">v0.1</span></h1>
+  <!-- Capability B: ordinary experience vs engineering instrumentation.
+       Everything below used to be one flat column of fifteen identically
+       styled cards -- the conversation sat between a pending-nudge queue and
+       a raw drive-activation readout, and finding the Parking Brake meant
+       scrolling past an affect slider. It read as a developer console that
+       happened to have a chat box in it.
+
+       Two views now, switched by the nav below and addressed by URL hash so
+       a view survives a reload and can be linked:
+
+         #/            Bartholomew  -- talking to him, what needs attention,
+                                       what he remembers, safety controls
+         #/workshop    Workshop     -- diagnostics, internals, engineering
+
+       Nothing is deleted and nothing is behind a password: Workshop is one
+       click away and this is a single-user localhost prototype, so this is a
+       separation of *attention*, not a privilege boundary. Safety is
+       deliberately not demoted -- the Parking Brake and its state live in the
+       ordinary view, and the presence strip carries brake state into both. -->
+  <header class="app-header">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div>
+        <h1>Bartholomew <span class="badge">v0.1</span></h1>
+        <!-- Truthful presence, wired to real readings. See renderPresence(). -->
+        <div id="presence" class="presence">
+          <span id="presence-avatar" class="presence-avatar" aria-hidden="true"></span>
+          <div>
+            <div class="presence-line">
+              <span id="presence-state" class="presence-state" data-state="available">available</span>
+              <span id="presence-detail" class="presence-detail"></span>
+            </div>
+            <div id="presence-safety" class="presence-safety"></div>
+          </div>
+        </div>
+      </div>
+      <nav class="viewnav" role="tablist" aria-label="Views">
+        <button class="viewtab" role="tab" id="tab-home"
+                aria-controls="view-home" onclick="showView('home')">Bartholomew</button>
+        <button class="viewtab" role="tab" id="tab-workshop"
+                aria-controls="view-workshop" onclick="showView('workshop')">Workshop</button>
+      </nav>
+    </div>
+  </header>
 
   <!-- Stage 1 (S1.6): Host-device onboarding guidance -- first-run modal -->
   <div id="onboarding-modal-overlay" class="modal-overlay" style="display:none">
@@ -149,20 +242,7 @@
     </div>
   </div>
 
-  <!-- Health / Status -->
-  <div class="card">
-    <div class="row">
-      <span id="kernel-status" class="badge">kernel: checking…</span>
-      <span id="nudge-count" class="badge">nudges: …</span>
-      <span id="last-reflection" class="badge">reflection: …</span>
-      <span id="wm-tokens" class="badge">WM: …</span>
-      <button onclick="refreshHealth()">Refresh Status</button>
-    </div>
-    <details style="margin-top:12px">
-      <summary style="cursor:pointer;color:#6b7280">Full health JSON</summary>
-      <div id="health" class="mono" style="margin-top:8px"></div>
-    </details>
-  </div>
+  <section id="view-home" role="tabpanel" aria-labelledby="tab-home">
 
   <!-- Chat -->
   <div class="card" id="chat-card">
@@ -179,6 +259,8 @@
       <button id="chat-send" class="primary" onclick="sendMsg()">Send</button>
     </div>
   </div>
+
+  <h2 class="section-heading">Needs your attention</h2>
 
   <!-- Consent-handler fix: Pending Memory Consent.
        Sits directly under the conversation, because a pending write is a
@@ -217,13 +299,15 @@
     <div id="awaiting-response-list"></div>
   </div>
 
+  <h2 class="section-heading">Safety &amp; privacy</h2>
+
   <!-- Stage 1 (S1.1): Parking Brake -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
       <h3 style="margin:0">🅿️ Parking Brake</h3>
       <span id="brake-status" class="badge">brake: checking…</span>
     </div>
-    <div class="row" style="margin-bottom:8px">
+    <div class="row brake-scope-row" style="margin-bottom:8px">
       <label><input type="checkbox" class="brake-scope" value="global"/> global</label>
       <label><input type="checkbox" class="brake-scope" value="skills"/> skills</label>
       <label><input type="checkbox" class="brake-scope" value="sight"/> sight</label>
@@ -235,6 +319,8 @@
       <button class="dismiss" onclick="engageBrake()">⛔ Engage</button>
       <button class="ack" onclick="disengageBrake()">✓ Disengage</button>
       <button onclick="refreshBrake()">Refresh</button>
+      <a href="#/workshop" onclick="showView('workshop')"
+         style="color:#60a5fa;font-size:13px;margin-left:4px">View the record of brake actions →</a>
     </div>
     <div id="brake-checked" class="brake-checked">state not yet read</div>
     <div id="brake-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
@@ -284,16 +370,48 @@
   </div>
 
 
-  <!-- System / Advanced.
-       Everything below is diagnostic or configurational. It is collapsed by
-       default so an ordinary session opens on the conversation rather than on
-       a dashboard; nothing is removed, and one click restores the full
-       developer view this page has always had. -->
-  <details id="advanced-panels" style="margin-top:18px">
-    <summary style="cursor:pointer;color:#6b7280;padding:8px 0">
-      ⚙️ System &amp; diagnostics — deployment guide, audit, self-state, persona,
-      episodes, reflections
-    </summary>
+  </section><!-- /view-home -->
+
+  <!-- Workshop: engineering and diagnostic instrumentation.
+       Previously this was a <details> collapsed inside the same column, which
+       still put an "expand the developer console" control in the middle of
+       the ordinary experience and, once expanded, restored the flat wall.
+       It is now a separate view.
+
+       Governance Audit is here because it is a technical event log, not
+       because it is unimportant: it is the record of brake actions, and the
+       ordinary Parking Brake card links straight to it. -->
+  <section id="view-workshop" role="tabpanel" aria-labelledby="tab-workshop" hidden>
+    <div class="card" style="border-color:#374151;background:#0f1620">
+      <div style="color:#9ca3af;font-size:13px;line-height:1.6">
+        <strong style="color:#e8f0fe">Workshop</strong> — engineering instrumentation
+        for inspecting and adjusting the running system. These are internals:
+        useful for diagnosis, not needed to use Bartholomew.
+        Safety controls stay on the <a href="#/" onclick="showView('home')"
+        style="color:#60a5fa">Bartholomew</a> view.
+      </div>
+    </div>
+
+  <!-- Runtime status. The kernel/nudge/reflection/working-memory badges and
+       the raw health JSON are diagnostics. What an ordinary user actually
+       needs from this reading -- is he online, can he think -- is carried by
+       the presence strip in the header, on every view. -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">📊 Runtime Status</h3>
+      <button onclick="refreshHealth()">Refresh Status</button>
+    </div>
+    <div class="row">
+      <span id="kernel-status" class="badge">kernel: checking…</span>
+      <span id="nudge-count" class="badge">nudges: …</span>
+      <span id="last-reflection" class="badge">reflection: …</span>
+      <span id="wm-tokens" class="badge">WM: …</span>
+    </div>
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;color:#6b7280">Full health JSON</summary>
+      <div id="health" class="mono" style="margin-top:8px"></div>
+    </details>
+  </div>
 
   <!-- Stage 1 (S1.6): Deployment Guide reference card -->
   <div class="card">
@@ -464,7 +582,7 @@
        risk entry is rewritten here, and the two absent endpoints stay absent.
        See the sprint handoff for the residual D4 items. -->
 
-  </details>
+  </section><!-- /view-workshop -->
 
   <script>
     const API = location.origin;
@@ -475,11 +593,16 @@
       try{
         const r = await fetch(API + "/api/health");
         const j = await r.json();
-        document.getElementById("health").textContent = JSON.stringify(j, null, 2);
+        setPresenceHealth(j);
+        const healthEl = document.getElementById("health");
+        if(healthEl) healthEl.textContent = JSON.stringify(j, null, 2);
 
         // Update kernel status badge
         const kernelEl = document.getElementById("kernel-status");
-        if(j.kernel_online){
+        if(!kernelEl){
+          // Workshop view not rendered in this document; presence above
+          // already carries the user-relevant part of this reading.
+        } else if(j.kernel_online){
           kernelEl.textContent = "kernel: online";
           kernelEl.className = "badge kernel-online";
         } else {
@@ -488,19 +611,28 @@
         }
 
         // Update nudge count badge
-        if(j.nudges_pending_count !== undefined){
-          document.getElementById("nudge-count").textContent = `nudges: ${j.nudges_pending_count}`;
+        const nudgeEl = document.getElementById("nudge-count");
+        if(nudgeEl && j.nudges_pending_count !== undefined){
+          nudgeEl.textContent = `nudges: ${j.nudges_pending_count}`;
         }
 
         // Update last reflection badge
-        if(j.last_daily_reflection){
+        const reflEl = document.getElementById("last-reflection");
+        if(reflEl && j.last_daily_reflection){
           const d = new Date(j.last_daily_reflection);
-          document.getElementById("last-reflection").textContent = `reflection: ${d.toLocaleDateString()}`;
+          reflEl.textContent = `reflection: ${d.toLocaleDateString()}`;
         }
       }catch(e){
-        document.getElementById("health").textContent = "health failed: " + e;
-        document.getElementById("kernel-status").textContent = "kernel: error";
-        document.getElementById("kernel-status").className = "badge kernel-offline";
+        // The status reading itself failed. Say unknown; do not leave the
+        // last good reading standing as if it were current.
+        setPresenceHealth({ kernel_online: false, model_status: "unreadable" });
+        const healthEl = document.getElementById("health");
+        if(healthEl) healthEl.textContent = "health failed: " + e;
+        const kernelEl2 = document.getElementById("kernel-status");
+        if(kernelEl2){
+          kernelEl2.textContent = "kernel: error";
+          kernelEl2.className = "badge kernel-offline";
+        }
       }
     }
 
@@ -575,6 +707,7 @@
         const j = await r.json();
         brakeRevision = j.revision;
         stampBrakeReading(true);
+        setPresenceBrake({ engaged: !!j.engaged, scopes: j.scopes || [], unreachable: false });
 
         // Revision moved (including the very first read) -> dependent
         // governed state may no longer be what those panels are showing.
@@ -607,7 +740,7 @@
         document.getElementById("brake-status").className = "badge kernel-offline";
         document.getElementById("brake-detail").textContent = String(e);
         stampBrakeReading(false);
-        setPresence("unknown");
+        setPresenceBrake({ engaged: null, scopes: [], unreachable: true });
       }
     }
 
@@ -1046,7 +1179,17 @@
         const snap = j.snapshot || {};
 
         // Update WM token badge
-        document.getElementById("wm-tokens").textContent = `WM: ${j.working_memory_tokens || 0} tokens`;
+        // working_memory_tokens is WorkingMemory.get_token_usage(), a
+        // (current, budget) tuple -- so it arrives as a two-element JSON
+        // array. Interpolating it directly rendered "WM: 0,4000 tokens".
+        // Same class of defect as MF-F001: a real value, displayed wrong.
+        const wmEl = document.getElementById("wm-tokens");
+        if(wmEl){
+          const wm = j.working_memory_tokens;
+          wmEl.textContent = Array.isArray(wm)
+            ? `WM: ${wm[0]} / ${wm[1]} tokens`
+            : `WM: ${typeof wm === 'number' ? wm : 0} tokens`;
+        }
 
         // Update affect
         const affect = snap.affect || {};
@@ -1066,8 +1209,13 @@
         const attention = snap.attention || {};
         const focusTarget = attention.focus_target ?? attention.target;
         const focusType = attention.focus_type ?? attention.type;
-        document.getElementById("attention-target").textContent = focusTarget || 'idle';
-        document.getElementById("attention-type").textContent = focusType || 'diffuse';
+        // focus_target is null when nothing is focused, and focus_type then
+        // reads "idle" too -- rendering both gave a redundant "idle / idle".
+        // Say what is actually true instead.
+        document.getElementById("attention-target").textContent =
+          focusTarget || 'nothing in particular';
+        document.getElementById("attention-type").textContent =
+          focusTarget ? (focusType || 'diffuse') : '';
         const intensity = attention.focus_intensity ?? attention.intensity ?? 0;
         document.getElementById("attention-intensity-val").textContent = intensity.toFixed(2);
         document.getElementById("attention-intensity-fill").style.width = (intensity * 100) + '%';
@@ -1570,25 +1718,128 @@
     // logger swallowed its failure into console.error, so a click looked
     // like it had worked.
 
+    // === Views ===
+    // Two views, addressed by URL hash so a reload keeps you where you were
+    // and a view can be linked. Not a privilege boundary -- see the comment
+    // on <header> -- a separation of attention.
+    const VIEWS = ["home", "workshop"];
+
+    function showView(name){
+      if(!VIEWS.includes(name)) name = "home";
+      VIEWS.forEach(v => {
+        const panel = document.getElementById("view-" + v);
+        const tab = document.getElementById("tab-" + v);
+        if(panel) panel.hidden = (v !== name);
+        if(tab){
+          tab.classList.toggle("active", v === name);
+          tab.setAttribute("aria-selected", v === name ? "true" : "false");
+        }
+      });
+      const target = name === "home" ? "#/" : "#/" + name;
+      if(location.hash !== target){
+        // replaceState, not assignment: switching views should not stack up
+        // history entries the back button has to walk through.
+        history.replaceState(null, "", target);
+      }
+    }
+
+    function viewFromHash(){
+      const h = (location.hash || "").replace(/^#\/?/, "");
+      return VIEWS.includes(h) ? h : "home";
+    }
+
+    window.addEventListener("hashchange", () => showView(viewFromHash()));
+
     // === Presence ===
-    // Bartholomew's current state, kept in one place. Capability A only uses
-    // it to reflect "thinking" (a real outstanding request) and "unknown" (a
-    // safety reading that could not be taken); the presence area itself is
-    // built out later. Guarded so it is inert until that element exists, and
-    // it never invents a state the system cannot actually distinguish.
-    let presenceOverride = null;
+    // Bartholomew's current state in one place, in the header, on every view.
+    //
+    // Every state here is derived from a real reading. `thinking` means a
+    // chat request is genuinely outstanding; `paused` means the Parking Brake
+    // read back engaged; `degraded` means the model backend reported itself
+    // unreachable; `unknown` means a reading could not be taken at all. There
+    // is deliberately no state the system cannot distinguish -- nothing here
+    // is decoration, and when we do not know, it says so rather than
+    // defaulting to "available".
+    let presenceOverride = null;      // transient, set by setThinking()
+    let presenceHealth = null;        // last /api/health reading
+    let presenceBrake = null;         // last /api/governance/brake reading
 
     function setPresence(state){
       presenceOverride = state;
       renderPresence();
     }
 
+    function setPresenceHealth(health){
+      presenceHealth = health;
+      renderPresence();
+    }
+
+    function setPresenceBrake(brake){
+      presenceBrake = brake;
+      renderPresence();
+    }
+
+    // Resolve the one state to show, most-urgent first.
+    function resolvePresence(){
+      if(presenceOverride === "unknown"){
+        return { state: "unknown", detail: "a safety reading could not be taken" };
+      }
+      if(presenceBrake && presenceBrake.unreachable){
+        return { state: "unknown", detail: "Parking Brake state unreadable" };
+      }
+      if(presenceBrake && presenceBrake.engaged){
+        const scopes = (presenceBrake.scopes && presenceBrake.scopes.length)
+          ? presenceBrake.scopes.join(", ") : "global";
+        return { state: "paused", detail: `Parking Brake engaged (${scopes})` };
+      }
+      if(presenceOverride === "thinking"){
+        return { state: "thinking", detail: "working on your message" };
+      }
+      if(presenceHealth === null){
+        return { state: "unknown", detail: "status not yet read" };
+      }
+      if(presenceHealth.kernel_online === false){
+        return { state: "degraded", detail: "kernel offline" };
+      }
+      if(presenceHealth.model_status && presenceHealth.model_status !== "ready"){
+        // Truthful: he is up, and cannot currently think.
+        return { state: "degraded", detail: `model ${presenceHealth.model_status}` };
+      }
+      return { state: "available", detail: "" };
+    }
+
     function renderPresence(){
-      const el = document.getElementById("presence-state");
-      if(!el) return;
-      const state = presenceOverride || "available";
-      el.dataset.state = state;
-      el.textContent = state;
+      const stateEl = document.getElementById("presence-state");
+      if(!stateEl) return;
+      const { state, detail } = resolvePresence();
+
+      stateEl.dataset.state = state;
+      stateEl.textContent = state;
+
+      const detailEl = document.getElementById("presence-detail");
+      if(detailEl) detailEl.textContent = detail ? "— " + detail : "";
+
+      const avatar = document.getElementById("presence-avatar");
+      if(avatar) avatar.dataset.state = state;
+
+      // Brake state is safety information: it is repeated in the header so it
+      // is visible from the Workshop view too, not only beside its control.
+      const safetyEl = document.getElementById("presence-safety");
+      if(safetyEl){
+        if(presenceBrake && presenceBrake.unreachable){
+          safetyEl.textContent = "Parking Brake: UNKNOWN";
+          safetyEl.className = "presence-safety presence-safety-alert";
+        }else if(presenceBrake && presenceBrake.engaged){
+          safetyEl.textContent = "Parking Brake: ENGAGED";
+          safetyEl.className = "presence-safety presence-safety-alert";
+        }else if(presenceBrake){
+          safetyEl.textContent = "Parking Brake: released";
+          safetyEl.className = "presence-safety";
+        }else{
+          safetyEl.textContent = "Parking Brake: not yet read";
+          safetyEl.className = "presence-safety";
+        }
+      }
     }
 
     // === Helpers ===
@@ -1598,6 +1849,8 @@
     }
 
     // === Initial Load ===
+    showView(viewFromHash());
+    renderPresence();
     refreshHealth();
     refreshBrake();
     refreshAudit();
@@ -1621,6 +1874,7 @@
     refreshReflections();
 
     // === Auto-refresh ===
+    setInterval(refreshHealth, 30000);     // Health every 30s -- presence reads it
     setInterval(refreshSelfState, 30000);  // Self-state every 30s
     setInterval(refreshEpisodes, 60000);   // Episodes every 60s
     setInterval(refreshBrake, 15000);      // Parking brake every 15s (safety-relevant)
