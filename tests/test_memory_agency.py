@@ -161,7 +161,7 @@ def test_search_does_not_misreport_the_total(client, stored):
 def test_a_correction_is_applied(client, stored):
     kind, key = stored
     response = client.put(
-        f"/api/memory/{kind}/{key}", json={"value": "the bin goes out on Fridays"}
+        f"/api/memory/{kind}/{key}", json={"value": "the bin goes out on Fridays"},
     )
 
     assert response.status_code == 200

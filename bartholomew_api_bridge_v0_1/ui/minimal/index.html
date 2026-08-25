@@ -65,9 +65,15 @@
     .viewtab.active { background:#1e3a5f; border-color:#3b82f6; color:#dbeafe; }
 
     .presence { display:flex; align-items:center; gap:12px; }
-    .presence-avatar { width:34px; height:34px; border-radius:50%; flex:0 0 34px;
+    .presence-avatar { width:38px; height:38px; border-radius:50%; flex:0 0 38px;
                        border:2px solid #374151; background:#1f2937;
+                       display:flex; align-items:center; justify-content:center; gap:6px;
                        transition: background .4s ease, border-color .4s ease; }
+    /* Two marks read as a face without committing to one. They are the only
+       moving part, and they move only for states that are really distinct. */
+    .presence-eye { width:5px; height:5px; border-radius:50%; background:#9ca3af;
+                    transition: background .4s ease, height .25s ease, opacity .4s ease; }
+    .presence-name { font-size:12px; color:#6b7280; }
     .presence-line { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
     .presence-state { font-size:14px; font-weight:600; text-transform:lowercase; }
     .presence-detail { font-size:12px; color:#9ca3af; }
@@ -81,14 +87,31 @@
     .presence-state[data-state="thinking"] { color:#60a5fa; }
     .presence-avatar[data-state="thinking"] { background:#1e3a5f; border-color:#60a5fa;
                                               animation: presence-pulse 1.6s ease-in-out infinite; }
+    .presence-state[data-state="speaking"] { color:#a5b4fc; }
+    .presence-avatar[data-state="speaking"] { background:#312e81; border-color:#a5b4fc; }
+    .presence-avatar[data-state="speaking"] .presence-eye { background:#e0e7ff; }
     .presence-state[data-state="paused"] { color:#fbbf24; }
     .presence-avatar[data-state="paused"] { background:#78350f; border-color:#fbbf24; }
     .presence-state[data-state="degraded"] { color:#fb923c; }
     .presence-avatar[data-state="degraded"] { background:#7c2d12; border-color:#fb923c; }
     .presence-state[data-state="unknown"] { color:#9ca3af; }
     .presence-avatar[data-state="unknown"] { background:#1f2937; border-color:#6b7280; }
+    /* Per-state eye treatment, keyed off the same data-state as everything
+       else so it can never disagree with the word beside it. */
+    .presence-avatar[data-state="available"] .presence-eye { background:#6ee7b7; }
+    .presence-avatar[data-state="thinking"] .presence-eye { background:#bfdbfe;
+                                                            animation: presence-look 2s ease-in-out infinite; }
+    .presence-avatar[data-state="thinking"] .presence-eye:nth-child(2) { animation-delay:.1s }
+    /* Paused: eyes closed. He is halted, not asleep, but "not looking" is the
+       honest read of a brake. */
+    .presence-avatar[data-state="paused"] .presence-eye { background:#fde68a; height:2px; }
+    .presence-avatar[data-state="degraded"] .presence-eye { background:#fed7aa; opacity:.55; }
+    .presence-avatar[data-state="unknown"] .presence-eye { background:#6b7280; opacity:.4; }
+    @keyframes presence-look { 0%,100%{transform:translateX(-1px)} 50%{transform:translateX(2px)} }
     @keyframes presence-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
-    @media (prefers-reduced-motion: reduce) { .presence-avatar { animation: none !important; } }
+    @media (prefers-reduced-motion: reduce) {
+      .presence-avatar, .presence-eye { animation: none !important; }
+    }
 
     /* Narrow screens: the header stacks rather than squeezing the nav. */
     @media (max-width: 640px) {
@@ -239,11 +262,33 @@
       <div>
         <h1>Bartholomew <span class="badge">v0.1</span></h1>
         <!-- Truthful presence, wired to real readings. See renderPresence(). -->
-        <div id="presence" class="presence">
-          <span id="presence-avatar" class="presence-avatar" aria-hidden="true"></span>
+        <!-- Expressive presence prototype.
+             The point is to begin separating Bartholomew from the application
+             chrome: he is a persistent individual operating through this
+             interface, not the interface itself. So he has one place on the
+             page that is *him*, present on every view, rather than being
+             implied by whichever panel you happen to be reading.
+
+             Deliberately not frozen: no final avatar design, no animation
+             system, no 3D anything, no art pipeline, no customer-facing name
+             for any of these states. It is a mark and a word, both driven off
+             the same resolved state, so replacing the mark later touches one
+             element and no logic.
+
+             It is also not decoration. Every state is a real reading (see
+             resolvePresence()), the mark and the label cannot disagree
+             because they read the same value, and when the system cannot
+             distinguish something the answer is "unknown" rather than an
+             invented distinction. A presence that looked calm while the
+             kernel was unreachable would be worse than no presence at all. -->
+        <div id="presence" class="presence" role="status" aria-live="polite">
+          <span id="presence-avatar" class="presence-avatar" aria-hidden="true">
+            <span class="presence-eye"></span><span class="presence-eye"></span>
+          </span>
           <div>
             <div class="presence-line">
-              <span id="presence-state" class="presence-state" data-state="available">available</span>
+              <span class="presence-name">Bartholomew is</span>
+              <span id="presence-state" class="presence-state" data-state="unknown">unknown</span>
               <span id="presence-detail" class="presence-detail"></span>
             </div>
             <div id="presence-safety" class="presence-safety"></div>
@@ -2159,6 +2204,21 @@
       }
       if(presenceOverride === "thinking"){
         return { state: "thinking", detail: "working on your message" };
+      }
+      // Cross-sprint seam, deliberately unreachable today.
+      //
+      // "Speaking" is a real state only once something is actually producing
+      // speech, and voice output belongs to the parallel capability sprint.
+      // Nothing in this build calls setPresence("speaking"), because there is
+      // no reading that would make it true -- showing it on reply delivery
+      // would be inventing a distinction the system cannot make, which is
+      // exactly what this presence area is not allowed to do.
+      //
+      // The branch and its styling exist so that when TTS lands, wiring it up
+      // is one setPresence() call at the point speech genuinely starts and
+      // stops, with no design decision left to make here.
+      if(presenceOverride === "speaking"){
+        return { state: "speaking", detail: "answering" };
       }
       if(presenceHealth === null){
         return { state: "unknown", detail: "status not yet read" };
