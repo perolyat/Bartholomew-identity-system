@@ -83,9 +83,9 @@ def test_chat_checks_response_ok_before_reading_reply(ui_code: str):
 def test_chat_never_renders_a_missing_reply_as_a_reply(ui_code: str):
     """A 2xx with no usable reply is a defect to report, not a blank message."""
     send = _function_body(ui_code, "sendMsg")
-    assert "typeof j.reply !== 'string'" in send, (
-        "sendMsg() must reject a non-string reply rather than rendering it"
-    )
+    assert (
+        "typeof j.reply !== 'string'" in send
+    ), "sendMsg() must reject a non-string reply rather than rendering it"
 
 
 def test_chat_failures_render_as_a_distinct_error_turn(ui_code: str, ui_source: str):

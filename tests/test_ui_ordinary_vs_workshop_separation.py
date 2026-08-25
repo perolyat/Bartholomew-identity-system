@@ -134,9 +134,10 @@ def test_brake_state_is_visible_from_every_view(ui_source: str):
     """
     assert 'id="presence-safety"' in ui_source
     for section_id in ("view-home", "view-workshop"):
-        assert 'id="presence-safety"' not in _section(ui_source, section_id), (
-            "presence must sit outside the view sections so it shows on both"
-        )
+        section = _section(ui_source, section_id)
+        assert (
+            'id="presence-safety"' not in section
+        ), "presence must sit outside the view sections so it shows on both"
 
 
 def test_privacy_controls_stay_in_the_ordinary_view(ui_source: str):

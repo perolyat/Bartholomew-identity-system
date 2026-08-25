@@ -65,9 +65,10 @@ def test_conversation_is_the_first_thing_in_the_ordinary_view(ui_source: str):
     # The first card in the ordinary view must be the chat card itself.
     first_card = re.search(r'<div class="card"[^>]*>', home)
     assert first_card, "the ordinary view has no cards"
-    assert 'id="chat-card"' in first_card.group(0), (
-        f"the first card in the ordinary view is not the conversation: {first_card.group(0)}"
-    )
+    opening_tag = first_card.group(0)
+    assert (
+        'id="chat-card"' in opening_tag
+    ), f"the first card in the ordinary view is not the conversation: {opening_tag}"
 
 
 def test_composer_supports_more_than_one_line(ui_source: str):

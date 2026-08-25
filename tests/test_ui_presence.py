@@ -75,9 +75,9 @@ def test_presence_never_defaults_to_available_when_nothing_is_known(ui_code: str
     assert "presenceHealth === null" in body
     unknown_index = body.index("presenceHealth === null")
     available_index = body.rindex('state: "available"')
-    assert unknown_index < available_index, (
-        "the unknown case must be resolved before falling through to available"
-    )
+    assert (
+        unknown_index < available_index
+    ), "the unknown case must be resolved before falling through to available"
 
 
 def test_presence_reports_a_halted_system_as_paused(ui_code: str):
@@ -137,6 +137,6 @@ def test_presence_animation_respects_reduced_motion(ui_source: str):
         for m in re.finditer(r"prefers-reduced-motion", ui_source)
     ]
     assert blocks, "no reduced-motion handling at all"
-    assert any("presence" in b for b in blocks), (
-        "the presence animation is not disabled under prefers-reduced-motion"
-    )
+    assert any(
+        "presence" in b for b in blocks
+    ), "the presence animation is not disabled under prefers-reduced-motion"

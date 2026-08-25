@@ -203,9 +203,9 @@ class TestDrivesAndAttention:
             drives = response.json()["drives"]
             assert drives, f"{path} returned no drives to check"
             for drive in drives:
-                assert "effective_activation" in drive, (
-                    f"{path} must expose effective_activation ({drive})"
-                )
+                assert (
+                    "effective_activation" in drive
+                ), f"{path} must expose effective_activation ({drive})"
                 assert isinstance(drive["effective_activation"], (int, float))
                 assert 0.0 <= drive["effective_activation"] <= 1.0
                 # Additive: the stored fields a persistence consumer needs
