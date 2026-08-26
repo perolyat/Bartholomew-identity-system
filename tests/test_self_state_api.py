@@ -189,6 +189,65 @@ class TestDrivesAndAttention:
         assert response.status_code == 200
         assert len(response.json()["drives"]) <= 2
 
+    def test_drives_expose_effective_activation(self, client):
+        """
+        MF-F001. `DriveState.to_dict()` is the persistence serialiser and
+        emits stored fields only, so `effective_activation` -- the clamped
+        current_activation + context_boost the kernel actually sorts on --
+        never reached any client. The minimal UI read that name off the
+        payload, found nothing, and rendered every drive as 0.00.
+        """
+        for path in ("/api/self/drives", "/api/self/drives/top"):
+            response = client.get(path)
+            assert response.status_code == 200
+            drives = response.json()["drives"]
+            assert drives, f"{path} returned no drives to check"
+            for drive in drives:
+                assert (
+                    "effective_activation" in drive
+                ), f"{path} must expose effective_activation ({drive})"
+                assert isinstance(drive["effective_activation"], (int, float))
+                assert 0.0 <= drive["effective_activation"] <= 1.0
+                # Additive: the stored fields a persistence consumer needs
+                # must still be there.
+                assert "current_activation" in drive
+                assert "context_boost" in drive
+
+    def test_effective_activation_matches_the_kernel_computation(self, client):
+        """The exposed value must be the derived one, not a copy of the stored one."""
+        response = client.get("/api/self/drives")
+        assert response.status_code == 200
+        for drive in response.json()["drives"]:
+            expected = max(
+                0.0,
+                min(1.0, drive["current_activation"] + drive["context_boost"]),
+            )
+            assert drive["effective_activation"] == pytest.approx(expected)
+
+    def test_self_snapshot_drives_use_the_same_contract(self, client):
+        """
+        A client reading drives from /api/self must see the same shape as one
+        reading /api/self/drives.
+        """
+        response = client.get("/api/self")
+        assert response.status_code == 200
+        drives = response.json()["snapshot"]["drives"]
+        assert drives
+        for drive in drives:
+            assert "effective_activation" in drive
+
+    def test_attention_payload_field_names_are_the_focus_prefixed_ones(self, client):
+        """
+        MF-F001's other half. The UI read attention.target/type/intensity;
+        the serialiser emits focus_target/focus_type/focus_intensity. Pin the
+        emitted names so the render mapping cannot drift back apart.
+        """
+        response = client.get("/api/self/attention")
+        assert response.status_code == 200
+        payload = response.json()
+        for field in ("focus_target", "focus_type", "focus_intensity"):
+            assert field in payload, f"attention payload must carry {field} ({payload})"
+
     def test_activate_and_satisfy_a_real_drive(self, client):
         # ExperienceKernel.__init__() is constructed by daemon.py with no
         # identity_path, so it always falls back to its own

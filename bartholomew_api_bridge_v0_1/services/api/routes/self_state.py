@@ -63,6 +63,35 @@ def _get_kernel():
 
 
 # =============================================================================
+# Drive serialisation
+# =============================================================================
+
+
+def _drive_payload(drive: Any) -> dict[str, Any]:
+    """
+    Serialise a DriveState for the API, including its *effective* activation.
+
+    Post-Test #1 defect MF-F001. `DriveState.to_dict()` emits the stored
+    fields only -- `current_activation` and `context_boost` -- because it is
+    the persistence serialiser and `effective_activation()` is a derived
+    method, not a field. Every consumer that wanted "how activated is this
+    drive right now" therefore had to recompute the clamp itself, and the
+    minimal UI did not: it read `d.effective_activation`, found a method name
+    that was never serialised, fell through its `|| 0` default and rendered
+    every drive as `0.00` while the kernel held 0.57/0.54/0.51/0.51/0.48.
+
+    Fixing it here rather than in `DriveState.to_dict()` keeps the persisted
+    shape byte-identical -- `from_dict()` round-trips the stored fields and
+    nothing derived leaks into the database -- while making the API contract
+    say what a client actually needs. The stored fields are still present, so
+    this is additive for any existing consumer.
+    """
+    payload = drive.to_dict()
+    payload["effective_activation"] = drive.effective_activation()
+    return payload
+
+
+# =============================================================================
 # Self-State Endpoints
 # =============================================================================
 
@@ -75,8 +104,13 @@ async def get_self_snapshot() -> dict[str, Any]:
     kernel = _get_kernel()
 
     snapshot = kernel.experience.self_snapshot()
+    snapshot_payload = snapshot.to_dict()
+    # MF-F001: the snapshot's own drive list is the persistence shape too.
+    # Enrich it the same way /self/drives does, so a client reading drives
+    # from either place sees the same contract.
+    snapshot_payload["drives"] = [_drive_payload(d) for d in snapshot.drives]
     return {
-        "snapshot": snapshot.to_dict(),
+        "snapshot": snapshot_payload,
         "active_persona": kernel.persona_manager.get_active_pack_id(),
         "working_memory_tokens": kernel.working_memory.get_token_usage(),
     }
@@ -150,7 +184,7 @@ async def get_drives() -> dict[str, Any]:
     kernel = _get_kernel()
     drives = kernel.experience.get_top_drives(n=100)
     return {
-        "drives": [d.to_dict() for d in drives],
+        "drives": [_drive_payload(d) for d in drives],
     }
 
 
@@ -160,7 +194,7 @@ async def get_top_drives(limit: int = 5) -> dict[str, Any]:
     kernel = _get_kernel()
     drives = kernel.experience.get_top_drives(n=limit)
     return {
-        "drives": [d.to_dict() for d in drives],
+        "drives": [_drive_payload(d) for d in drives],
     }
 
 
@@ -174,7 +208,7 @@ async def activate_drive(drive_id: str, amount: float = 0.2) -> dict[str, Any]:
         drive = kernel.experience.get_drive(drive_id)
         return {
             "ok": True,
-            "drive": drive.to_dict() if drive else None,
+            "drive": _drive_payload(drive) if drive else None,
         }
     except ValueError as e:
         raise HTTPException(404, str(e)) from None
@@ -199,7 +233,7 @@ async def satisfy_drive(drive_id: str) -> dict[str, Any]:
         drive = kernel.experience.get_drive(drive_id)
         return {
             "ok": True,
-            "drive": drive.to_dict() if drive else None,
+            "drive": _drive_payload(drive) if drive else None,
         }
     except ValueError as e:
         raise HTTPException(404, str(e)) from None

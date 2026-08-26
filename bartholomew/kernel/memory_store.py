@@ -118,6 +118,27 @@ class StoreResult:
     ephemeral_embeddings: list[tuple[str, np.ndarray]] = field(default_factory=list)
     created_or_updated: str = "created"  # "created" or "updated"
 
+    outcome: str = "stored"
+    """
+    Why the write ended as it did. The governed write path knows this
+    directly; callers previously had to reconstruct it by diffing the
+    pending-consent inbox before and after the call, which is brittle under
+    concurrency and silently wrong once the inbox exceeds the scan limit.
+
+    One of:
+
+    * ``stored``              -- written.
+    * ``queued_for_consent``  -- governance requires a human decision; the
+      value is in ``pending_sensitive_writes`` and was NOT written.
+    * ``refused``             -- governance rejected the value outright
+      (``never_store``, or an interactive handler declining). Not storable.
+    * ``precondition_failed`` -- a conditional write whose
+      ``expected_memory_id`` no longer matched; nothing was written.
+
+    `stored` remains the authoritative boolean and is unchanged for every
+    existing caller; this only names *which* not-stored case occurred.
+    """
+
 
 # Phase 2d: Lazy imports for embeddings (optional feature)
 _embedding_engine = None
@@ -258,6 +279,29 @@ CREATE TABLE IF NOT EXISTS system_flags (
   updated_at TEXT NOT NULL
 );
 """
+
+
+@dataclass
+class CorrectionOutcome:
+    """
+    What happened to a user's attempt to correct a stored memory.
+
+    `stored=False` on its own is ambiguous -- governance either queued the new
+    value for consent (recoverable, waiting in the pending inbox, old value
+    still in place) or refused it outright (never storable). Callers must be
+    able to tell those apart to say anything truthful about it.
+    """
+
+    stored: bool
+    memory_id: int | None = None
+    queued_for_consent: bool = False
+    target_changed: bool = False
+    """The record was deleted or replaced while this correction was in
+    flight, so the conditional write did not land. Nothing was written and
+    nothing was removed: whatever is at that key now is another writer's, or
+    the user's deletion, and it stands. Distinct from a governance refusal --
+    nothing was rejected, the target simply is no longer the record the user
+    was correcting."""
 
 
 class MemoryStore:
@@ -466,7 +510,26 @@ class MemoryStore:
         skip_privacy_guard: bool = False,
         skip_rule_consent: bool = False,
         summary: str | None = None,
+        expected_memory_id: int | None = None,
     ) -> StoreResult:
+        """
+        `expected_memory_id` makes this a conditional write (compare-and-swap).
+
+        When supplied, the row currently at `(kind, key)` must still have that
+        id or nothing is written and the result is
+        `outcome="precondition_failed"`. The check runs inside the same
+        transaction as the write, under `BEGIN IMMEDIATE`, so no other writer
+        can slip between the check and the write.
+
+        This exists because a correction must apply to the *exact record the
+        user was looking at*. Checking existence beforehand and compensating
+        afterwards cannot be made safe: between the two, another writer may
+        delete and recreate the row, and a post-hoc "the id changed" test
+        cannot distinguish our own accidental resurrection from someone
+        else's newer legitimate write -- the classic ABA problem. Deleting on
+        that evidence destroys real data. Refusing the write up front does
+        not. Omitted (the default) this parameter changes nothing.
+        """
         # Rule evaluation: check governance rules first
         memory_dict = {
             "kind": kind,
@@ -480,7 +543,7 @@ class MemoryStore:
         # promotion path, ever -- not affected by skip_rule_consent.
         if not evaluated.get("allow_store", True):
             print(f"[Bartholomew] Memory blocked by governance rules: {kind}/{key}")
-            return StoreResult(stored=False)
+            return StoreResult(stored=False, outcome="refused")
 
         # S1.2: ask_before_store (requires_consent=true) -- unlike
         # never_store above, memory_rules.py's should_store() docstring has
@@ -505,7 +568,7 @@ class MemoryStore:
                 f"[Bartholomew] Memory requires consent, queued for review "
                 f"(pending_id={pending_id}); not stored yet: {kind}/{key}",
             )
-            return StoreResult(stored=False)
+            return StoreResult(stored=False, outcome="queued_for_consent")
 
         # Apply redaction if required by rules (Phase 2a)
         redacted_value = value
@@ -657,18 +720,38 @@ class MemoryStore:
                     f"[Bartholomew] Sensitive content queued for review "
                     f"(pending_id={pending_id}); not stored yet.",
                 )
-                return StoreResult(stored=False)
+                return StoreResult(stored=False, outcome="queued_for_consent")
 
             allowed = await request_permission_to_store(value)
 
             if not allowed:
                 print("[Bartholomew] OK, I won't store that kernel memory.")
-                return StoreResult(stored=False)
+                return StoreResult(stored=False, outcome="refused")
 
         # Prepare result object
         result = StoreResult()
 
         async with aiosqlite.connect(self.db_path) as db:
+            if expected_memory_id is not None:
+                # BEGIN IMMEDIATE takes the write lock now, so the identity
+                # check below and the write that follows are one atomic step
+                # against any other writer. A deferred transaction would only
+                # take the lock at the INSERT, leaving a window in between --
+                # which is precisely the race this parameter exists to close.
+                await db.execute("BEGIN IMMEDIATE")
+                cursor = await db.execute(
+                    "SELECT id FROM memories WHERE kind=? AND key=?",
+                    (kind, key),
+                )
+                current = await cursor.fetchone()
+                if current is None or current[0] != expected_memory_id:
+                    # The record the caller meant is no longer the record
+                    # here: deleted, or replaced by a newer write. Either way
+                    # this write must not land. Nothing was changed, so there
+                    # is nothing to compensate.
+                    await db.rollback()
+                    return StoreResult(stored=False, outcome="precondition_failed")
+
             await db.execute(
                 "INSERT INTO memories(kind,key,value,summary,ts) "
                 "VALUES(?,?,?,?,?) "
@@ -1079,6 +1162,34 @@ class MemoryStore:
                 )
             return entries
 
+    async def _refuse_mutation_if_braked(self, refusal: str) -> None:
+        """Raise ParkingBrakeEngagedError if the brake is engaged at all.
+
+        The shared execution boundary behind every mutating memory operation.
+        Extracted from `_refuse_consent_resolution_if_braked()` (which now
+        delegates here) when user-facing Memory Agency needed the identical
+        check for editing and forgetting; its docstring carries the full
+        rationale, which applies unchanged to those two.
+
+        In short: Governance decision 2026-08-18, "Parking Brake means
+        inspect, but do not mutate". Reading memory stays allowed under a
+        halt, because seeing what is stored is inspection and a halt must not
+        hide it. Enforced here rather than in an API route because brake scope
+        is Governance authority and `DECISIONS.md`'s authority-tiers entry
+        requires enforcement below the presentation layer -- a client that is
+        bypassed, crashes, or is replaced cannot get around this. Gated on the
+        brake being engaged at all rather than on one scope, because the
+        user's memory belongs to none of the existing subsystem scopes.
+        """
+        from bartholomew.orchestrator.safety.governance_store import (
+            ParkingBrakeEngagedError,
+            engaged_state_fail_closed_off_loop,
+        )
+
+        state = await engaged_state_fail_closed_off_loop(self.db_path)
+        if state.engaged:
+            raise ParkingBrakeEngagedError(refusal, scopes=state.scopes)
+
     async def _refuse_consent_resolution_if_braked(self, action: str) -> None:
         """Refuse to resolve a pending consent request while the brake is on.
 
@@ -1106,19 +1217,11 @@ class MemoryStore:
         the existing subsystem scopes (`skills`, `sight`, `voice`,
         `scheduler`, `training`), so picking one would be arbitrary.
         """
-        from bartholomew.orchestrator.safety.governance_store import (
-            ParkingBrakeEngagedError,
-            engaged_state_fail_closed_off_loop,
+        await self._refuse_mutation_if_braked(
+            f"Parking brake engaged: cannot {action} a pending consent "
+            "request while Bartholomew is halted. The request remains "
+            "pending and can be resolved once the brake is released.",
         )
-
-        state = await engaged_state_fail_closed_off_loop(self.db_path)
-        if state.engaged:
-            raise ParkingBrakeEngagedError(
-                f"Parking brake engaged: cannot {action} a pending consent "
-                "request while Bartholomew is halted. The request remains "
-                "pending and can be resolved once the brake is released.",
-                scopes=state.scopes,
-            )
 
     async def approve_pending_sensitive_write(self, pending_id: int) -> StoreResult:
         """
@@ -1262,8 +1365,7 @@ class MemoryStore:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT id, kind, key, value, summary, ts FROM memories "
-                "WHERE kind = ? AND key = ?",
+                "SELECT id, kind, key, value, summary, ts FROM memories WHERE kind = ? AND key = ?",
                 (kind, key),
             )
             row = await cursor.fetchone()
@@ -1324,6 +1426,273 @@ class MemoryStore:
                 )
             entries.append(entry)
         return entries
+
+    # How many rows are pulled from SQLite per batch while scanning for a
+    # search match. Bounds peak memory: a search over a large store holds one
+    # batch plus the requested window, never the whole store.
+    _SEARCH_SCAN_BATCH = 500
+
+    def _decorate_entry(self, row: Any) -> dict[str, Any]:
+        """
+        Turn one memories row into a user-facing entry: decrypt, mark
+        readability, and attach governance metadata.
+
+        Governance metadata is derived from the record's *actual* value. When
+        the value cannot be decrypted with a key this process holds, it is not
+        derived at all: re-running the rules engine over a blanked value would
+        classify an unreadable `user.secure` record as `uncategorised` with no
+        privacy class, which is a fabricated classification of exactly the
+        material most in need of a truthful one. Those fields are reported as
+        None with `governance_known=False` instead.
+        """
+        entry = dict(row)
+        entry["value"] = _encryption_module.decrypt_if_envelope(entry["value"])
+        if entry.get("summary"):
+            entry["summary"] = _encryption_module.decrypt_if_envelope(entry["summary"])
+
+        entry["readable"] = not _encryption_module.is_envelope(entry["value"])
+        if not entry["readable"]:
+            entry["value"] = ""
+            entry["unreadable_reason"] = (
+                "Stored encrypted, and cannot be decrypted with the key this "
+                "process holds. Set BME_KEY_STANDARD/BME_KEY_STRONG to a "
+                "stable key to keep encrypted memories readable across runs."
+            )
+            entry["governance_known"] = False
+            entry["category"] = None
+            entry["matched_categories"] = None
+            entry["privacy_class"] = None
+            entry["recall_policy"] = None
+            entry["always_keep"] = None
+            return entry
+
+        evaluated = _rules_engine.evaluate(
+            {"kind": entry["kind"], "key": entry["key"], "value": entry["value"]},
+        )
+        categories = evaluated.get("matched_categories") or []
+        entry["governance_known"] = True
+        entry["category"] = categories[0] if categories else "uncategorised"
+        entry["matched_categories"] = categories
+        entry["privacy_class"] = evaluated.get("privacy_class")
+        entry["recall_policy"] = evaluated.get("recall_policy")
+        entry["always_keep"] = "always_keep" in categories
+        return entry
+
+    async def list_memories(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        kind: str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        List stored memories for the user to read, newest first. Read-only.
+
+        Memory Agency: the user is entitled to see what Bartholomew has
+        stored about them. That is a different question from what a *model*
+        may be shown -- `get_memory()`'s docstring rightly forbids using it to
+        surface memories to a user or a model, because it applies no consent
+        gating and so must not decide relevance for a retrieval path. This
+        method is not a retrieval path and makes no relevance decision: it is
+        the subject of the data reading their own record in full, which is the
+        one case consent-gated retrieval is not protecting against.
+
+        It lives here rather than in the API layer for the reason
+        `get_memory()` gives: `MemoryStore` is the single memory authority,
+        and a route opening its own connection would be a second persistence
+        access point beside it.
+
+        Search
+        ------
+        Values may be encrypted at rest, so a SQL `LIKE` would match
+        ciphertext rather than text. Matching therefore happens after
+        decryption -- but it is applied to the **whole store**, not to one
+        page of it. An earlier version paged in SQL first and filtered the
+        page afterwards, which reported a real memory as absent whenever it
+        sat outside the fetched window, and paginated over the unfiltered set
+        so offsets did not address the filtered results at all.
+
+        The scan reads in batches of `_SEARCH_SCAN_BATCH` and keeps only the
+        requested window plus a match counter, so peak memory does not grow
+        with the store.
+
+        Returned counts are about the result set the caller asked for:
+
+        * `total`       -- matches when searching; rows in the store (after
+          any `kind` filter) when not. Either way, the number `offset` and
+          `limit` address.
+        * `store_total` -- rows before any search filter, always.
+        * `has_more`    -- whether rows remain after this window.
+        * `filtered`    -- whether a search filter was applied.
+        """
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+
+        where: list[str] = []
+        params: list[Any] = []
+        if kind:
+            where.append("m.kind = ?")
+            params.append(kind)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+
+        select_sql = (
+            "SELECT m.id, m.kind, m.key, m.value, m.summary, m.ts, "
+            "c.consent_at AS consent_at, c.source AS consent_source "
+            f"FROM memories m LEFT JOIN memory_consent c ON c.memory_id = m.id {clause} "  # noqa: S608 - clause is fixed fragments; values are bound
+            "ORDER BY m.ts DESC, m.id DESC LIMIT ? OFFSET ?"
+        )
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            count_cursor = await db.execute(
+                f"SELECT COUNT(*) AS n FROM memories m {clause}",  # noqa: S608 - as above
+                tuple(params),
+            )
+            count_row = await count_cursor.fetchone()
+            store_total = int(count_row["n"]) if count_row else 0
+
+            if not search:
+                cursor = await db.execute(select_sql, (*params, limit, offset))
+                entries = [self._decorate_entry(r) for r in await cursor.fetchall()]
+                return {
+                    "entries": entries,
+                    "total": store_total,
+                    "store_total": store_total,
+                    "limit": limit,
+                    "offset": offset,
+                    "filtered": False,
+                    "has_more": offset + len(entries) < store_total,
+                }
+
+            # Searching: scan the whole store in batches, decrypt, match, and
+            # apply offset/limit to the matches themselves.
+            needle = search.casefold()
+            matched = 0
+            window: list[dict[str, Any]] = []
+            scanned = 0
+            while scanned < store_total:
+                cursor = await db.execute(
+                    select_sql,
+                    (*params, self._SEARCH_SCAN_BATCH, scanned),
+                )
+                # Materialised so the scan can count it: fetchall() is typed
+                # as an Iterable, and the batch is bounded by _SEARCH_SCAN_BATCH.
+                batch = list(await cursor.fetchall())
+                if not batch:
+                    break
+                scanned += len(batch)
+                for row in batch:
+                    entry = self._decorate_entry(row)
+                    # An unreadable value cannot be matched against; only its
+                    # key is searchable. Saying otherwise would claim the
+                    # search covered content nothing could read.
+                    if needle in str(entry["key"]).casefold() or (
+                        entry["readable"] and needle in str(entry["value"]).casefold()
+                    ):
+                        if offset <= matched < offset + limit:
+                            window.append(entry)
+                        matched += 1
+
+        return {
+            "entries": window,
+            "total": matched,
+            "store_total": store_total,
+            "limit": limit,
+            "offset": offset,
+            "filtered": True,
+            "has_more": offset + len(window) < matched,
+        }
+
+    async def list_memory_kinds(self) -> list[dict[str, Any]]:
+        """Distinct memory kinds with their counts, for a filter control."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT kind, COUNT(*) AS n FROM memories GROUP BY kind ORDER BY n DESC",
+            )
+            rows = await cursor.fetchall()
+        return [{"kind": r["kind"], "count": int(r["n"])} for r in rows]
+
+    async def correct_memory(self, kind: str, key: str, value: str) -> CorrectionOutcome:
+        """
+        Replace a stored memory's value on the user's instruction.
+
+        Deliberately a thin wrapper over `upsert_memory()` rather than an
+        UPDATE of its own: that is the single governed write path, so a
+        correction is subject to exactly the governance the original write
+        was. A corrected value that trips `never_store` is refused; one that
+        trips `ask_before_store` is queued for consent and not stored.
+
+        The write is conditional on the record still being the one the user
+        was looking at (`expected_memory_id`), evaluated inside the write's
+        own transaction. If the record was deleted or replaced meanwhile,
+        nothing is written and the outcome says so.
+
+        That ordering is what makes a user's deletion win: the row is gone,
+        the precondition fails, and the correction simply does not land. An
+        earlier version instead wrote unconditionally and then deleted the
+        row if its id had changed -- which destroyed newer legitimate writes,
+        because a changed id does not prove the row present is our own
+        resurrection rather than someone else's newer record.
+
+        Refused outright while the Parking Brake is engaged: editing is a
+        mutation, and "inspect, but do not mutate" applies.
+        """
+        await self._refuse_mutation_if_braked(
+            "Parking brake engaged: cannot edit a memory while Bartholomew is "
+            "halted. Release the brake and try again.",
+        )
+        existing = await self.get_memory(kind, key)
+        if existing is None:
+            raise KeyError(f"no memory {kind}/{key}")
+
+        result = await self.upsert_memory(
+            kind,
+            key,
+            value,
+            datetime.now(timezone.utc).isoformat(),
+            expected_memory_id=existing["id"],
+        )
+
+        if result.stored:
+            return CorrectionOutcome(stored=True, memory_id=result.memory_id)
+
+        # The write authority reports why directly -- no inbox diffing.
+        if result.outcome == "precondition_failed":
+            logger.info(
+                "Correction to %s/%s did not apply: the record changed while the "
+                "correction was in flight. Nothing was written.",
+                kind,
+                key,
+            )
+            return CorrectionOutcome(stored=False, target_changed=True)
+
+        return CorrectionOutcome(
+            stored=False,
+            queued_for_consent=result.outcome == "queued_for_consent",
+        )
+
+    async def forget_memory(self, kind: str, key: str) -> bool:
+        """
+        Delete a memory on the user's explicit instruction. Permanent.
+
+        `delete_memory()` below is the mechanical primitive -- row plus FTS
+        index, one transaction -- and stays exactly that. This is the governed
+        user-facing action on top of it, refused while the brake is engaged
+        for the same reason `correct_memory()` is. Keeping them separate means
+        internal maintenance paths can still use the primitive without
+        acquiring a brake dependency they should not have.
+
+        There is no undo, and no soft-delete tier exists in this schema to
+        route to. Callers must therefore make the action explicit and
+        confirmed at the point of use rather than inferring it.
+        """
+        await self._refuse_mutation_if_braked(
+            "Parking brake engaged: cannot forget a memory while Bartholomew "
+            "is halted. Release the brake and try again.",
+        )
+        return await self.delete_memory(kind, key)
 
     async def list_memories_by_kind(
         self,

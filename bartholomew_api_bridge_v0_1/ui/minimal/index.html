@@ -13,6 +13,24 @@
     .card-attention { border-color:#d97706; background:#1c1917; }
     button { border-radius:10px; border:1px solid #374151; background:#111827; color:#e8f0fe; padding:8px 12px; cursor:pointer; }
     button:hover { background:#1f2937; }
+    /* F4: keyboard users could tab through this entire page with no visible
+       indication of where they were -- several controls here engage or
+       release a safety halt, and one deletes a memory permanently. */
+    :focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; border-radius: 6px; }
+    /* F4: any of these can receive a long unbroken string -- an encryption
+       envelope queued in the consent inbox, a stack-trace-ish backend error,
+       a URL. Without this the whole page grew a horizontal scrollbar and
+       every card stretched off-screen (observed at 2200px wide in a 420px
+       viewport). Wrap mid-token rather than letting one value set the page
+       width. */
+    .nudge-msg, .memory-value, .turn-body, .episode-narrative,
+    .memory-key, .nudge-kind { overflow-wrap: anywhere; }
+    /* Belt and braces: nothing may make the document itself scroll sideways.
+       Wide content scrolls inside its own container instead. */
+    body { overflow-x: hidden; }
+    .mono, .reflection-content { overflow-x: auto; }
+    button, select { min-height: 34px; }
+    a { color: #60a5fa; }
     button.ack { border-color: #059669; color: #10b981; }
     button.ack:hover { background: #064e3b; }
     button.dismiss { border-color: #dc2626; color: #ef4444; }
@@ -26,7 +44,30 @@
     .badge { border:1px solid #374151; padding:4px 8px; border-radius:999px; font-size:12px; }
     .badge.kernel-online { border-color: #059669; color: #10b981; }
     .badge.kernel-offline { border-color: #dc2626; color: #ef4444; }
-    #chatlog { max-height: 40vh; overflow:auto; white-space:pre-wrap; }
+    #chatlog { max-height: 40vh; overflow:auto; }
+    .first-use { border:1px dashed #2d3b52; border-radius:10px; padding:14px 16px;
+                 color:#9ca3af; font-size:13px; line-height:1.7; }
+    .first-use strong { color:#e8f0fe; }
+    .first-use ul { margin:8px 0 0; padding-left:20px; }
+    .first-use a { color:#60a5fa; }
+    .turn { border-radius:10px; padding:10px 12px; margin-bottom:8px; white-space:pre-wrap; line-height:1.5; }
+    .turn-who { font-size:11px; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; color:#9ca3af; }
+    .turn-meta { font-size:11px; color:#6b7280; margin-top:6px; }
+    .turn-user { background:#111f33; border:1px solid #1e3a5f; }
+    .turn-user .turn-who { color:#60a5fa; }
+    .turn-bartholomew { background:#141b26; border:1px solid #263041; }
+    .turn-bartholomew .turn-who { color:#a5b4fc; }
+    /* A failure must not look like a reply. TECH-F001. */
+    .turn-error { background:#2a1113; border:1px solid #7f1d1d; }
+    .turn-error .turn-who { color:#f87171; }
+    .turn-warn { background:#2a2011; border:1px solid #92400e; }
+    .turn-warn .turn-who { color:#fbbf24; }
+    .turn-system { background:#161b22; border:1px solid #30363d; }
+    .thinking { display:flex; align-items:center; gap:6px; color:#9ca3af; font-size:13px; margin:4px 0 10px; }
+    .thinking-dot { width:6px; height:6px; border-radius:50%; background:#60a5fa; animation: blink 1.2s infinite ease-in-out; }
+    .thinking-dot:nth-child(2){ animation-delay:.2s } .thinking-dot:nth-child(3){ animation-delay:.4s }
+    @keyframes blink { 0%,80%,100%{opacity:.25} 40%{opacity:1} }
+    @media (prefers-reduced-motion: reduce) { .thinking-dot { animation: none; opacity: .6; } }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px;}
     .nudge-item { background: #1f2937; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
     .nudge-kind { color: #60a5fa; font-weight: 600; }
@@ -37,6 +78,113 @@
     .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; background: #1f2937; }
     .tab.active { background: #374151; }
     .empty-state { color: #6b7280; font-style: italic; padding: 12px; }
+    .app-header { margin-bottom: 20px; }
+    .app-header h1 { margin: 0 0 10px 0; }
+    .section-heading { font-size:13px; text-transform:uppercase; letter-spacing:1px;
+                       color:#6b7280; margin: 26px 0 10px; font-weight:600; }
+    .viewnav { display:flex; gap:6px; }
+    .viewtab { padding:10px 18px; font-size:14px; }
+    .viewtab.active { background:#1e3a5f; border-color:#3b82f6; color:#dbeafe; }
+
+    .presence { display:flex; align-items:center; gap:12px; }
+    .presence-avatar { width:38px; height:38px; border-radius:50%; flex:0 0 38px;
+                       border:2px solid #374151; background:#1f2937;
+                       display:flex; align-items:center; justify-content:center; gap:6px;
+                       transition: background .4s ease, border-color .4s ease; }
+    /* Two marks read as a face without committing to one. They are the only
+       moving part, and they move only for states that are really distinct. */
+    .presence-eye { width:5px; height:5px; border-radius:50%; background:#9ca3af;
+                    transition: background .4s ease, height .25s ease, opacity .4s ease; }
+    .presence-name { font-size:12px; color:#6b7280; }
+    .presence-line { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+    .presence-state { font-size:14px; font-weight:600; text-transform:lowercase; }
+    .presence-detail { font-size:12px; color:#9ca3af; }
+    .presence-safety { font-size:11px; color:#6b7280; margin-top:2px; }
+    .presence-safety-alert { color:#f87171; font-weight:600; }
+
+    /* One palette, keyed off the resolved state, used by both the dot and the
+       label so they can never disagree. */
+    .presence-state[data-state="available"] { color:#10b981; }
+    .presence-avatar[data-state="available"] { background:#065f46; border-color:#10b981; }
+    .presence-state[data-state="thinking"] { color:#60a5fa; }
+    .presence-avatar[data-state="thinking"] { background:#1e3a5f; border-color:#60a5fa;
+                                              animation: presence-pulse 1.6s ease-in-out infinite; }
+    .presence-state[data-state="speaking"] { color:#a5b4fc; }
+    .presence-avatar[data-state="speaking"] { background:#312e81; border-color:#a5b4fc; }
+    .presence-avatar[data-state="speaking"] .presence-eye { background:#e0e7ff; }
+    .presence-state[data-state="paused"] { color:#fbbf24; }
+    .presence-avatar[data-state="paused"] { background:#78350f; border-color:#fbbf24; }
+    .presence-state[data-state="degraded"] { color:#fb923c; }
+    .presence-avatar[data-state="degraded"] { background:#7c2d12; border-color:#fb923c; }
+    .presence-state[data-state="unknown"] { color:#9ca3af; }
+    .presence-avatar[data-state="unknown"] { background:#1f2937; border-color:#6b7280; }
+    /* Per-state eye treatment, keyed off the same data-state as everything
+       else so it can never disagree with the word beside it. */
+    .presence-avatar[data-state="available"] .presence-eye { background:#6ee7b7; }
+    .presence-avatar[data-state="thinking"] .presence-eye { background:#bfdbfe;
+                                                            animation: presence-look 2s ease-in-out infinite; }
+    .presence-avatar[data-state="thinking"] .presence-eye:nth-child(2) { animation-delay:.1s }
+    /* Paused: eyes closed. He is halted, not asleep, but "not looking" is the
+       honest read of a brake. */
+    .presence-avatar[data-state="paused"] .presence-eye { background:#fde68a; height:2px; }
+    .presence-avatar[data-state="degraded"] .presence-eye { background:#fed7aa; opacity:.55; }
+    .presence-avatar[data-state="unknown"] .presence-eye { background:#6b7280; opacity:.4; }
+    @keyframes presence-look { 0%,100%{transform:translateX(-1px)} 50%{transform:translateX(2px)} }
+    @keyframes presence-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+    @media (prefers-reduced-motion: reduce) {
+      .presence-avatar, .presence-eye { animation: none !important; }
+    }
+
+    /* Narrow screens: the header stacks rather than squeezing the nav. */
+    @media (max-width: 640px) {
+      body { margin: 14px; }
+      .app-header .row { flex-direction: column; gap: 14px; }
+      .viewnav { width: 100%; }
+      .viewtab { flex: 1; }
+    }
+
+    /* `input { width:100% }` (above) made every text input consume its whole
+       flex row, pushing the adjacent button onto its own line -- the Send
+       button sat under the chat box rather than beside it, and the brake
+       scope labels stacked their checkbox above their text. Give the inputs
+       a flex basis instead of a fixed 100%. */
+    .row > input[type="text"], .row > input:not([type]) { flex: 1 1 220px; width: auto; min-width: 0; }
+    .brake-scope-row label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+    .brake-scope-row input { width:auto; flex:none; }
+
+    .chat-compose { display:flex; gap:8px; align-items:flex-end; }
+    .chat-compose textarea { flex:1 1 auto; resize:vertical; min-height:44px; max-height:220px;
+                             line-height:1.5; font-family:inherit; font-size:15px; }
+    .chat-hint { font-size:11px; color:#4b5563; margin-top:6px; }
+    .chat-attention { background:#1c2432; border:1px solid #2d3b52; border-radius:10px;
+                      padding:10px 12px; margin-bottom:12px; font-size:13px; color:#cbd5e1; }
+    .chat-attention a { color:#60a5fa; }
+
+    .await-warn { color:#fbbf24; }
+    .await-alert { color:#f87171; font-weight:600; }
+
+    .memory-summary { font-size:12px; color:#6b7280; margin-bottom:10px; }
+    .memory-item { background:#141b26; border:1px solid #263041; border-radius:10px;
+                   padding:12px; margin-bottom:8px; }
+    .memory-head { display:flex; justify-content:space-between; align-items:flex-start;
+                   gap:10px; flex-wrap:wrap; }
+    .memory-key { font-weight:600; color:#e8f0fe; }
+    .memory-kind { font-size:11px; color:#9ca3af; }
+    .memory-value { margin:8px 0; line-height:1.5; white-space:pre-wrap; }
+    .memory-value-unreadable { color:#fbbf24; font-style:italic; }
+    .memory-tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .memory-tag { font-size:11px; border-radius:999px; padding:2px 8px;
+                  border:1px solid #374151; color:#9ca3af; }
+    .memory-tag-keep { border-color:#3b82f6; color:#93c5fd; }
+    .memory-tag-privacy { border-color:#92400e; color:#fbbf24; }
+    .memory-edit { width:100%; margin:8px 0; min-height:64px; }
+    .memory-note { font-size:12px; margin-top:8px; padding:8px 10px; border-radius:8px; }
+    .memory-note-ok { background:#062e21; color:#6ee7b7; }
+    .memory-note-warn { background:#2a2011; color:#fbbf24; }
+    .memory-note-err { background:#2a1113; color:#f87171; }
+
+    .brake-checked { font-size:11px; color:#6b7280; margin-top:8px; }
+    .brake-checked-stale { color:#f87171; }
 
     /* Stage 3 UI Styles */
     .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
@@ -115,7 +263,71 @@
   </style>
 </head>
 <body>
-  <h1>Bartholomew <span class="badge">v0.1</span></h1>
+  <!-- Capability B: ordinary experience vs engineering instrumentation.
+       Everything below used to be one flat column of fifteen identically
+       styled cards -- the conversation sat between a pending-nudge queue and
+       a raw drive-activation readout, and finding the Parking Brake meant
+       scrolling past an affect slider. It read as a developer console that
+       happened to have a chat box in it.
+
+       Two views now, switched by the nav below and addressed by URL hash so
+       a view survives a reload and can be linked:
+
+         #/            Bartholomew  -- talking to him, what needs attention,
+                                       what he remembers, safety controls
+         #/workshop    Workshop     -- diagnostics, internals, engineering
+
+       Nothing is deleted and nothing is behind a password: Workshop is one
+       click away and this is a single-user localhost prototype, so this is a
+       separation of *attention*, not a privilege boundary. Safety is
+       deliberately not demoted -- the Parking Brake and its state live in the
+       ordinary view, and the presence strip carries brake state into both. -->
+  <header class="app-header">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div>
+        <h1>Bartholomew <span class="badge">v0.1</span></h1>
+        <!-- Truthful presence, wired to real readings. See renderPresence(). -->
+        <!-- Expressive presence prototype.
+             The point is to begin separating Bartholomew from the application
+             chrome: he is a persistent individual operating through this
+             interface, not the interface itself. So he has one place on the
+             page that is *him*, present on every view, rather than being
+             implied by whichever panel you happen to be reading.
+
+             Deliberately not frozen: no final avatar design, no animation
+             system, no 3D anything, no art pipeline, no customer-facing name
+             for any of these states. It is a mark and a word, both driven off
+             the same resolved state, so replacing the mark later touches one
+             element and no logic.
+
+             It is also not decoration. Every state is a real reading (see
+             resolvePresence()), the mark and the label cannot disagree
+             because they read the same value, and when the system cannot
+             distinguish something the answer is "unknown" rather than an
+             invented distinction. A presence that looked calm while the
+             kernel was unreachable would be worse than no presence at all. -->
+        <div id="presence" class="presence" role="status" aria-live="polite">
+          <span id="presence-avatar" class="presence-avatar" aria-hidden="true">
+            <span class="presence-eye"></span><span class="presence-eye"></span>
+          </span>
+          <div>
+            <div class="presence-line">
+              <span class="presence-name">Bartholomew is</span>
+              <span id="presence-state" class="presence-state" data-state="unknown">unknown</span>
+              <span id="presence-detail" class="presence-detail"></span>
+            </div>
+            <div id="presence-safety" class="presence-safety"></div>
+          </div>
+        </div>
+      </div>
+      <nav class="viewnav" role="tablist" aria-label="Views">
+        <button class="viewtab" role="tab" id="tab-home"
+                aria-controls="view-home" onclick="showView('home')">Bartholomew</button>
+        <button class="viewtab" role="tab" id="tab-workshop"
+                aria-controls="view-workshop" onclick="showView('workshop')">Workshop</button>
+      </nav>
+    </div>
+  </header>
 
   <!-- Stage 1 (S1.6): Host-device onboarding guidance -- first-run modal -->
   <div id="onboarding-modal-overlay" class="modal-overlay" style="display:none">
@@ -128,30 +340,56 @@
     </div>
   </div>
 
-  <!-- Health / Status -->
-  <div class="card">
-    <div class="row">
-      <span id="kernel-status" class="badge">kernel: checking…</span>
-      <span id="nudge-count" class="badge">nudges: …</span>
-      <span id="last-reflection" class="badge">reflection: …</span>
-      <span id="wm-tokens" class="badge">WM: …</span>
-      <button onclick="refreshHealth()">Refresh Status</button>
-    </div>
-    <details style="margin-top:12px">
-      <summary style="cursor:pointer;color:#6b7280">Full health JSON</summary>
-      <div id="health" class="mono" style="margin-top:8px"></div>
-    </details>
-  </div>
+  <section id="view-home" role="tabpanel" aria-labelledby="tab-home">
 
   <!-- Chat -->
-  <div class="card">
-    <h3>💬 Chat</h3>
-    <div id="chatlog" class="mono"></div>
-    <div class="row">
-      <input id="msg" placeholder="Say something…" onkeydown="if(event.key==='Enter'){sendMsg()}"/>
-      <button onclick="sendMsg()">Send</button>
+  <!-- The conversation is the primary way to use Bartholomew, so it is the
+       first and largest thing on the page. This session owns the human-facing
+       interaction surface only: what the backend can actually do is decided
+       by the runtime contract, and this panel must never imply more than that.
+       If a message cannot be answered, it says so (see sendMsg). -->
+  <div class="card" id="chat-card">
+    <h3>💬 Talk to Bartholomew</h3>
+    <div id="chat-attention" class="chat-attention" style="display:none"></div>
+    <div id="chatlog" aria-live="polite" aria-label="Conversation transcript"></div>
+    <!-- F3: first-use orientation, in the one place a new user is already
+         looking. Deliberately not an onboarding wizard and not a modal --
+         the page previously opened with a full-screen deployment-guidance
+         modal over it before anything had been said, which had to be
+         dismissed before the app could be used at all.
+
+         It removes itself on the first message rather than needing to be
+         dismissed, and it states only what is actually true right now:
+         his live state comes from the presence strip, and the capability
+         line is filled in from /api/health rather than asserted here. -->
+    <div id="first-use" class="first-use">
+      <strong>This is where you talk to Bartholomew.</strong> Type below and press Enter.
+      <ul>
+        <li id="first-use-capability">Checking what he can currently do…</li>
+        <li>His current state is always shown at the top of the page, next to his name —
+            including whether the <strong>Parking Brake</strong> is on, which halts him.</li>
+        <li>What he remembers about you is under
+            <a href="#needs-attention" onclick="scrollToAttention(event)">What Bartholomew remembers</a>,
+            where you can correct or delete any of it.</li>
+        <li>Engineering internals live under
+            <a href="#/workshop" onclick="showView('workshop')">Workshop</a>. You do not need them.</li>
+      </ul>
     </div>
+    <div id="chat-thinking" class="thinking" style="display:none">
+      <span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>
+      <span>Bartholomew is thinking…</span>
+    </div>
+    <div class="chat-compose">
+      <textarea id="msg" rows="2"
+                placeholder="Tell Bartholomew what you need…"
+                aria-label="Message to Bartholomew"
+                onkeydown="chatKeydown(event)"></textarea>
+      <button id="chat-send" class="primary" onclick="sendMsg()">Send</button>
+    </div>
+    <div class="chat-hint">Enter sends · Shift+Enter starts a new line</div>
   </div>
+
+  <h2 class="section-heading" id="needs-attention">Needs your attention</h2>
 
   <!-- Consent-handler fix: Pending Memory Consent.
        Sits directly under the conversation, because a pending write is a
@@ -190,13 +428,43 @@
     <div id="awaiting-response-list"></div>
   </div>
 
+  <h2 class="section-heading">What Bartholomew remembers</h2>
+
+  <!-- Memory Agency. The user can see, correct and delete what is stored
+       about them. Every action here goes through the existing single memory
+       authority via /api/memory -- nothing in this panel decides what may be
+       stored, kept or shown. Deleting is explicit and confirmed; nothing is
+       ever inferred from conversational text. -->
+  <div class="card" id="memory-card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">🧾 Memories</h3>
+      <div class="row">
+        <a id="memory-export" href="#" onclick="exportMemories(event)"
+           style="color:#60a5fa;font-size:13px">Download a copy</a>
+        <button onclick="refreshMemories()">Refresh</button>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <input id="memory-search" placeholder="Search what he remembers…"
+             aria-label="Search memories"
+             onkeydown="if(event.key==='Enter'){refreshMemories()}"/>
+      <select id="memory-kind" aria-label="Filter memories by type" onchange="refreshMemories()">
+        <option value="">All types</option>
+      </select>
+    </div>
+    <div id="memory-summary" class="memory-summary"></div>
+    <div id="memory-list"></div>
+  </div>
+
+  <h2 class="section-heading">Safety &amp; privacy</h2>
+
   <!-- Stage 1 (S1.1): Parking Brake -->
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
       <h3 style="margin:0">🅿️ Parking Brake</h3>
       <span id="brake-status" class="badge">brake: checking…</span>
     </div>
-    <div class="row" style="margin-bottom:8px">
+    <div class="row brake-scope-row" style="margin-bottom:8px">
       <label><input type="checkbox" class="brake-scope" value="global"/> global</label>
       <label><input type="checkbox" class="brake-scope" value="skills"/> skills</label>
       <label><input type="checkbox" class="brake-scope" value="sight"/> sight</label>
@@ -208,8 +476,31 @@
       <button class="dismiss" onclick="engageBrake()">⛔ Engage</button>
       <button class="ack" onclick="disengageBrake()">✓ Disengage</button>
       <button onclick="refreshBrake()">Refresh</button>
+      <a href="#/workshop" onclick="showView('workshop')"
+         style="color:#60a5fa;font-size:13px;margin-left:4px">View the record of brake actions →</a>
     </div>
+    <div id="brake-checked" class="brake-checked">state not yet read</div>
     <div id="brake-detail" class="mono" style="margin-top:8px;color:#6b7280"></div>
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;color:#9ca3af;font-size:13px">What do these scopes stop?</summary>
+      <div style="font-size:13px;color:#9ca3af;margin-top:8px;line-height:1.6">
+        Ticking no box and pressing Engage applies the brake <strong>globally</strong>.
+        Ticking boxes restricts it to those areas only.
+        <ul style="margin:8px 0 0;padding-left:20px">
+          <li><strong>global</strong> — everything below, together.</li>
+          <li><strong>skills</strong> — Bartholomew stops running skills/tools.</li>
+          <li><strong>sight</strong> — visual input paths.</li>
+          <li><strong>voice</strong> — voice input/output paths.</li>
+          <li><strong>scheduler</strong> — his own background activity stops.</li>
+          <li><strong>training</strong> — no new material is taken in.</li>
+        </ul>
+        <p style="margin:8px 0 0">
+          The brake is enforced in Governance, not here. This panel reads and sets it;
+          if the reading cannot be taken it says <em>UNKNOWN</em> rather than showing
+          &ldquo;disengaged&rdquo;.
+        </p>
+      </div>
+    </details>
   </div>
 
   <!-- Stage 1 (S1.3): Notification Settings -->
@@ -236,16 +527,48 @@
   </div>
 
 
-  <!-- System / Advanced.
-       Everything below is diagnostic or configurational. It is collapsed by
-       default so an ordinary session opens on the conversation rather than on
-       a dashboard; nothing is removed, and one click restores the full
-       developer view this page has always had. -->
-  <details id="advanced-panels" style="margin-top:18px">
-    <summary style="cursor:pointer;color:#6b7280;padding:8px 0">
-      ⚙️ System &amp; diagnostics — deployment guide, audit, self-state, persona,
-      episodes, reflections
-    </summary>
+  </section><!-- /view-home -->
+
+  <!-- Workshop: engineering and diagnostic instrumentation.
+       Previously this was a <details> collapsed inside the same column, which
+       still put an "expand the developer console" control in the middle of
+       the ordinary experience and, once expanded, restored the flat wall.
+       It is now a separate view.
+
+       Governance Audit is here because it is a technical event log, not
+       because it is unimportant: it is the record of brake actions, and the
+       ordinary Parking Brake card links straight to it. -->
+  <section id="view-workshop" role="tabpanel" aria-labelledby="tab-workshop" hidden>
+    <div class="card" style="border-color:#374151;background:#0f1620">
+      <div style="color:#9ca3af;font-size:13px;line-height:1.6">
+        <strong style="color:#e8f0fe">Workshop</strong> — engineering instrumentation
+        for inspecting and adjusting the running system. These are internals:
+        useful for diagnosis, not needed to use Bartholomew.
+        Safety controls stay on the <a href="#/" onclick="showView('home')"
+        style="color:#60a5fa">Bartholomew</a> view.
+      </div>
+    </div>
+
+  <!-- Runtime status. The kernel/nudge/reflection/working-memory badges and
+       the raw health JSON are diagnostics. What an ordinary user actually
+       needs from this reading -- is he online, can he think -- is carried by
+       the presence strip in the header, on every view. -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h3 style="margin:0">📊 Runtime Status</h3>
+      <button onclick="refreshHealth()">Refresh Status</button>
+    </div>
+    <div class="row">
+      <span id="kernel-status" class="badge">kernel: checking…</span>
+      <span id="nudge-count" class="badge">nudges: …</span>
+      <span id="last-reflection" class="badge">reflection: …</span>
+      <span id="wm-tokens" class="badge">WM: …</span>
+    </div>
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;color:#6b7280">Full health JSON</summary>
+      <div id="health" class="mono" style="margin-top:8px"></div>
+    </details>
+  </div>
 
   <!-- Stage 1 (S1.6): Deployment Guide reference card -->
   <div class="card">
@@ -398,26 +721,25 @@
     <div id="reflection-weekly" class="reflection-content mono" style="display:none"></div>
   </div>
 
-  <!-- Water (existing legacy panel).
-       Labelled unavailable because it is: this panel calls /api/water/today
-       and /api/water/log, and neither endpoint exists in the API bridge --
-       both 404 on every load. RISKS.md's hydration/water-logging tech-debt
-       entry describes them as "live, working, legacy code", which is
-       inaccurate; only the panel is real. Left in place and labelled rather
-       than removed, because removing the legacy water code is a separate,
-       explicitly unapproved decision recorded in that same entry, and
-       implementing the missing endpoints is out of scope for this slice. -->
-  <div class="card">
-    <h3>💧 Water <span class="badge" style="color:#f87171;border-color:#7f1d1d">endpoints not implemented</span></h3>
-    <div class="row">
-      <button onclick="addWater(250)">+250ml</button>
-      <button onclick="addWater(500)">+500ml</button>
-      <span id="total" class="badge">today: … ml</span>
-      <button onclick="refreshWater()">Refresh</button>
-    </div>
-  </div>
+  <!-- Water/hydration: ordinary controls removed (D4 / MF-F003 / B-F005).
+       This panel offered enabled +250ml / +500ml buttons and a running
+       total. The two hydration endpoints it called do not exist in the API
+       bridge and never did -- every click 404'd and the total rendered
+       "today: undefined ml". Labelling the panel "endpoints not implemented"
+       while leaving the buttons clickable still presented a dead feature as
+       an ordinary-user control.
 
-  </details>
+       Decision D4 puts Water/hydration outside current ordinary scope, so
+       the controls are gone rather than repaired. Scope discipline: D4 also
+       requires that the canonical RISKS.md hydration entry be amended rather
+       than a competing authority created, and that legacy data/model
+       disposition is handled separately and must not silently delete
+       historical data. This change does neither of those things -- it removes
+       ordinary-user controls only. No table is dropped, no row is deleted, no
+       risk entry is rewritten here, and the two absent endpoints stay absent.
+       See the sprint handoff for the residual D4 items. -->
+
+  </section><!-- /view-workshop -->
 
   <script>
     const API = location.origin;
@@ -428,11 +750,16 @@
       try{
         const r = await fetch(API + "/api/health");
         const j = await r.json();
-        document.getElementById("health").textContent = JSON.stringify(j, null, 2);
+        setPresenceHealth(j);
+        const healthEl = document.getElementById("health");
+        if(healthEl) healthEl.textContent = JSON.stringify(j, null, 2);
 
         // Update kernel status badge
         const kernelEl = document.getElementById("kernel-status");
-        if(j.kernel_online){
+        if(!kernelEl){
+          // Workshop view not rendered in this document; presence above
+          // already carries the user-relevant part of this reading.
+        } else if(j.kernel_online){
           kernelEl.textContent = "kernel: online";
           kernelEl.className = "badge kernel-online";
         } else {
@@ -441,19 +768,28 @@
         }
 
         // Update nudge count badge
-        if(j.nudges_pending_count !== undefined){
-          document.getElementById("nudge-count").textContent = `nudges: ${j.nudges_pending_count}`;
+        const nudgeEl = document.getElementById("nudge-count");
+        if(nudgeEl && j.nudges_pending_count !== undefined){
+          nudgeEl.textContent = `nudges: ${j.nudges_pending_count}`;
         }
 
         // Update last reflection badge
-        if(j.last_daily_reflection){
+        const reflEl = document.getElementById("last-reflection");
+        if(reflEl && j.last_daily_reflection){
           const d = new Date(j.last_daily_reflection);
-          document.getElementById("last-reflection").textContent = `reflection: ${d.toLocaleDateString()}`;
+          reflEl.textContent = `reflection: ${d.toLocaleDateString()}`;
         }
       }catch(e){
-        document.getElementById("health").textContent = "health failed: " + e;
-        document.getElementById("kernel-status").textContent = "kernel: error";
-        document.getElementById("kernel-status").className = "badge kernel-offline";
+        // The status reading itself failed. Say unknown; do not leave the
+        // last good reading standing as if it were current.
+        setPresenceHealth({ kernel_online: false, model_status: "unreadable" });
+        const healthEl = document.getElementById("health");
+        if(healthEl) healthEl.textContent = "health failed: " + e;
+        const kernelEl2 = document.getElementById("kernel-status");
+        if(kernelEl2){
+          kernelEl2.textContent = "kernel: error";
+          kernelEl2.className = "badge kernel-offline";
+        }
       }
     }
 
@@ -473,6 +809,53 @@
       }
     }
 
+    // PB-F002. Engaging or releasing the brake changes what other governed
+    // panels are reporting -- notifications, the consent inbox, the
+    // awaiting-response queue, the audit log, drives. Those panels each
+    // refreshed only on their own timer or their own Refresh button, so
+    // after a brake transition the page showed a mix of post-transition and
+    // pre-transition state, and the stale half looked exactly as
+    // authoritative as the fresh half. The Test #1 matrix hit this in all 48
+    // cases containing `global` or `skills`.
+    //
+    // The mechanism is deliberately the smallest one this architecture
+    // supports: the brake endpoint already returns a monotonic `revision`,
+    // and this page already polls it on a 15s safety cadence. So whenever
+    // the observed revision differs from the one we last rendered against,
+    // re-read the dependent panels. That covers a transition made from this
+    // page, from another tab, from the CLI, or from curl -- none of which a
+    // "refresh after my own button click" fix would catch.
+    //
+    // This sets no numeric freshness *policy*. UI-SYNC001b deliberately
+    // leaves the critical-state freshness/fail-safe bound unresolved, and
+    // nothing here decides it: the existing 15s poll is reused as-is, and
+    // the reading is stamped with the time it was taken (below) so a user
+    // can see how old it is rather than being told it is current.
+    let brakeRevisionRendered = null;
+
+    async function revalidateBrakeDependents(){
+      // Fire-and-report: one panel failing must not stop the others, and each
+      // of these already renders its own failure truthfully.
+      await Promise.allSettled([
+        refreshNotificationSettings(),
+        refreshPendingConsent(),
+        refreshAwaitingResponse(),
+        refreshAudit(),
+        refreshNudges(),
+        refreshSelfState(),
+        refreshHealth(),
+        refreshMemories(),
+      ]);
+    }
+
+    function stampBrakeReading(ok){
+      const el = document.getElementById("brake-checked");
+      if(!el) return;
+      const now = new Date().toLocaleTimeString();
+      el.textContent = ok ? `state read at ${now}` : `last read attempt failed at ${now}`;
+      el.className = ok ? "brake-checked" : "brake-checked brake-checked-stale";
+    }
+
     async function refreshBrake(){
       try{
         const r = await fetch(API + "/api/governance/brake");
@@ -481,6 +864,22 @@
         }
         const j = await r.json();
         brakeRevision = j.revision;
+        stampBrakeReading(true);
+        setPresenceBrake({ engaged: !!j.engaged, scopes: j.scopes || [], unreachable: false });
+
+        // Revision moved (including the very first read) -> dependent
+        // governed state may no longer be what those panels are showing.
+        if(brakeRevisionRendered !== j.revision){
+          const isFirstRead = brakeRevisionRendered === null;
+          brakeRevisionRendered = j.revision;
+          if(!isFirstRead){
+            appendChatTurn('system',
+              j.engaged
+                ? `Parking Brake ENGAGED (${j.scopes && j.scopes.length ? j.scopes.join(', ') : 'global'}). Refreshing dependent state.`
+                : "Parking Brake released. Refreshing dependent state.");
+          }
+          revalidateBrakeDependents();
+        }
 
         const el = document.getElementById("brake-status");
         if(j.engaged){
@@ -498,6 +897,8 @@
         document.getElementById("brake-status").textContent = "brake: UNKNOWN (status unreachable)";
         document.getElementById("brake-status").className = "badge kernel-offline";
         document.getElementById("brake-detail").textContent = String(e);
+        stampBrakeReading(false);
+        setPresenceBrake({ engaged: null, scopes: [], unreachable: true });
       }
     }
 
@@ -518,7 +919,7 @@
           return;
         }
         await refreshBrake();
-        await refreshAudit();
+        await revalidateBrakeDependents();
       }catch(e){
         alert("Failed to engage brake: " + e);
       }
@@ -545,7 +946,7 @@
           return;
         }
         await refreshBrake();
-        await refreshAudit();
+        await revalidateBrakeDependents();
       }catch(e){
         alert("Failed to disengage brake: " + e);
       }
@@ -697,6 +1098,7 @@
         const j = await r.json();
         const entries = j.entries || [];
         setConsentAttention(entries.length);
+        setChatAttention('consent', entries.length);
 
         if(entries.length === 0){
           el.innerHTML = '<div class="empty-state">No memories awaiting consent. You\'re all caught up! ✨</div>';
@@ -708,8 +1110,8 @@
             <div class="row" style="justify-content:space-between">
               <span class="nudge-kind">${escapeHtml(e.kind)} · ${escapeHtml(e.key)}</span>
               <div class="row">
-                <button class="ack" onclick="approvePendingConsent(${e.id})">✓ Approve</button>
-                <button class="dismiss" onclick="denyPendingConsent(${e.id})">✕ Deny</button>
+                <button class="ack" onclick="approvePendingConsent(${Number(e.id)})">✓ Approve</button>
+                <button class="dismiss" onclick="denyPendingConsent(${Number(e.id)})">✕ Deny</button>
               </div>
             </div>
             <div class="nudge-msg">${escapeHtml(e.value)}</div>
@@ -763,31 +1165,87 @@
         }
         const j = await r.json();
         const entries = (j.entries || []).filter(e => e.status !== 'resolved');
+        setChatAttention('awaiting', entries.length);
 
         if(entries.length === 0){
           el.innerHTML = '<div class="empty-state">Nothing awaiting a reply. You\'re all caught up! ✨</div>';
           return;
         }
 
-        el.innerHTML = entries.map(e => `
-          <div class="nudge-item">
-            <div class="row" style="justify-content:space-between">
-              <span class="nudge-kind">${escapeHtml(e.status)} · ${escapeHtml(e.origin_surface)}</span>
-              <div class="row">
-                <button class="dismiss" onclick="resolveAwaitingResponse(${e.id})">✕ Resolve</button>
-              </div>
-            </div>
-            <div class="nudge-msg">${escapeHtml(e.subject)}</div>
-            <div class="nudge-ts">
-              opened: ${escapeHtml(e.opened_at)} ·
-              due: ${escapeHtml(e.due_at || '—')} ·
-              reminders: ${e.reminder_count}
-            </div>
-          </div>
-        `).join('');
+        // Overdue first, then soonest-due, then oldest. These are durable
+        // obligations: the one that has already slipped is the one that
+        // needs the eye, and it used to be wherever the store happened to
+        // return it.
+        entries.sort((a, b) => {
+          const da = dueMillis(a), db = dueMillis(b);
+          if(da !== db) return da - db;
+          return String(a.opened_at).localeCompare(String(b.opened_at));
+        });
+
+        el.innerHTML = entries.map(renderAwaitingItem).join('');
       }catch(e){
         el.innerHTML = `<div class="empty-state">Failed to load awaiting-response queue: ${escapeHtml(e.message)}</div>`;
       }
+    }
+
+    // F1: this queue is a durable obligation record with an approved role.
+    // Its *authority* is untouched here; only how it reads. Previously each
+    // item led with a raw status enum and an origin-surface token, and
+    // printed two ISO timestamps -- so "reminded · chat" over an ISO string
+    // was doing the work of telling someone they were three days late
+    // replying to something.
+    const AWAITING_STATUS = {
+      open:      { label: "waiting",       cls: "" },
+      reminded:  { label: "reminded you",  cls: "await-warn" },
+      escalated: { label: "escalated",     cls: "await-alert" },
+    };
+
+    function dueMillis(e){
+      // No due date sorts last, not first: absence of a deadline is not
+      // urgency. Number.MAX_SAFE_INTEGER rather than Infinity so the
+      // subtraction in the comparator stays a real number.
+      if(!e.due_at) return Number.MAX_SAFE_INTEGER;
+      const t = Date.parse(e.due_at);
+      return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
+    }
+
+    // Plain language for a deadline, in either direction.
+    function describeDue(e){
+      if(!e.due_at) return { text: "no date set", cls: "" };
+      const t = Date.parse(e.due_at);
+      if(Number.isNaN(t)) return { text: `due ${e.due_at}`, cls: "" };
+      const days = Math.round((t - Date.now()) / 86400000);
+      if(days < 0) return { text: `overdue by ${Math.abs(days)} ${Math.abs(days) === 1 ? 'day' : 'days'}`, cls: "await-alert" };
+      if(days === 0) return { text: "due today", cls: "await-warn" };
+      if(days === 1) return { text: "due tomorrow", cls: "await-warn" };
+      return { text: `due in ${days} days`, cls: "" };
+    }
+
+    function renderAwaitingItem(e){
+      const status = AWAITING_STATUS[e.status] || { label: e.status, cls: "" };
+      const due = describeDue(e);
+      const reminders = e.reminder_count
+        ? ` · reminded ${e.reminder_count} ${e.reminder_count === 1 ? 'time' : 'times'}`
+        : '';
+
+      return `
+        <div class="nudge-item">
+          <div class="row" style="justify-content:space-between">
+            <span class="nudge-kind ${status.cls}">${escapeHtml(status.label)}</span>
+            <div class="row">
+              <button class="ack" onclick="resolveAwaitingResponse(${Number(e.id)}, 'reply_received')"
+                      title="You got the reply you were waiting for.">✓ Got a reply</button>
+              <button class="dismiss" onclick="resolveAwaitingResponse(${Number(e.id)}, 'user_dismissed')"
+                      title="You no longer need this reply.">✕ No longer needed</button>
+            </div>
+          </div>
+          <div class="nudge-msg">${escapeHtml(e.subject)}</div>
+          <div class="nudge-ts">
+            <span class="${due.cls}">${escapeHtml(due.text)}</span> ·
+            opened ${escapeHtml(formatTimeAgo(e.opened_at) || e.opened_at)}${escapeHtml(reminders)}
+          </div>
+        </div>
+      `;
     }
 
     async function openAwaitingResponse(){
@@ -811,12 +1269,16 @@
       }
     }
 
-    async function resolveAwaitingResponse(id){
+    // The store already distinguishes reply_received from user_dismissed, and
+    // that distinction is the difference between an obligation that was met
+    // and one that was dropped. Every resolution used to be recorded as
+    // user_dismissed regardless, so the record could not tell them apart.
+    async function resolveAwaitingResponse(id, resolution){
       try{
         const r = await fetch(API + `/api/awaiting-response/${id}/resolve`, {
           method: "POST",
           headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ resolution: "user_dismissed", actor: "user" })
+          body: JSON.stringify({ resolution: resolution || "user_dismissed", actor: "user" })
         });
         if(!r.ok){
           alert("Failed to resolve: HTTP " + r.status);
@@ -936,7 +1398,17 @@
         const snap = j.snapshot || {};
 
         // Update WM token badge
-        document.getElementById("wm-tokens").textContent = `WM: ${j.working_memory_tokens || 0} tokens`;
+        // working_memory_tokens is WorkingMemory.get_token_usage(), a
+        // (current, budget) tuple -- so it arrives as a two-element JSON
+        // array. Interpolating it directly rendered "WM: 0,4000 tokens".
+        // Same class of defect as MF-F001: a real value, displayed wrong.
+        const wmEl = document.getElementById("wm-tokens");
+        if(wmEl){
+          const wm = j.working_memory_tokens;
+          wmEl.textContent = Array.isArray(wm)
+            ? `WM: ${wm[0]} / ${wm[1]} tokens`
+            : `WM: ${typeof wm === 'number' ? wm : 0} tokens`;
+        }
 
         // Update affect
         const affect = snap.affect || {};
@@ -944,11 +1416,26 @@
         updateAffect('arousal', affect.arousal || 0);
         updateAffect('energy', affect.energy || 0);
 
-        // Update attention
+        // Update attention.
+        //
+        // MF-F001: these read `attention.target` / `.type` / `.intensity`,
+        // but AttentionState.to_dict() has always emitted `focus_target`,
+        // `focus_type` and `focus_intensity`. Every field missed, so the
+        // panel silently rendered its fallbacks -- "idle", "diffuse", 0.00 --
+        // no matter what the kernel was actually attending to. The old names
+        // are kept as a secondary fallback so this stays correct if the
+        // serialiser is ever widened.
         const attention = snap.attention || {};
-        document.getElementById("attention-target").textContent = attention.target || 'idle';
-        document.getElementById("attention-type").textContent = attention.type || 'diffuse';
-        const intensity = attention.intensity || 0;
+        const focusTarget = attention.focus_target ?? attention.target;
+        const focusType = attention.focus_type ?? attention.type;
+        // focus_target is null when nothing is focused, and focus_type then
+        // reads "idle" too -- rendering both gave a redundant "idle / idle".
+        // Say what is actually true instead.
+        document.getElementById("attention-target").textContent =
+          focusTarget || 'nothing in particular';
+        document.getElementById("attention-type").textContent =
+          focusTarget ? (focusType || 'diffuse') : '';
+        const intensity = attention.focus_intensity ?? attention.intensity ?? 0;
         document.getElementById("attention-intensity-val").textContent = intensity.toFixed(2);
         document.getElementById("attention-intensity-fill").style.width = (intensity * 100) + '%';
 
@@ -1000,6 +1487,29 @@
       }
     }
 
+    // MF-F001: the API now serialises `effective_activation` (the clamped
+    // current_activation + context_boost the kernel actually sorts on). The
+    // old code read that name off a payload that never carried it and fell
+    // through `|| 0`, rendering five drives as 0.00 while the kernel held
+    // 0.57/0.54/0.51/0.51/0.48. Recomputing from the stored fields is the
+    // fallback, so an older API build still renders truthfully rather than
+    // as zero -- and `0` is only shown when the value really is zero.
+    function driveActivation(d){
+      if(typeof d.effective_activation === 'number') return d.effective_activation;
+      if(typeof d.current_activation === 'number'){
+        return Math.max(0, Math.min(1, d.current_activation + (d.context_boost || 0)));
+      }
+      if(typeof d.activation === 'number') return d.activation;
+      return 0;
+    }
+
+    // Drive ids are snake_case internals ("protect_user_wellbeing").
+    // Presented to an ordinary reader they should look like words.
+    function driveLabel(id){
+      if(!id) return 'unknown';
+      return String(id).replace(/_/g, ' ');
+    }
+
     async function refreshDrives(){
       try{
         const r = await fetch(API + "/api/self/drives/top?limit=5");
@@ -1011,21 +1521,25 @@
           return;
         }
 
-        document.getElementById("drives-list").innerHTML = drives.map(d => `
+        document.getElementById("drives-list").innerHTML = drives.map(d => {
+          const act = driveActivation(d);
+          return `
           <div class="drive-item">
             <div class="drive-header">
-              <span class="drive-name">${escapeHtml(d.drive_id || d.id)}</span>
-              <span class="drive-value">${(d.effective_activation || d.activation || 0).toFixed(2)}</span>
+              <span class="drive-name">${escapeHtml(driveLabel(d.drive_id || d.id))}</span>
+              <span class="drive-value">${act.toFixed(2)}</span>
             </div>
             <div class="drive-bar">
-              <div class="drive-fill" style="width:${Math.min(100, (d.effective_activation || d.activation || 0) * 100)}%"></div>
+              <div class="drive-fill" style="width:${Math.min(100, act * 100)}%"></div>
             </div>
           </div>
-        `).join('');
+        `;}).join('');
       }catch(e){
         console.error("Drives refresh failed:", e);
       }
     }
+
+    let activeGoals = [];
 
     function renderGoals(goals){
       const el = document.getElementById("goals-list");
@@ -1033,12 +1547,23 @@
         el.innerHTML = '<span class="empty-state">No active goals</span>';
         return;
       }
-      el.innerHTML = goals.map(g => `
+      // Same defect the memory buttons had, and here the value is typed
+      // straight into the "Add a new goal" box: escapeHtml() does not escape
+      // an apostrophe, so a goal containing one broke out of this string.
+      // Address by index and bind a listener instead.
+      activeGoals = goals;
+      el.innerHTML = goals.map((g, i) => `
         <span class="goal-tag">
           ${escapeHtml(g)}
-          <button onclick="completeGoal('${escapeHtml(g)}')" title="Complete">✓</button>
+          <button data-goal-index="${i}" title="Complete">✓</button>
         </span>
       `).join('');
+      el.querySelectorAll("[data-goal-index]").forEach(btn => {
+        const i = Number(btn.dataset.goalIndex);
+        btn.addEventListener("click", () => {
+          if(activeGoals[i] !== undefined) completeGoal(activeGoals[i]);
+        });
+      });
     }
 
     async function addGoal(){
@@ -1090,13 +1615,19 @@
         const j2 = await r2.json();
         const packs = j2.packs || [];
 
-        document.getElementById("persona-list").innerHTML = packs.map(p => `
+        // Same construct, same fix: the pack id never enters handler source.
+        const personaEl = document.getElementById("persona-list");
+        personaEl.innerHTML = packs.map((p, i) => `
           <button class="persona-btn ${p.is_active ? 'active' : ''}"
-                  onclick="switchPersona('${escapeHtml(p.pack_id)}')"
+                  data-pack-index="${i}"
                   ${p.is_active ? 'disabled' : ''}>
             ${escapeHtml(p.name || p.pack_id)}
           </button>
         `).join('');
+        personaEl.querySelectorAll("[data-pack-index]").forEach(btn => {
+          const p = packs[Number(btn.dataset.packIndex)];
+          if(p) btn.addEventListener("click", () => switchPersona(p.pack_id));
+        });
 
       }catch(e){
         console.error("Persona refresh failed:", e);
@@ -1180,6 +1711,8 @@
         const r = await fetch(API + "/api/nudges/pending");
         const j = await r.json();
 
+        setChatAttention('nudges', (j.nudges || []).length);
+
         if(!j.nudges || j.nudges.length === 0){
           listEl.innerHTML = '<div class="empty-state">No pending nudges. You\'re all caught up! ✨</div>';
           return;
@@ -1190,8 +1723,8 @@
             <div class="row" style="justify-content:space-between">
               <span class="nudge-kind">${escapeHtml(n.kind || 'nudge')}</span>
               <div class="row">
-                <button class="ack" onclick="ackNudge(${n.id})">✓ Ack</button>
-                <button class="dismiss" onclick="dismissNudge(${n.id})">✕ Dismiss</button>
+                <button class="ack" onclick="ackNudge(${Number(n.id)})">✓ Ack</button>
+                <button class="dismiss" onclick="dismissNudge(${Number(n.id)})">✕ Dismiss</button>
               </div>
             </div>
             <div class="nudge-msg">${escapeHtml(n.message || n.content || '')}</div>
@@ -1272,68 +1805,741 @@
     }
 
     // === Chat ===
+    //
+    // Cross-sprint seam. appendChatTurn() takes a role, so a real action
+    // result from the parallel capability sprint (a task that ran, a reminder
+    // that fired) can be rendered as its own turn once /api/chat actually
+    // reports one -- the styling and the transcript structure are already
+    // here. Nothing is rendered speculatively: this UI shows only fields the
+    // response really carries, so until that backend exists there is nothing
+    // to display and no placeholder pretending otherwise.
+    // TECH-F001. This used to be:
+    //
+    //     const j = await r.json();
+    //     appendChat(j.reply + ...)
+    //
+    // with no `r.ok` check. fetch() only rejects on a network failure, so an
+    // HTTP 503 -- exactly what /api/chat returns when the model backend is
+    // unreachable, carrying a truthful `detail` naming backend, model and
+    // reason -- resolved normally, `j.reply` was absent, and the user was
+    // shown the literal string `undefined` in the transcript. Under a
+    // Governance block the same path produced the same thing. The backend was
+    // telling the truth the whole time; the UI was throwing it away.
+    //
+    // Nothing here changes backend failure semantics. It reads the failure
+    // the API already reports and renders it as a failure.
     async function sendMsg(){
       const el = document.getElementById("msg");
       const val = el.value.trim();
       if(!val) return;
       el.value = "";
-      appendChat("> " + val);
+      appendChatTurn('user', val);
+      setThinking(true);
       try{
         const r = await fetch(API + "/api/chat", {
           method: "POST",
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({message: val})
         });
-        const j = await r.json();
-        appendChat(j.reply + (j.tone ? `\n[tone:${j.tone}]` : "") + (j.emotion? ` [emotion:${j.emotion}]` : ""));
+
+        if(!r.ok){
+          appendChatTurn('error', await describeHttpFailure(r, "Bartholomew could not answer"));
+          return;
+        }
+
+        let j;
+        try{
+          j = await r.json();
+        }catch(parseErr){
+          appendChatTurn('error', "Bartholomew could not answer — the response was not readable JSON.");
+          return;
+        }
+
+        // A 2xx with no reply field is itself a defect, not a blank message.
+        // Say so rather than printing "undefined" or nothing at all.
+        if(typeof j.reply !== 'string' || j.reply === ''){
+          appendChatTurn('error', "Bartholomew returned an empty reply. This is a defect, not an answer.");
+          return;
+        }
+
+        const meta = [];
+        if(j.tone) meta.push(`tone: ${j.tone}`);
+        if(j.emotion) meta.push(`emotion: ${j.emotion}`);
+        appendChatTurn('bartholomew', j.reply, meta.join(' · '));
+
+        // WP-A2b: the API reports a lost provenance record on an otherwise
+        // successful reply. That is a degraded state the user is entitled to
+        // see -- the answer is real, its audit trail is not.
+        if(j.audit_degraded){
+          appendChatTurn('warn',
+            "This reply was delivered, but its audit/provenance record was not written" +
+            (j.audit_error ? ` (${j.audit_error})` : "") + ".");
+        }
       }catch(e){
-        appendChat("! chat failed: " + e);
+        // Genuine network/transport failure -- the request never got an
+        // answer. Distinct from an answered request that failed.
+        appendChatTurn('error', "Could not reach Bartholomew: " + (e && e.message ? e.message : String(e)));
+      }finally{
+        setThinking(false);
       }
     }
 
-    function appendChat(t){
+    // Turn a non-2xx Response into the truthful sentence behind it.
+    // FastAPI's HTTPException bodies are {"detail": "..."}; a validation
+    // error's detail is a list of objects, which must not be stringified
+    // into "[object Object]".
+    async function describeHttpFailure(r, prefix){
+      let detail = "";
+      try{
+        const j = await r.json();
+        if(typeof j.detail === 'string'){
+          detail = j.detail;
+        }else if(Array.isArray(j.detail)){
+          detail = j.detail.map(d => d && d.msg ? d.msg : JSON.stringify(d)).join('; ');
+        }else if(j.detail){
+          detail = JSON.stringify(j.detail);
+        }
+      }catch(e){
+        try{ detail = (await r.text()).slice(0, 400); }catch(e2){ detail = ""; }
+      }
+      const status = `HTTP ${r.status}${r.statusText ? ' ' + r.statusText : ''}`;
+      return detail ? `${prefix} — ${detail} (${status})` : `${prefix} — ${status}`;
+    }
+
+    // Enter sends, Shift+Enter is a newline. The input used to be a single
+    // <input>, so anything longer than a sentence scrolled sideways inside a
+    // one-line box and a newline was impossible -- which quietly discourages
+    // saying anything substantial to him.
+    function chatKeydown(event){
+      if(event.key === 'Enter' && !event.shiftKey && !event.isComposing){
+        event.preventDefault();
+        sendMsg();
+      }
+    }
+
+    // Routine interaction should not require hunting through panels to notice
+    // that something is waiting. This line summarises what the ordinary view
+    // already loaded, next to the conversation, and links to it.
+    //
+    // Counts only -- it does not restate or act on the items, so it cannot
+    // drift out of step with the panels that own them.
+    const chatAttentionCounts = { consent: 0, nudges: 0, awaiting: 0 };
+
+    function setChatAttention(key, count){
+      chatAttentionCounts[key] = count;
+      renderChatAttention();
+    }
+
+    function renderChatAttention(){
+      const el = document.getElementById("chat-attention");
+      if(!el) return;
+      const parts = [];
+      const { consent, nudges, awaiting } = chatAttentionCounts;
+      if(consent) parts.push(`${consent} ${consent === 1 ? 'memory' : 'memories'} waiting for your consent`);
+      if(nudges) parts.push(`${nudges} ${nudges === 1 ? 'nudge' : 'nudges'} from Bartholomew`);
+      if(awaiting) parts.push(`${awaiting} ${awaiting === 1 ? 'reply' : 'replies'} you are waiting on`);
+
+      if(parts.length === 0){
+        el.style.display = "none";
+        el.textContent = "";
+        return;
+      }
+      el.style.display = "block";
+      el.innerHTML = `Waiting for you: ${escapeHtml(parts.join(' · '))} — ` +
+        `<a href="#needs-attention" onclick="scrollToAttention(event)">see what needs attention</a>`;
+    }
+
+    function scrollToAttention(event){
+      event.preventDefault();
+      showView('home');
+      const el = document.getElementById("needs-attention");
+      if(el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    // A transcript of typed turns rather than one appended text blob.
+    //
+    // The old renderer was `el.textContent += "\n" + t` on a single <pre>-ish
+    // div: every line -- your message, his reply, and a backend failure --
+    // arrived in identical monospace with no visual difference between them.
+    // TECH-F001 needs a failure to *look* like a failure, which a shared text
+    // node cannot express. `role` is one of user / bartholomew / error /
+    // warn / system.
+    // Truthful capability line: says what /api/health actually reports, not
+    // what the product would like to claim.
+    function renderFirstUseCapability(){
+      const el = document.getElementById("first-use-capability");
+      if(!el) return;
+      const h = presenceHealth;
+      if(h === null){
+        el.textContent = "Checking what he can currently do…";
+      } else if(h.kernel_online === false){
+        el.textContent = "He is not running right now, so he cannot answer.";
+      } else if(h.model_status === "selected_reachability_unknown"){
+        // Do not promise either outcome: nothing here knows which it is.
+        el.textContent =
+          "He is running. Whether his model will answer could not be checked, so a message may or may not get through.";
+      } else if(h.model_status && h.model_status !== "ready"){
+        el.textContent =
+          `He is running, but cannot think right now (${h.model_status}), so messages will fail until that is fixed.`;
+      } else {
+        el.textContent = "He can hold a conversation and remember things you tell him.";
+      }
+    }
+
+    function appendChatTurn(role, text, meta){
       const el = document.getElementById("chatlog");
-      el.textContent += (el.textContent ? "\n" : "") + t;
+      // The orientation panel has served its purpose once there is a
+      // transcript. It goes away on its own rather than needing dismissal.
+      const firstUse = document.getElementById("first-use");
+      if(firstUse) firstUse.remove();
+      const wrap = document.createElement("div");
+      wrap.className = "turn turn-" + role;
+
+      const who = document.createElement("div");
+      who.className = "turn-who";
+      who.textContent = ({
+        user: "You",
+        bartholomew: "Bartholomew",
+        error: "⚠ Failed",
+        warn: "⚠ Degraded",
+        system: "System",
+      })[role] || role;
+
+      const body = document.createElement("div");
+      body.className = "turn-body";
+      // textContent, not innerHTML -- a reply, or a backend error string, is
+      // never markup here.
+      body.textContent = text;
+
+      wrap.appendChild(who);
+      wrap.appendChild(body);
+      if(meta){
+        const m = document.createElement("div");
+        m.className = "turn-meta";
+        m.textContent = meta;
+        wrap.appendChild(m);
+      }
+      el.appendChild(wrap);
       el.scrollTop = el.scrollHeight;
     }
 
+    // A request in flight is a state the user should be able to see, and it
+    // must end whether the request succeeded or failed (hence the `finally`
+    // in sendMsg). Truthful: it reflects an actual outstanding fetch, not a
+    // timer.
+    function setThinking(on){
+      const ind = document.getElementById("chat-thinking");
+      if(ind) ind.style.display = on ? "flex" : "none";
+      const btn = document.getElementById("chat-send");
+      if(btn) btn.disabled = on;
+      setPresence(on ? "thinking" : null);
+    }
+
     // === Water ===
-    async function refreshWater(){
-      try{
-        const r = await fetch(API + "/api/water/today");
-        const j = await r.json();
-        document.getElementById("total").textContent = `today: ${j.total_ml} ml`;
-      }catch(e){
-        document.getElementById("total").textContent = "today: n/a";
+    // The hydration panel's two functions were removed with it (D4/MF-F003).
+    // They were the only callers of the two absent hydration endpoints; the
+    // "today" reader rendered `undefined ml` from the 404 body, and the
+    // logger swallowed its failure into console.error, so a click looked
+    // like it had worked.
+
+    // === Views ===
+    // Two views, addressed by URL hash so a reload keeps you where you were
+    // and a view can be linked. Not a privilege boundary -- see the comment
+    // on <header> -- a separation of attention.
+    const VIEWS = ["home", "workshop"];
+
+    function showView(name){
+      if(!VIEWS.includes(name)) name = "home";
+      VIEWS.forEach(v => {
+        const panel = document.getElementById("view-" + v);
+        const tab = document.getElementById("tab-" + v);
+        if(panel) panel.hidden = (v !== name);
+        if(tab){
+          tab.classList.toggle("active", v === name);
+          tab.setAttribute("aria-selected", v === name ? "true" : "false");
+        }
+      });
+      const target = name === "home" ? "#/" : "#/" + name;
+      if(location.hash !== target){
+        // replaceState, not assignment: switching views should not stack up
+        // history entries the back button has to walk through.
+        history.replaceState(null, "", target);
       }
     }
 
-    async function addWater(ml){
+    function viewFromHash(){
+      const h = (location.hash || "").replace(/^#\/?/, "");
+      return VIEWS.includes(h) ? h : "home";
+    }
+
+    window.addEventListener("hashchange", () => showView(viewFromHash()));
+
+    // === Memory Agency ===
+    //
+    // Read, correct and forget what Bartholomew has stored about you. Every
+    // call goes to /api/memory, which is a thin translation layer over the
+    // single memory authority -- nothing here decides what may be stored,
+    // kept, or shown, and nothing here bypasses consent, retention or
+    // provenance.
+    //
+    // Deleting is deliberately awkward in the one way that matters: it is a
+    // named record, an explicit button, and a confirmation, and the API
+    // itself refuses without confirm=true. Nothing in this sprint infers a
+    // deletion from conversational text.
+    let memoryKindsLoaded = false;
+    // The rendered page addresses memories by index into this array; the real
+    // kind/key are only ever read from here, never parsed back out of the DOM.
+    let memoryEntries = [];
+
+    async function refreshMemories(){
+      const listEl = document.getElementById("memory-list");
+      const summaryEl = document.getElementById("memory-summary");
+      if(!listEl) return;
+
+      const search = (document.getElementById("memory-search").value || "").trim();
+      const kind = document.getElementById("memory-kind").value;
+      const params = new URLSearchParams({ limit: "200" });
+      if(search) params.set("search", search);
+      if(kind) params.set("kind", kind);
+
       try{
-        await fetch(API + "/api/water/log", {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ml})
-        });
-        await refreshWater();
+        const r = await fetch(API + "/api/memory?" + params.toString());
+        if(!r.ok){
+          listEl.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load memories"))}</div>`;
+          summaryEl.textContent = "";
+          return;
+        }
+        const j = await r.json();
+        const entries = j.entries || [];
+
+        // Truthful count: with a search active the total is the unfiltered
+        // store size, so do not present the filtered page as the whole.
+        summaryEl.textContent = j.filtered
+          ? `${entries.length} shown · ${j.total} stored in total`
+          : `${j.total} ${j.total === 1 ? 'memory' : 'memories'} stored`;
+
+        if(entries.length === 0){
+          listEl.innerHTML = search || kind
+            ? '<div class="empty-state">Nothing stored matches that.</div>'
+            : '<div class="empty-state">Bartholomew has not stored anything about you yet.</div>';
+          return;
+        }
+
+        memoryEntries = entries;
+        listEl.innerHTML = entries.map(renderMemoryItem).join('');
+        bindMemoryActions();
+        if(!memoryKindsLoaded) loadMemoryKinds();
       }catch(e){
-        console.error("Water log failed:", e);
+        listEl.innerHTML = `<div class="empty-state">Could not load memories: ${escapeHtml(e.message)}</div>`;
+        summaryEl.textContent = "";
+      }
+    }
+
+    // A memory is addressed by its position in `memoryEntries`, never by
+    // interpolating its kind/key into markup.
+    //
+    // These buttons used to carry inline handlers built by string
+    // concatenation -- onclick="forgetMemory('${escapeAttr(kind)}', ...)".
+    // That is not safe no matter how the value is escaped: escapeAttr()
+    // turned an apostrophe into &#39;, but the HTML parser decodes character
+    // references *before* the inline handler is compiled as JavaScript, so
+    // the apostrophe came back and a crafted key could close the string and
+    // run same-origin code -- including against the delete and governance
+    // endpoints. Memory keys are not all chosen by this UI (the training
+    // path accepts caller-supplied ids that become keys), so this was
+    // reachable, not theoretical.
+    //
+    // Now the identifier never appears in any markup: the index goes into a
+    // data attribute, listeners are bound with addEventListener, and the real
+    // kind/key are read from the JS array.
+    function renderMemoryItem(m, index){
+      const tags = [];
+      // Governance metadata is absent for a record this process cannot
+      // decrypt. Say so rather than showing the absence of tags as though it
+      // meant "nothing sensitive here".
+      if(m.governance_known === false){
+        tags.push('<span class="memory-tag" title="This record could not be decrypted, so its classification cannot be determined.">classification unknown</span>');
+      }
+      if(m.always_keep){
+        // Honest wording. always_keep is a *recall* policy: it means he will
+        // always bring this up, not that it is protected from deletion. No
+        // delete prohibition exists in this codebase, and implying one would
+        // be inventing a protection the user does not actually have.
+        tags.push('<span class="memory-tag memory-tag-keep" title="Bartholomew will always recall this. It can still be deleted, and deletion is permanent.">always recalled</span>');
+      }
+      if(m.privacy_class){
+        tags.push(`<span class="memory-tag memory-tag-privacy">${escapeHtml(m.privacy_class)}</span>`);
+      }
+      // `always_keep` already has its own, better-worded tag above; showing
+      // the raw category name beside it just repeats it in rule-engine terms.
+      if(m.category && m.category !== 'uncategorised' && m.category !== 'always_keep'){
+        tags.push(`<span class="memory-tag">${escapeHtml(String(m.category).replace(/_/g, ' '))}</span>`);
+      }
+
+      // Not every memory_consent row is a human decision. upsert_memory()'s
+      // embedding flow writes source='upsert_memory', and
+      // persist_embeddings_for() writes source='persist_embeddings_for' --
+      // both bookkeeping. Only approve_pending_sensitive_write() writes
+      // source='consent_approval', and its own code comment is explicit that
+      // this is what "a human explicitly approved this write" looks like.
+      //
+      // Rendering every joined row as "you approved this" invented an
+      // approval the user never gave, on the one panel whose entire purpose
+      // is telling them the truth about their own data.
+      const provenance = memoryProvenance(m);
+
+      const value = m.readable === false
+        ? `<div class="memory-value memory-value-unreadable">${escapeHtml(m.unreadable_reason || 'Stored encrypted; cannot be displayed.')}</div>`
+        : `<div class="memory-value">${escapeHtml(m.value)}</div>`;
+
+      // A record this process cannot read must not offer an edit box: saving
+      // one would overwrite content nobody has actually seen.
+      const editable = m.readable !== false;
+
+      return `
+        <div class="memory-item" data-index="${index}">
+          <div class="memory-head">
+            <div>
+              <div class="memory-key">${escapeHtml(m.key)}</div>
+              <div class="memory-kind">${escapeHtml(m.kind)} · remembered ${escapeHtml(formatTimeAgo(m.ts) || m.ts)}</div>
+            </div>
+            <div class="row">
+              ${editable ? '<button data-act="correct">Correct</button>' : ''}
+              <button class="dismiss" data-act="forget">Forget</button>
+            </div>
+          </div>
+          ${value}
+          <div class="memory-tags">${tags.join('')}</div>
+          <div class="nudge-ts" style="margin-top:6px">${provenance}</div>
+          <div class="memory-editor" style="display:none"></div>
+          <div class="memory-status"></div>
+        </div>
+      `;
+    }
+
+    // The one source that means a person decided. Kept as a list so adding
+    // another genuine approval path is a one-line change here.
+    const HUMAN_CONSENT_SOURCES = ['consent_approval'];
+
+    function memoryProvenance(m){
+      if(!m.consent_at){
+        return 'no explicit consent decision recorded';
+      }
+      const when = escapeHtml(new Date(m.consent_at).toLocaleString());
+      if(HUMAN_CONSENT_SOURCES.includes(m.consent_source)){
+        return `you approved this on ${when}`;
+      }
+      // Truthful and deliberately not dressed up as consent: something was
+      // recorded, by a process, and it was not the user agreeing to anything.
+      const src = m.consent_source ? escapeHtml(m.consent_source) : 'an internal process';
+      return `no explicit approval recorded — a consent row was written by ${src} on ${when}`;
+    }
+
+    function memoryNode(index){
+      return document.querySelector(`.memory-item[data-index="${index}"]`);
+    }
+
+    // One delegated listener per render. Nothing here is built from a stored
+    // value, so no memory content can influence what code runs.
+    function bindMemoryActions(){
+      const listEl = document.getElementById("memory-list");
+      if(!listEl) return;
+      listEl.querySelectorAll(".memory-item [data-act]").forEach(btn => {
+        const item = btn.closest(".memory-item");
+        const index = Number(item.dataset.index);
+        if(!Number.isInteger(index) || !memoryEntries[index]) return;
+        btn.addEventListener("click", () => {
+          if(btn.dataset.act === "correct") beginEditMemory(index);
+          else if(btn.dataset.act === "forget") forgetMemory(index);
+        });
+      });
+    }
+
+    function beginEditMemory(index){
+      const node = memoryNode(index);
+      if(!node) return;
+      const current = node.querySelector(".memory-value").textContent;
+      const editor = node.querySelector(".memory-editor");
+      editor.style.display = "block";
+      editor.innerHTML = `
+        <textarea class="memory-edit" aria-label="Corrected value"></textarea>
+        <div class="row">
+          <button class="ack" data-act="save">Save correction</button>
+          <button data-act="cancel">Cancel</button>
+        </div>
+      `;
+      const box = editor.querySelector("textarea");
+      box.value = current;
+      box.focus();
+      editor.querySelector('[data-act="save"]').onclick = () => saveMemory(index, box.value);
+      editor.querySelector('[data-act="cancel"]').onclick = () => { editor.style.display = "none"; };
+    }
+
+    function setMemoryStatus(index, cls, text){
+      const node = memoryNode(index);
+      if(!node) return;
+      const el = node.querySelector(".memory-status");
+      el.className = "memory-status memory-note " + cls;
+      el.textContent = text;
+    }
+
+    async function saveMemory(index, value){
+      const m = memoryEntries[index];
+      if(!m) return;
+      if(!value || !value.trim()){
+        setMemoryStatus(index, "memory-note-err", "A memory cannot be blank. Use Forget to remove it.");
+        return;
+      }
+      try{
+        const r = await fetch(API + `/api/memory/${encodeURIComponent(m.kind)}/${encodeURIComponent(m.key)}`, {
+          method: "PUT",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ value })
+        });
+        if(!r.ok){
+          setMemoryStatus(index, "memory-note-err",
+            await describeHttpFailure(r, "The correction was not saved"));
+          return;
+        }
+        const j = await r.json();
+        if(j.stored){
+          setMemoryStatus(index, "memory-note-ok", j.detail || "Memory updated.");
+          await refreshMemories();
+          return;
+        }
+        // Governed non-success. It must not look like it worked: the stored
+        // value is unchanged either way, and a queued correction is waiting
+        // in the consent inbox rather than applied.
+        setMemoryStatus(index, "memory-note-warn", j.detail || "The correction was not stored.");
+        if(j.queued_for_consent) await refreshPendingConsent();
+        // The record is gone; the list still shows it. Re-read so the user
+        // sees the state their delete actually produced.
+        if(j.target_changed) await refreshMemories();
+      }catch(e){
+        setMemoryStatus(index, "memory-note-err", "The correction was not saved: " + e.message);
+      }
+    }
+
+    async function forgetMemory(index){
+      const m = memoryEntries[index];
+      if(!m) return;
+      // Explicit and confirmed. The API refuses without confirm=true as well,
+      // so this is a second gate rather than the only one.
+      const ok = confirm(
+        `Permanently forget "${m.key}"?\n\n` +
+        "This deletes it from Bartholomew's memory. It cannot be undone."
+      );
+      if(!ok) return;
+      try{
+        const r = await fetch(
+          API + `/api/memory/${encodeURIComponent(m.kind)}/${encodeURIComponent(m.key)}?confirm=true`,
+          { method: "DELETE" }
+        );
+        if(!r.ok){
+          setMemoryStatus(index, "memory-note-err",
+            await describeHttpFailure(r, "It was not forgotten"));
+          return;
+        }
+        await refreshMemories();
+      }catch(e){
+        setMemoryStatus(index, "memory-note-err", "It was not forgotten: " + e.message);
+      }
+    }
+
+    async function loadMemoryKinds(){
+      try{
+        const r = await fetch(API + "/api/memory/kinds");
+        if(!r.ok) return;
+        const j = await r.json();
+        const sel = document.getElementById("memory-kind");
+        const current = sel.value;
+        sel.innerHTML = '<option value="">All types</option>' + (j.kinds || []).map(k =>
+          // A real double-quoted attribute value, not handler source:
+          // escapeHtml() already escapes the `"` delimiter (and & < >),
+          // which is what this position needs.
+          `<option value="${escapeHtml(k.kind)}">${escapeHtml(k.kind)} (${k.count})</option>`
+        ).join('');
+        sel.value = current;
+        memoryKindsLoaded = true;
+      }catch(e){
+        // A missing filter control is not worth an error banner; the list
+        // itself renders and reports its own failures.
+      }
+    }
+
+    async function exportMemories(event){
+      event.preventDefault();
+      // Fetched rather than a plain link so a failure is reported instead of
+      // navigating the page to an error body.
+      try{
+        const r = await fetch(API + "/api/memory/export");
+        if(!r.ok){
+          alert(await describeHttpFailure(r, "The export could not be produced"));
+          return;
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "bartholomew-memories.json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }catch(e){
+        alert("The export could not be produced: " + e.message);
+      }
+    }
+
+    // === Presence ===
+    // Bartholomew's current state in one place, in the header, on every view.
+    //
+    // Every state here is derived from a real reading. `thinking` means a
+    // chat request is genuinely outstanding; `paused` means the Parking Brake
+    // read back engaged; `degraded` means the model backend reported itself
+    // unreachable; `unknown` means a reading could not be taken at all. There
+    // is deliberately no state the system cannot distinguish -- nothing here
+    // is decoration, and when we do not know, it says so rather than
+    // defaulting to "available".
+    let presenceOverride = null;      // transient, set by setThinking()
+    let presenceHealth = null;        // last /api/health reading
+    let presenceBrake = null;         // last /api/governance/brake reading
+
+    function setPresence(state){
+      presenceOverride = state;
+      renderPresence();
+    }
+
+    function setPresenceHealth(health){
+      presenceHealth = health;
+      renderPresence();
+    }
+
+    function setPresenceBrake(brake){
+      presenceBrake = brake;
+      renderPresence();
+    }
+
+    // Resolve the one state to show, most-urgent first.
+    function resolvePresence(){
+      if(presenceOverride === "unknown"){
+        return { state: "unknown", detail: "a safety reading could not be taken" };
+      }
+      if(presenceBrake && presenceBrake.unreachable){
+        return { state: "unknown", detail: "Parking Brake state unreadable" };
+      }
+      if(presenceBrake && presenceBrake.engaged){
+        const scopes = (presenceBrake.scopes && presenceBrake.scopes.length)
+          ? presenceBrake.scopes.join(", ") : "global";
+        return { state: "paused", detail: `Parking Brake engaged (${scopes})` };
+      }
+      if(presenceOverride === "thinking"){
+        return { state: "thinking", detail: "working on your message" };
+      }
+      // Cross-sprint seam, deliberately unreachable today.
+      //
+      // "Speaking" is a real state only once something is actually producing
+      // speech, and voice output belongs to the parallel capability sprint.
+      // Nothing in this build calls setPresence("speaking"), because there is
+      // no reading that would make it true -- showing it on reply delivery
+      // would be inventing a distinction the system cannot make, which is
+      // exactly what this presence area is not allowed to do.
+      //
+      // The branch and its styling exist so that when TTS lands, wiring it up
+      // is one setPresence() call at the point speech genuinely starts and
+      // stops, with no design decision left to make here.
+      if(presenceOverride === "speaking"){
+        return { state: "speaking", detail: "answering" };
+      }
+      if(presenceHealth === null){
+        return { state: "unknown", detail: "status not yet read" };
+      }
+      if(presenceHealth.kernel_online === false){
+        return { state: "degraded", detail: "kernel offline" };
+      }
+      // `selected_but_unreachable` is an observation: the probe ran and the
+      // backend did not answer. `selected_reachability_unknown` is the
+      // absence of one -- no probe adapter, or the probe timed out -- and it
+      // does NOT establish that chat will fail. Collapsing the two showed a
+      // working-but-unprobeable backend as definitely broken, which is the
+      // same fabrication in the other direction as claiming it is ready.
+      if(presenceHealth.model_status === "selected_reachability_unknown"){
+        return { state: "unknown", detail: "cannot tell whether the model will answer" };
+      }
+      if(presenceHealth.model_status && presenceHealth.model_status !== "ready"){
+        // The probe ran and said no, or the backend is a stub.
+        return { state: "degraded", detail: `model ${presenceHealth.model_status}` };
+      }
+      return { state: "available", detail: "" };
+    }
+
+    function renderPresence(){
+      const stateEl = document.getElementById("presence-state");
+      if(!stateEl) return;
+      const { state, detail } = resolvePresence();
+
+      stateEl.dataset.state = state;
+      stateEl.textContent = state;
+
+      const detailEl = document.getElementById("presence-detail");
+      if(detailEl) detailEl.textContent = detail ? "— " + detail : "";
+
+      const avatar = document.getElementById("presence-avatar");
+      if(avatar) avatar.dataset.state = state;
+
+      // Brake state is safety information: it is repeated in the header so it
+      // is visible from the Workshop view too, not only beside its control.
+      renderFirstUseCapability();
+
+      const safetyEl = document.getElementById("presence-safety");
+      if(safetyEl){
+        if(presenceBrake && presenceBrake.unreachable){
+          safetyEl.textContent = "Parking Brake: UNKNOWN";
+          safetyEl.className = "presence-safety presence-safety-alert";
+        }else if(presenceBrake && presenceBrake.engaged){
+          safetyEl.textContent = "Parking Brake: ENGAGED";
+          safetyEl.className = "presence-safety presence-safety-alert";
+        }else if(presenceBrake){
+          safetyEl.textContent = "Parking Brake: released";
+          safetyEl.className = "presence-safety";
+        }else{
+          safetyEl.textContent = "Parking Brake: not yet read";
+          safetyEl.className = "presence-safety";
+        }
       }
     }
 
     // === Helpers ===
+    // escapeAttr() used to live here, escaping quotes for values interpolated
+    // into inline event handlers. It is gone rather than fixed: escaping
+    // cannot make that construct safe, because the HTML parser decodes
+    // character references before the handler is compiled as JavaScript.
+    // Bind listeners and pass identifiers through DOM data instead --
+    // see bindMemoryActions().
+
     function escapeHtml(str){
       if(!str) return '';
       return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     // === Initial Load ===
+    showView(viewFromHash());
+    renderPresence();
+    // The conversation is where an ordinary session starts, so the caret
+    // starts there. Only on the ordinary view -- stealing focus while someone
+    // is reading Workshop would be wrong.
+    if(viewFromHash() === "home"){
+      const msgEl = document.getElementById("msg");
+      if(msgEl) msgEl.focus();
+    }
     refreshHealth();
     refreshBrake();
     refreshAudit();
     refreshNotificationSettings();
     refreshPendingConsent();
     refreshAwaitingResponse();
+    refreshMemories();
+    loadMemoryKinds();
     refreshOnboardingGuide();
     // maybeShowOnboardingModal() is deliberately not called on load.
     //
@@ -1349,9 +2555,9 @@
     refreshEpisodes();
     refreshNudges();
     refreshReflections();
-    refreshWater();
 
     // === Auto-refresh ===
+    setInterval(refreshHealth, 30000);     // Health every 30s -- presence reads it
     setInterval(refreshSelfState, 30000);  // Self-state every 30s
     setInterval(refreshEpisodes, 60000);   // Episodes every 60s
     setInterval(refreshBrake, 15000);      // Parking brake every 15s (safety-relevant)
@@ -1359,6 +2565,7 @@
     setInterval(refreshNotificationSettings, 30000);  // Notification settings every 30s
     setInterval(refreshPendingConsent, 30000);        // Pending memory consent every 30s
     setInterval(refreshAwaitingResponse, 30000);       // Awaiting-response queue every 30s
+    setInterval(refreshMemories, 60000);               // Stored memories every 60s
   </script>
 </body>
 </html>

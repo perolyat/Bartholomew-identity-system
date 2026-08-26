@@ -5,7 +5,9 @@ services:
     build: .
     container_name: bartholomew-api
     ports:
-      - "5173:5173"
+      # Loopback only. "5173:5173" would publish on every host interface, and
+      # this API has no authentication -- see DECISIONS.md and the Dockerfile.
+      - "127.0.0.1:5173:5173"
     environment:
       - ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
       - TZ=Australia/Brisbane
