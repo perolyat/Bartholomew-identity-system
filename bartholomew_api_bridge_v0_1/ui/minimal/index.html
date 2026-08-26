@@ -2154,6 +2154,12 @@
     // kind/key are read from the JS array.
     function renderMemoryItem(m, index){
       const tags = [];
+      // Governance metadata is absent for a record this process cannot
+      // decrypt. Say so rather than showing the absence of tags as though it
+      // meant "nothing sensitive here".
+      if(m.governance_known === false){
+        tags.push('<span class="memory-tag" title="This record could not be decrypted, so its classification cannot be determined.">classification unknown</span>');
+      }
       if(m.always_keep){
         // Honest wording. always_keep is a *recall* policy: it means he will
         // always bring this up, not that it is protected from deletion. No
@@ -2308,7 +2314,7 @@
         if(j.queued_for_consent) await refreshPendingConsent();
         // The record is gone; the list still shows it. Re-read so the user
         // sees the state their delete actually produced.
-        if(j.deleted_during_correction) await refreshMemories();
+        if(j.target_changed) await refreshMemories();
       }catch(e){
         setMemoryStatus(index, "memory-note-err", "The correction was not saved: " + e.message);
       }

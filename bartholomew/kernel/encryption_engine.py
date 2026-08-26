@@ -374,3 +374,29 @@ class EncryptionEngine:
 
 # Module-level singleton for shared access
 _encryption_engine = EncryptionEngine()
+
+
+# Public helpers over the singleton.
+#
+# Callers previously reached through `_encryption_module._encryption_engine`
+# -- a private object -- to decrypt stored values. These give the encryption
+# authority a public surface for the two things callers actually need, without
+# introducing a second encryption abstraction: both delegate to the same
+# singleton and the same Envelope format.
+def is_envelope(value: Any) -> bool:
+    """True if `value` is a still-encrypted envelope (not plaintext)."""
+    if not isinstance(value, str):
+        return False
+    return Envelope.from_json(value) is not None
+
+
+def decrypt_if_envelope(value: str, context: dict[str, Any] | None = None) -> str:
+    """
+    Best-effort decrypt of a stored value.
+
+    Returns plaintext when the envelope can be opened with a key this process
+    holds; returns the value unchanged otherwise (including when it was never
+    encrypted). Use `is_envelope()` on the result to tell those apart -- a
+    returned envelope means "could not decrypt", not "this is the content".
+    """
+    return _encryption_engine.try_decrypt_if_envelope(value, context)

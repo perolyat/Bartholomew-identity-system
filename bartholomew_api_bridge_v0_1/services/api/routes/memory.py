@@ -114,25 +114,37 @@ async def export_memories() -> Response:
     """
     Download every stored memory as JSON.
 
-    Deliberately small in scope: it serialises exactly what `list_memories()`
-    already returns, from data that already exists, through the same
-    authority. It is not a portability subsystem -- there is no schema
-    contract, no import path, and no cross-system format here, and building
-    one is a separate piece of work. What it does give the user today is a
-    truthful, complete copy of their own record that leaves the machine only
-    when they ask for it.
+    Pages through `MemoryStore` to completion rather than returning one page.
+    An earlier version fetched a single 500-row page and set `truncated: true`
+    -- honest, but it meant "download your memories" silently produced a
+    partial file for any store larger than that, which is not an export.
 
-    `truncated` is set when there is more than one export page's worth, so
-    the file can never quietly claim to be complete when it is not.
+    Bounded work per step: pages are requested one at a time at the store's
+    own page ceiling and appended, so peak memory is one page plus the
+    accumulated result rather than an unbounded query. `complete` states
+    plainly whether the file is the whole record.
     """
     kernel = _get_kernel()
-    page = await kernel.mem.list_memories(limit=500, offset=0)
+
+    memories: list[dict[str, Any]] = []
+    offset = 0
+    page_size = 500
+    store_total = 0
+    while True:
+        page = await kernel.mem.list_memories(limit=page_size, offset=offset)
+        store_total = page["store_total"]
+        batch = page["entries"]
+        memories.extend(batch)
+        if not batch or not page["has_more"]:
+            break
+        offset += len(batch)
+
     payload = {
         "exported_at": datetime.now().astimezone().isoformat(),
-        "total_stored": page["total"],
-        "exported_count": len(page["entries"]),
-        "truncated": page["total"] > len(page["entries"]),
-        "memories": page["entries"],
+        "total_stored": store_total,
+        "exported_count": len(memories),
+        "complete": len(memories) >= store_total,
+        "memories": memories,
     }
     return Response(
         content=json.dumps(payload, indent=2, default=str),
@@ -164,8 +176,9 @@ async def correct_memory(kind: str, key: str, body: MemoryCorrection) -> dict[st
       consent for the new value; it is waiting in the pending-consent inbox
       and the old value is still what Bartholomew holds.
     * `stored: false` without it -- governance refused the new value outright.
-    * `deleted_during_correction: true` -- the memory was deleted while the
-      correction was in flight; the deletion stands and nothing was stored.
+    * `target_changed: true` -- the record was deleted or replaced while the
+      correction was in flight; the conditional write did not land, and
+      nothing was written or removed.
     """
     kernel = _get_kernel()
     try:
@@ -183,35 +196,29 @@ async def correct_memory(kind: str, key: str, body: MemoryCorrection) -> dict[st
             "detail": "Memory updated.",
         }
 
-    # Not stored because the record was deleted while the correction was in
-    # flight. Nothing was refused; the target went away and the user's delete
-    # stands. Reporting this as a governance refusal would be wrong, and
-    # reporting it as success would resurrect a memory they forgot.
-    if result.deleted_during_correction:
+    # Not stored. The reason comes from the write authority itself -- it is
+    # not reconstructed here from a side-channel scan of the consent inbox.
+    if result.target_changed:
         return {
             "ok": False,
             "stored": False,
             "queued_for_consent": False,
-            "deleted_during_correction": True,
+            "target_changed": True,
             "detail": (
-                "This memory was deleted while your correction was being saved, "
-                "so the correction was discarded and it stays forgotten."
+                "This memory changed while your correction was being saved, so "
+                "nothing was written. Reload to see what is stored now."
             ),
         }
 
-    # Not stored. Which of the two governed refusals happened is decided by
-    # the authority, not guessed here -- a queued correction is recoverable
-    # and the user should be sent to the inbox; a refused one is not, and
-    # saying "queued" would be a lie.
-    queued = result.queued_for_consent
     return {
         "ok": False,
         "stored": False,
-        "queued_for_consent": queued,
+        "queued_for_consent": result.queued_for_consent,
+        "target_changed": False,
         "detail": (
             "This change needs your consent before it can be stored. It is "
             "waiting in Pending Memory Consent; the previous value is unchanged."
-            if queued
+            if result.queued_for_consent
             else "Governance rules refused this value, so the memory was not changed."
         ),
     }

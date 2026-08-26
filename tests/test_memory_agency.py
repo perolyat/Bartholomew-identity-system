@@ -319,8 +319,10 @@ def test_export_returns_a_truthful_download(client, stored):
     assert "attachment" in response.headers["content-disposition"]
     body = response.json()
     assert body["exported_count"] == len(body["memories"])
-    # It must never claim to be complete when it is not.
-    assert body["truncated"] == (body["total_stored"] > body["exported_count"])
+    # The export now pages to completion rather than returning one page, so a
+    # normal-sized store exports in full and says so.
+    assert body["exported_count"] == body["total_stored"]
+    assert body["complete"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +433,11 @@ def test_a_correction_never_resurrects_a_deleted_memory(client):
     assert response.status_code == 200
     body = response.json()
 
-    # The deletion must win.
+    # The deletion must win. It now wins by the conditional write refusing to
+    # land at all, rather than by a compensating delete after the fact --
+    # see test_memory_agency_review_fixes.py for why that distinction matters.
     assert body["stored"] is False
-    assert body["deleted_during_correction"] is True
+    assert body["target_changed"] is True
     assert body["queued_for_consent"] is False, "this is not a governance refusal"
 
     # And the memory must actually still be gone.
@@ -448,8 +452,8 @@ def test_correction_outcome_distinguishes_a_race_from_a_refusal():
 
     queued = CorrectionOutcome(stored=False, queued_for_consent=True)
     refused = CorrectionOutcome(stored=False)
-    raced = CorrectionOutcome(stored=False, deleted_during_correction=True)
+    raced = CorrectionOutcome(stored=False, target_changed=True)
 
-    assert queued.queued_for_consent and not queued.deleted_during_correction
-    assert not refused.queued_for_consent and not refused.deleted_during_correction
-    assert raced.deleted_during_correction and not raced.queued_for_consent
+    assert queued.queued_for_consent and not queued.target_changed
+    assert not refused.queued_for_consent and not refused.target_changed
+    assert raced.target_changed and not raced.queued_for_consent
