@@ -28,6 +28,7 @@ from bartholomew.kernel.skill_base import (
     SkillContext,
     SkillResult,
 )
+from bartholomew.kernel.time_utils import now_in_configured_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -607,8 +608,22 @@ class NotifySkill(SkillBase):
     # -------------------------------------------------------------------------
 
     def _is_quiet_hours(self) -> bool:
-        """Check if currently within quiet hours."""
-        now = datetime.now()
+        """
+        Check if currently within quiet hours, in Bartholomew's configured
+        timezone rather than the host's.
+
+        This used to read a naive `datetime.now()`, so quiet hours followed
+        whatever zone the machine happened to be in. On a host clocked to UTC
+        with `config/kernel.yaml` set to Australia/Brisbane -- an entirely
+        ordinary deployment -- that is ten hours out: a 09:22 reminder was
+        suppressed as though it were 23:22, and nothing looked wrong. Quiet
+        hours are a promise to the user about *their* evening, so they have to
+        be evaluated in the zone the user configured.
+
+        Same rule as `scheduler/drives.py::_today_for()`: behaviour must never
+        depend on an unstated machine setting. The fallback is UTC, not local.
+        """
+        now = now_in_configured_timezone()
         current_time = now.strftime("%H:%M")
 
         start = self._quiet_hours_start
