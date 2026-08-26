@@ -1,8 +1,10 @@
 import asyncio
 import atexit
 import datetime as dt
+import ipaddress
 import os
 import re
+import sys
 import time as _time
 from datetime import datetime
 from pathlib import Path
@@ -141,6 +143,124 @@ _ADMISSION_EXEMPT_PATHS = frozenset(
 _ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding", "/ui")
 
 
+# =============================================================================
+# Network access boundary
+# =============================================================================
+#
+# Decision (2026-08-26): the unauthenticated API bridge must be loopback-only
+# by default. This resolves a contradiction that already existed in the
+# repository -- `DECISIONS.md` and `INTERFACES.md` both state that the API has
+# no authentication and "must not be exposed beyond localhost", while the
+# Dockerfile bound 0.0.0.0 and QUICKSTART.md demonstrated a LAN bind -- in
+# favour of the safer reading the canonical documents already held.
+#
+# This is NOT authentication and must not be mistaken for it. It is a network
+# boundary: it decides *where the API is reachable from*, not *who is asking*.
+# CORS is likewise not a boundary here -- it constrains browser origins only,
+# and any non-browser client ignores it entirely.
+#
+# Enforced in two places, because either alone is insufficient:
+#
+#   1. The bind address (`resolve_bind_host()`), so the normal launch path
+#      never listens on a non-loopback interface.
+#   2. The request boundary (in `admission_middleware`, the existing single
+#      chokepoint for external request admission -- not a second one), so a
+#      process launched by hand with `--host 0.0.0.0`, or reached through a
+#      container port publish, still refuses non-loopback callers.
+#
+# A deliberate override exists for container and development use. It is opt-in
+# only, never a default, and says plainly what it is exposing.
+
+ALLOW_NON_LOOPBACK_ENV = "BARTH_API_ALLOW_NON_LOOPBACK"
+BIND_HOST_ENV = "BARTH_API_HOST"
+DEFAULT_BIND_HOST = "127.0.0.1"
+
+_NON_LOOPBACK_WARNING = (
+    "\n"
+    "  ****************************************************************\n"
+    "  *  Bartholomew's API is bound to a NON-LOOPBACK address.       *\n"
+    "  *                                                              *\n"
+    "  *  This API has NO AUTHENTICATION. Anything that can reach     *\n"
+    "  *  this port can read, correct, delete and export your entire  *\n"
+    "  *  personal memory, and can release the Parking Brake.         *\n"
+    "  *                                                              *\n"
+    "  *  Bound to: %s\n"
+    "  *  Enabled by: %s=1\n"
+    "  ****************************************************************\n"
+)
+
+
+def is_loopback_host(host: str | None) -> bool:
+    """True if `host` names a loopback interface (or nothing at all)."""
+    if not host:
+        return False
+    candidate = host.strip().strip("[]")
+    if candidate in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_local_peer(client_host: str | None) -> bool:
+    """
+    True if this request did not arrive over a network from somewhere else.
+
+    Three cases, and only the third is a real remote caller:
+
+    * `None` -- no peer address. A UNIX-domain socket, or an ASGI transport
+      with no network under it. Local by construction.
+    * not an IP address -- Starlette's in-process TestClient reports the
+      sentinel ``"testclient"``. Nothing that crossed a TCP socket can look
+      like this: uvicorn fills `client` from the socket peer name, which is
+      always an IP for TCP. So a non-IP peer never came over the network.
+    * an IP address -- a genuine network peer, and it must be loopback.
+
+    Rejecting the first two blocked every in-process caller, including the
+    repository's own API tests, without adding any protection: a LAN caller
+    always presents a routable IP and is still refused.
+    """
+    if client_host is None:
+        return True
+    candidate = client_host.strip().strip("[]")
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        # Not an address at all, so it never crossed a socket.
+        return True
+    return is_loopback_host(client_host)
+
+
+def non_loopback_allowed() -> bool:
+    """True only when a non-loopback boundary has been deliberately enabled."""
+    return is_truthy(os.getenv(ALLOW_NON_LOOPBACK_ENV))
+
+
+def resolve_bind_host() -> str:
+    """
+    The address the API should bind to.
+
+    Loopback unless `BARTH_API_HOST` names something else *and*
+    `BARTH_API_ALLOW_NON_LOOPBACK` is explicitly set. A non-loopback request
+    without that opt-in is refused rather than silently downgraded, so a
+    misconfiguration is loud instead of surprising.
+    """
+    requested = os.getenv(BIND_HOST_ENV, DEFAULT_BIND_HOST).strip() or DEFAULT_BIND_HOST
+    if is_loopback_host(requested):
+        return requested
+    if not non_loopback_allowed():
+        raise RuntimeError(
+            f"{BIND_HOST_ENV}={requested!r} is not a loopback address. The "
+            f"Bartholomew API has no authentication and is loopback-only by "
+            f"default. To bind it anyway -- exposing personal memory to "
+            f"anything that can reach the port -- set "
+            f"{ALLOW_NON_LOOPBACK_ENV}=1 deliberately.",
+        )
+    print(_NON_LOOPBACK_WARNING % (requested, ALLOW_NON_LOOPBACK_ENV), file=sys.stderr)
+    return requested
+
+
 def _admission_exempt(path: str) -> bool:
     if path in _ADMISSION_EXEMPT_PATHS:
         return True
@@ -169,6 +289,28 @@ async def admission_middleware(request: Request, call_next):
     KernelDaemon.stop() can drain() to a confirmed-empty state rather than
     assuming in-flight work has finished.
     """
+    # Network boundary first: refuse a non-loopback caller before any route,
+    # exempt or not, sees the request. Deliberately ahead of the exemption
+    # list -- /healthz and /ui are exempt from *kernel readiness*, not from
+    # the question of who may reach this process at all.
+    #
+    # `request.client.host` is the peer address of the actual connection. Any
+    # X-Forwarded-* header is ignored on purpose: it is attacker-controlled
+    # and this boundary exists precisely because no trusted proxy is part of
+    # the current architecture.
+    if not non_loopback_allowed():
+        if not _is_local_peer(request.client.host if request.client else None):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "This Bartholomew API is loopback-only. It has no "
+                        "authentication, so it does not answer non-local "
+                        "callers. See DECISIONS.md (deployment architecture)."
+                    ),
+                },
+            )
+
     if _admission_exempt(request.url.path):
         return await call_next(request)
 

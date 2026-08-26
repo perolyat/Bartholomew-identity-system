@@ -28,4 +28,17 @@ RUN mkdir -p /app/data
 EXPOSE 5173
 
 # Run uvicorn
+# The API has no authentication and is loopback-only by default
+# (DECISIONS.md, INTERFACES.md). A container must bind 0.0.0.0 *inside its own
+# network namespace* or published ports cannot reach it at all -- that is not
+# the same as being LAN-exposed, and it is not sufficient on its own.
+#
+# Two things keep it safe, and both are required:
+#   1. Publish to loopback on the host: `-p 127.0.0.1:5173:5173`
+#      (docker-compose.yml does this). A bare `-p 5173:5173` publishes on
+#      every host interface and must not be used.
+#   2. BARTH_API_ALLOW_NON_LOOPBACK=1, set deliberately below, because the
+#      request boundary sees the Docker bridge address rather than loopback.
+#      This prints a conspicuous warning at every startup.
+ENV BARTH_API_ALLOW_NON_LOOPBACK=1
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5173"]

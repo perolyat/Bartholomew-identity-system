@@ -169,11 +169,13 @@ curl http://localhost:5173/internal/metrics
 
    Bind the API to a private interface and only allow Prometheus/sidecar access:
    ```bash
-   # Bind to loopback or private network interface
+   # Loopback only. The API has no authentication, so it is not bound to a
+   # routable interface -- see DECISIONS.md (deployment architecture).
+   # Reach the metrics endpoint from the same host, or via a sidecar that
+   # itself connects over loopback.
+   python -m app          # binds 127.0.0.1 by default
+   # equivalently:
    uvicorn app:app --host 127.0.0.1 --port 5173
-
-   # Or bind to private subnet
-   uvicorn app:app --host 10.0.0.10 --port 5173
    ```
 
 3. **Prometheus Scrape Configuration**
