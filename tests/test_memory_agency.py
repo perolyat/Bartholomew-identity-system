@@ -386,3 +386,70 @@ def _find(client, kind: str, key: str):
         if entry["kind"] == kind and entry["key"] == key:
             return entry
     return None
+
+
+# ---------------------------------------------------------------------------
+# Review findings (Codex, 2026-08-25)
+# ---------------------------------------------------------------------------
+
+
+def test_a_correction_never_resurrects_a_deleted_memory(client):
+    """
+    P1. The existence check and the governed upsert are separate statements on
+    separate connections, so a confirmed DELETE can land between them.
+    `upsert_memory()` is an upsert: with the row gone it INSERTs, recreating
+    the record under a new id. The user was told `forgotten: true` while the
+    memory sat there again holding the corrected value.
+
+    Simulated deterministically by deleting the row from inside the write, at
+    exactly the moment the race would land.
+    """
+    _seed_memory("fact", "agency_race", "original value")
+    store = app_module._kernel.mem
+    original = _find(client, "fact", "agency_race")
+    assert original is not None
+
+    real_upsert = type(store).upsert_memory
+    deleted: list[bool] = []
+
+    async def _delete_then_upsert(self, kind, key, value, ts, **kwargs):
+        if kind == "fact" and key == "agency_race" and not deleted:
+            deleted.append(True)
+            # The user's confirmed delete lands here.
+            await real_delete(self, kind, key)
+        return await real_upsert(self, kind, key, value, ts, **kwargs)
+
+    real_delete = type(store).delete_memory
+
+    type(store).upsert_memory = _delete_then_upsert
+    try:
+        response = client.put("/api/memory/fact/agency_race", json={"value": "corrected value"})
+    finally:
+        type(store).upsert_memory = real_upsert
+
+    assert deleted, "the simulated delete never ran"
+    assert response.status_code == 200
+    body = response.json()
+
+    # The deletion must win.
+    assert body["stored"] is False
+    assert body["deleted_during_correction"] is True
+    assert body["queued_for_consent"] is False, "this is not a governance refusal"
+
+    # And the memory must actually still be gone.
+    assert (
+        _find(client, "fact", "agency_race") is None
+    ), "the correction resurrected a memory the user deleted"
+
+
+def test_correction_outcome_distinguishes_a_race_from_a_refusal():
+    """The three not-stored outcomes must stay tellable apart."""
+    from bartholomew.kernel.memory_store import CorrectionOutcome
+
+    queued = CorrectionOutcome(stored=False, queued_for_consent=True)
+    refused = CorrectionOutcome(stored=False)
+    raced = CorrectionOutcome(stored=False, deleted_during_correction=True)
+
+    assert queued.queued_for_consent and not queued.deleted_during_correction
+    assert not refused.queued_for_consent and not refused.deleted_during_correction
+    assert raced.deleted_during_correction and not raced.queued_for_consent

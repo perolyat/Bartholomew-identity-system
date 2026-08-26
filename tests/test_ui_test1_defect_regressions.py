@@ -251,3 +251,111 @@ def _function_body(script: str, name: str) -> str:
             if depth == 0:
                 return script[start : i + 1]
     raise AssertionError(f"unbalanced braces in {name}()")
+
+
+# ---------------------------------------------------------------------------
+# Review findings (Codex, 2026-08-25) -- all three are the same defect class
+# the rest of this file exists for: the page stating something it does not know.
+# ---------------------------------------------------------------------------
+
+
+def test_no_inline_handler_is_built_from_an_interpolated_value(ui_code: str):
+    """
+    P1, and a security bug rather than a cosmetic one.
+
+    The Correct/Forget buttons were built by string concatenation:
+    `onclick="forgetMemory('${escapeAttr(kind)}', ...)"`. No amount of
+    escaping makes that safe -- escapeAttr() turned an apostrophe into
+    `&#39;`, but the HTML parser decodes character references *before* the
+    inline handler is compiled as JavaScript, so the apostrophe returns and a
+    crafted key can close the string and run same-origin code, including
+    against the delete and governance endpoints. Memory keys are not all
+    chosen by this UI, so it was reachable.
+    """
+    # Checked across the whole page, not just the memory panel: the same
+    # construct was also carrying a goal typed by the user and a persona id.
+    # Comments are stripped first (ui_code), so the prose above describing the
+    # old construct does not trip this. Numeric ids coerced with Number(...) at
+    # the interpolation site are allowed -- that makes the integer invariant
+    # explicit instead of assumed; anything else must be bound as a listener.
+    offenders = [m.group(0) for m in re.finditer(r'on\w+="[^"]*\$\{(?!Number\()', ui_code)]
+    assert not offenders, f"inline handlers built from interpolated values: {offenders}"
+    # The unsafe helper must be gone entirely, not merely unused.
+    assert "function escapeAttr" not in ui_code
+
+    # Actions are bound as listeners instead.
+    assert "addEventListener" in _function_body(ui_code, "bindMemoryActions")
+
+
+def test_memory_actions_address_records_by_index_not_by_identifier(ui_code: str):
+    """The kind/key must be read from JS state, never parsed back out of markup."""
+    body = _function_body(ui_code, "bindMemoryActions")
+    assert "dataset.index" in body
+    assert "memoryEntries" in body
+
+
+def test_a_technical_consent_row_is_not_reported_as_user_approval(ui_code: str):
+    """
+    P2. `memory_consent` rows are written by upsert_memory()'s embedding flow
+    (source='upsert_memory') and by persist_embeddings_for() -- bookkeeping,
+    not decisions. Only approve_pending_sensitive_write() writes
+    source='consent_approval'. Rendering every joined row as "you approved
+    this" invented an approval the user never gave.
+    """
+    body = _function_body(ui_code, "memoryProvenance")
+    assert "HUMAN_CONSENT_SOURCES" in body
+    assert "consent_approval" in ui_code
+
+    # The claim must be gated on the source, not on the row existing.
+    approved_at = body.index("you approved this")
+    gate = body.index("HUMAN_CONSENT_SOURCES")
+    assert gate < approved_at, "the approval wording must sit behind the source check"
+
+
+def test_the_human_approval_source_matches_what_the_store_writes():
+    """Pins the two ends of the contract together."""
+    import inspect
+
+    from bartholomew.kernel.memory_store import MemoryStore
+
+    source = inspect.getsource(MemoryStore.approve_pending_sensitive_write)
+    assert "consent_approval" in source
+
+
+def test_unknown_model_reachability_is_not_reported_as_broken(ui_code: str):
+    """
+    P2. /api/health distinguishes `selected_but_unreachable` (the probe ran
+    and the backend did not answer) from `selected_reachability_unknown` (no
+    probe adapter, or it timed out). The second does not establish that chat
+    will fail. Collapsing them showed a working-but-unprobeable backend as
+    definitely broken -- the same fabrication as claiming it is ready.
+    """
+    presence = _function_body(ui_code, "resolvePresence")
+    assert "selected_reachability_unknown" in presence
+    unknown_branch = presence.index("selected_reachability_unknown")
+    degraded_catchall = presence.index('!== "ready"')
+    assert (
+        unknown_branch < degraded_catchall
+    ), "unknown reachability must be handled before the non-ready catch-all"
+
+    capability = _function_body(ui_code, "renderFirstUseCapability")
+    assert "selected_reachability_unknown" in capability
+    # It must not promise failure for a state it cannot determine.
+    unknown_start = capability.index("selected_reachability_unknown")
+    unknown_text = capability[unknown_start : capability.index("} else", unknown_start)]
+    assert (
+        "will fail" not in unknown_text
+    ), "the unknown-reachability branch must not promise that messages will fail"
+
+
+def test_health_really_emits_both_reachability_states():
+    """The distinction the UI now honours must exist in the API."""
+    source = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "bartholomew_api_bridge_v0_1"
+        / "services"
+        / "api"
+        / "app.py"
+    ).read_text(encoding="utf-8")
+    assert "selected_but_unreachable" in source
+    assert "selected_reachability_unknown" in source

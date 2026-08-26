@@ -164,6 +164,8 @@ async def correct_memory(kind: str, key: str, body: MemoryCorrection) -> dict[st
       consent for the new value; it is waiting in the pending-consent inbox
       and the old value is still what Bartholomew holds.
     * `stored: false` without it -- governance refused the new value outright.
+    * `deleted_during_correction: true` -- the memory was deleted while the
+      correction was in flight; the deletion stands and nothing was stored.
     """
     kernel = _get_kernel()
     try:
@@ -179,6 +181,22 @@ async def correct_memory(kind: str, key: str, body: MemoryCorrection) -> dict[st
             "stored": True,
             "memory_id": result.memory_id,
             "detail": "Memory updated.",
+        }
+
+    # Not stored because the record was deleted while the correction was in
+    # flight. Nothing was refused; the target went away and the user's delete
+    # stands. Reporting this as a governance refusal would be wrong, and
+    # reporting it as success would resurrect a memory they forgot.
+    if result.deleted_during_correction:
+        return {
+            "ok": False,
+            "stored": False,
+            "queued_for_consent": False,
+            "deleted_during_correction": True,
+            "detail": (
+                "This memory was deleted while your correction was being saved, "
+                "so the correction was discarded and it stays forgotten."
+            ),
         }
 
     # Not stored. Which of the two governed refusals happened is decided by

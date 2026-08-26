@@ -274,6 +274,10 @@ class CorrectionOutcome:
     stored: bool
     memory_id: int | None = None
     queued_for_consent: bool = False
+    deleted_during_correction: bool = False
+    """The record was deleted while this correction was in flight; the
+    deletion stands and the correction was discarded. Distinct from a
+    governance refusal -- nothing was rejected, the target simply went away."""
 
 
 def _is_encryption_envelope(value: Any) -> bool:
@@ -1523,6 +1527,10 @@ class MemoryStore:
         and not stored* -- `StoreResult.stored` is False in both cases, and a
         caller must report that rather than claiming the edit was applied.
 
+        Never resurrects a deleted memory: if the record is removed while this
+        correction is in flight, the recreated row is discarded and the
+        deletion stands (see the comment on the id check below).
+
         Returns a `CorrectionOutcome` rather than a bare `StoreResult` because
         `stored=False` alone is ambiguous, and the two cases need opposite
         things said to the user: a queued correction is recoverable and is
@@ -1545,6 +1553,7 @@ class MemoryStore:
         existing = await self.get_memory(kind, key)
         if existing is None:
             raise KeyError(f"no memory {kind}/{key}")
+        original_id = existing["id"]
 
         before = {p["id"] for p in await self.list_pending_sensitive_writes(limit=500)}
         result = await self.upsert_memory(
@@ -1554,6 +1563,34 @@ class MemoryStore:
             datetime.now(timezone.utc).isoformat(),
         )
         if result.stored:
+            # A correction must never resurrect a memory the user forgot.
+            #
+            # The existence check above and upsert_memory() below are separate
+            # statements on separate connections, so a confirmed delete can
+            # land between them. upsert_memory() is an upsert: with the row
+            # gone it INSERTs, recreating the record under a new id. The user
+            # would have been told `forgotten: true` while the memory sat
+            # there again holding the corrected value -- the delete reported
+            # honestly and then quietly undone.
+            #
+            # There is no transaction spanning both: upsert_memory() owns its
+            # own connection and runs redaction, encryption, summarisation,
+            # embedding and chunking inside it. So this compensates instead of
+            # pretending to be atomic. A changed row id is proof the original
+            # was deleted mid-flight; the resurrected row is removed through
+            # the same primitive forget_memory() uses, and the correction is
+            # reported as not stored. The user's delete stands, which is the
+            # outcome that must win when the two race.
+            if result.memory_id is not None and result.memory_id != original_id:
+                await self.delete_memory(kind, key)
+                logger.warning(
+                    "Correction to %s/%s raced a delete: the memory was removed while the "
+                    "correction was in flight, so the recreated row was discarded and the "
+                    "deletion stands.",
+                    kind,
+                    key,
+                )
+                return CorrectionOutcome(stored=False, deleted_during_correction=True)
             return CorrectionOutcome(stored=True, memory_id=result.memory_id)
 
         after = await self.list_pending_sensitive_writes(limit=500)

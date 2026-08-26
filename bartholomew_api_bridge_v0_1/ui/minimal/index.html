@@ -1110,8 +1110,8 @@
             <div class="row" style="justify-content:space-between">
               <span class="nudge-kind">${escapeHtml(e.kind)} · ${escapeHtml(e.key)}</span>
               <div class="row">
-                <button class="ack" onclick="approvePendingConsent(${e.id})">✓ Approve</button>
-                <button class="dismiss" onclick="denyPendingConsent(${e.id})">✕ Deny</button>
+                <button class="ack" onclick="approvePendingConsent(${Number(e.id)})">✓ Approve</button>
+                <button class="dismiss" onclick="denyPendingConsent(${Number(e.id)})">✕ Deny</button>
               </div>
             </div>
             <div class="nudge-msg">${escapeHtml(e.value)}</div>
@@ -1233,9 +1233,9 @@
           <div class="row" style="justify-content:space-between">
             <span class="nudge-kind ${status.cls}">${escapeHtml(status.label)}</span>
             <div class="row">
-              <button class="ack" onclick="resolveAwaitingResponse(${e.id}, 'reply_received')"
+              <button class="ack" onclick="resolveAwaitingResponse(${Number(e.id)}, 'reply_received')"
                       title="You got the reply you were waiting for.">✓ Got a reply</button>
-              <button class="dismiss" onclick="resolveAwaitingResponse(${e.id}, 'user_dismissed')"
+              <button class="dismiss" onclick="resolveAwaitingResponse(${Number(e.id)}, 'user_dismissed')"
                       title="You no longer need this reply.">✕ No longer needed</button>
             </div>
           </div>
@@ -1539,18 +1539,31 @@
       }
     }
 
+    let activeGoals = [];
+
     function renderGoals(goals){
       const el = document.getElementById("goals-list");
       if(!goals || goals.length === 0){
         el.innerHTML = '<span class="empty-state">No active goals</span>';
         return;
       }
-      el.innerHTML = goals.map(g => `
+      // Same defect the memory buttons had, and here the value is typed
+      // straight into the "Add a new goal" box: escapeHtml() does not escape
+      // an apostrophe, so a goal containing one broke out of this string.
+      // Address by index and bind a listener instead.
+      activeGoals = goals;
+      el.innerHTML = goals.map((g, i) => `
         <span class="goal-tag">
           ${escapeHtml(g)}
-          <button onclick="completeGoal('${escapeHtml(g)}')" title="Complete">✓</button>
+          <button data-goal-index="${i}" title="Complete">✓</button>
         </span>
       `).join('');
+      el.querySelectorAll("[data-goal-index]").forEach(btn => {
+        const i = Number(btn.dataset.goalIndex);
+        btn.addEventListener("click", () => {
+          if(activeGoals[i] !== undefined) completeGoal(activeGoals[i]);
+        });
+      });
     }
 
     async function addGoal(){
@@ -1602,13 +1615,19 @@
         const j2 = await r2.json();
         const packs = j2.packs || [];
 
-        document.getElementById("persona-list").innerHTML = packs.map(p => `
+        // Same construct, same fix: the pack id never enters handler source.
+        const personaEl = document.getElementById("persona-list");
+        personaEl.innerHTML = packs.map((p, i) => `
           <button class="persona-btn ${p.is_active ? 'active' : ''}"
-                  onclick="switchPersona('${escapeHtml(p.pack_id)}')"
+                  data-pack-index="${i}"
                   ${p.is_active ? 'disabled' : ''}>
             ${escapeHtml(p.name || p.pack_id)}
           </button>
         `).join('');
+        personaEl.querySelectorAll("[data-pack-index]").forEach(btn => {
+          const p = packs[Number(btn.dataset.packIndex)];
+          if(p) btn.addEventListener("click", () => switchPersona(p.pack_id));
+        });
 
       }catch(e){
         console.error("Persona refresh failed:", e);
@@ -1704,8 +1723,8 @@
             <div class="row" style="justify-content:space-between">
               <span class="nudge-kind">${escapeHtml(n.kind || 'nudge')}</span>
               <div class="row">
-                <button class="ack" onclick="ackNudge(${n.id})">✓ Ack</button>
-                <button class="dismiss" onclick="dismissNudge(${n.id})">✕ Dismiss</button>
+                <button class="ack" onclick="ackNudge(${Number(n.id)})">✓ Ack</button>
+                <button class="dismiss" onclick="dismissNudge(${Number(n.id)})">✕ Dismiss</button>
               </div>
             </div>
             <div class="nudge-msg">${escapeHtml(n.message || n.content || '')}</div>
@@ -1955,6 +1974,10 @@
         el.textContent = "Checking what he can currently do…";
       } else if(h.kernel_online === false){
         el.textContent = "He is not running right now, so he cannot answer.";
+      } else if(h.model_status === "selected_reachability_unknown"){
+        // Do not promise either outcome: nothing here knows which it is.
+        el.textContent =
+          "He is running. Whether his model will answer could not be checked, so a message may or may not get through.";
       } else if(h.model_status && h.model_status !== "ready"){
         el.textContent =
           `He is running, but cannot think right now (${h.model_status}), so messages will fail until that is fixed.`;
@@ -2064,6 +2087,9 @@
     // itself refuses without confirm=true. Nothing in this sprint infers a
     // deletion from conversational text.
     let memoryKindsLoaded = false;
+    // The rendered page addresses memories by index into this array; the real
+    // kind/key are only ever read from here, never parsed back out of the DOM.
+    let memoryEntries = [];
 
     async function refreshMemories(){
       const listEl = document.getElementById("memory-list");
@@ -2099,7 +2125,9 @@
           return;
         }
 
+        memoryEntries = entries;
         listEl.innerHTML = entries.map(renderMemoryItem).join('');
+        bindMemoryActions();
         if(!memoryKindsLoaded) loadMemoryKinds();
       }catch(e){
         listEl.innerHTML = `<div class="empty-state">Could not load memories: ${escapeHtml(e.message)}</div>`;
@@ -2107,8 +2135,24 @@
       }
     }
 
-    function renderMemoryItem(m){
-      const id = `${m.kind}/${m.key}`;
+    // A memory is addressed by its position in `memoryEntries`, never by
+    // interpolating its kind/key into markup.
+    //
+    // These buttons used to carry inline handlers built by string
+    // concatenation -- onclick="forgetMemory('${escapeAttr(kind)}', ...)".
+    // That is not safe no matter how the value is escaped: escapeAttr()
+    // turned an apostrophe into &#39;, but the HTML parser decodes character
+    // references *before* the inline handler is compiled as JavaScript, so
+    // the apostrophe came back and a crafted key could close the string and
+    // run same-origin code -- including against the delete and governance
+    // endpoints. Memory keys are not all chosen by this UI (the training
+    // path accepts caller-supplied ids that become keys), so this was
+    // reachable, not theoretical.
+    //
+    // Now the identifier never appears in any markup: the index goes into a
+    // data attribute, listeners are bound with addEventListener, and the real
+    // kind/key are read from the JS array.
+    function renderMemoryItem(m, index){
       const tags = [];
       if(m.always_keep){
         // Honest wording. always_keep is a *recall* policy: it means he will
@@ -2126,9 +2170,17 @@
         tags.push(`<span class="memory-tag">${escapeHtml(String(m.category).replace(/_/g, ' '))}</span>`);
       }
 
-      const provenance = m.consent_at
-        ? `you approved this on ${escapeHtml(new Date(m.consent_at).toLocaleString())}${m.consent_source ? ` (${escapeHtml(m.consent_source)})` : ''}`
-        : 'no explicit consent decision recorded';
+      // Not every memory_consent row is a human decision. upsert_memory()'s
+      // embedding flow writes source='upsert_memory', and
+      // persist_embeddings_for() writes source='persist_embeddings_for' --
+      // both bookkeeping. Only approve_pending_sensitive_write() writes
+      // source='consent_approval', and its own code comment is explicit that
+      // this is what "a human explicitly approved this write" looks like.
+      //
+      // Rendering every joined row as "you approved this" invented an
+      // approval the user never gave, on the one panel whose entire purpose
+      // is telling them the truth about their own data.
+      const provenance = memoryProvenance(m);
 
       const value = m.readable === false
         ? `<div class="memory-value memory-value-unreadable">${escapeHtml(m.unreadable_reason || 'Stored encrypted; cannot be displayed.')}</div>`
@@ -2139,15 +2191,15 @@
       const editable = m.readable !== false;
 
       return `
-        <div class="memory-item" data-memory="${escapeHtml(id)}">
+        <div class="memory-item" data-index="${index}">
           <div class="memory-head">
             <div>
               <div class="memory-key">${escapeHtml(m.key)}</div>
               <div class="memory-kind">${escapeHtml(m.kind)} · remembered ${escapeHtml(formatTimeAgo(m.ts) || m.ts)}</div>
             </div>
             <div class="row">
-              ${editable ? `<button onclick="beginEditMemory('${escapeAttr(m.kind)}','${escapeAttr(m.key)}')">Correct</button>` : ''}
-              <button class="dismiss" onclick="forgetMemory('${escapeAttr(m.kind)}','${escapeAttr(m.key)}')">Forget</button>
+              ${editable ? '<button data-act="correct">Correct</button>' : ''}
+              <button class="dismiss" data-act="forget">Forget</button>
             </div>
           </div>
           ${value}
@@ -2159,12 +2211,46 @@
       `;
     }
 
-    function memoryNode(kind, key){
-      return document.querySelector(`.memory-item[data-memory="${CSS.escape(kind + '/' + key)}"]`);
+    // The one source that means a person decided. Kept as a list so adding
+    // another genuine approval path is a one-line change here.
+    const HUMAN_CONSENT_SOURCES = ['consent_approval'];
+
+    function memoryProvenance(m){
+      if(!m.consent_at){
+        return 'no explicit consent decision recorded';
+      }
+      const when = escapeHtml(new Date(m.consent_at).toLocaleString());
+      if(HUMAN_CONSENT_SOURCES.includes(m.consent_source)){
+        return `you approved this on ${when}`;
+      }
+      // Truthful and deliberately not dressed up as consent: something was
+      // recorded, by a process, and it was not the user agreeing to anything.
+      const src = m.consent_source ? escapeHtml(m.consent_source) : 'an internal process';
+      return `no explicit approval recorded — a consent row was written by ${src} on ${when}`;
     }
 
-    function beginEditMemory(kind, key){
-      const node = memoryNode(kind, key);
+    function memoryNode(index){
+      return document.querySelector(`.memory-item[data-index="${index}"]`);
+    }
+
+    // One delegated listener per render. Nothing here is built from a stored
+    // value, so no memory content can influence what code runs.
+    function bindMemoryActions(){
+      const listEl = document.getElementById("memory-list");
+      if(!listEl) return;
+      listEl.querySelectorAll(".memory-item [data-act]").forEach(btn => {
+        const item = btn.closest(".memory-item");
+        const index = Number(item.dataset.index);
+        if(!Number.isInteger(index) || !memoryEntries[index]) return;
+        btn.addEventListener("click", () => {
+          if(btn.dataset.act === "correct") beginEditMemory(index);
+          else if(btn.dataset.act === "forget") forgetMemory(index);
+        });
+      });
+    }
+
+    function beginEditMemory(index){
+      const node = memoryNode(index);
       if(!node) return;
       const current = node.querySelector(".memory-value").textContent;
       const editor = node.querySelector(".memory-editor");
@@ -2179,71 +2265,78 @@
       const box = editor.querySelector("textarea");
       box.value = current;
       box.focus();
-      editor.querySelector('[data-act="save"]').onclick = () => saveMemory(kind, key, box.value);
+      editor.querySelector('[data-act="save"]').onclick = () => saveMemory(index, box.value);
       editor.querySelector('[data-act="cancel"]').onclick = () => { editor.style.display = "none"; };
     }
 
-    function setMemoryStatus(kind, key, cls, text){
-      const node = memoryNode(kind, key);
+    function setMemoryStatus(index, cls, text){
+      const node = memoryNode(index);
       if(!node) return;
       const el = node.querySelector(".memory-status");
       el.className = "memory-status memory-note " + cls;
       el.textContent = text;
     }
 
-    async function saveMemory(kind, key, value){
+    async function saveMemory(index, value){
+      const m = memoryEntries[index];
+      if(!m) return;
       if(!value || !value.trim()){
-        setMemoryStatus(kind, key, "memory-note-err", "A memory cannot be blank. Use Forget to remove it.");
+        setMemoryStatus(index, "memory-note-err", "A memory cannot be blank. Use Forget to remove it.");
         return;
       }
       try{
-        const r = await fetch(API + `/api/memory/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`, {
+        const r = await fetch(API + `/api/memory/${encodeURIComponent(m.kind)}/${encodeURIComponent(m.key)}`, {
           method: "PUT",
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({ value })
         });
         if(!r.ok){
-          setMemoryStatus(kind, key, "memory-note-err",
+          setMemoryStatus(index, "memory-note-err",
             await describeHttpFailure(r, "The correction was not saved"));
           return;
         }
         const j = await r.json();
         if(j.stored){
-          setMemoryStatus(kind, key, "memory-note-ok", j.detail || "Memory updated.");
+          setMemoryStatus(index, "memory-note-ok", j.detail || "Memory updated.");
           await refreshMemories();
           return;
         }
         // Governed non-success. It must not look like it worked: the stored
         // value is unchanged either way, and a queued correction is waiting
         // in the consent inbox rather than applied.
-        setMemoryStatus(kind, key, "memory-note-warn", j.detail || "The correction was not stored.");
+        setMemoryStatus(index, "memory-note-warn", j.detail || "The correction was not stored.");
         if(j.queued_for_consent) await refreshPendingConsent();
+        // The record is gone; the list still shows it. Re-read so the user
+        // sees the state their delete actually produced.
+        if(j.deleted_during_correction) await refreshMemories();
       }catch(e){
-        setMemoryStatus(kind, key, "memory-note-err", "The correction was not saved: " + e.message);
+        setMemoryStatus(index, "memory-note-err", "The correction was not saved: " + e.message);
       }
     }
 
-    async function forgetMemory(kind, key){
+    async function forgetMemory(index){
+      const m = memoryEntries[index];
+      if(!m) return;
       // Explicit and confirmed. The API refuses without confirm=true as well,
       // so this is a second gate rather than the only one.
       const ok = confirm(
-        `Permanently forget "${key}"?\n\n` +
+        `Permanently forget "${m.key}"?\n\n` +
         "This deletes it from Bartholomew's memory. It cannot be undone."
       );
       if(!ok) return;
       try{
         const r = await fetch(
-          API + `/api/memory/${encodeURIComponent(kind)}/${encodeURIComponent(key)}?confirm=true`,
+          API + `/api/memory/${encodeURIComponent(m.kind)}/${encodeURIComponent(m.key)}?confirm=true`,
           { method: "DELETE" }
         );
         if(!r.ok){
-          setMemoryStatus(kind, key, "memory-note-err",
+          setMemoryStatus(index, "memory-note-err",
             await describeHttpFailure(r, "It was not forgotten"));
           return;
         }
         await refreshMemories();
       }catch(e){
-        setMemoryStatus(kind, key, "memory-note-err", "It was not forgotten: " + e.message);
+        setMemoryStatus(index, "memory-note-err", "It was not forgotten: " + e.message);
       }
     }
 
@@ -2255,7 +2348,10 @@
         const sel = document.getElementById("memory-kind");
         const current = sel.value;
         sel.innerHTML = '<option value="">All types</option>' + (j.kinds || []).map(k =>
-          `<option value="${escapeAttr(k.kind)}">${escapeHtml(k.kind)} (${k.count})</option>`
+          // A real double-quoted attribute value, not handler source:
+          // escapeHtml() already escapes the `"` delimiter (and & < >),
+          // which is what this position needs.
+          `<option value="${escapeHtml(k.kind)}">${escapeHtml(k.kind)} (${k.count})</option>`
         ).join('');
         sel.value = current;
         memoryKindsLoaded = true;
@@ -2355,8 +2451,17 @@
       if(presenceHealth.kernel_online === false){
         return { state: "degraded", detail: "kernel offline" };
       }
+      // `selected_but_unreachable` is an observation: the probe ran and the
+      // backend did not answer. `selected_reachability_unknown` is the
+      // absence of one -- no probe adapter, or the probe timed out -- and it
+      // does NOT establish that chat will fail. Collapsing the two showed a
+      // working-but-unprobeable backend as definitely broken, which is the
+      // same fabrication in the other direction as claiming it is ready.
+      if(presenceHealth.model_status === "selected_reachability_unknown"){
+        return { state: "unknown", detail: "cannot tell whether the model will answer" };
+      }
       if(presenceHealth.model_status && presenceHealth.model_status !== "ready"){
-        // Truthful: he is up, and cannot currently think.
+        // The probe ran and said no, or the backend is a stub.
         return { state: "degraded", detail: `model ${presenceHealth.model_status}` };
       }
       return { state: "available", detail: "" };
@@ -2399,11 +2504,12 @@
     }
 
     // === Helpers ===
-    // escapeHtml() is for text nodes. Values interpolated into a quoted
-    // inline handler need the quote forms escaped too.
-    function escapeAttr(str){
-      return escapeHtml(str).replace(/'/g, "&#39;");
-    }
+    // escapeAttr() used to live here, escaping quotes for values interpolated
+    // into inline event handlers. It is gone rather than fixed: escaping
+    // cannot make that construct safe, because the HTML parser decodes
+    // character references before the handler is compiled as JavaScript.
+    // Bind listeners and pass identifiers through DOM data instead --
+    // see bindMemoryActions().
 
     function escapeHtml(str){
       if(!str) return '';
