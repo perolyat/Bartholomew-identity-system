@@ -200,3 +200,28 @@ def test_a_local_unbound_process_is_still_allowed(monkeypatch):
     assert_principal_owns_this_process(
         Principal(str(uuid.uuid4()), "solo", PrincipalKind.USER, "s"),
     )
+
+
+def test_the_control_plane_database_follows_the_data_root(monkeypatch, tmp_path):
+    """
+    The control-plane default must honour `BARTH_DATA_ROOT`.
+
+    Hardcoding the repository's `data/` directory meant a caller that had
+    isolated every other persistence surface -- which is what the test suite
+    does -- still shared one physical control-plane file, reintroducing the
+    cross-caller sharing that fresh-per-call resolution exists to prevent.
+    """
+    from bartholomew.platform.store import resolve_platform_db_path
+
+    monkeypatch.delenv("BARTH_PLATFORM_DB_PATH", raising=False)
+    monkeypatch.setenv("BARTH_DATA_ROOT", str(tmp_path))
+    assert resolve_platform_db_path() == str(tmp_path / "platform.db")
+
+
+def test_an_explicit_control_plane_path_still_wins(monkeypatch, tmp_path):
+    from bartholomew.platform.store import resolve_platform_db_path
+
+    explicit = str(tmp_path / "explicit.db")
+    monkeypatch.setenv("BARTH_DATA_ROOT", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("BARTH_PLATFORM_DB_PATH", explicit)
+    assert resolve_platform_db_path() == explicit

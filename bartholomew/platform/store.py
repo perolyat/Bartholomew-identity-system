@@ -26,6 +26,9 @@ from pathlib import Path
 from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
 
 PLATFORM_DB_PATH_ENV = "BARTH_PLATFORM_DB_PATH"
+# Shared with runtime_registry by variable name rather than by import, so this
+# module stays importable without the runtime machinery.
+DATA_ROOT_ENV = "BARTH_DATA_ROOT"
 
 _SCHEMA = """
 -- Accounts. Operator-created only for Alpha: there is no self-registration
@@ -102,8 +105,17 @@ def resolve_platform_db_path() -> str:
     Python's module cache at whichever import happens first, which silently
     shares one physical file across test files that each set the environment
     variable expecting isolation.
+
+    The default honours `BARTH_DATA_ROOT` rather than hardcoding the
+    repository's `data/` directory. Hardcoding it meant that a caller which
+    had isolated every *other* persistence surface by setting the data root --
+    which is what the test suite does -- still landed on one shared
+    control-plane file, reintroducing exactly the cross-caller sharing the
+    fresh-read above exists to prevent.
     """
-    default = str(Path(__file__).resolve().parents[2] / "data" / "platform.db")
+    root = os.getenv(DATA_ROOT_ENV)
+    base = Path(root) if root else Path(__file__).resolve().parents[2] / "data"
+    default = str(base / "platform.db")
     path = os.getenv(PLATFORM_DB_PATH_ENV, default)
     parent = os.path.dirname(path)
     if parent:
