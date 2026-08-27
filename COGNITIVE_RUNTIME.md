@@ -312,6 +312,7 @@ concept" entry; this file is the reference copy going forward.)
 | Competency (application/reasoning) | Kernel Executive — same owner as Planning, above; applying a competency is the Executive doing its existing job with richer inputs, not a second reasoning authority (added 2026-08-08, conceptual) | — |
 | Training (ingestion of trained material) | No new owner — training material is Observation → Interpretation → Memory like any other input (added 2026-08-08, conceptual) | — |
 | Personal-identity ownership (whose Bartholomew persisted state and executing work belong to) | **No owner exists today, deliberately.** The runtime serves exactly one personal Bartholomew identity, and the deployment itself — one process, one SQLite database, one filesystem path — is the implicit boundary. When ownership becomes real it belongs to the Identity System (row 1), never to individual stores or capabilities (added 2026-08-15, conceptual — see below) | — |
+| External capability supply (an outside model, agent, service, application or device performing a bounded task on Bartholomew's behalf) | **Skill Registry — the same owner as Capabilities, above.** An external provider is a capability, however intelligent it is internally; it is never a second decision authority, and no architectural concept may be named after a provider (added 2026-08-27, conceptual — beyond the existing model adapters, no external capability provider exists) | `identity_interpreter/adapters/` (local + cloud model adapters) under `ModelRouter` today; remote services / MCP later |
 
 The 2026-07-21 audit named four "duplicate pairs." Three (persona, permission gates,
 kill-switch) are genuine. The fourth, "model routing," was **reclassified in item 11.15 as not
@@ -402,6 +403,41 @@ because a capability reported as present but unusable is the failure mode worth 
 transport, or device being present; do not infer a capability's availability from configuration
 alone. **No device-agent, capability-protocol or multi-tenancy implementation is authorised** —
 none exists, and this subsection creates no interface.
+
+### External providers sit beneath Capability, never at Executive or Governance (added 2026-08-27)
+
+`CONSTITUTION.md`'s "Bartholomew employs an ecosystem; it does not become it" and `DECISIONS.md`'s
+corresponding entry establish that external models, agents, services, applications and devices are
+replaceable **suppliers** beneath Bartholomew. This subsection records only what that means for the
+Runtime Contract. **It changes no stage of the loop and authorises no implementation.**
+
+An external provider occupies exactly the **Capability** and **Execution** stages — the same
+position a local skill or the injected `respond_fn` occupies today. It never occupies Executive and
+never occupies Governance:
+
+- **Executive** stays the sole place where memory, competencies, goals/context and available
+  capabilities are combined into a decision. A provider may be *delegated a bounded task*; the
+  `CandidateAction` that delegates it is still Bartholomew's proposal, and Governance must still be
+  able to deny it. Constructing a `CandidateAction` that Governance cannot meaningfully deny is not
+  a valid Executive stage, and that does not become less true because the executor is a frontier
+  model.
+- **Governance** remains the admission gate above the call, not something the provider participates
+  in. A provider's own safety behaviour is not a Governance checkpoint and may never be relied on
+  as one. The Parking Brake must be able to halt a provider-backed capability the same as any other
+  — including, per `DECISIONS.md`'s brake-tier entry, locally when central services are unavailable.
+- **Reflection and Memory** treat what a provider returns as a **result with provenance**: the
+  source is part of the record, and the output is evidence, not truth. Promotion into longer-lived
+  knowledge runs through the existing learning rules and the personal / generalisable / system-level
+  classification recorded above — not through a second pathway because the assertion came from an
+  AI.
+
+Two live precedents already implement this shape and are the pattern to follow rather than replace:
+`ModelRouter` dispatching to interchangeable local and cloud adapters (cloud off unless explicitly
+configured), and `ModelBackendError`, which exists so that a provider failure can never be mistaken
+for a genuine response — a truthful degraded result rather than a fabricated success. The **tracked
+gap** noted in the ownership table above (the live routing path does not consult the Identity
+selection policy) is where any future capability-need-to-provider mapping belongs; no such mapping,
+broker or selection mechanism is authorised, and one option is not a selection problem.
 
 ## Governance checkpoints
 

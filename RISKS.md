@@ -324,6 +324,44 @@
   remote call. Designing that, along with what Bartholomew is allowed to *do* while degraded (act on
   stale state? queue? refuse?), is a prerequisite for the first device agent, not a follow-up to it.
   No design exists, and none is authorised.
+- **(2026-08-27) External-provider dependency and lock-in — TARGET-architecture risk, not a current
+  defect.** `DECISIONS.md`'s "Bartholomew is the persistent executive above an ecosystem of external
+  intelligence and capability providers" deliberately prefers obtaining capability externally over
+  duplicating it. The risk that creates is a capability whose supplier is effectively singular:
+  terms, pricing, availability or policy change, and Bartholomew's usefulness changes with them, or
+  privacy and Governance come under pressure to keep the capability. **Nothing is exposed today** —
+  the only external seam is the optional cloud model backend, which is off unless deliberately
+  configured and which a local backend already substitutes for. Recorded now because the mitigations
+  are architectural and cheap while there is one seam: identity and data portability
+  (`CONSTITUTION.md`), external output held as evidence rather than as the substrate itself, and the
+  discipline of asking *what happens to the user if this provider disappears tomorrow?* before each
+  integration rather than after. See `ASSUMPTIONS.md` A10. No mitigation work is authorised by this
+  entry, and none is scheduled.
+- **(2026-08-27) External AI output could contaminate governed memory if treated as truth —
+  conceptual risk, no current pathway.** The rule recorded in `CONSTITUTION.md`'s "Bartholomew
+  employs an ecosystem" section and clause (d) of the corresponding decision — an external
+  assertion is **evidence with provenance**, and reaches durable knowledge only through the existing
+  learning and Governance rules — is stated precisely because the opposite is the easy
+  implementation. A confident-sounding model output written straight into memory is indistinguishable
+  later from something the user said, and the personal / potentially generalisable / system-level
+  classification cannot repair a record whose provenance was never captured. **No such pathway
+  exists today**: nothing writes model output to durable memory outside the existing consent-gated
+  write path. The mitigation is that the provenance requirement is now recorded *before* the first
+  external capability is built, not discovered after. There is no provenance field distinguishing
+  "asserted by an external provider" on memory writes today; adding one is **not authorised here**
+  and belongs to whatever slice first needs it.
+- **(2026-08-27) No structured representation of a long-lived objective — recorded conceptual gap,
+  not a defect and not scheduled.** `ExperienceKernel`'s active goals are a redacted `list[str]` of
+  free-text descriptions. There is no representation of why an objective exists, its desired
+  outcome, constraints, relevant people, budget, prior decisions, rejected alternatives,
+  dependencies, delegated work, progress or what needs attention next; the nearest existing
+  machinery is the `awaiting_response` obligation state, which tracks obligations rather than
+  objectives. This matters for the ecosystem direction specifically: the decision's guarantee that
+  a provider executes a bounded task while **Bartholomew retains the objective** is currently a
+  principle without a representation behind it. **Nothing is broken** — no current slice needs one,
+  and inventing an objective model ahead of a slice that does would be the exact failure
+  `docs/TILT.md` exists to prevent. Recorded so it is found deliberately rather than rediscovered as
+  a surprise. Designing it requires its own proposal and approval.
 - **(2026-08-17) Cloud budget ledger has a check-then-act window under concurrency — deferred,
   and deliberately not fixed now.** `ModelRouter._route_cloud()` reads the spend snapshot, makes
   the provider request, then records the cost. Two concurrent cloud generations can each observe

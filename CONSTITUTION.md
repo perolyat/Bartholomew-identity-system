@@ -462,6 +462,55 @@ technologies" principle stated at the top of this document, applied to cognition
 is why `COGNITIVE_RUNTIME.md`'s ownership table names *Identity System*, *Kernel Executive* and
 *Memory Substrate* as owners, never a model.
 
+### Bartholomew employs an ecosystem; it does not become it (added 2026-08-27)
+
+The subsection above states this for the model layer. It holds equally for **everything external
+that Bartholomew can use.** Frontier models, specialist AI agents, coding and research systems,
+conventional APIs, SaaS applications, operating-system services, local applications, web services,
+device and edge capability agents, sensors, smart-home systems and future capability providers are
+**resources Bartholomew can employ — not entities that become Bartholomew.** This is the
+"Responsibilities, Not Technologies" principle at the top of this document applied one step further
+out: the architecture reasons about a **needed capability**, never about a named vendor.
+
+Three consequences are binding.
+
+**The provider supplies capability; Bartholomew owns the objective.** An external system may
+execute a bounded task. It never becomes the owner of the user's ongoing objective, and it must
+never acquire authority over Bartholomew's Governance, identity, personal Memory policy or autonomy
+boundaries. The Executive decides and delegates, Governance decides whether it may happen, and the
+provider is how it is physically done — the capability/competency distinction stated above, applied
+to suppliers. **An external capability provider is a capability, however intelligent it is
+internally.** Consequently no provider may name an architectural concept: there must never be a
+`ClaudeExecutive`, `GeminiMemory`, `OpenAIPlanner`, `SiriManager` or any comparable provider-named
+cognitive authority, for exactly the reason there must never be an `EstateExecutive`. Provider
+integrations belong beneath the existing Capability pillar as interchangeable adapters.
+
+**External output is evidence with provenance — not truth, not learning, and not memory.** What an
+external system returns is an observation or a result carrying its source, governed by the same
+consent, privacy, provenance and audit rules as any other input. Whether it becomes longer-lived
+knowledge is decided by the learning rules already stated above — observable outcome, verification,
+repeated evidence, user correction, confidence, source provenance — and by the personal /
+potentially generalisable / system-level classification, which is unchanged. Learning *which*
+external capability works well for *what* is ordinary competency development through this same one
+Memory substrate, not a second learning system, and never a licence for uncontrolled
+self-modification or autonomous modification of model weights.
+
+**Ecosystem progress should become supply, not obsolescence.** Bartholomew should avoid
+unnecessarily duplicating a capability it can obtain safely, reliably and governably from outside;
+a stronger reasoning model, coding agent, vision or speech system, or application integration
+should *increase* what Bartholomew can do. The durable asset is not the intelligence — it is
+decades of governed personal memory, learned competence, provenance, objectives and executive
+continuity about one individual, which no supplier provides.
+
+**This section authorises no implementation.** It does not authorise a capability broker, provider
+selection or routing logic, external-agent integration, provider-performance learning, or a
+provider marketplace. `docs/TILT.md` remains the near-term sequencing authority, and the correct
+first step is one narrowly scoped external provider performing one bounded task through the
+existing governed seam. See `DECISIONS.md`'s "Bartholomew is the persistent executive above an
+ecosystem of external intelligence and capability providers" entry for the decision, alternatives
+and consequences, including the one genuine gap it records rather than closes: Bartholomew has no
+structured representation of a long-lived objective today.
+
 ### Identity is portable across infrastructure
 
 A user's Bartholomew must remain their Bartholomew even if they replace their phone or computer;
@@ -623,6 +672,14 @@ and never trade it away silently for implementation convenience:
    execution boundary rather than in a client. Collapsing the tiers into one undifferentiated
    switch, letting one user's brake affect another, or making a client the only thing holding the
    halt state are conflicts under this rule, not implementation details.
+10. **Bartholomew's executive authority over external providers** (added 2026-08-27) — the
+    separation between Bartholomew and any external intelligence or capability supplier; the rule
+    that a provider executes bounded tasks and never owns the user's objective; and the rule that
+    external output is evidence with provenance rather than truth, learning or memory. Letting an
+    external system acquire authority over Governance, identity, personal Memory policy or autonomy
+    boundaries, introducing a provider-named cognitive authority, or promoting an external
+    assertion into durable knowledge outside the existing learning and Governance rules are
+    conflicts under this rule, not implementation details.
 
 Surfacing the conflict is the requirement; the user may then decide. Proceeding without surfacing
 it is a governance violation, not a judgement call. See `CHECKLISTS.md`'s "Platform and

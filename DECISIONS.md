@@ -2314,3 +2314,159 @@
   curiosity equivalence to per-prompt granularity is a change **against this entry** and needs
   Taylor, not an inference.
 - **Date:** 2026-08-22 (decision recorded; implementation merged 2026-08-21, PR #60, `2e3a340`)
+
+## Decision: Bartholomew is the persistent executive above an ecosystem of external intelligence and capability providers
+- **Decision:** Bartholomew is **one persistent, governed personal executive**. Models, specialist
+  AI agents, coding and research systems, conventional APIs, SaaS applications, operating-system
+  services, local applications, web services, device/edge capability agents, sensors, smart-home
+  systems and future capability providers are **replaceable suppliers of intelligence or executable
+  capability beneath it**. Bartholomew retains identity, memory, objectives, learned competence,
+  provenance, Governance and executive authority across all of them. Progress elsewhere in the AI
+  and software ecosystem should therefore, wherever practical, **increase Bartholomew's available
+  capability rather than obsolete Bartholomew** — and Bartholomew should avoid unnecessarily
+  duplicating a capability it can obtain safely, reliably and governably from an external provider.
+  This is a **clarification and generalisation of architecture this repository already holds**, not
+  a new direction. Six clauses are binding:
+
+  **(a) The generalisation.** `CONSTITUTION.md`'s "Bartholomew is not the LLM" and its
+  three-layer model (platform / underlying intelligence and resources / a user's personal
+  Bartholomew) already make the *model* layer a replaceable supplier. This entry extends that same
+  replaceability from models to the **whole external ecosystem of intelligence and capability**. It
+  is the "Responsibilities, Not Technologies" principle applied one step further out: the
+  architecture reasons about a **needed capability**, not about a named vendor.
+
+  **(b) No provider-named cognitive authority, ever.** A provider integration is never an
+  architectural concept. This repository must never introduce a `ClaudeExecutive`, `GeminiMemory`,
+  `OpenAIPlanner`, `SiriManager` or any comparable provider-named executive, memory, planner or
+  governance authority — the same prohibition `CONSTITUTION.md` already states for per-domain
+  cognition (`EstateExecutive`, `EstateMemory`, …), for the same reason. Provider integrations,
+  where eventually implemented, live **beneath** the existing Capability pillar as interchangeable
+  adapters, exactly as `identity_interpreter/adapters/`'s local and cloud model adapters already do
+  beneath `ModelRouter`.
+
+  **(c) A provider supplies capability; Bartholomew owns the objective.** An external system may
+  execute a **bounded task**. It never becomes the owner of the user's ongoing objective, and it
+  never acquires authority over Bartholomew's Governance, identity, personal Memory policy or
+  autonomy boundaries. The Executive decides and delegates; Governance decides whether it may
+  happen; the provider is *how it is physically done*. This is `CONSTITUTION.md`'s existing
+  capability/competency distinction, unchanged — an external capability provider is a **capability**,
+  however intelligent it is internally.
+
+  **(d) External output is evidence with provenance — not truth, not learning, not memory.** An
+  external provider's output enters the Runtime Contract as an observation/result carrying its
+  source, and is subject to the same Memory, consent, privacy, provenance and Governance rules as
+  any other input. Promotion into longer-lived knowledge follows the **existing** learning rules —
+  observable outcome, verification, repeated evidence, user correction, confidence, source
+  provenance — and the existing personal / potentially generalisable / system-level classification.
+  **No second learning system is created**, and nothing here authorises uncontrolled
+  self-modification or autonomous modification of model weights.
+
+  **(e) Learning how to use external systems is ordinary competency, not a new pillar.** Operational
+  knowledge — which provider tends to work well for which task, which strategies repeatedly succeed
+  or fail, when verification is required, which combinations work, when local processing is
+  preferable, what supervision a provider/task class warrants — is learned through the **existing**
+  competency and training model (instruction, correction, supervised work, observed outcomes) and
+  held in the **one** shared Memory substrate. Most of it is *system/product* learning under
+  `CONSTITUTION.md`'s three-way classification, some is genuinely *personal* (this user's provider
+  preferences and permissions); neither may become shared platform knowledge automatically.
+
+  **(f) This is architectural principle, and it authorises no implementation.** It does **not**
+  authorise a Capability Broker, provider adapters beyond those that already exist, model-routing
+  or provider-selection logic, autonomous provider selection, external-agent integration,
+  provider-performance learning, a provider marketplace, cloud infrastructure, or device-agent
+  infrastructure. **`docs/TILT.md` remains the near-term sequencing authority and is not weakened.**
+  The correct first step is one narrowly scoped external provider performing one bounded task
+  through the existing governed seam, returning a result with provenance that the Executive uses
+  toward a real user objective — not a routing layer built ahead of a second provider. Complexity
+  is earned by real use: a second meaningfully different provider creates the first genuine need
+  for selection; observed real-world outcomes create the first genuine need for
+  capability-performance learning.
+
+- **Alternatives considered:** (a) **Record nothing — the existing wording already implies it.**
+  Rejected: it is *compatible* with this direction but not explicit. "Bartholomew is not the LLM"
+  is stated about cognition; nothing in canonical authority says an external *capability* supplier
+  is equally subordinate and equally replaceable, and nothing says an external AI's output is
+  evidence rather than truth. Silence is not neutral — a later session would have invented an
+  answer. (b) **Create a new canonical document (e.g. `PROVIDERS.md` or `ECOSYSTEM.md`).** Rejected
+  under "Canonical SSOT docs (no doc sprawl)": the existing 14-document structure holds this
+  decision comfortably — Constitution for the enduring principle, this document for the decision,
+  `COGNITIVE_RUNTIME.md` for runtime authority semantics, `INTERFACES.md` for the boundary shape.
+  A 15th document would create a second authority on capability. (c) **Design the Capability Broker
+  / provider-selection mechanism now, while the thinking is fresh.** Rejected: it is precisely the
+  giant-abstraction-before-real-use failure `docs/TILT.md` exists to prevent, and there is at
+  present exactly one external provider class (models) with one live seam. A selection mechanism
+  with one option to select from is not a mechanism. (d) **Treat capable external agents as
+  peer decision-makers Bartholomew coordinates with.** Rejected outright: it contradicts
+  `CONSTITUTION.md`'s single-Executive requirement and would put an external system above
+  Bartholomew's Governance. Intelligence in a supplier does not confer authority over the user.
+
+- **Why:** The strategic risk this entry answers is that a fast-moving external ecosystem makes a
+  personal assistant look redundant. The architecture already contains the answer — the durable
+  asset is decades of governed personal memory, learned competence, provenance and executive
+  continuity about one individual, none of which a frontier model or a bounded specialist agent
+  supplies. Making the relationship explicit converts ecosystem progress from a threat into supply.
+  The repository-grounded reconciliation of 2026-08-27 found **no canonical statement contradicting
+  this direction**, and found substantial existing support for it: the Five Pillars' one Executive /
+  one Memory / cross-cutting Governance; "Responsibilities, Not Technologies"; the capability vs
+  competency distinction; the three-layer platform/identity model and "Bartholomew is not the LLM";
+  "Identity is portable across infrastructure" (which already names changing AI providers and model
+  generations explicitly); `COGNITIVE_RUNTIME.md`'s ownership table, which already records
+  Capabilities as owned by the Skill Registry with "*local skills today; remote services / MCP
+  later*"; and the server-centric deployment entry above, whose clauses (d) and (e) already require
+  that device and embodiment capabilities be **declared, governed, and never independent brains**.
+  A live implementation precedent already exists and is the model to follow: `ModelRouter` dispatches
+  to interchangeable local/cloud adapters, `select_model` holds Identity-driven task-type policy,
+  cloud is off unless deliberately configured, and `ModelBackendError` refuses to let a provider
+  failure be mistaken for a genuine response. What was genuinely missing was the generalisation, the
+  evidence-not-truth rule, and an explicit statement that objective ownership never delegates.
+
+- **Consequences:**
+  - `CONSTITUTION.md` gains one subsection inside "One Platform, Many Personal Bartholomews"
+    ("Bartholomew employs an ecosystem; it does not become it") stating the enduring principle, and
+    a tenth clause in that section's binding conflict-surfacing rule. The Five Pillars, the
+    capability/competency distinction, the learning classification and the Sovereign Principle are
+    **unchanged** — this entry is reconciled *through* them.
+  - `COGNITIVE_RUNTIME.md` records where an external provider sits in the Runtime Contract (beneath
+    Capability/Execution; never at Executive or Governance) and adds one ownership-table row for
+    external capability supply. No stage of the loop changes.
+  - `INTERFACES.md` §6 gains one **"NOT implemented, NOT approved"** bullet recording the required
+    properties of an external-capability-provider boundary, reusing the device-capability
+    declaration properties already recorded there rather than inventing a second shape.
+  - `MASTER_PLAN.md` gains one key-invariant line. `ROADMAP.md` gains one "What we will not do yet"
+    line placing provider-selection/broker/marketplace/performance-learning infrastructure in
+    **FUTURE PLATFORM WORK**. **No stage's exit criteria, sequencing or status changes**, and the
+    Post-Test #1 readiness bands are untouched.
+  - `ASSUMPTIONS.md` gains **A10** (external providers remain available and substitutable on
+    acceptable terms). `RISKS.md`'s tech-debt watchlist gains three dated entries: provider
+    dependency and lock-in; external output contaminating governed memory; and the
+    objective-continuity gap below.
+  - **One genuine architectural gap is recorded, not closed.** Bartholomew cannot today retain
+    structured continuity over a long-lived objective. `ExperienceKernel`'s active goals are a
+    redacted `list[str]` of free-text descriptions; there is no representation of why an objective
+    exists, its desired outcome, constraints, relevant people, budget, prior decisions, rejected
+    alternatives, dependencies, delegated work or progress. The nearest existing machinery is the
+    `awaiting_response` obligation state (which tracks *obligations*, not objectives) and the shared
+    Memory substrate. This is a **conceptual gap recorded for a future separately-approved
+    proposal**; nothing here authorises designing or building an objective model, and no current
+    slice depends on one.
+  - **A known implementation gap becomes relevant and is not scheduled:**
+    `COGNITIVE_RUNTIME.md`'s ownership table already records that the live routing path does not
+    consult the Identity selection policy. That seam — not a new broker — is where any future
+    capability-need-to-provider mapping belongs.
+  - **No rework is required now, and none is recommended.** This entry is an evolutionary
+    refinement, not permission for a rewrite: it introduces no new architectural concept, assigns
+    external capability supply to the **existing** Skill Registry owner rather than a new one, and
+    reuses `INTERFACES.md`'s already-recorded device-capability properties rather than inventing a
+    second boundary shape. The repository-grounded check behind that claim: the first external
+    capability can be built as an ordinary skill on the **existing** `SkillBase` / manifest /
+    `PermissionChecker` / `SkillRegistry.execute_action()` path, because an outbound network call
+    from inside a governed skill is already a shipped and tested pattern —
+    `NotifySkill._deliver_notification()`'s real webhook POST, delivered in Usable POC slice 1, run
+    off the event loop per the B2/B8 discipline, and reporting *attempted* separately from
+    *delivered* precisely so a failure cannot read as a success. **The seam this direction needs
+    already exists and has already carried real traffic.** No refactor, rename, generalisation or
+    parallel system is justified by this entry; refactoring would need its own justification —
+    demonstrably blocking a useful vertical slice, violating an established invariant, or material
+    technical risk — and none of those is currently demonstrated.
+  - **Nothing about the current system changes.** No code is authorised by this entry.
+- **Date:** 2026-08-27

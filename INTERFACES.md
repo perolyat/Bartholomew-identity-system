@@ -228,6 +228,30 @@ Listing them here does not authorise building them.
     the authentication design that `DECISIONS.md` gates behind a reviewed threat model. This bullet
     does not pre-empt that design; it only records that the capability contract cannot be built
     before it.
+- **External capability provider boundary (added 2026-08-27).** Per `DECISIONS.md`'s "Bartholomew
+  is the persistent executive above an ecosystem of external intelligence and capability providers"
+  and `CONSTITUTION.md`'s "Bartholomew employs an ecosystem; it does not become it". **Nothing of
+  this exists** beyond the model adapters already behind `ModelRouter`: there is no capability
+  broker, no provider registry, no selection or routing mechanism, and none is authorised. Recorded
+  only so a future, separately-approved integration has one agreed shape. The required properties
+  are **the same four already stated for device capabilities above** — declared rather than assumed;
+  availability reported distinctly from declaration; every invocation passing the same Governance
+  checkpoints and haltable by the Parking Brake; consent per-capability and revocable — plus three
+  specific to an external supplier:
+  - **The seam is a capability call, not a cognition handoff.** A provider is invoked through the
+    Capability/Execution stages of the Runtime Contract; it does not receive Executive authority,
+    does not participate in Governance, and does not become the owner of the objective the task
+    serves. The bounded task, its inputs and its permitted scope are Bartholomew's to define.
+  - **Results carry provenance and are evidence, not truth.** The identity of the supplier, and the
+    fact that the content is an external assertion rather than an established fact, must survive
+    into Reflection and any durable write. A provider failure must surface as a truthful degraded
+    result — the precedent is `ModelBackendError`, which exists so a failed generation can never be
+    mistaken for a real one.
+  - **What is sent is governed before it leaves.** Sending personal context to an external system is
+    a disclosure, and the existing consent, privacy, redaction and `never_store`/`ask_before_store`
+    semantics apply to egress, not only to storage. The precedent is the cloud model adapter, which
+    is off unless deliberately configured precisely because enabling it is the point where personal
+    context first leaves the deployment.
 
 ---
 

@@ -1525,3 +1525,23 @@ pass inserts ahead of them.
   stop authority (`RISKS.md`, and clause (b) of that entry), and the same Stage 6 auth/threat-model
   gate that already blocks remote exposure. The proposed *shape* of the capability contract is
   recorded in `INTERFACES.md` §6 under "Proposed contracts — NOT implemented, NOT approved".
+- **Build a capability broker, provider registry, provider-selection/routing mechanism,
+  external-agent integration, provider-performance learning, or a provider marketplace (added
+  2026-08-27).** `DECISIONS.md`'s "Bartholomew is the persistent executive above an ecosystem of
+  external intelligence and capability providers" establishes that external models, agents,
+  services, applications and devices are replaceable suppliers beneath one persistent governed
+  executive. That is **enduring principle and TARGET direction, not current scope, and none of that
+  infrastructure exists** — the only external-provider seam in the repository is `ModelRouter`'s
+  local/cloud model adapters. It joins the lines above as **FUTURE PLATFORM WORK** requiring its own
+  proposal and approval.
+  **Explicitly unchanged by that decision:** the Usable POC / time-to-real-use prioritisation and
+  `docs/TILT.md` sequencing continue to govern what is worked on next; **no stage's exit criteria,
+  sequencing or status changed**; and the Post-Test #1 readiness bands are untouched. A destination
+  was recorded, not a schedule. The sequencing that decision does name is deliberately the opposite
+  of building infrastructure first: **one** narrowly scoped external provider performing **one**
+  bounded task through the existing governed seam comes first; a second meaningfully different
+  provider is what would first create a genuine selection problem; observed real-world outcomes are
+  what would first create a genuine need for capability-performance learning. Also recorded there,
+  and **not** scheduled: Bartholomew has no structured representation of a long-lived objective
+  today (`ExperienceKernel`'s active goals are free-text strings), which is a conceptual gap for a
+  future separately-approved proposal, not work authorised here.
