@@ -228,9 +228,7 @@ def test_non_loopback_opt_in_cannot_produce_an_unauthenticated_surface(tmp_path)
     finally:
         svc.kill()
 
-    assert svc.proc.returncode == EXIT_BAD_CONFIG, (
-        "a non-loopback bind started without TLS"
-    )
+    assert svc.proc.returncode == EXIT_BAD_CONFIG, "a non-loopback bind started without TLS"
     assert _rows(svc) == 0
 
 
