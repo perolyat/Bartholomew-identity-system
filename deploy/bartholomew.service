@@ -1,0 +1,66 @@
+# systemd unit for Bartholomew — the server-centric Alpha target.
+#
+# Install (as root):
+#   install -m 644 deploy/bartholomew.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now bartholomew
+#
+# Edit User/WorkingDirectory/ExecStart to match the deployment before enabling.
+#
+# This unit is the supervisor. Bartholomew deliberately does not supervise
+# itself (see bartholomew/runtime/serve.py) — restart-on-failure and
+# start-at-boot are exactly what an init system is for, and two supervisors
+# disagreeing is worse than none.
+
+[Unit]
+Description=Bartholomew Personal Executive System
+Documentation=file:///opt/bartholomew/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# One process per runtime. The kernel's SQLite persistence is single-writer
+# and KernelDaemon takes an exclusive lock on the database file at startup,
+# so a second instance against the same BARTH_DB_PATH cannot start — `serve`
+# exits 3 and says so. Isolate additional runtimes by database, not by
+# adding processes here.
+User=bartholomew
+Group=bartholomew
+WorkingDirectory=/opt/bartholomew
+Environment=PYTHONUNBUFFERED=1
+Environment=BARTH_DB_PATH=/var/lib/bartholomew/barth.db
+
+# Loopback-only, deliberately. The API has no authentication of its own yet,
+# and inbound capture fails closed until the authenticated control plane
+# installs a principal resolver. Do NOT add BARTH_API_ALLOW_NON_LOOPBACK here
+# to "make it reachable" — public exposure is a separate, explicit decision
+# that follows authentication and TLS, not a deployment convenience.
+ExecStart=/opt/bartholomew/.venv/bin/python -m bartholomew serve
+
+Restart=on-failure
+RestartSec=5s
+
+# Do not restart-loop on a configuration that cannot succeed: exit 3 is
+# "another instance owns this database" and exit 4 is "refused configuration".
+# Both need a human, and hammering them hides the message.
+RestartPreventExitStatus=3 4
+
+# Must exceed serve.SHUTDOWN_BUDGET_SECONDS (30s). KernelDaemon.stop() drains
+# in-flight requests, cancels background tasks and checkpoints the WAL; a
+# SIGKILL partway through is precisely the unclean shutdown the next startup
+# then has to detect and recover from.
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+# Modest hardening. Nothing here is a substitute for authentication.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bartholomew
+StateDirectory=bartholomew
+
+[Install]
+WantedBy=multi-user.target

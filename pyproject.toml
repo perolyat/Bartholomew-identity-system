@@ -111,6 +111,7 @@ ignore = [
 "test_*.py" = ["PLC0415"]  # Lazy imports in root-level tests
 "cleanup_*.py" = ["PLC0415"]  # Lazy imports in utility scripts
 "bartholomew/kernel/**" = ["PLC0415", "PLR0912", "PLR0915", "PLW0603"]  # Lazy imports for optional deps + temp complexity
+"bartholomew/runtime/**" = ["PLC0415"]  # Lazy imports: serve must not import the API app at CLI load time
 "bartholomew_api_bridge_v0_1/**" = ["PLC0415", "PLW0603"]  # Lazy imports + global metrics
 "identity_interpreter/orchestrator/**" = ["PLC0415"]  # Lazy imports for optional dependencies
 "identity_interpreter/adapters/sight/**" = ["PLC0415"]  # Lazy imports for optional vision deps

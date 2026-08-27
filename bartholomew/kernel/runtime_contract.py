@@ -2643,3 +2643,284 @@ async def run_training_through_runtime_contract(
     result.provenance_error = ingest_reflection.error
 
     return result
+
+
+# =============================================================================
+# Inbound capture (Session D)
+# =============================================================================
+#
+# The governed seam for events that arrive from outside, rather than from
+# Taylor typing, a device, or a scheduler drive. Same shape as every other
+# surface in this module: Observation -> Interpretation -> Executive ->
+# Governance -> Capability/Execution -> Reflection.
+#
+# Two things this seam deliberately is NOT:
+#
+#   * It is not an Executive. Capture records that something arrived; it never
+#     decides what the event means, whether it is true, or what Bartholomew
+#     should do about it. Nothing here writes Memory, creates an objective,
+#     invokes a skill, or schedules work.
+#   * It is not domain-aware. `event_type` is an opaque string that is stored
+#     and never branched on. There is no `if email`, no `if calendar`. Future
+#     provider adapters translate their payloads into this envelope; the
+#     ingress path stays blind to what they mean.
+#
+# Parking Brake semantics here follow the canonical rule -- "inspect, but do
+# not mutate" (DECISIONS.md, Governance decision 2026-08-18). A braked inbound
+# request therefore writes NOTHING AT ALL: no `inbound_events` row, no
+# Reflection. Recording a "received and refused" row would itself be a
+# governed-state mutation performed while the user has halted mutation, which
+# is exactly the side door a brake exists to close. The caller gets an honest,
+# retryable refusal (`ParkingBrakeEngagedError` -> 503) and nothing is
+# acknowledged as captured, so the sender's own retry re-delivers the event
+# once the brake is released.
+
+#: The single CandidateAction kind for inbound capture. One kind, not one per
+#: provider -- the Executive-facing surface must not grow a taxonomy of
+#: domains through the back door of governance kinds.
+INBOUND_CAPTURE_KIND = "inbound_capture"
+
+
+@dataclass
+class InboundRuntimeResult:
+    """Outcome of one inbound event through the Runtime Contract.
+
+    `captured` is the only field that means the event is durably recorded.
+    `duplicate` means this (source_id, event_id) was already captured and the
+    stored row is being reported again -- a retry from an external system,
+    not a second logical event.
+    """
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    captured: bool
+    duplicate: bool
+    outcome: str
+    reason: str | None
+    stored: Any  # StoredInboundEvent | None
+
+    #: True when the Reflection accompanying a capture failed to persist. The
+    #: capture itself is unaffected and is never re-run for it -- the row is
+    #: the durable record and it exists -- but the event must not present as
+    #: fully recorded. Same posture as the device seams (WP-A2b).
+    provenance_degraded: bool = False
+    provenance_error: str | None = None
+
+
+async def _record_inbound_reflection(
+    db_path: str | None,
+    event_type: str,
+    source_id: str,
+    event_id: str,
+    outcome: str,
+    reason: str | None,
+    payload_sha256: str | None,
+) -> ReflectionWriteOutcome:
+    """One ActionReflection per *captured* inbound event.
+
+    Only reached after a successful capture. Denials under the Parking Brake
+    write nothing (see this section's header); a persistence failure has
+    nothing to reflect on, because nothing was captured.
+
+    The payload itself is never put in the Reflection -- the digest is, so the
+    audit trail can prove *which* content was accepted without copying
+    third-party data into a second store.
+    """
+    mem = None
+    if db_path:
+        try:
+            from .memory_store import MemoryStore
+
+            mem = MemoryStore(db_path)
+        except Exception as exc:
+            logger.exception("Failed to construct MemoryStore for inbound reflection")
+            return ReflectionWriteOutcome(
+                error=f"reflection write failed (inbound): store construction failed: {exc}",
+            )
+    reflection = ActionReflection(
+        surface="inbound",
+        action=INBOUND_CAPTURE_KIND,
+        outcome=outcome,
+        summary=f"Inbound event captured from {source_id} ({event_type})",
+        details={
+            "source_id": source_id,
+            "event_id": event_id,
+            "event_type": event_type,
+            "payload_sha256": payload_sha256 or "",
+            **({"reason": reason} if reason else {}),
+        },
+    )
+    return await record_action_reflection(mem, reflection)
+
+
+async def run_inbound_through_runtime_contract(
+    *,
+    db_path: str,
+    source_id: str,
+    event_id: str,
+    event_type: str,
+    payload: Any,
+    verified_by: str,
+    occurred_at: str | None = None,
+    runtime_id: str | None = None,
+    identity_context: IdentityContext | None = None,
+) -> InboundRuntimeResult:
+    """Trace one inbound event through the Runtime Contract seam.
+
+    The governed production entry point for the inbound surface. Everything
+    upstream of this -- transport, principal verification, payload shape
+    validation -- belongs to the API boundary; everything downstream of
+    capture belongs to whoever later decides what a captured event means.
+
+    `verified_by` is the identity of *what verified this event's source*,
+    supplied by the authenticated control plane. This seam does not
+    authenticate anything and must never be called with an unverified caller:
+    the API boundary fails closed before reaching here.
+
+    Order matters and is not negotiable:
+
+      1. Parking Brake, read through `GovernanceStore` -- the same authority
+         chat, scheduler drives, skill execution and the device seams read,
+         and fail-closed on an unreadable gate. Gated on the brake being
+         *engaged at all* rather than on a subsystem scope, matching the
+         existing memory-mutation gate: capture mutates governed state and
+         belongs to none of the existing subsystem scopes.
+      2. Identity Policy Decision (additive; skipped when no IdentityContext
+         is wired in, matching every other surface).
+      3. Capture -- reached only if both gates allowed.
+
+    Raises `ParkingBrakeEngagedError` when the brake is engaged, so the caller
+    reports an honest retryable refusal, and `InboundPersistenceError` when
+    the write fails. Neither is a success and neither may be reported as one.
+    """
+    from bartholomew.kernel.inbound_store import (
+        OUTCOME_CAPTURED,
+        capture_event,
+        ensure_schema,
+    )
+    from bartholomew.orchestrator.safety.governance_store import (
+        ParkingBrakeEngagedError,
+        engaged_state_fail_closed_off_loop,
+    )
+
+    observation = Observation(source=f"inbound:{source_id}", raw_content=event_type)
+    interpretation = Interpretation(observation=observation, prompt=event_type)
+    candidate_action = CandidateAction(kind=INBOUND_CAPTURE_KIND, interpretation=interpretation)
+
+    # Governance gate 1: Parking Brake. Before anything is written, and
+    # fail-closed -- an unreadable safety gate must refuse, never wave through.
+    # `engaged_state_fail_closed_off_loop` propagates its own read failures,
+    # which is the fail-closed behaviour: the exception aborts the caller
+    # before capture.
+    state = await engaged_state_fail_closed_off_loop(db_path)
+    if state.engaged:
+        raise ParkingBrakeEngagedError(
+            "Parking brake is engaged: inbound events are not being captured. "
+            "Nothing was recorded, and the sender may retry once it is released.",
+            scopes=state.scopes,
+        )
+
+    # Schema before either write path. The Identity-policy branch below
+    # records its refusal into the same table a capture uses, so preparing it
+    # only on the success path left the denial path writing to a table that
+    # did not exist yet.
+    #
+    # Schema preparation is part of persisting, so a failure here is an
+    # inbound persistence failure like any other -- reported as one rather
+    # than leaking a raw sqlite3 error the caller would have to guess at.
+    try:
+        await run_off_loop(ensure_schema, db_path)
+    except Exception as e:
+        from bartholomew.kernel.inbound_store import InboundPersistenceError
+
+        raise InboundPersistenceError(
+            f"Inbound event {source_id}/{event_id} was NOT persisted: "
+            f"inbound schema unavailable: {type(e).__name__}: {e}",
+        ) from e
+
+    # Governance gate 2: Identity Policy Decision (additive; see docstring).
+    if identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, candidate_action.kind)
+        if not decision.allowed:
+            # A policy denial is not a brake halt: mutation is not forbidden,
+            # this particular action is. Recording the refusal is therefore
+            # both permitted and useful -- but it stays a refusal, never a
+            # capture, and `captured` is False.
+            reason = f"Denied by Identity policy: {decision.reason}"
+            stored = await run_off_loop(
+                capture_event,
+                db_path,
+                source_id=source_id,
+                event_id=event_id,
+                event_type=event_type,
+                occurred_at=occurred_at,
+                payload=payload,
+                outcome="governance_denied",
+                governance_reason=reason,
+                verified_by=verified_by,
+                runtime_id=runtime_id,
+            )
+            return InboundRuntimeResult(
+                observation=observation,
+                candidate_action=candidate_action,
+                governance_allowed=False,
+                captured=False,
+                duplicate=stored.duplicate,
+                outcome="governance_denied",
+                reason=reason,
+                stored=stored,
+            )
+
+    # Capability + Execution: durable capture, and nothing else.
+    stored = await run_off_loop(
+        capture_event,
+        db_path,
+        source_id=source_id,
+        event_id=event_id,
+        event_type=event_type,
+        occurred_at=occurred_at,
+        payload=payload,
+        outcome=OUTCOME_CAPTURED,
+        governance_reason=None,
+        verified_by=verified_by,
+        runtime_id=runtime_id,
+    )
+
+    if stored.duplicate:
+        # A retry. The logical event already exists and is unchanged; writing
+        # a second Reflection for it would inflate the audit trail with
+        # repeat deliveries that produced no new capture.
+        return InboundRuntimeResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            captured=stored.outcome == OUTCOME_CAPTURED,
+            duplicate=True,
+            outcome=stored.outcome,
+            reason=stored.governance_reason,
+            stored=stored,
+        )
+
+    reflection = await _record_inbound_reflection(
+        db_path,
+        event_type,
+        source_id,
+        event_id,
+        OUTCOME_CAPTURED,
+        None,
+        stored.payload_sha256,
+    )
+
+    return InboundRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=True,
+        captured=True,
+        duplicate=False,
+        outcome=OUTCOME_CAPTURED,
+        reason=None,
+        stored=stored,
+        provenance_degraded=reflection.error is not None,
+        provenance_error=reflection.error,
+    )

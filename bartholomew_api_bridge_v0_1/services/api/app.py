@@ -45,6 +45,7 @@ from .routes import (
     awaiting_response,
     consent,
     governance,
+    inbound,
     liveness,
     memory,
     metrics,
@@ -89,6 +90,12 @@ app.include_router(memory.router)
 app.include_router(awaiting_response.router)
 app.include_router(onboarding.router)
 app.include_router(training.router)
+
+# Governed inbound capture (Session D). Deliberately NOT added to
+# `_ADMISSION_EXEMPT_PATHS`: unlike health and static UI, capture writes
+# governed state and needs a live kernel, so it must be refused during the
+# startup and shutdown windows like every other real ingress point.
+app.include_router(inbound.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)
@@ -376,6 +383,15 @@ async def startup():
     except Exception:
         pass
 
+    # Inbound capture stays fail-closed unless the authenticated control
+    # plane installs a principal resolver. The one exception is the
+    # double-gated test resolver, which exists so the end-to-end HTTP path is
+    # provable against a real server process and which announces itself
+    # everywhere it applies -- see inbound_auth's module docstring.
+    from . import inbound_auth
+
+    inbound_auth.maybe_install_test_resolver_from_env()
+
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
 
@@ -639,6 +655,77 @@ async def _model_health() -> dict[str, Any]:
     return info
 
 
+def _component_health() -> dict[str, Any]:
+    """Whether each always-on component is actually alive (Session D).
+
+    Four components an operator needs distinguished, because "the process is
+    up" answers none of them:
+
+    * **service**  -- this HTTP process. If you are reading this, it is up.
+    * **runtime**  -- the kernel daemon, and which lifecycle state it is in.
+    * **scheduler**-- the autonomy loop, from its own heartbeat. A loop that
+      died, or that stopped beating, reports failed rather than silently
+      leaving the service looking healthy.
+    * **inbound**  -- whether the capture door is open, and on what. Fail-closed
+      (no resolver) is a normal, reportable state, not a fault; a test-only
+      resolver is flagged loudly so a running service can never be admitting
+      events on test credentials unnoticed.
+
+    Returns the components plus a private `_overall` key: "ok" only when
+    nothing is failed, "degraded" otherwise. Never raises -- a health endpoint
+    that 500s tells an operator nothing.
+    """
+    from bartholomew.runtime.health import ComponentHealth
+
+    components: dict[str, Any] = {"service": {"status": "ok"}}
+
+    if _kernel is None:
+        components["runtime"] = {"status": "failed", "state": "not_initialized"}
+        components["scheduler"] = {"status": "unknown", "state": "unknown"}
+    else:
+        state = getattr(_kernel.lifecycle_state, "value", str(_kernel.lifecycle_state))
+        running = state == "running"
+        components["runtime"] = ComponentHealth(
+            "runtime",
+            ok=running,
+            detail={"state": state},
+        ).as_dict()
+
+        heartbeat = getattr(_kernel, "scheduler_heartbeat", None)
+        if heartbeat is None:
+            components["scheduler"] = {"status": "unknown", "state": "unknown"}
+        else:
+            snapshot = heartbeat.snapshot()
+            components["scheduler"] = ComponentHealth(
+                "scheduler",
+                ok=snapshot["healthy"],
+                detail=snapshot,
+            ).as_dict()
+
+    try:
+        from . import inbound_auth
+
+        open_for_capture = inbound_auth.get_resolver() is not None
+        components["inbound"] = {
+            # An intentionally closed door is working correctly, so this is
+            # "ok" either way -- what matters is that it says which it is.
+            "status": "ok",
+            "open": open_for_capture,
+            "test_resolver_active": inbound_auth.resolver_is_test_only(),
+            "detail": (
+                "Inbound capture is closed: no principal resolver installed."
+                if not open_for_capture
+                else "Inbound capture is open."
+            ),
+        }
+    except Exception:
+        components["inbound"] = {"status": "unknown"}
+
+    failed = any(isinstance(v, dict) and v.get("status") == "failed" for v in components.values())
+    components["_overall"] = "degraded" if failed else "ok"
+    return components
+
+
 @app.get("/api/health")
 async def health():
     kernel_info = {}
@@ -666,13 +753,18 @@ async def health():
         kernel_info = {"kernel_online": False}
 
     model_info = await _model_health()
+    components = _component_health()
 
     return {
-        "status": "ok",
+        # Not hardcoded any more. An always-on service whose scheduler has
+        # died must not answer "ok" -- that is the failure this endpoint
+        # exists to make visible (Session D).
+        "status": components["_overall"],
         "tz": str(TZ),
         "time": datetime.now(TZ).isoformat(),
         "orchestrator": getattr(orch, "__class__", type("x", (object,), {})).__name__,
         "version": app.version,
+        "components": {k: v for k, v in components.items() if not k.startswith("_")},
         **model_info,
         **kernel_info,
     }

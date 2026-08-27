@@ -456,6 +456,19 @@ tool_use:
     # docstring), so it needs its own allowlist entry to ever run against
     # this Identity.yaml.
     - "awaiting_response_check"
+    # Session D: the governed inbound-capture seam's single kind
+    # (docs/D_ALWAYS_ON_AND_INBOUND.md). Follows the same recorded precedent
+    # as S1.3's "notify" and S1.4's awaiting_response_* entries immediately
+    # above -- a seam kind that is unreachable without its own allowlist
+    # entry, because no inbound kind is exempted the way self-maintenance
+    # drives are via _SELF_MAINTENANCE_DRIVES.
+    #
+    # What this authorises is deliberately narrow: *recording that an
+    # authenticated external event arrived*. It is not permission to believe
+    # the event, act on it, or execute anything on its behalf. There is
+    # exactly one kind here, not one per provider, so allowlisting capture
+    # can never widen into allowlisting a domain.
+    - "inbound_capture"
     # Usable POC slice 2 (docs/POC_SLICE_2_PROACTIVE_REMINDERS.md): the
     # scheduler drive that notices stored date-bearing facts falling due and
     # sends one governed reminder for each. Follows the same recorded

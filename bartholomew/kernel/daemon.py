@@ -296,6 +296,15 @@ class KernelDaemon:
         self._last_daily_reflection = None
         self._last_weekly_reflection = None
 
+        # Always-on health: what this process's autonomy loop is doing.
+        # Written by the scheduler loop itself (see scheduler/loop.py's
+        # `_beat()`), read by the health surface. In-memory by design -- it
+        # answers "is *this* process's scheduler alive right now", which no
+        # previous process's durable state can answer.
+        from bartholomew.runtime.health import SchedulerHeartbeat
+
+        self.scheduler_heartbeat = SchedulerHeartbeat()
+
         # Lifecycle state (Phase B stage B5) -- see DaemonLifecycleState.
         self.lifecycle_state = DaemonLifecycleState.NOT_STARTED
         self._runtime_id: str | None = None
@@ -505,6 +514,7 @@ class KernelDaemon:
             from .scheduler.loop import run_scheduler
 
             self._scheduler_task = asyncio.create_task(run_scheduler(self))
+            self._scheduler_task.add_done_callback(self._on_scheduler_task_done)
             resources_started.append("scheduler_task")
         except BaseException:  # includes CancelledError; re-raised below
             self.lifecycle_state = DaemonLifecycleState.FAILED
@@ -683,6 +693,36 @@ class KernelDaemon:
                     print(f"[Kernel] Activated persona: {packs[0]}")
         except Exception as e:
             print(f"[Kernel] Experience kernel init warning: {e}")
+
+    def _on_scheduler_task_done(self, task: asyncio.Task[None]) -> None:
+        """Turn a dead autonomy loop into an observable state.
+
+        `run_scheduler()` is created fire-and-forget, so before this the loop
+        could exit -- on cancellation during shutdown, or on an exception that
+        escaped its own guards -- and nothing anywhere would notice. The
+        process kept serving, the health endpoint kept saying ok, and
+        Bartholomew had quietly stopped being proactive. That is precisely the
+        "always-on software that silently dies" failure.
+
+        Records the outcome on the heartbeat rather than acting on it: a
+        supervisor restarting the service is the recovery mechanism, and
+        deciding that here would be a second, competing supervisor.
+        """
+        if task.cancelled():
+            self.scheduler_heartbeat.mark_stopped()
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Scheduler loop exited unexpectedly: %s", exc, exc_info=exc)
+            self.scheduler_heartbeat.mark_failed(exc)
+            return
+        # A clean return is still wrong while the daemon is running: the loop
+        # is supposed to run until cancelled.
+        if self.lifecycle_state is DaemonLifecycleState.RUNNING:
+            logger.error("Scheduler loop returned while the daemon is still RUNNING")
+            self.scheduler_heartbeat.mark_failed("scheduler loop returned unexpectedly")
+        else:
+            self.scheduler_heartbeat.mark_stopped()
 
     async def stop(self) -> None:
         """Gracefully stop the kernel daemon."""

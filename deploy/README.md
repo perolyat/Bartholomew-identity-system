@@ -1,0 +1,144 @@
+# Running Bartholomew as a service
+
+Bartholomew's kernel and scheduler run inside the API process. That process is
+what must stay alive — not a browser tab, and not a developer's terminal.
+
+Everything below launches the same thing:
+
+```
+python -m bartholomew serve
+```
+
+No arguments are required. It binds through the existing access boundary
+(loopback unless a non-loopback bind has been deliberately enabled), starts the
+kernel, starts the scheduler, and serves the API and UI. Closing the browser
+has no effect on it.
+
+## What supervises it
+
+Bartholomew does not supervise itself. Restart-on-failure and start-at-boot
+belong to the operating system, and two supervisors disagreeing is worse than
+one. Pick one of:
+
+| Target | Mechanism |
+|---|---|
+| Linux server (the Alpha target) | `deploy/bartholomew.service` (systemd) |
+| Any host with Docker | `docker compose up -d` (`restart: unless-stopped`) |
+| Windows development | run `python -m bartholomew serve` in a terminal |
+| Windows as a service (optional) | an operator-managed wrapper such as NSSM — see below |
+
+### systemd
+
+```bash
+sudo install -m 644 deploy/bartholomew.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bartholomew
+systemctl status bartholomew
+journalctl -u bartholomew -f
+```
+
+Edit `User`, `WorkingDirectory`, `ExecStart` and `BARTH_DB_PATH` in the unit
+before enabling it.
+
+### Docker
+
+```bash
+docker compose up -d
+docker compose logs -f
+docker compose down
+```
+
+The compose file publishes to `127.0.0.1:5173` only. A bare `-p 5173:5173`
+publishes on every host interface and must not be used.
+
+### Windows
+
+`python -m bartholomew serve` works as-is and is the supported development
+path. If a Windows *service* is wanted, a third-party wrapper such as
+[NSSM](https://nssm.cc/) can register the same command. That is an optional,
+operator-managed adapter: nothing in this repository bundles it, depends on it,
+or requires it, and Docker Desktop is an equally supported alternative.
+
+## Invariants the service enforces
+
+`serve` refuses two configurations outright, exiting **4** with the reason:
+
+* `--workers` greater than 1
+* `--reload`
+
+Both would run more than one kernel against one database. Bartholomew's SQLite
+persistence is single-writer and `KernelDaemon` takes an exclusive lock on the
+database file at startup, so additional processes cannot start anyway — the
+refusal just makes that legible instead of surfacing as a lock error later.
+
+**Scale by running separate runtimes against separate databases, never by
+adding workers to one.**
+
+## Exit codes
+
+| Code | Meaning | What to do |
+|---|---|---|
+| 0 | Clean exit | — |
+| 3 | Another Bartholomew already owns this database | Stop it, or use a different `BARTH_DB_PATH` |
+| 4 | Refused configuration (`--workers`/`--reload`/bad bind) | Fix the unit file; retrying will not help |
+| 143 / -15 | Terminated by SIGTERM | Normal. uvicorn re-raises the signal after a graceful shutdown |
+
+`systemd` is configured with `RestartPreventExitStatus=3 4`, so neither
+un-winnable case turns into a restart loop.
+
+### "Could not acquire process lock"
+
+Something else owns the database. On Linux the lock is released automatically
+when the holder exits, so this almost always means a second instance really is
+running (`systemctl status bartholomew`, `ps aux | grep bartholomew`). On
+Windows the file handle can outlive an ungracefully-killed process; confirm no
+`python` process is holding it before doing anything to the lock file. The lock
+is never broken automatically — doing so would defeat the only thing preventing
+two schedulers writing one database.
+
+## Shutdown
+
+`SIGTERM` (what every supervisor sends) triggers a graceful stop: request
+admission closes, in-flight work drains, background tasks are cancelled, the
+SQLite WAL is checkpointed, and the process lock is released. That takes up to
+`serve.SHUTDOWN_BUDGET_SECONDS` (30s), so any supervisor's stop timeout must
+exceed it — the unit file uses 45s and compose uses `stop_grace_period: 45s`. A
+`SIGKILL` partway through is exactly the unclean shutdown the next startup then
+has to detect and recover from.
+
+## Is it actually alive?
+
+`GET /api/health` answers per component, and reports `"status": "degraded"`
+when any of them has failed:
+
+```json
+{
+  "status": "ok",
+  "components": {
+    "service":   {"status": "ok"},
+    "runtime":   {"status": "ok", "state": "running"},
+    "scheduler": {"status": "ok", "state": "running",
+                  "last_beat": "...Z", "seconds_since_beat": 3.1,
+                  "last_drive": "self_check", "stalled": false},
+    "inbound":   {"status": "ok", "open": false,
+                  "test_resolver_active": false,
+                  "detail": "Inbound capture is closed: no principal resolver installed."}
+  }
+}
+```
+
+`/healthz` stays a trivial liveness probe (that is its job for load balancers);
+`/api/health` is the one that can tell you the scheduler died.
+
+A `scheduler` that reports `failed` or `stalled: true` means the autonomy loop
+is no longer running in this process even though the API still answers. Restart
+the service and check the logs — that is the failure mode this field exists to
+stop being silent.
+
+## Exposure
+
+The API is loopback-only by default and has no authentication of its own;
+inbound capture fails closed until the authenticated control plane installs a
+principal resolver. Do not add `BARTH_API_ALLOW_NON_LOOPBACK=1` to make the
+service reachable from elsewhere — public exposure is a separate, explicit
+decision that follows authentication and TLS, not a deployment convenience.

@@ -14,7 +14,12 @@ services:
     volumes:
       # Persist SQLite databases
       - ./data:/app/data
+    # Docker is the supervisor here, the same role systemd plays in
+    # deploy/bartholomew.service. Bartholomew does not restart itself.
     restart: unless-stopped
+    # KernelDaemon.stop() drains, cancels background work and checkpoints the
+    # WAL; the 10s default would SIGKILL partway through that.
+    stop_grace_period: 45s
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5173/healthz"]
       interval: 30s

@@ -560,6 +560,38 @@ def say(
     raise typer.Exit(code=1)
 
 
+@app.command("serve")
+def serve_command(
+    host: str = typer.Option(
+        None,
+        help=(
+            "Bind address. Defaults to the access boundary's resolution "
+            "(loopback unless BARTH_API_ALLOW_NON_LOOPBACK is deliberately set)."
+        ),
+    ),
+    port: int = typer.Option(None, help="Port to listen on. Defaults to BARTH_API_PORT or 5173."),
+    workers: int = typer.Option(1, help="Must be 1; Bartholomew's persistence is single-writer."),
+    reload: bool = typer.Option(False, "--reload", help="Refused; see `serve`'s error message."),
+    log_level: str = typer.Option("info", help="uvicorn log level."),
+) -> None:
+    """
+    Run Bartholomew as a service.
+
+    The entry point a service supervisor launches: no terminal, no browser, no
+    reload. Bartholomew's kernel and scheduler run in this process and keep
+    running whether or not anything is connected to it.
+
+    Supervision (restart on failure, start at boot) belongs to systemd, the
+    Windows service manager, or the container runtime -- see `deploy/README.md`.
+    This command does not supervise itself.
+    """
+    from bartholomew.runtime.serve import serve
+
+    code = serve(host=host, port=port, workers=workers, reload=reload, log_level=log_level)
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
 def main():
     """Entry point for CLI"""
     app()

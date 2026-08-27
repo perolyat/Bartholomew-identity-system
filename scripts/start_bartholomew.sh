@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
-export UVICORN_RELOAD=true
-uvicorn app:app --host 127.0.0.1 --port 5173
+
+# Development launcher. For a supervised, always-on service use
+#   python -m bartholomew serve
+# under systemd/Docker instead (see deploy/README.md) -- this script is a
+# foreground process that dies with the terminal.
+exec python -m bartholomew serve "$@"

@@ -41,4 +41,12 @@ EXPOSE 5173
 #      request boundary sees the Docker bridge address rather than loopback.
 #      This prints a conspicuous warning at every startup.
 ENV BARTH_API_ALLOW_NON_LOOPBACK=1
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5173"]
+# `serve` resolves its bind address through the access boundary rather than
+# taking a --host flag, so the container's namespace-local 0.0.0.0 bind is
+# expressed here. Both variables are required: the boundary refuses a
+# non-loopback bind that was not deliberately enabled.
+ENV BARTH_API_HOST=0.0.0.0
+# One process, no reload, no extra workers -- `serve` refuses those outright
+# because the kernel's persistence is single-writer and it takes an exclusive
+# process lock on the database at startup.
+CMD ["python", "-m", "bartholomew", "serve"]
