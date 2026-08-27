@@ -27,6 +27,18 @@ import pytest
 # place before pytest imports any test module.
 os.environ.setdefault("BARTH_DB_PATH", str(Path(tempfile.mkdtemp()) / "test-session.db"))
 
+# The deterministic hash embedder is not a semantic embedder, and outside tests
+# it never serves silently: an unloadable model fails closed rather than
+# degrading (see bartholomew/kernel/embedding_engine.py). CI has no provisioned
+# model, so the test session enables the fallback *explicitly* -- which is the
+# only way it can ever run. `setdefault`, so a developer with a real model
+# provisioned can unset it and exercise the genuine semantic path.
+#
+# Tests asserting on real semantic behaviour must not rely on this: vectors
+# produced here are stored and searched as `deterministic-hash` and are kept in
+# a separate retrieval population from semantic ones.
+os.environ.setdefault("BARTHO_EMBED_ALLOW_FALLBACK", "1")
+
 
 class _InMemoryTestKeyring(keyring.backend.KeyringBackend):
     """In-process keyring backend for tests, not for product use.

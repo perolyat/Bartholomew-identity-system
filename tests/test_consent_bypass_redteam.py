@@ -61,8 +61,8 @@ def _now() -> str:
 def _index_memory(db_path: str, memory_id: int, kind: str, key: str, value: str) -> None:
     """
     Land a memory in the DB and index it in both FTS and the vector store,
-    using the *real* embedding engine/config (matching what HybridRetriever/
-    Retriever query with by default) -- bypassing MemoryStore.upsert_memory()
+    using the *real* embedding engine and its effective storage identity
+    (matching what HybridRetriever/Retriever query with by default) -- bypassing MemoryStore.upsert_memory()
     entirely, since that write path already hard-blocks requires_consent
     content (see module docstring). This is the retrieval-layer's own
     responsibility being tested in isolation from the write-time guard.
@@ -80,14 +80,19 @@ def _index_memory(db_path: str, memory_id: int, kind: str, key: str, value: str)
     fts.upsert(memory_id, value)
 
     embed_engine = get_embedding_engine()
-    cfg = embed_engine.config
+    # `storage_identity`, not `config`: the identity that actually produced the
+    # vector. Seeding with the configured identity would file a deterministic
+    # vector into the semantic population, and the retriever -- which searches
+    # only its own engine's population -- would then never see it.
+    provider, model, embedder_kind = embed_engine.storage_identity
     vec = embed_engine.embed_texts([value])[0]
     VectorStore(db_path).upsert(
         memory_id=memory_id,
         vec=vec,
         source="summary",
-        provider=cfg.provider,
-        model=cfg.model,
+        provider=provider,
+        model=model,
+        embedder_kind=embedder_kind,
     )
 
 
