@@ -40,7 +40,6 @@ from prometheus_client import PlatformCollector, ProcessCollector
 
 from bartholomew.platform.exposure import assert_exposure_is_safe, describe_exposure
 from bartholomew.platform.http_identity import (
-    PRINCIPAL_STATE_ATTR,
     authenticate_and_authorize,
 )
 from bartholomew.platform.http_identity import error_response as platform_error_response

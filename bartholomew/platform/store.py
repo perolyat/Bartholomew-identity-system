@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 from bartholomew.kernel.db_ctx import connect, set_wal_pragmas
@@ -139,11 +140,9 @@ def record_platform_audit(
     its audit row, or vice versa, is a worse record than either alone.
 
     `detail` must never contain a session token or password material -- see
-    the audit-hygiene test in tests/test_platform_secret_hygiene.py.
+    the audit-hygiene tests in tests/test_s8_auth_boundary.py.
     """
-    import time as _t
-
     conn.execute(
         "INSERT INTO platform_audit(ts, event, user_id, detail) VALUES (?, ?, ?, ?)",
-        (int(ts if ts is not None else _t.time()), event, user_id, detail),
+        (int(ts if ts is not None else time.time()), event, user_id, detail),
     )

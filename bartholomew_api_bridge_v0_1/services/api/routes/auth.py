@@ -56,7 +56,8 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
         raise HTTPException(401, "Invalid username or password.")
 
     _session_id, token = sessions.create_session(
-        account["user_id"], fingerprint=request_fingerprint(request)
+        account["user_id"],
+        fingerprint=request_fingerprint(request),
     )
 
     # HttpOnly: unreachable from page JavaScript, so an XSS in the UI cannot

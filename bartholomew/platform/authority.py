@@ -67,7 +67,7 @@ class PlatformBrakeUnavailableError(Exception):
 
 def _read(conn) -> PlatformBrakeState:
     row = conn.execute(
-        "SELECT engaged, scopes, revision FROM platform_brake_state WHERE id = 1"
+        "SELECT engaged, scopes, revision FROM platform_brake_state WHERE id = 1",
     ).fetchone()
     if row is None:
         return PlatformBrakeState(engaged=False, scopes=frozenset(), revision=0)

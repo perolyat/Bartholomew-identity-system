@@ -564,8 +564,6 @@ def say(
     raise typer.Exit(code=1)
 
 
-
-
 # ---------------------------------------------------------------------------
 # Alpha account provisioning (S8)
 # ---------------------------------------------------------------------------
@@ -699,7 +697,8 @@ def platform_brake_off(
     reason: str = typer.Option(None, help="Why this halt was released"),
     actor: str = typer.Option(..., help="Who is releasing it (recorded in the audit trail)"),
     expected_revision: int = typer.Option(
-        None, help="Refuse if the platform brake has moved since you read it"
+        None,
+        help="Refuse if the platform brake has moved since you read it",
     ),
 ):
     """Release the Platform/Admin halt. Does not touch any Personal brake."""
@@ -708,9 +707,7 @@ def platform_brake_off(
 
     init_platform_schema()
     try:
-        state = authority.disengage(
-            reason=reason, actor=actor, expected_revision=expected_revision
-        )
+        state = authority.disengage(reason=reason, actor=actor, expected_revision=expected_revision)
     except authority.StalePlatformWriteError as e:
         console.print(f"\n[yellow]{e}[/yellow]\n")
         raise typer.Exit(1) from e

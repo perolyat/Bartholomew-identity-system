@@ -146,7 +146,8 @@ def create_account(
 def get_account(user_id: str, *, db_path: str | None = None) -> dict | None:
     with platform_connection(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM platform_accounts WHERE user_id = ?", (user_id,)
+            "SELECT * FROM platform_accounts WHERE user_id = ?",
+            (user_id,),
         ).fetchone()
     return dict(row) if row else None
 
@@ -161,9 +162,7 @@ def list_accounts(*, db_path: str | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def set_account_disabled(
-    user_id: str, disabled: bool, *, db_path: str | None = None
-) -> None:
+def set_account_disabled(user_id: str, disabled: bool, *, db_path: str | None = None) -> None:
     """
     Disable or re-enable an account.
 

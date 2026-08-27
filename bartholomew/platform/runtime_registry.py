@@ -33,8 +33,9 @@ KEYRING_SERVICE_ENV = "BARTHO_MEMORY_KEYRING_SERVICE"
 # hand-edited row, a future import path, a bug that lets input through --
 # cannot contain a path separator or `..` and escape its own directory.
 # Path traversal here would defeat every other isolation property at once.
-_USER_ID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-                         r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+_USER_ID_RE = re.compile(
+    r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z",
+)
 
 
 class RuntimeResolutionError(Exception):
@@ -75,8 +76,7 @@ class RuntimeHandle:
 def _validate_user_id(user_id: str) -> str:
     if not user_id or not _USER_ID_RE.match(user_id):
         raise RuntimeResolutionError(
-            "user_id is not a well-formed identifier; refusing to derive a "
-            "data path from it",
+            "user_id is not a well-formed identifier; refusing to derive a data path from it",
         )
     return user_id
 
@@ -151,8 +151,7 @@ def assert_runtime_matches(handle: RuntimeHandle, active_db_path: str | None) ->
         raise AuthenticationError("no runtime is active for this identity")
     if Path(active_db_path).resolve() != Path(handle.db_path).resolve():
         raise AuthenticationError(
-            "authenticated identity does not match the runtime served by this "
-            "process",
+            "authenticated identity does not match the runtime served by this process",
         )
 
 

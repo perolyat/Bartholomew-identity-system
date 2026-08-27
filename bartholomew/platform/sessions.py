@@ -36,7 +36,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-import sqlite3
 import time
 import uuid
 
@@ -119,7 +118,11 @@ def create_session(
         )
         # Note the audit detail records the session id, never the token.
         record_platform_audit(
-            conn, "session.created", user_id=user_id, detail=f"session={session_id}", ts=now
+            conn,
+            "session.created",
+            user_id=user_id,
+            detail=f"session={session_id}",
+            ts=now,
         )
     return session_id, token
 
@@ -157,13 +160,24 @@ def verify_session(
 
     try:
         return _verify_session_locked(
-            token_hash, fingerprint=fingerprint, db_path=db_path,
-            idle_timeout_s=idle_timeout_s, now=now,
+            token_hash,
+            fingerprint=fingerprint,
+            db_path=db_path,
+            idle_timeout_s=idle_timeout_s,
+            now=now,
         )
-    except sqlite3.Error as exc:
-        # The control-plane store itself could not answer. This is the case a
-        # permissive default would silently turn into an open door, so it has
-        # its own exception and its own 503 -- never a fallback identity.
+    except AuthenticationError:
+        # A decided refusal. Propagate it unchanged: "this credential is not
+        # valid" must not be reclassified as "the subsystem is unwell".
+        raise
+    except Exception as exc:
+        # Anything else means the control-plane store could not answer --
+        # sqlite3 errors, but also OSError from an unreachable path, and any
+        # failure mode not yet enumerated. Catching broadly is deliberate and
+        # is the fail-closed default: an unexpected exception in the
+        # authentication subsystem must become a refusal with a truthful 503,
+        # never a 500 that some future error handler might soften, and never
+        # a fallback identity.
         raise AuthUnavailableError("control-plane session store unavailable") from exc
 
 
@@ -266,7 +280,11 @@ def revoke_all_sessions(user_id: str, *, db_path: str | None = None, now: int | 
             (now, user_id),
         )
         record_platform_audit(
-            conn, "session.revoked_all", user_id=user_id, detail=f"count={cur.rowcount}", ts=now
+            conn,
+            "session.revoked_all",
+            user_id=user_id,
+            detail=f"count={cur.rowcount}",
+            ts=now,
         )
         return cur.rowcount
 

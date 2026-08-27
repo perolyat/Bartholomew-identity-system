@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 
 from .capabilities import require_capability
 from .exposure import auth_enforced
@@ -59,17 +60,59 @@ CLIENT_SUPPLIED_IDENTITY_HEADERS = (
 )
 
 
+def _iter_routes(routes: Any):
+    """
+    Flatten the app's route table.
+
+    FastAPI wraps included routers in an `_IncludedRouter` object whose own
+    `routes` live on `original_router`, so a plain iteration over
+    `app.routes` sees the wrappers rather than the endpoints. Recursing is
+    what makes the policy lookup -- and the coverage test that guards it --
+    see every route rather than only the ones declared on the app directly.
+    """
+    for route in routes:
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            yield from _iter_routes(inner.routes)
+            continue
+        yield route
+
+
 def _route_template(request: Any) -> str | None:
     """
-    The route template FastAPI matched, e.g. `/api/memory/{kind}/{key}`.
+    The route template that will handle this request, e.g.
+    `/api/memory/{kind}/{key}`.
 
-    None when nothing matched -- which means the request is heading for a
-    404. Policy is looked up against this rather than the raw URL so that no
-    path-normalisation trick can select a different policy entry than the
-    handler that will run.
+    Resolved by running the app's own matcher rather than reading
+    `request.scope["route"]`. That key is populated by the router, which runs
+    *after* HTTP middleware -- so at this point it is always absent, and
+    reading it would make the policy lookup silently conclude "no route" and
+    skip enforcement on every request. That is precisely the fail-open shape
+    this boundary exists to prevent, so the match is done explicitly here.
+
+    Matching the template rather than the raw URL also means no
+    path-normalisation trick (`//api/..`, `%2e%2e`, a trailing slash) can
+    select a different policy entry than the handler that actually runs: this
+    asks the same matcher, with the same scope, that routing will use.
+
+    Returns None only when genuinely nothing matches -- a 404, where no
+    handler will run.
     """
-    route = request.scope.get("route")
-    return getattr(route, "path", None)
+    scope = request.scope
+    partial: str | None = None
+    for route in _iter_routes(request.app.routes):
+        try:
+            match, _child = route.matches(scope)
+        except Exception:
+            continue
+        if match is Match.FULL:
+            return getattr(route, "path", None)
+        if match is Match.PARTIAL and partial is None:
+            # Path matches but the method does not: a 405. Remember it so a
+            # wrong-method request is still policed rather than waved through
+            # as "no route".
+            partial = getattr(route, "path", None)
+    return partial
 
 
 def request_fingerprint(request: Any) -> str:

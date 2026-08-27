@@ -187,7 +187,8 @@ def test_the_override_also_opens_the_request_boundary(monkeypatch, tmp_path):
     it satisfies the TLS precondition and leaves the assertion unchanged.
     """
     cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
-    cert.write_text("cert"); key.write_text("key")
+    cert.write_text("cert")
+    key.write_text("key")
     monkeypatch.setenv(ALLOW_NON_LOOPBACK_ENV, "1")
     monkeypatch.setenv("BARTH_API_TLS_CERTFILE", str(cert))
     monkeypatch.setenv("BARTH_API_TLS_KEYFILE", str(key))
