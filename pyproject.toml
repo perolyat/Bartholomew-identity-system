@@ -46,6 +46,21 @@ dependencies = [
     "requests>=2.31",
 ]
 
+# Real semantic embeddings. Deliberately an extra rather than a core
+# dependency: sentence-transformers pulls torch, which is a very large install
+# and is not needed to run, test, or develop Bartholomew -- retrieval without
+# it is FTS-only, which is a supported and honest state (see
+# `describe_retrieval()` and /api/health's retrieval_* fields).
+#
+# Installing this extra is necessary but NOT sufficient to get semantic
+# retrieval: the model itself must also be provisioned locally with
+# `bartholomew embeddings provision`, because ordinary operation never
+# downloads model assets. See docs/RETRIEVAL_EMBEDDER.md.
+[project.optional-dependencies]
+embeddings = [
+    "sentence-transformers>=2.2.0",
+]
+
 [project.scripts]
 bartholomew = "bartholomew.cli:main"
 bartholomew-backfill-fts = "scripts.backfill_fts:main"

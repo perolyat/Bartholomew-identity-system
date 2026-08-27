@@ -112,8 +112,12 @@ class TestRetrievalBoost:
         vec1 = engine.embed_texts(["hello world"])[0]
         vec2 = engine.embed_texts(["hello world"])[0]
 
-        vec_store.upsert(mem1_id, vec1, "summary", "local-sbert", "test-model")
-        vec_store.upsert(mem2_id, vec2, "summary", "local-sbert", "test-model")
+        # The retriever searches only the vector population its own engine
+        # produced, so seed with that engine's effective kind -- in CI the
+        # deterministic development embedder, not a semantic one.
+        kind = engine.storage_identity[2]
+        vec_store.upsert(mem1_id, vec1, "summary", "local-sbert", "test-model", kind)
+        vec_store.upsert(mem2_id, vec2, "summary", "local-sbert", "test-model", kind)
 
         # Mock rules to apply boost to mem2
         def mock_evaluate(memory_dict):
@@ -248,7 +252,11 @@ class TestPolicyFlags:
         vec_store = VectorStore(db_path)
         engine = EmbeddingEngine()
         vec = engine.embed_texts(["test content"])[0]
-        vec_store.upsert(mem_id, vec, "summary", "local-sbert", "test-model")
+        # The retriever searches only the vector population its own engine
+        # produced, so seed with that engine's effective kind -- in CI the
+        # deterministic development embedder, not a semantic one.
+        kind = engine.storage_identity[2]
+        vec_store.upsert(mem_id, vec, "summary", "local-sbert", "test-model", kind)
 
         # Mock rules to return context_only policy
         def mock_evaluate(memory_dict):

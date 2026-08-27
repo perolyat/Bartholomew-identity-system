@@ -615,16 +615,18 @@ class HybridRetriever:
             # Embed query
             qvec = self.embedding_engine.embed_texts([query])[0]
 
-            # Search with strict model matching
-            cfg = self.embedding_engine.config
+            # Search with strict model matching, against the population this
+            # engine actually produced -- see `VectorStore.search`.
+            provider, model, embedder_kind = self.embedding_engine.storage_identity
             results = self.vector_store.search(
                 qvec,
                 top_k=self.config.vec_candidates,
-                provider=cfg.provider,
-                model=cfg.model,
-                dim=cfg.dim,
+                provider=provider,
+                model=model,
+                dim=self.embedding_engine.config.dim,
                 source=filters.source,
                 allow_mismatch=False,
+                embedder_kind=embedder_kind,
             )
             logger.debug(f"Vector search returned {len(results)} candidates")
             return results

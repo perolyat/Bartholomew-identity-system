@@ -12,8 +12,20 @@ import sqlite3
 import numpy as np
 
 from bartholomew.kernel.db_ctx import set_wal_pragmas
+from bartholomew.kernel.embedding_engine import (
+    KIND_DETERMINISTIC,
+    KIND_SEMANTIC,
+    KIND_UNVERIFIED,
+)
 
 logger = logging.getLogger(__name__)
+
+#: Kinds that may be returned to a caller at all. `unverified` is deliberately
+#: absent: a row whose true embedder is unknown cannot be honestly presented as
+#: either semantic or deterministic, so it is excluded from retrieval until
+#: `bartholomew embeddings rebuild` regenerates it. Exclusion, not deletion --
+#: no source memory and no row is destroyed by this.
+RETRIEVABLE_KINDS = (KIND_SEMANTIC, KIND_DETERMINISTIC)
 
 
 # Schema for vector embeddings table
@@ -27,6 +39,10 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
   norm         REAL NOT NULL,
   provider     TEXT NOT NULL,
   model        TEXT NOT NULL,
+  -- What actually produced this vector, as opposed to what was configured
+  -- when it was written. See MIGRATIONS below for why the default is
+  -- 'unverified' rather than 'semantic'.
+  embedder_kind TEXT NOT NULL DEFAULT 'unverified',
   created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
@@ -38,6 +54,11 @@ CREATE INDEX IF NOT EXISTS idx_mememb_source
 CREATE INDEX IF NOT EXISTS idx_mememb_dim
   ON memory_embeddings(dim);
 """
+
+#: Created after `_migrate_embedder_kind`, never inside VECTOR_SCHEMA: on a
+#: database predating the column, `executescript` would reach this index before
+#: the migration had added the column it indexes.
+KIND_INDEX_SQL = "CREATE INDEX IF NOT EXISTS idx_mememb_kind ON memory_embeddings(embedder_kind)"
 
 
 class VectorStore:
@@ -71,11 +92,55 @@ class VectorStore:
         with sqlite3.connect(self.db_path) as conn:
             set_wal_pragmas(conn)
             conn.executescript(VECTOR_SCHEMA)
+            self._migrate_embedder_kind(conn)
+            conn.execute(KIND_INDEX_SQL)
             conn.commit()
 
             # Phase 2d+: Create VSS triggers if extension available
             if self.vss_available:
                 self._create_vss_triggers(conn)
+
+    def _migrate_embedder_kind(self, conn: sqlite3.Connection) -> None:
+        """Add `embedder_kind` to a pre-existing table, defaulting to unverified.
+
+        Rows written before this column existed recorded the *configured*
+        provider and model regardless of which embedder actually ran. Where
+        `sentence-transformers` was absent -- which was every deployment, since
+        it was not an installed dependency -- those rows hold deterministic
+        hash vectors labelled as a real semantic model.
+
+        There is no way to tell, from the row alone, which embedder produced
+        it. So this migration does not guess: it marks every pre-existing row
+        `unverified`, which excludes it from retrieval, and leaves the row and
+        its source memory entirely intact for
+        `bartholomew embeddings rebuild` to regenerate from authoritative
+        retained source text.
+
+        Idempotent, and cheap on an already-migrated database: one PRAGMA.
+        """
+        try:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_embeddings)")}
+        except sqlite3.Error as e:  # pragma: no cover - table always exists here
+            logger.error("Could not inspect memory_embeddings for migration: %s", e)
+            return
+
+        if "embedder_kind" in columns:
+            return
+
+        conn.execute(
+            "ALTER TABLE memory_embeddings "
+            f"ADD COLUMN embedder_kind TEXT NOT NULL DEFAULT '{KIND_UNVERIFIED}'",
+        )
+        affected = conn.execute("SELECT COUNT(*) FROM memory_embeddings").fetchone()[0]
+        if affected:
+            logger.warning(
+                "Marked %d pre-existing embedding(s) as '%s': their true embedder is "
+                "not recorded, so they are excluded from retrieval until rebuilt. "
+                "Run `bartholomew embeddings rebuild` to regenerate them. "
+                "No memories were modified or deleted.",
+                affected,
+                KIND_UNVERIFIED,
+            )
 
     def _check_vss_availability(self) -> None:
         """
@@ -208,6 +273,7 @@ class VectorStore:
         source: str,
         provider: str,
         model: str,
+        embedder_kind: str = KIND_SEMANTIC,
     ) -> None:
         """
         Insert or update an embedding
@@ -216,9 +282,22 @@ class VectorStore:
             memory_id: ID of the memory this embedding belongs to
             vec: Embedding vector (1D numpy array, float32, normalized)
             source: 'summary' or 'full'
-            provider: Provider name (e.g., 'local-sbert')
-            model: Model identifier
+            provider: Provider name that actually produced this vector
+            model: Model identifier that actually produced this vector
+            embedder_kind: `semantic` or `deterministic-hash` -- what really
+                generated the vector. Callers pass
+                `EmbeddingEngine.storage_identity`, which derives all three
+                from the engine's live status rather than its configuration.
+
+        Raises:
+            ValueError: `embedder_kind` is not a writable kind. `unverified`
+                is a migration marker, never something a writer may claim.
         """
+        if embedder_kind not in RETRIEVABLE_KINDS:
+            raise ValueError(
+                f"embedder_kind must be one of {RETRIEVABLE_KINDS}, got {embedder_kind!r}",
+            )
+
         # Validate inputs
         if vec.ndim != 1:
             raise ValueError(f"Expected 1D vector, got shape {vec.shape}")
@@ -249,18 +328,18 @@ class VectorStore:
                 # Update existing
                 conn.execute(
                     "UPDATE memory_embeddings SET "
-                    "vec=?, norm=?, dim=?, provider=?, model=?, "
+                    "vec=?, norm=?, dim=?, provider=?, model=?, embedder_kind=?, "
                     "created_at=CURRENT_TIMESTAMP "
                     "WHERE embedding_id=?",
-                    (vec_blob, norm, dim, provider, model, existing[0]),
+                    (vec_blob, norm, dim, provider, model, embedder_kind, existing[0]),
                 )
             else:
                 # Insert new
                 conn.execute(
                     "INSERT INTO memory_embeddings "
-                    "(memory_id, source, dim, vec, norm, provider, model) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (memory_id, source, dim, vec_blob, norm, provider, model),
+                    "(memory_id, source, dim, vec, norm, provider, model, embedder_kind) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (memory_id, source, dim, vec_blob, norm, provider, model, embedder_kind),
                 )
 
             conn.commit()
@@ -287,6 +366,7 @@ class VectorStore:
         source: str | None = None,
         allow_mismatch: bool = False,
         apply_consent_gate: bool = True,
+        embedder_kind: str | None = None,
     ) -> list[tuple[int, float]]:
         """
         Search for similar embeddings
@@ -307,6 +387,13 @@ class VectorStore:
                           Backward compat: treated as True when all
                           provider/model/dim are None.
             apply_consent_gate: If True (default), apply privacy filtering
+            embedder_kind: Restrict the search population to vectors produced
+                by this kind of embedder. Callers holding a live engine pass
+                its kind, which is what keeps semantic and deterministic
+                vectors in separate populations: a hash vector can never be
+                scored against a semantic query, whatever the provider and
+                model filters say. `unverified` rows are excluded regardless,
+                because their true embedder is unknown.
 
         Returns:
             List of (memory_id, score) tuples, sorted by score descending
@@ -331,7 +418,16 @@ class VectorStore:
         fetch_k = top_k * 3 if apply_consent_gate else top_k
 
         if self.vss_available:
-            results = self._search_vss(qvec, fetch_k, provider, model, dim, source, allow_mismatch)
+            results = self._search_vss(
+                qvec,
+                fetch_k,
+                provider,
+                model,
+                dim,
+                source,
+                allow_mismatch,
+                embedder_kind,
+            )
         else:
             results = self._search_bruteforce(
                 qvec,
@@ -341,6 +437,7 @@ class VectorStore:
                 dim,
                 source,
                 allow_mismatch,
+                embedder_kind,
             )
 
         # Apply consent gate if enabled
@@ -364,6 +461,7 @@ class VectorStore:
         dim: int | None,
         source: str | None,
         allow_mismatch: bool,
+        embedder_kind: str | None = None,
     ) -> list[tuple[int, float]]:
         """
         Search using sqlite-vss (if available)
@@ -373,7 +471,16 @@ class VectorStore:
         Fall back to brute-force for now.
         """
         logger.warning("VSS search not fully implemented, using brute-force")
-        return self._search_bruteforce(qvec, top_k, provider, model, dim, source, allow_mismatch)
+        return self._search_bruteforce(
+            qvec,
+            top_k,
+            provider,
+            model,
+            dim,
+            source,
+            allow_mismatch,
+            embedder_kind,
+        )
 
     def _search_bruteforce(
         self,
@@ -384,6 +491,7 @@ class VectorStore:
         dim: int | None,
         source: str | None,
         allow_mismatch: bool,
+        embedder_kind: str | None = None,
     ) -> list[tuple[int, float]]:
         """
         Brute-force cosine similarity search
@@ -396,6 +504,19 @@ class VectorStore:
             # Build query with optional filters
             query = "SELECT memory_id, vec, dim, provider, model FROM memory_embeddings WHERE 1=1"
             params: list = []
+
+            # The population filter, applied before anything else and never
+            # relaxed by allow_mismatch. Mixing hash vectors into a semantic
+            # search -- or returning a row whose embedder is unknown -- is not
+            # a tuning choice, so this is not on the same footing as the
+            # provider/model/dim filters below.
+            if embedder_kind is not None:
+                query += " AND embedder_kind=?"
+                params.append(embedder_kind)
+            else:
+                placeholders = ",".join("?" for _ in RETRIEVABLE_KINDS)
+                query += f" AND embedder_kind IN ({placeholders})"
+                params.extend(RETRIEVABLE_KINDS)
 
             # Phase 2d+: Strict model matching (unless allow_mismatch)
             if not allow_mismatch:
@@ -448,6 +569,20 @@ class VectorStore:
         # Sort by score descending and take top-k
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
+
+    def count_by_kind(self) -> dict[str, int]:
+        """Embedding counts grouped by `embedder_kind`.
+
+        The honest inventory a health or CLI surface needs: how many vectors
+        are genuinely semantic, how many are the deterministic development
+        embedder, and how many are unverified and therefore not retrievable.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            set_wal_pragmas(conn)
+            rows = conn.execute(
+                "SELECT embedder_kind, COUNT(*) FROM memory_embeddings GROUP BY embedder_kind",
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
 
     def count(self) -> int:
         """

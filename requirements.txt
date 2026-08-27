@@ -33,6 +33,15 @@ rich>=13.7
 requests>=2.31
 pytest-timeout>=2.3
 
-# Phase 2d: Vector embeddings (optional for production use)
-# sentence-transformers>=2.2.0  # Uncomment for real embeddings
-# Falls back to deterministic hash-based embedder if not installed
+# Vector embeddings: real semantic model.
+#
+# Installed via the `embeddings` extra (`pip install -e '.[embeddings]'`)
+# rather than listed here, because sentence-transformers pulls torch and is
+# not needed to run, test or develop the system.
+#
+# NOTE: absence no longer degrades silently. Without it, an enabled embedder
+# fails closed and retrieval reports itself as FTS-only through /api/health;
+# the deterministic hash embedder serves only when BARTHO_EMBED_ALLOW_FALLBACK
+# is explicitly set (development and test). Installing the extra is necessary
+# but not sufficient -- the model must also be provisioned locally with
+# `bartholomew embeddings provision`. See docs/RETRIEVAL_EMBEDDER.md.

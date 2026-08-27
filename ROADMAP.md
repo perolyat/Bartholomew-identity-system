@@ -653,7 +653,13 @@ Everything applicable from Bands A and B, plus:
 - **PT-F001** startup/readiness closure — a supported fresh start reaches ready through canonical
   host/config, with no manual process override;
 - **OP-W003** retrieval-mode decision — intended embedder enabled, or fallback explicitly approved
-  with measured quality and degraded-state reporting;
+  with measured quality and degraded-state reporting. **Still a Band C blocker: DEFERRED as at
+  2026-08-27, neither branch taken** (see `RISKS.md` and `docs/RETRIEVAL_EMBEDDER.md`). The
+  degraded-state reporting half is implemented, and quality is now measured — but only against a
+  bounded synthetic fixture characterising the *fallback*, which is not a basis for making the real
+  embedder the default. The real model deliberately remains an uninstalled opt-in extra, and
+  retrieval remains FTS-first. **Closing this needs representative real-world retrieval evidence
+  against a provisioned real model**, not more synthetic measurement;
 - technical defect closure where relevant: **TECH-F001**, **MF-F001**, **MF-F002**,
   **PB-F001** / **PB-F002**, and the **UI-SYNC001** critical-state issues;
 - **HU-F002** conversational quality addressed — relevance, non-repetition, truthful failure;

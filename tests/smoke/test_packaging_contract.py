@@ -54,8 +54,11 @@ DECLARED_CONSOLE_SCRIPTS = ["bartholomew", "bartholomew-backfill-fts"]
 # below enforces that, so this set cannot be used to silence a real undeclared
 # dependency.
 GUARDED_OPTIONAL_IMPORTS = {
-    # Optional real-embeddings backend; embedding_engine falls back to a
-    # deterministic hash embedder (documented in requirements.txt).
+    # Optional real-embeddings backend, installed via the `embeddings` extra.
+    # Absent, embedding_engine fails CLOSED -- no vectors are written and
+    # retrieval reports itself as FTS-only; it degrades to the deterministic
+    # hash embedder only under an explicit BARTHO_EMBED_ALLOW_FALLBACK.
+    # See docs/RETRIEVAL_EMBEDDER.md.
     "sentence_transformers",
     # Optional local-LLM client; llm_stub sets HAS_OLLAMA_CLIENT=False without it.
     "ollama",
