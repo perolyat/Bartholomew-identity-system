@@ -13,10 +13,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from bartholomew.kernel.embedding_engine import get_embedding_engine
 from bartholomew.kernel.hybrid_retriever import HybridRetrievalConfig
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.retrieval import get_retriever
-from bartholomew.kernel.embedding_engine import get_embedding_engine
 from bartholomew.kernel.vector_store import VectorStore
 from tests.helpers.synthetic import create_synthetic_embeddings
 
