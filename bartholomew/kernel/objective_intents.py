@@ -127,17 +127,27 @@ _OPEN_RES = (
     ),
 )
 
-#: Asking what is outstanding.
+#: Asking what Bartholomew is carrying.
+#:
+#: Deliberately narrow. Broad phrasings like "what's on my plate?" and
+#: "what's outstanding?" were tried and removed: they read equally as a
+#: question about *tasks*, and claiming them here both stole the turn from
+#: task control and stopped an ordinary question reaching the model at all.
+#: An utterance has to be asking about objectives specifically to be
+#: recognised as asking about objectives.
 _LIST_RES = (
+    re.compile(r"^what\s+am\s+i\s+working\s+(?:on|towards)\b.*$", re.IGNORECASE),
     re.compile(
-        r"^what(?:'?s| is| are)?\s+(?:am\s+i\s+)?(?:working\s+on|outstanding|on\s+my\s+plate)"
-        r"\b.*$",
+        r"^what\s+am\s+i\s+trying\s+to\s+(?:do|achieve|get\s+done)\b.*$",
         re.IGNORECASE,
     ),
-    re.compile(r"^what\s+am\s+i\s+trying\s+to\s+(?:do|achieve|get\s+done)\b.*$", re.IGNORECASE),
-    re.compile(r"^(?:list|show)\s+(?:my\s+)?objectives\b.*$", re.IGNORECASE),
-    re.compile(r"^where\s+(?:are\s+we|are\s+things)\s+(?:up\s+to|at)\b.*$", re.IGNORECASE),
+    re.compile(r"^(?:list|show)\s+(?:me\s+)?(?:my\s+)?objectives\b.*$", re.IGNORECASE),
+    re.compile(
+        r"^what\s+(?:objectives|are\s+my\s+objectives)\b.*$",
+        re.IGNORECASE,
+    ),
 )
+
 
 #: Declaring an outcome reached. This is the sentence that must permanently
 #: stop the resurfacing, so its shapes are the plain ones people actually use.

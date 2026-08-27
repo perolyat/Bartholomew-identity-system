@@ -202,17 +202,33 @@ class TestAsking:
         "utterance",
         [
             "what am I working on?",
-            "what's outstanding?",
+            "what am I working towards?",
             "what am I trying to achieve?",
+            "what am I trying to get done?",
             "list my objectives",
-            "show my objectives",
-            "where are things up to?",
+            "show me my objectives",
+            "what are my objectives?",
         ],
     )
     def test_asking_what_is_outstanding_is_recognised(self, utterance):
         intent = oi.parse_intent(utterance, TODAY)
         assert intent is not None
         assert intent.action == oi.INTENT_LIST
+
+    @pytest.mark.parametrize(
+        "utterance",
+        [
+            "what's on my plate?",
+            "what's outstanding?",
+            "where are things up to?",
+        ],
+    )
+    def test_task_shaped_questions_are_left_for_task_control_and_the_model(self, utterance):
+        """These read equally as questions about tasks. Claiming them here
+        both steals the turn from task control and stops an ordinary
+        question ever reaching the model -- a regression this pinned after
+        `test_api_chat_runtime_contract.py` caught it."""
+        assert oi.parse_intent(utterance, TODAY) is None
 
 
 class TestMatching:
