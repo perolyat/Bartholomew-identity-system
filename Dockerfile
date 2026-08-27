@@ -27,24 +27,32 @@ RUN mkdir -p /app/data
 # Expose port
 EXPOSE 5173
 
-# Run uvicorn
-# The API has no authentication and is loopback-only by default
-# (DECISIONS.md, INTERFACES.md). A container must bind 0.0.0.0 *inside its own
-# network namespace* or published ports cannot reach it at all -- that is not
-# the same as being LAN-exposed, and it is not sufficient on its own.
+# Run Bartholomew as a service.
 #
-# Two things keep it safe, and both are required:
+# The API has no authentication *of its own* -- authentication is the
+# platform's (bartholomew/platform), and whether it is enforced is decided by
+# the exposure rules, not by this file.
+#
+# A container must bind 0.0.0.0 *inside its own network namespace* or
+# published ports cannot reach it at all. That is not the same as being
+# LAN-exposed, and it is not sufficient on its own.
+#
+# Three things keep this safe, and all three are required:
 #   1. Publish to loopback on the host: `-p 127.0.0.1:5173:5173`
 #      (docker-compose.yml does this). A bare `-p 5173:5173` publishes on
 #      every host interface and must not be used.
 #   2. BARTH_API_ALLOW_NON_LOOPBACK=1, set deliberately below, because the
 #      request boundary sees the Docker bridge address rather than loopback.
-#      This prints a conspicuous warning at every startup.
+#      Under S8 this same variable forces authentication AND TLS on, and
+#      nothing can turn either off while it is set.
+#   3. TLS material and the runtime binding, supplied by docker-compose.yml.
+#      Without them the process refuses to start -- which is the point: an
+#      unauthenticated or plaintext container is not a configuration this
+#      image can be talked into.
 ENV BARTH_API_ALLOW_NON_LOOPBACK=1
 # `serve` resolves its bind address through the access boundary rather than
 # taking a --host flag, so the container's namespace-local 0.0.0.0 bind is
-# expressed here. Both variables are required: the boundary refuses a
-# non-loopback bind that was not deliberately enabled.
+# expressed here.
 ENV BARTH_API_HOST=0.0.0.0
 # One process, no reload, no extra workers -- `serve` refuses those outright
 # because the kernel's persistence is single-writer and it takes an exclusive

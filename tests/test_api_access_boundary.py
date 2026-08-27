@@ -94,7 +94,13 @@ def test_explicit_override_permits_a_non_loopback_bind(monkeypatch, capsys):
 
     warning = capsys.readouterr().err
     assert "NON-LOOPBACK" in warning
-    assert "NO AUTHENTICATION" in warning
+    # The banner must state what is actually true of this bind. It used to
+    # claim "NO AUTHENTICATION", which was accurate when the network boundary
+    # was the only protection and became false once a non-loopback bind began
+    # forcing authentication and TLS on (platform/exposure.py). Asserting the
+    # accurate claim keeps the banner honest in the direction it now has to be.
+    assert "ENFORCED" in warning
+    assert "cannot" in warning
     assert "personal memory" in warning
     assert ALLOW_NON_LOOPBACK_ENV in warning
 

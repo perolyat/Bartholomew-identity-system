@@ -128,21 +128,46 @@ def serve(
     # constructs the orchestrator and reads config files, which should happen
     # when we are actually about to serve rather than when the CLI is merely
     # listing its commands.
+    from bartholomew.platform.exposure import (
+        ExposureConfigurationError,
+        auth_enforced,
+        resolve_tls_material,
+    )
     from bartholomew_api_bridge_v0_1.services.api.app import app, resolve_bind_host
 
     try:
         bind_host = host or resolve_bind_host()
         bind_port = port if port is not None else resolve_port()
-    except (RuntimeError, ValueError) as e:
+
+        # The platform decides whether this deployment must be authenticated
+        # and encrypted; this decides nothing and only obeys. A non-loopback
+        # bind forces both on and no variable turns either off, so an
+        # unauthenticated or plaintext remote deployment is refused here --
+        # before a socket exists -- rather than discovered later by whoever
+        # is on the path.
+        #
+        # Deliberately no "TLS is terminated upstream" escape hatch: no
+        # trusted proxy is part of this architecture (the request boundary
+        # ignores X-Forwarded-* for the same reason), and from inside this
+        # process such a flag is indistinguishable from a plaintext
+        # deployment.
+        tls = resolve_tls_material()
+    except (RuntimeError, ValueError, ExposureConfigurationError) as e:
         # `resolve_bind_host()` raises when a non-loopback bind was requested
         # without the deliberate opt-in. That refusal is the existing network
         # boundary and is preserved exactly: `serve` does not widen it.
         print(f"[bartholomew serve] {e}", file=sys.stderr)
         return EXIT_BAD_CONFIG
 
+    # The scheme is reported from the TLS material actually about to be
+    # handed to the socket, not from an intention -- a startup line claiming
+    # https over a plaintext listener is exactly the misreport that gets a
+    # deployment trusted when it should not be.
+    scheme = "https" if tls else "http"
     print(
-        f"[bartholomew serve] Starting on http://{bind_host}:{bind_port} "
-        f"(stop budget {SHUTDOWN_BUDGET_SECONDS}s)",
+        f"[bartholomew serve] Starting on {scheme}://{bind_host}:{bind_port} "
+        f"(auth {'enforced' if auth_enforced() else 'disabled'}, "
+        f"TLS {'on' if tls else 'off'}, stop budget {SHUTDOWN_BUDGET_SECONDS}s)",
         file=sys.stderr,
     )
 
@@ -163,6 +188,12 @@ def serve(
         workers=1,
         reload=False,
         timeout_graceful_shutdown=SHUTDOWN_BUDGET_SECONDS,
+        # Passed to the real listening socket, so TLS is a property of the
+        # connection rather than a claim in a log line. None when TLS is not
+        # required (the loopback development deployment), which uvicorn
+        # treats as plain HTTP.
+        ssl_certfile=tls[0] if tls else None,
+        ssl_keyfile=tls[1] if tls else None,
     )
     server = uvicorn.Server(config)
     recorder.bind_server(server)

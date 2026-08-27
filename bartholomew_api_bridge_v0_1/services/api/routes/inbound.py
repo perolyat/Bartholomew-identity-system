@@ -118,8 +118,7 @@ def _require_principal(request: Request):
     if principal is None:
         raise HTTPException(
             401,
-            "Authentication is required to capture inbound events; "
-            "nothing was captured.",
+            "Authentication is required to capture inbound events; nothing was captured.",
         )
     return principal
 

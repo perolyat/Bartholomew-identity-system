@@ -196,14 +196,23 @@ ALLOW_NON_LOOPBACK_ENV = "BARTH_API_ALLOW_NON_LOOPBACK"
 BIND_HOST_ENV = "BARTH_API_HOST"
 DEFAULT_BIND_HOST = "127.0.0.1"
 
+# Kept as a conspicuous notice, but no longer as the claim it used to make.
+# It said "This API has NO AUTHENTICATION", which was true when the boundary
+# was the only protection and is now false: a non-loopback bind forces
+# authentication and TLS on, and no environment variable downgrades either
+# (bartholomew/platform/exposure.py). A security banner that overstates the
+# danger is not harmlessly cautious -- it trains operators to discount the
+# banners that are accurate.
 _NON_LOOPBACK_WARNING = (
     "\n"
     "  ****************************************************************\n"
     "  *  Bartholomew's API is bound to a NON-LOOPBACK address.       *\n"
     "  *                                                              *\n"
-    "  *  This API has NO AUTHENTICATION. Anything that can reach     *\n"
-    "  *  this port can read, correct, delete and export your entire  *\n"
-    "  *  personal memory, and can release the Parking Brake.         *\n"
+    "  *  Authentication and TLS are therefore ENFORCED and cannot    *\n"
+    "  *  be disabled while this bind is in effect. Anything that can *\n"
+    "  *  reach this port and hold valid credentials can read,        *\n"
+    "  *  correct, delete and export that user's personal memory,     *\n"
+    "  *  and can release their Parking Brake.                        *\n"
     "  *                                                              *\n"
     "  *  Bound to: %s\n"
     "  *  Enabled by: %s=1\n"

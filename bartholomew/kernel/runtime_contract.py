@@ -3357,8 +3357,6 @@ async def run_objective_through_runtime_contract(
     )
 
 
-
-
 # =============================================================================
 # Inbound capture (Session D)
 # =============================================================================
@@ -3522,16 +3520,50 @@ async def run_inbound_through_runtime_contract(
     interpretation = Interpretation(observation=observation, prompt=event_type)
     candidate_action = CandidateAction(kind=INBOUND_CAPTURE_KIND, interpretation=interpretation)
 
-    # Governance gate 1: Parking Brake. Before anything is written, and
-    # fail-closed -- an unreadable safety gate must refuse, never wave through.
-    # `engaged_state_fail_closed_off_loop` propagates its own read failures,
-    # which is the fail-closed behaviour: the exception aborts the caller
-    # before capture.
+    # Governance gate 1: the Parking Brake, composed across both authority
+    # tiers. Before anything is written, and fail-closed on either.
+    #
+    # Personal/User tier: gated on the brake being engaged *at all* rather
+    # than on a subsystem scope, matching the existing memory-mutation gate --
+    # capture mutates governed state and belongs to none of the existing
+    # scopes. `engaged_state_fail_closed_off_loop` propagates its own read
+    # failures, which is the fail-closed behaviour: the exception aborts the
+    # caller before capture.
     state = await engaged_state_fail_closed_off_loop(db_path)
-    if state.engaged:
+    personal_blocked = state.engaged
+
+    # Platform/Admin tier: composed restrictively through the platform's own
+    # `authority.is_blocked()` -- an OR, where either tier halts and neither
+    # release implies the other. Passed the Personal answer rather than
+    # letting the platform module reach into a user's runtime, which is what
+    # keeps the Personal tier working when the platform store is absent.
+    # Fails closed inside `is_blocked`: an unreadable platform store is
+    # treated as a halt.
+    #
+    # Scope "inbound" is a name, not a registered brake scope: no new scope is
+    # introduced here, so in practice a *global* platform halt is what stops
+    # capture -- which is the intended reading of "any applicable halt".
+    blocked = personal_blocked
+    try:
+        from bartholomew.platform import authority
+
+        blocked = await run_off_loop(
+            authority.is_blocked,
+            "inbound",
+            personal_blocked=personal_blocked,
+        )
+    except ImportError:
+        # No control plane in this deployment: the Personal tier is the whole
+        # answer, and it has already been read. Deliberately not a silent
+        # pass for other failures -- `is_blocked` fails closed internally, so
+        # anything it raises has already been converted to "blocked".
+        blocked = personal_blocked
+
+    if blocked:
         raise ParkingBrakeEngagedError(
-            "Parking brake is engaged: inbound events are not being captured. "
-            "Nothing was recorded, and the sender may retry once it is released.",
+            "A parking brake or platform halt is engaged: inbound events are "
+            "not being captured. Nothing was recorded, and the sender may "
+            "retry once it is released.",
             scopes=state.scopes,
         )
 

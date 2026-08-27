@@ -1022,6 +1022,7 @@ def platform_brake_status():
     else:
         console.print(f"\n[green]PLATFORM halt released[/green] (revision {state.revision})\n")
 
+
 @app.command("serve")
 def serve_command(
     host: str = typer.Option(

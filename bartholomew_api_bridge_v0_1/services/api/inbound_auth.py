@@ -221,6 +221,11 @@ def install_test_resolver(
 #: Token for the test resolver, read only when the gate above is also set.
 TEST_RESOLVER_TOKEN_ENV = "BARTH_INBOUND_TEST_TOKEN"
 
+#: A runtime the test source claims to belong to. Read only alongside both
+#: gates above, and ignored by everything -- it exists so a test can prove
+#: that a source-claimed runtime has no effect on where an event lands.
+TEST_RESOLVER_CLAIMED_RUNTIME_ENV = "BARTH_INBOUND_TEST_CLAIMED_RUNTIME_ID"
+
 
 def maybe_install_test_resolver_from_env() -> bool:
     """Install the test resolver if -- and only if -- both gates are set.
@@ -249,7 +254,11 @@ def maybe_install_test_resolver_from_env() -> bool:
     token = (os.getenv(TEST_RESOLVER_TOKEN_ENV) or "").strip()
     if not token:
         return False
-    install_test_resolver(token)
+    # A runtime the test source will *claim*, so an integration test can prove
+    # that a spoofing source is ignored rather than merely unexpressible.
+    # Ignored by every code path; see `resolved_runtime_id`.
+    claimed = (os.getenv(TEST_RESOLVER_CLAIMED_RUNTIME_ENV) or "").strip() or None
+    install_test_resolver(token, claimed_runtime_id=claimed)
     return True
 
 

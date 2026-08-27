@@ -1,28 +1,80 @@
-version: '3.8'
-
 services:
   api:
     build: .
     container_name: bartholomew-api
     ports:
-      # Loopback only. "5173:5173" would publish on every host interface, and
-      # this API has no authentication -- see DECISIONS.md and the Dockerfile.
+      # Loopback only, always. A bare "5173:5173" publishes on every host
+      # interface; this publishes to the host's loopback and nowhere else.
+      #
+      # This is a *reachability* control and nothing more. It is not what
+      # makes the deployment safe -- authentication and TLS below are, and
+      # they are enforced regardless of what is published.
       - "127.0.0.1:5173:5173"
     environment:
-      - ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+      # The container's bridge peer address is not loopback, so the request
+      # boundary requires this to accept its own published traffic at all.
+      #
+      # Under S8 that same variable forces authentication AND TLS on, and
+      # nothing can turn either off while it is set (platform/exposure.py).
+      # That is the intended consequence, not a side effect to work around:
+      # this compose file runs an authenticated, encrypted Bartholomew.
+      #
+      # Session B's coordination note offered a second option -- a separate
+      # "this deployment is only local" assertion that would keep the
+      # container plaintext and unauthenticated. That option is deliberately
+      # NOT taken: an operator assertion about topology is exactly the kind
+      # of flag that becomes a quiet bypass, and it would be indistinguishable
+      # from inside the process from a genuinely exposed deployment.
+      - BARTH_API_ALLOW_NON_LOOPBACK=1
+      - BARTH_API_HOST=0.0.0.0
+      - BARTH_AUTH_MODE=enforced
+
+      # TLS terminates in this process. There is no reverse proxy and no
+      # UNIX socket in front of it, both because none is part of this
+      # architecture and because either would make every caller look local
+      # to the request boundary (see docs/S8_CROSS_STREAM_COORDINATION.md).
+      - BARTH_API_TLS_CERTFILE=/run/secrets/bartholomew/cert.pem
+      - BARTH_API_TLS_KEYFILE=/run/secrets/bartholomew/key.pem
+
+      # Which personal Bartholomew this container serves. Explicit, because a
+      # process bound to one user refuses every other authenticated identity
+      # (platform/runtime_registry.assert_principal_owns_this_process) --
+      # "whichever kernel happens to be loaded" is never the right answer to
+      # "whose Bartholomew is this?".
+      #
+      # Provision the account first, on the host:
+      #   python -m bartholomew accounts create <username>
+      # then set this to the user_id it prints.
+      - BARTH_RUNTIME_USER_ID=${BARTH_RUNTIME_USER_ID:?set to the user_id this container serves}
+
+      - ALLOWED_ORIGINS=https://localhost:5173,https://127.0.0.1:5173
       - TZ=Australia/Brisbane
     volumes:
       # Persist SQLite databases
       - ./data:/app/data
+      # Certificate and key, read-only. Generate a self-signed pair for local
+      # use with deploy/generate-dev-cert.sh; use real material for Alpha.
+      - ./deploy/certs:/run/secrets/bartholomew:ro
     # Docker is the supervisor here, the same role systemd plays in
-    # deploy/bartholomew.service. Bartholomew does not restart itself.
+    # deploy/bartholomew.service. Bartholomew does not restart itself; it
+    # exits non-zero when a component it cannot run without has failed, and
+    # this policy is what turns that into a restart.
     restart: unless-stopped
     # KernelDaemon.stop() drains, cancels background work and checkpoints the
     # WAL; the 10s default would SIGKILL partway through that.
     stop_grace_period: 45s
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5173/healthz"]
+      # HTTPS, because the listener speaks nothing else. --cacert rather than
+      # -k: a healthcheck that skips verification would pass against a
+      # misconfigured certificate, which is most of what it is here to catch.
+      test:
+        - CMD
+        - curl
+        - -f
+        - --cacert
+        - /run/secrets/bartholomew/cert.pem
+        - https://localhost:5173/healthz
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
