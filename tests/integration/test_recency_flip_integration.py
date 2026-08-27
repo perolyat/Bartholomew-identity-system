@@ -16,6 +16,7 @@ import pytest
 from bartholomew.kernel.hybrid_retriever import HybridRetrievalConfig
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.retrieval import get_retriever
+from bartholomew.kernel.embedding_engine import get_embedding_engine
 from bartholomew.kernel.vector_store import VectorStore
 from tests.helpers.synthetic import create_synthetic_embeddings
 
@@ -159,6 +160,13 @@ async def test_recency_boost_flips_rankings_weighted():
 
         # Add near-equal embeddings (same group = nearly identical)
         vec_store = VectorStore(db_path)
+        # The retriever searches only the vector population its own engine
+        # produced, so seed with that engine's effective identity rather than
+        # the configured one. Hardcoding "local-sbert"/"BAAI/bge-small-en-v1.5"
+        # here files the vectors into the semantic population while the engine
+        # serves the deterministic development embedder, and the vector arm
+        # then silently returns nothing.
+        provider, model, embedder_kind = get_embedding_engine().storage_identity
         for item in corpus:
             memory_id = memory_map[(item["group_id"], item["variant"])]
             group_id = item["group_id"]
@@ -169,8 +177,9 @@ async def test_recency_boost_flips_rankings_weighted():
                 memory_id=memory_id,
                 vec=vec,
                 source="full",
-                provider="local-sbert",
-                model="BAAI/bge-small-en-v1.5",
+                provider=provider,
+                model=model,
+                embedder_kind=embedder_kind,
             )
 
         # Query each group's text
@@ -266,6 +275,13 @@ async def test_recency_boost_flips_rankings_rrf():
 
         # Add near-equal embeddings
         vec_store = VectorStore(db_path)
+        # The retriever searches only the vector population its own engine
+        # produced, so seed with that engine's effective identity rather than
+        # the configured one. Hardcoding "local-sbert"/"BAAI/bge-small-en-v1.5"
+        # here files the vectors into the semantic population while the engine
+        # serves the deterministic development embedder, and the vector arm
+        # then silently returns nothing.
+        provider, model, embedder_kind = get_embedding_engine().storage_identity
         for item in corpus:
             memory_id = memory_map[(item["group_id"], item["variant"])]
             group_id = item["group_id"]
@@ -275,8 +291,9 @@ async def test_recency_boost_flips_rankings_rrf():
                 memory_id=memory_id,
                 vec=vec,
                 source="full",
-                provider="local-sbert",
-                model="BAAI/bge-small-en-v1.5",
+                provider=provider,
+                model=model,
+                embedder_kind=embedder_kind,
             )
 
         # Query each group's text
@@ -371,6 +388,13 @@ async def test_recency_disabled_no_flip():
 
         # Add near-equal embeddings
         vec_store = VectorStore(db_path)
+        # The retriever searches only the vector population its own engine
+        # produced, so seed with that engine's effective identity rather than
+        # the configured one. Hardcoding "local-sbert"/"BAAI/bge-small-en-v1.5"
+        # here files the vectors into the semantic population while the engine
+        # serves the deterministic development embedder, and the vector arm
+        # then silently returns nothing.
+        provider, model, embedder_kind = get_embedding_engine().storage_identity
         for item in corpus:
             memory_id = memory_map[(item["group_id"], item["variant"])]
             group_id = item["group_id"]
@@ -380,8 +404,9 @@ async def test_recency_disabled_no_flip():
                 memory_id=memory_id,
                 vec=vec,
                 source="full",
-                provider="local-sbert",
-                model="BAAI/bge-small-en-v1.5",
+                provider=provider,
+                model=model,
+                embedder_kind=embedder_kind,
             )
 
         # Query with recency DISABLED

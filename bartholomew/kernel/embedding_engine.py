@@ -279,7 +279,15 @@ class LocalSBERTProvider(EmbeddingProvider):
 
     def _load_model(self):
         """Load the model, offline unless downloading is explicitly allowed."""
-        from sentence_transformers import SentenceTransformer
+        # Guarded here rather than at module scope: sentence-transformers is an
+        # optional extra, and `tests/smoke/test_packaging_contract.py` requires
+        # every optional import to be lexically wrapped. Re-raised unchanged so
+        # `__init__` can tell "library absent" from "model failed to load" and
+        # report the right remedy.
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise
 
         target = self.model_id
         if self.model_path:
