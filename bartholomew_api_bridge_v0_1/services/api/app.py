@@ -318,9 +318,12 @@ async def admission_middleware(request: Request, call_next):
                 status_code=403,
                 content={
                     "detail": (
-                        "This Bartholomew API is loopback-only. It has no "
-                        "authentication, so it does not answer non-local "
-                        "callers. See DECISIONS.md (deployment architecture)."
+                        "This Bartholomew deployment is loopback-only and "
+                        "does not answer non-local callers. Reaching it "
+                        "remotely requires a deliberately exposed deployment, "
+                        "which is authenticated and TLS-only. See "
+                        "DECISIONS.md (deployment architecture, and the S8 "
+                        "Alpha authentication entry)."
                     ),
                 },
             )
