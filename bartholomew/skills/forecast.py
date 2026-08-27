@@ -67,6 +67,8 @@ justify an abstraction (`docs/TILT.md`).
 from __future__ import annotations
 
 import logging
+import math
+import os
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -647,8 +649,6 @@ def _map_response(payload: Any, egress: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _clean_env(name: str) -> str:
-    import os
-
     return (os.getenv(name) or "").strip()
 
 
@@ -680,7 +680,7 @@ def _coerce_coordinate(value: Any, name: str, limit: float) -> float:
         number = float(value)
     except (TypeError, ValueError):
         raise ForecastLookupError(OUTCOME_BAD_REQUEST, f"{name} must be a number") from None
-    if number != number or abs(number) > limit:  # NaN or out of range
+    if math.isnan(number) or abs(number) > limit:
         raise ForecastLookupError(
             OUTCOME_BAD_REQUEST,
             f"{name} must be between -{limit:g} and {limit:g}",

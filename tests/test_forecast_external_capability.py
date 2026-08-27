@@ -477,7 +477,7 @@ class TestProvenance:
         assert {k: str(v) for k, v in disclosed.items()} == recorder.received[0]["query"]
 
     async def test_failure_retains_provenance(self, provider, monkeypatch):
-        """"We asked this provider and got nothing" is evidence too."""
+        """ "We asked this provider and got nothing" is evidence too."""
         server, recorder = provider
         recorder.status = 500
         skill = await _skill(monkeypatch, _provider_url(server))
@@ -709,10 +709,13 @@ class TestExecutiveAuthority:
     def test_a_week_request_is_bounded(self):
         intent = forecast_intents.parse_intent("what's the weather this week", date(2026, 8, 27))
         assert intent.params["days"] == 7
-        assert forecast_intents.parse_intent(
-            "check the forecast for the next 40 days",
-            date(2026, 8, 27),
-        ).params["days"] == forecast_intents.MAX_DAYS
+        assert (
+            forecast_intents.parse_intent(
+                "check the forecast for the next 40 days",
+                date(2026, 8, 27),
+            ).params["days"]
+            == forecast_intents.MAX_DAYS
+        )
 
     def test_a_named_place_is_declined_not_silently_redirected(self):
         intent = forecast_intents.parse_intent("what's the weather in Melbourne?")
@@ -854,7 +857,11 @@ class TestReplaceability:
     def test_no_broker_or_registry_was_introduced(self):
         """Clause (f): a selection mechanism with one option is not a mechanism."""
         source = (REPO_ROOT / "bartholomew" / "skills" / "forecast.py").read_text().lower()
-        for forbidden in ("class providerregistry", "class capabilitybroker", "def select_provider"):
+        for forbidden in (
+            "class providerregistry",
+            "class capabilitybroker",
+            "def select_provider",
+        ):
             assert forbidden not in source
 
 

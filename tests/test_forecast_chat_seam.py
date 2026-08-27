@@ -323,9 +323,9 @@ class TestTheRecord:
         assert result.forecast_action["provider_host"] == "127.0.0.1"
 
     async def test_the_reflection_is_persisted_for_the_turn(self, daemon):
-        from bartholomew.kernel.reflection import REFLECTION_KIND
-
         import aiosqlite
+
+        from bartholomew.kernel.reflection import REFLECTION_KIND
 
         await _say(daemon, "will it rain tomorrow?")
 

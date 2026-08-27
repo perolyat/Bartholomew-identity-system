@@ -303,9 +303,7 @@ def render_unavailable(reason: str) -> str:
 
 
 def render_denied(reason: str) -> str:
-    return (
-        f"I didn't look that up: {reason} Nothing was sent to the forecast provider."
-    )
+    return f"I didn't look that up: {reason} Nothing was sent to the forecast provider."
 
 
 def render_failure(intent: ForecastIntent, reason: str | None) -> str:
