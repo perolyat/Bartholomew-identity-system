@@ -248,7 +248,6 @@ class TestOrdinaryConversationIsUnaffected:
             "how do you keep track of things?",
             "tell me about task management",
             "my birthday is 3rd March",
-            "what is the weather like",
         ],
     )
     async def test_no_task_operation_is_inferred(self, daemon, utterance):
@@ -259,6 +258,30 @@ class TestOrdinaryConversationIsUnaffected:
         assert result.response == "ordinary chat reply"
         assert responder.calls == 1
         assert _stored_tasks(daemon.mem.db_path) == []
+
+    async def test_a_weather_question_is_not_a_task_instruction(self, daemon):
+        """Moved out of the parametrisation above by the Golden Path first
+        slice (2026-08-27), which is why it now asserts something narrower.
+
+        "what is the weather like" used to stand for ordinary conversation
+        here. It no longer is: it is an explicit request for the `forecast`
+        capability, so it is claimed by that recogniser rather than answered
+        by the model. What this test still pins -- and what this class is
+        actually about -- is that it is not read as a *task* instruction and
+        changes no task state. The forecast recogniser's own behaviour is
+        covered in tests/test_forecast_chat_seam.py.
+        """
+        responder = _Responder()
+        result, _ = await _say(daemon, "what is the weather like", responder)
+
+        assert result.task_action is None
+        assert _stored_tasks(daemon.mem.db_path) == []
+        # The forecast skill is not loaded in this fixture, so the capability
+        # reports itself unavailable -- and deliberately does not fall through
+        # to the model, which would be free to invent a forecast.
+        assert result.forecast_action["outcome"] == rc.FORECAST_OUTCOME_UNAVAILABLE
+        assert responder.calls == 0
+        assert "Skill not loaded" not in result.response
 
     async def test_a_turn_with_no_task_intent_records_nothing_extra(self, daemon):
         result, _ = await _say(daemon, "what a lovely day")
