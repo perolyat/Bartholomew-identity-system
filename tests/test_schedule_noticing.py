@@ -20,7 +20,7 @@ delivery-outcome record -- is tested in tests/test_schedule_reminder_drive.py.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta, timezone
 
 import pytest
 
@@ -237,3 +237,200 @@ class TestReminderIdentityAndRendering:
 
     def test_days_until_is_reported_from_the_caller_s_today(self):
         assert self._reminder("car_rego", "Car rego: on 3 June").days_until(TODAY) == 2
+
+
+# ---------------------------------------------------------------------------
+# Relative forms, anchored to the row's capture date.
+#
+# The property under test throughout is that a relative form is resolved from
+# the moment the user spoke it and never from notice-time "today". Every test
+# below that could be satisfied by drifting forward uses a capture date that
+# differs from TODAY, so drift would produce a visibly different answer.
+# ---------------------------------------------------------------------------
+
+CAPTURED = date(2026, 6, 1)  # a Monday
+
+
+def _dated_row(text: str, ts: object, kind: str = "user_schedule", memory_id: int = 1) -> dict:
+    return {
+        "id": memory_id,
+        "kind": kind,
+        "key": "dentist_appointment",
+        "value": text,
+        "summary": None,
+        "ts": ts,
+    }
+
+
+class TestCaptureDate:
+    def test_iso_utc_string_with_z_suffix(self):
+        # The shape MemoryStore's slice 1 capture path actually writes.
+        assert sn.capture_date("2026-06-01T04:30:00Z") == date(2026, 6, 1)
+
+    def test_iso_string_with_explicit_offset(self):
+        assert sn.capture_date("2026-06-01T04:30:00+00:00") == date(2026, 6, 1)
+
+    def test_a_naive_timestamp_is_read_as_utc_not_as_host_local_time(self):
+        assert sn.capture_date("2026-06-01T04:30:00") == date(2026, 6, 1)
+
+    def test_epoch_seconds_string_is_accepted(self):
+        # `drives.py` writes `str(int(time.time()))` on its own memory writes.
+        assert sn.capture_date("1780000000") is not None
+
+    def test_conversion_uses_the_timezone_it_is_given(self):
+        # 22:00 UTC on 31 May is already 1 June in Brisbane (UTC+10). The
+        # local date is the one the user's words were spoken on, and it is
+        # the anchor a relative form must resolve against.
+        brisbane = timezone(timedelta(hours=10))
+        assert sn.capture_date("2026-05-31T22:00:00Z", brisbane) == date(2026, 6, 1)
+        assert sn.capture_date("2026-05-31T22:00:00Z") == date(2026, 5, 31)
+
+    @pytest.mark.parametrize("raw", [None, "", "   ", "not a date", "yesterday", {}, []])
+    def test_unparseable_timestamps_yield_none_rather_than_a_fallback(self, raw):
+        assert sn.capture_date(raw) is None
+
+
+class TestRelativeDateParsing:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Dentist appointment: on Friday", date(2026, 6, 5)),
+            ("Dentist appointment: this Friday", date(2026, 6, 5)),
+            ("Dentist appointment: due Friday", date(2026, 6, 5)),
+            ("Dentist appointment: on Fri", date(2026, 6, 5)),
+            ("Dentist appointment: on Thurs", date(2026, 6, 4)),
+            ("Dentist appointment: tomorrow", date(2026, 6, 2)),
+            ("Dentist appointment: the day after tomorrow", date(2026, 6, 3)),
+            ("Dentist appointment: today", date(2026, 6, 1)),
+            ("Dentist appointment: tonight", date(2026, 6, 1)),
+            ("Dentist appointment: in 3 days", date(2026, 6, 4)),
+            ("Dentist appointment: in three days", date(2026, 6, 4)),
+            ("Dentist appointment: in a week", date(2026, 6, 8)),
+            ("Dentist appointment: in 2 weeks", date(2026, 6, 15)),
+            ("Dentist appointment: in a fortnight", date(2026, 6, 15)),
+        ],
+    )
+    def test_forms_resolve_from_the_capture_date(self, text, expected):
+        assert sn.parse_relative_due_date(text, CAPTURED) == expected
+
+    def test_a_weekday_naming_the_capture_day_means_the_next_one(self):
+        # CAPTURED is a Monday. "on Monday" said on a Monday is next Monday --
+        # the day already most of the way through is not something anyone
+        # schedules by naming it.
+        assert sn.parse_relative_due_date("Standup: on Monday", CAPTURED) == date(2026, 6, 8)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Dentist appointment: next Friday",
+            "Dentist appointment: next week",
+            "Dentist appointment: next month",
+        ],
+    )
+    def test_genuinely_ambiguous_forms_are_refused_not_approximated(self, text):
+        assert sn.parse_relative_due_date(text, CAPTURED) is None
+
+    def test_an_ambiguous_form_suppresses_the_whole_relative_pass(self):
+        # "next Friday" is the question being asked; a "tomorrow" elsewhere in
+        # the same text must not be used to answer it.
+        text = "Dentist appointment: next Friday, booked tomorrow"
+        assert sn.parse_relative_due_date(text, CAPTURED) is None
+
+    def test_a_weekday_beside_an_unparsed_ordinal_day_is_refused(self):
+        # The text names a specific calendar day this module could not read
+        # absolutely. Resolving the weekday could contradict it.
+        assert sn.parse_relative_due_date("Dentist: on Friday the 12th", CAPTURED) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Dentist appointment: sometime",
+            "Friday markets are the best",  # a bare weekday, unanchored
+            "Car rego: renewed",
+            "",
+            "   ",
+        ],
+    )
+    def test_text_with_no_resolvable_relative_form_yields_none(self, text):
+        assert sn.parse_relative_due_date(text, CAPTURED) is None
+
+
+class TestRelativeFormsInParseDueDate:
+    def test_absolute_forms_still_win_outright(self):
+        # A capture anchor must not change how an absolute date is read.
+        assert sn.parse_due_date("Car rego: on 5 June", TODAY, CAPTURED) == date(2026, 6, 5)
+
+    def test_without_a_capture_anchor_relative_forms_are_not_resolved(self):
+        # Exactly the pre-2026-08-27 behaviour, pinned so a row with no usable
+        # `ts` can never silently acquire an invented anchor.
+        assert sn.parse_due_date("Dentist: on Friday", TODAY) is None
+        assert sn.parse_due_date("Dentist: tomorrow", TODAY) is None
+
+    def test_relative_forms_resolve_from_capture_not_from_today(self):
+        # Captured a week before TODAY. Anchored to capture, "tomorrow" is
+        # 26 May and has gone; anchored to today it would be 2 June. The
+        # answer must be the former.
+        captured = date(2026, 5, 25)
+        assert sn.parse_due_date("Dentist: tomorrow", TODAY, captured) == date(2026, 5, 26)
+
+    def test_a_relative_form_never_rolls_forward_the_way_an_undated_one_does(self):
+        # "5 June" undated rolls to its next occurrence; "tomorrow" does not.
+        stale = date(2025, 1, 1)
+        assert sn.parse_due_date("Car rego: on 5 June", TODAY) == date(2026, 6, 5)
+        assert sn.parse_due_date("Dentist: tomorrow", TODAY, stale) == date(2025, 1, 2)
+
+
+class TestSelectDueWithRelativeFacts:
+    def test_a_relatively_dated_fact_inside_the_window_is_now_noticed(self):
+        # The headline behaviour change: the shape slice 1's extractor
+        # produces most often was previously never noticed at all.
+        rows = [_dated_row("Dentist appointment: on Friday", "2026-06-01T02:00:00Z")]
+        noticed = sn.select_due(rows, TODAY, look_ahead_days=7)
+        assert [item.due_date for item in noticed] == [date(2026, 6, 5)]
+
+    def test_a_stale_relative_fact_goes_quiet_rather_than_drifting_forward(self):
+        # Captured three weeks ago. Its "tomorrow" is long past, so it is
+        # dropped -- never re-anchored onto a date the user never named.
+        rows = [_dated_row("Dentist appointment: tomorrow", "2026-05-11T02:00:00Z")]
+        assert sn.select_due(rows, TODAY, look_ahead_days=7) == []
+
+    def test_a_row_without_a_timestamp_resolves_no_relative_form(self):
+        rows = [_row("user_schedule", "dentist", "Dentist appointment: on Friday")]
+        assert sn.select_due(rows, TODAY, look_ahead_days=7) == []
+
+    def test_a_row_with_an_unreadable_timestamp_resolves_no_relative_form(self):
+        rows = [_dated_row("Dentist appointment: on Friday", "sometime last week")]
+        assert sn.select_due(rows, TODAY, look_ahead_days=7) == []
+
+    def test_the_timezone_used_for_the_anchor_is_the_one_passed_in(self):
+        # Captured at 22:00 UTC on Sunday 31 May, which is Monday 1 June in
+        # Brisbane. "on Friday" is 5 June read locally and 5 June read in UTC
+        # only by coincidence of the weekday -- so use "tomorrow", where the
+        # two readings differ by a day and drift would be visible.
+        brisbane = timezone(timedelta(hours=10))
+        rows = [_dated_row("Dentist appointment: tomorrow", "2026-05-31T22:00:00Z")]
+        assert [i.due_date for i in sn.select_due(rows, TODAY, look_ahead_days=7, tz=brisbane)] == [
+            date(2026, 6, 2),
+        ]
+        # Without the timezone the anchor is 31 May, so "tomorrow" is 1 June.
+        assert [i.due_date for i in sn.select_due(rows, TODAY, look_ahead_days=7)] == [
+            date(2026, 6, 1),
+        ]
+
+    def test_relative_and_absolute_facts_sort_together_closest_due_first(self):
+        rows = [
+            _dated_row("Dentist appointment: on Friday", "2026-06-01T02:00:00Z", memory_id=1),
+            _row("user_schedule", "car_rego", "Car rego: on 3 June", memory_id=2),
+            _dated_row("Vet visit: tomorrow", "2026-06-01T02:00:00Z", memory_id=3),
+        ]
+        rows[2]["key"] = "vet_visit"
+        noticed = sn.select_due(rows, TODAY, look_ahead_days=7)
+        assert [item.due_date for item in noticed] == [
+            date(2026, 6, 2),
+            date(2026, 6, 3),
+            date(2026, 6, 5),
+        ]
+
+    def test_an_ambiguous_relative_fact_still_produces_nothing(self):
+        rows = [_dated_row("Dentist appointment: next Friday", "2026-06-01T02:00:00Z")]
+        assert sn.select_due(rows, TODAY, look_ahead_days=14) == []

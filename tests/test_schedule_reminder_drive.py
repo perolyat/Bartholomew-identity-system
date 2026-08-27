@@ -195,6 +195,26 @@ async def _store_schedule_fact(mem, key: str, text: str) -> None:
     assert result.stored, f"governed write refused {key!r}: the test's premise is wrong"
 
 
+def _backdate_fact(db_path: str, key: str, days: int) -> None:
+    """Move a stored fact's capture timestamp into the past.
+
+    Written directly rather than through `upsert_memory()` because there is no
+    governed way to store a fact *as of* an earlier moment -- and the point of
+    the test is what the drive does with a row whose anchor has aged, not how
+    the row got there.
+    """
+    stamp = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE memories SET ts = ? WHERE kind = 'user_schedule' AND key = ?",
+            (stamp, key),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _due_in(days: int) -> str:
     """A fact whose text names an absolute date `days` from today, in the
     shape slice 1's extractor produces."""
@@ -280,9 +300,70 @@ class TestAcceptanceBar:
         monkeypatch,
         webhook_server,
     ):
-        """The drive would rather say nothing than guess a date."""
+        """The drive would rather say nothing than guess a date.
+
+        `on Friday` was this test's example until relative forms were
+        implemented (2026-08-27); it is now resolvable against the row's
+        capture date and has its own test below. The examples here are the
+        ones that remain genuinely unresolvable: a fact with no "when" at all,
+        and `next Friday`, whose meaning varies between speakers and is
+        refused rather than approximated.
+        """
         server, recorder = webhook_server
-        await _store_schedule_fact(mem, "dentist", "Dentist appointment: on Friday")
+        await _store_schedule_fact(mem, "dentist", "Dentist appointment: sometime soon")
+        await _store_schedule_fact(mem, "vet", "Vet visit: next Friday")
+        registry = await _registry(mem, monkeypatch, _url(server))
+
+        await drive_schedule_reminder_check(_Ctx(mem, scheduler_store, registry))
+
+        assert _reminders(mem.db_path) == []
+        assert recorder.received == []
+
+    async def test_a_relatively_dated_fact_produces_a_reminder(
+        self,
+        mem,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """The end-to-end half of the 2026-08-27 relative-form change.
+
+        `_store_schedule_fact()` writes through the real governed path, so the
+        row carries a real capture timestamp -- meaning this exercises the
+        actual anchor the drive reads, not a hand-placed one. The fact is
+        stored today and says "tomorrow", so it falls one day out and inside
+        the default look-ahead window whenever the test runs.
+        """
+        server, recorder = webhook_server
+        await _store_schedule_fact(mem, "dentist", "Dentist appointment: tomorrow")
+        registry = await _registry(mem, monkeypatch, _url(server))
+        ctx = _Ctx(mem, scheduler_store, registry, identity=REAL_ALLOW_CONTEXT)
+
+        await drive_schedule_reminder_check(ctx)
+
+        rows = _reminders(mem.db_path)
+        assert len(rows) == 1, "expected exactly one reminder in the queue"
+        expected = sn.format_due_date(date.today() + timedelta(days=1))
+        assert expected in rows[0]["message"]
+        assert len(recorder.received) == 1
+
+    async def test_a_stale_relative_fact_is_not_dragged_forward(
+        self,
+        mem,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """The safety property the capture anchor exists for.
+
+        A fact stored long ago that says "tomorrow" names a date that has
+        gone. Anchored to notice-time today it would fire every single day,
+        forever, for a commitment the user never made. Anchored to capture it
+        goes quiet, which is the whole reason the anchor is the capture date.
+        """
+        server, recorder = webhook_server
+        await _store_schedule_fact(mem, "dentist", "Dentist appointment: tomorrow")
+        _backdate_fact(mem.db_path, "dentist", days=30)
         registry = await _registry(mem, monkeypatch, _url(server))
 
         await drive_schedule_reminder_check(_Ctx(mem, scheduler_store, registry))

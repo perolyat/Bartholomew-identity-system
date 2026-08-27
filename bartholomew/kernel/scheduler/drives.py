@@ -457,6 +457,12 @@ async def drive_schedule_reminder_check(ctx: Any) -> Nudge | None:
         return None
 
     today = _local_today(ctx)
+    # The same timezone `_local_today()` uses, handed to the noticing so a
+    # relative form resolves against the local date the fact was captured on
+    # rather than against its UTC date. The two must not drift apart: a
+    # reminder anchored in one zone and windowed in another is off by a day
+    # for part of every day.
+    tz = getattr(ctx, "tz", None) or timezone.utc
     cfg = getattr(ctx, "cfg", None) or {}
     proactive_cfg = cfg.get("proactive") or {}
     look_ahead = int(
@@ -472,6 +478,7 @@ async def drive_schedule_reminder_check(ctx: Any) -> Nudge | None:
         today,
         look_ahead_days=look_ahead,
         limit=per_tick,
+        tz=tz,
     )
     if not reminders:
         return None
