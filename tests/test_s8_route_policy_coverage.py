@@ -91,9 +91,18 @@ def test_the_policy_table_has_no_entries_for_routes_that_do_not_exist():
     fact that a real route may have been renamed out from under its policy.
     """
     declared = _declared_routes()
-    # The auth routes are declared on their own router and always exist; the
-    # internal metrics path only exists under METRICS_INTERNAL_ONLY.
-    exempt = {("GET", "/internal/metrics")}
+    # Entries that legitimately have no route in this repository yet:
+    #   * /internal/metrics exists only under METRICS_INTERNAL_ONLY;
+    #   * the inbound-capture routes are Session D's to implement, and are
+    #     pre-classified here so that D's handlers arrive authenticated
+    #     instead of hitting default-deny and inviting a bypass. Remove these
+    #     from the exemption once D has landed them.
+    exempt = {
+        ("GET", "/internal/metrics"),
+        ("POST", "/api/inbound/events"),
+        ("GET", "/api/inbound/events"),
+        ("GET", "/api/inbound/events/{event_id}"),
+    }
     stale = [
         f"{m} {p}"
         for (m, p) in ROUTE_CAPABILITIES

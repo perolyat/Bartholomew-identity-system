@@ -142,6 +142,14 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # --- training ----------------------------------------------------------
     ("GET", "/api/training/source-types"): Capability.TRAINING_SUBMIT,
     ("POST", "/api/training/submit"): Capability.TRAINING_SUBMIT,
+    # --- inbound capture (Session D owns the handlers; B owns this policy) ---
+    # Classified before the routes exist, deliberately. Routes are
+    # default-deny, so an unclassified /api/inbound/events would 403 the
+    # moment D registered it; pre-classifying means D's first push works and
+    # arrives already authenticated, rather than tempting a bypass.
+    ("POST", "/api/inbound/events"): Capability.INBOUND_SUBMIT,
+    ("GET", "/api/inbound/events"): Capability.INBOUND_READ,
+    ("GET", "/api/inbound/events/{event_id}"): Capability.INBOUND_READ,
     # --- kernel command -----------------------------------------------------
     ("POST", "/kernel/command/{cmd}"): Capability.KERNEL_COMMAND,
     # --- metrics -------------------------------------------------------------

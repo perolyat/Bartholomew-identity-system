@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.exposed_posture import establish_exposed_posture
 from tests.helpers.tls_fixtures import write_self_signed_cert
 
 pytestmark = pytest.mark.slow
@@ -162,48 +163,27 @@ def test_plaintext_to_the_exposed_port_does_not_get_a_usable_response(tls_server
         pass
 
 
-def test_a_handlaunched_plaintext_exposed_process_refuses_requests(tmp_path):
+def test_a_handlaunched_plaintext_exposed_process_refuses_requests(monkeypatch, tmp_path):
     """
-    The launch path this cannot control: `uvicorn app:app --host 0.0.0.0`
-    never calls `serve()`, so nothing configures TLS. The request boundary
-    must refuse anyway, so the gap does not depend on how the process started.
+    The launch path `serve()` cannot control: starting the app through the
+    `uvicorn` CLI never calls it, so nothing configures TLS. The request
+    boundary must refuse anyway, so the guarantee does not depend on how the
+    process started.
 
     Exercised in-process against the real middleware, since the point is the
-    boundary's decision rather than uvicorn's behaviour.
+    boundary's decision rather than uvicorn's behaviour: a plaintext
+    `base_url` is exactly what a hand-launched plaintext server would give.
     """
     from fastapi.testclient import TestClient
 
-    cert, key = write_self_signed_cert(tmp_path)
-    prior = {
-        k: os.environ.get(k)
-        for k in (
-            "BARTH_API_ALLOW_NON_LOOPBACK",
-            "BARTH_API_TLS_CERTFILE",
-            "BARTH_API_TLS_KEYFILE",
-            "BARTH_AUTH_MODE",
-        )
-    }
-    os.environ.update(
-        {
-            "BARTH_API_ALLOW_NON_LOOPBACK": "1",
-            "BARTH_API_TLS_CERTFILE": cert,
-            "BARTH_API_TLS_KEYFILE": key,
-        },
-    )
-    try:
-        from bartholomew_api_bridge_v0_1.services.api.app import app
+    establish_exposed_posture(monkeypatch, tmp_path)
 
-        # base_url http:// == the request arrives over plaintext.
-        with TestClient(app, base_url="http://testserver", raise_server_exceptions=False) as c:
-            resp = c.get("/healthz")
-        assert resp.status_code == 403
-        assert "TLS only" in resp.text
-    finally:
-        for k, v in prior.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+    from bartholomew_api_bridge_v0_1.services.api.app import app
+
+    with TestClient(app, base_url="http://testserver", raise_server_exceptions=False) as c:
+        resp = c.get("/healthz")
+    assert resp.status_code == 403
+    assert "TLS only" in resp.text
 
 
 def test_uvicorn_tls_kwargs_are_empty_for_a_loopback_deployment(monkeypatch):

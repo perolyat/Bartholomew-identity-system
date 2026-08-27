@@ -127,7 +127,9 @@ def test_a_user_cannot_release_the_platform_tier_through_scopes(user_db):
         store.engage(scope, reason="user", actor="alice")
     state = store.refresh()
     store.disengage(
-        reason="user clears everything", expected_revision=state.revision, actor="alice",
+        reason="user clears everything",
+        expected_revision=state.revision,
+        actor="alice",
     )
     assert is_blocked_fail_closed("skills", user_db) is True
 

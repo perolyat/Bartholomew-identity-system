@@ -30,10 +30,11 @@ def serve() -> None:
     socket.** Validating that certificate files exist is not the same as
     serving TLS: `uvicorn_tls_kwargs()` is what hands the material to the
     listener, so an exposed deployment speaks HTTPS rather than merely having
-    passed a file-existence check. A process launched some other way (a bare
-    `uvicorn app:app --host 0.0.0.0`) bypasses this function entirely, which
-    is why the request boundary independently refuses a plaintext request on
-    an exposed deployment -- see `admission_middleware`.
+    passed a file-existence check. A process launched some other way (the
+    `uvicorn` CLI with an explicit non-loopback `--host`) bypasses this
+    function entirely, which is why the request boundary independently
+    refuses a plaintext request on an exposed deployment -- see
+    `admission_middleware`.
     """
     # Fail closed before binding, not on the first request: by then the
     # socket is already open. Also verifies the bound runtime user.

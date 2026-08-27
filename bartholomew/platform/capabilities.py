@@ -42,6 +42,12 @@ class Capability(str, Enum):
     GOVERNANCE_AUDIT = "governance:audit"
     TRAINING_SUBMIT = "training:submit"
     KERNEL_COMMAND = "kernel:command"
+    # Inbound capture (Session D). Two capabilities, not one: submitting
+    # captured material into a personal Bartholomew and reading back what was
+    # captured are different powers, and a capture client that can only write
+    # should not be able to read the capture history back out.
+    INBOUND_SUBMIT = "inbound:submit"
+    INBOUND_READ = "inbound:read"
     NOTIFICATIONS = "notifications"
     AWAITING_RESPONSE = "awaiting_response"
     REFLECTION = "reflection"
@@ -69,6 +75,8 @@ _USER_CAPABILITIES = frozenset(
         Capability.GOVERNANCE_AUDIT,
         Capability.TRAINING_SUBMIT,
         Capability.KERNEL_COMMAND,
+        Capability.INBOUND_SUBMIT,
+        Capability.INBOUND_READ,
         Capability.NOTIFICATIONS,
         Capability.AWAITING_RESPONSE,
         Capability.REFLECTION,

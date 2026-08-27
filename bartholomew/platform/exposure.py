@@ -267,6 +267,11 @@ def assert_exposure_is_safe() -> None:
     """
     resolve_auth_mode()
     resolve_tls_material()
+    if non_loopback_enabled():
+        # An exposed deployment must know whose Bartholomew it serves, and
+        # the database and keyring it is configured to use must agree. There
+        # is no unbound remote personal-runtime mode.
+        require_bound_runtime_user()
 
 
 def describe_exposure() -> dict:
