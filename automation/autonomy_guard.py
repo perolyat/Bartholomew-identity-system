@@ -60,14 +60,20 @@ MEMORY_PRODUCTION_PREFIXES = (
 )
 
 
-def changed_paths() -> list[str]:
+def _git_paths(*args: str) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACMRTUXB", "HEAD"],
+        ["git", *args],
         check=True,
         capture_output=True,
         text=True,
     )
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def changed_paths() -> list[str]:
+    tracked = _git_paths("diff", "--name-only", "--diff-filter=ACMRTUXB", "HEAD")
+    untracked = _git_paths("ls-files", "--others", "--exclude-standard")
+    return sorted(set(tracked + untracked))
 
 
 def reason_for_block(path: str) -> str | None:
@@ -86,7 +92,9 @@ def reason_for_block(path: str) -> str | None:
         return f"consequential area: {', '.join(matched)}"
 
     lowered = path.lower()
-    if lowered.endswith(("requirements.lock", "poetry.lock", "uv.lock", "package-lock.json", "pnpm-lock.yaml")):
+    if lowered.endswith(
+        ("requirements.lock", "poetry.lock", "uv.lock", "package-lock.json", "pnpm-lock.yaml"),
+    ):
         return "dependency lockfile"
     return None
 
