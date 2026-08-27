@@ -897,6 +897,25 @@
   fix is a bounded package addressing the timeout/startup-burst interaction (see the entry above).
   **Risk category:** reliability/product.
 
+  > **Partially addressed 2026-08-27 — the burst half only.** `scheduler/loop.py` now paces its
+  > due-task iterations (`DRIVE_PACE_S`, default 0.5s, `BARTH_DRIVE_PACE_S=0` restores the previous
+  > behaviour), so the scheduler's writes reach the database as a paced stream instead of one
+  > unbroken burst. **Measured on a fresh database before and after:** the same five startup drives
+  > previously wrote all five ticks inside a *single* `started_ts` second; they now spread across
+  > roughly three seconds, with the same five ticks recorded — no drive skipped, no work dropped,
+  > no `next_run_ts` altered. `tests/test_scheduler_persistence_concurrency.py::
+  > test_startup_drives_are_paced_not_burst` asserts that property and fails with pacing disabled.
+  >
+  > **What is NOT claimed:** the user-facing HTTP 400 was *not* reproduced locally at its measured
+  > ~0.3% rate, so this is a fix to the documented mechanism, not a demonstrated elimination of the
+  > failure. The rate should be re-measured against a live app the way WP-A2 measured it before this
+  > entry is closed.
+  >
+  > **What is deliberately unchanged:** the effective 5s `busy_timeout` and the dead 30s connection
+  > parameter (entry above) — Taylor retained that behaviour on 2026-08-22 and changing either value
+  > remains a repository-wide change requiring its own decision. **This entry stays open** until the
+  > timeout half is decided and the live rate re-measured.
+
 - **(2026-08-22) `get_permission_checker()` is a process-global singleton that ignores `db_path`
   after first construction.** `kernel/skill_permissions.py`'s module-level `_checker` is created
   once; every later `get_permission_checker(db_path=...)` call returns the cached instance bound to

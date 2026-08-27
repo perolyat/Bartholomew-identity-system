@@ -18,6 +18,38 @@ from .store import SchedulerStore
 log = logging.getLogger(__name__)
 DRIVE_TIMEOUT = float(os.getenv("BARTH_DRIVE_TIMEOUT", "5.0"))
 
+# Pause between consecutive due-task iterations, so the scheduler's writes
+# reach the shared database as a paced stream rather than a solid burst.
+#
+# Why this exists (RISKS.md, "(2026-08-22) Startup-window governed actions can
+# fail with a raw `database is locked`"): a fresh database makes every
+# registered drive due at the same instant (persistence.upsert_scheduled_tasks
+# seeds next_run_ts = now), and a restart after downtime leaves them all
+# overdue. Either way this loop previously ran them back to back with no yield
+# at all -- each iteration's nudge, tick and next-run writes following the last
+# with no gap. SQLite allows one writer at a time, so a *sustained* stream of
+# scheduler write transactions can starve a concurrent user-facing governed
+# write for longer than its effective 5s busy timeout, surfacing to the user as
+# HTTP 400 `database is locked`. Measured during WP-A2 at 3-4 failures per 1200
+# quiet-hours updates, always within the first ~8 requests after process start.
+#
+# A short pause between iterations leaves a clear window in which a competing
+# writer can take the lock well inside its budget. It is deliberately a pacing
+# change and nothing more: no next_run_ts is altered, no cadence is rescheduled,
+# no drive is skipped, and no work is dropped -- the same drives run, spaced.
+# Against cadences measured in minutes to days, the added catch-up latency is
+# immaterial.
+#
+# Deliberately NOT changed here: the effective 5s `PRAGMA busy_timeout` and the
+# dead 30s connection parameter (RISKS.md, "(2026-08-22) The effective SQLite
+# lock timeout is 5 seconds..."). Taylor retained that behaviour on 2026-08-22
+# and that entry records that changing either value is a repository-wide
+# behaviour change requiring its own decision.
+#
+# Set BARTH_DRIVE_PACE_S=0 to disable (tests that drive the loop against a
+# virtual clock, or any caller wanting the previous back-to-back behaviour).
+DRIVE_PACE_S = max(0.0, float(os.getenv("BARTH_DRIVE_PACE_S", "0.5")))
+
 
 async def _run_drive(ctx: Any, task_id: str, fn):
     """
@@ -160,6 +192,14 @@ async def run_scheduler(ctx: Any) -> None:
                     # No tasks due, sleep briefly
                     await asyncio.sleep(5)
                     continue
+
+                # Pace the write stream (see DRIVE_PACE_S above). Applied
+                # once per due-task iteration, before any of this iteration's
+                # writes, so consecutive iterations cannot chain into an
+                # unbroken burst -- and so the first drive after startup does
+                # not begin writing in the same instant the process does.
+                if DRIVE_PACE_S:
+                    await asyncio.sleep(DRIVE_PACE_S)
 
                 task_id = due_task["id"]
                 scheduled_ts = due_task["next_run_ts"]

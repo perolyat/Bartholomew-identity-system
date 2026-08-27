@@ -174,6 +174,52 @@ async def test_fresh_database_scheduler_startup_does_not_hang(mock_config_files)
     assert drained is True
 
 
+async def test_startup_drives_are_paced_not_burst(mock_config_files):
+    """Regression test for RISKS.md's "(2026-08-22) Startup-window governed
+    actions can fail with a raw `database is locked`".
+
+    A fresh database makes every registered drive due at the same instant
+    (upsert_scheduled_tasks seeds next_run_ts = now). Before the pacing fix the
+    loop ran them back to back with no yield, so every drive's writes landed in
+    one unbroken burst -- measured here as all ticks sharing a single
+    started_ts. SQLite allows one writer at a time, so a sustained burst can
+    starve a concurrent user-facing governed write past its effective 5s busy
+    timeout.
+
+    This asserts the pacing property directly and deterministically: the same
+    drives still run (nothing is skipped or dropped), but consecutive drive
+    executions are separated in time rather than sharing an instant.
+    """
+    from bartholomew.kernel.daemon import KernelDaemon
+    from bartholomew.kernel.scheduler.loop import run_scheduler
+
+    daemon = KernelDaemon(**mock_config_files)
+    task = asyncio.create_task(run_scheduler(daemon))
+    try:
+        # Long enough for several paced drives to complete.
+        await asyncio.sleep(4.0)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await daemon.scheduler_store.close()
+
+    conn = sqlite3.connect(mock_config_files["db_path"])
+    try:
+        rows = conn.execute("SELECT task_id, started_ts FROM ticks ORDER BY started_ts").fetchall()
+    finally:
+        conn.close()
+
+    # The drives must actually have run -- otherwise this asserts nothing.
+    assert len(rows) >= 2, f"expected the startup drives to run, got {rows}"
+
+    distinct_starts = {started for _, started in rows}
+    assert len(distinct_starts) > 1, (
+        f"all {len(rows)} startup drives executed within a single instant "
+        f"({distinct_starts}) -- the unpaced burst this fix exists to remove"
+    )
+
+
 # -- 3. Checkpoint contention degrades safely ----------------------------------
 
 
