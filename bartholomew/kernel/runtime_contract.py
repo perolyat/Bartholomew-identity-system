@@ -3021,6 +3021,89 @@ _OBJECTIVE_OUTCOME_BY_TRANSITION = {
 }
 
 
+@dataclass(frozen=True)
+class ObjectiveAdmission:
+    """Whether one objective transition is admitted, and why not if not.
+
+    `outcome` is the value a refused transition reports
+    ("parking_brake_denied" or "governance_denied"), so the caller never has
+    to reconstruct it.
+    """
+
+    allowed: bool
+    outcome: str | None = None
+    reason: str | None = None
+
+
+async def evaluate_objective_admission(ctx: Any, kind: str) -> ObjectiveAdmission:
+    """The single Governance authority for every objective mutation.
+
+    Both gates, in one place, so there is exactly one implementation of the
+    decision. `run_objective_through_runtime_contract()` calls this
+    immediately before it writes, and the re-engagement drive calls it before
+    it persists anything of its own -- one authority consulted twice, never
+    two implementations that can drift apart.
+
+    **Gate 1: the Parking Brake, engaged AT ALL -- not scoped to `skills`.**
+    This is `DECISIONS.md`'s "Parking Brake means inspect, but do not mutate"
+    (2026-08-18), clause (d): the gate is the engaged flag itself, not any one
+    subsystem scope, so a brake engaged for `voice` alone still refuses an
+    objective mutation. An objective is durable user state in the same sense
+    the user's memory is -- it belongs to none of the existing subsystem
+    scopes (`skills`, `sight`, `voice`, `scheduler`, `training`), so gating it
+    on any single one would be arbitrary, which is exactly the reasoning
+    `MemoryStore._refuse_mutation_if_braked()` already records for memory.
+    This uses the same helper that check uses,
+    `engaged_state_fail_closed_off_loop()`, rather than a second one.
+
+    Reading objectives stays allowed under a halt, because seeing what
+    Bartholomew is carrying is inspection, and clause (b)'s reasoning applies:
+    a halt that hides what the system was about to do defeats the purpose of
+    halting. `_live_objectives()` and the Interpretation block are therefore
+    deliberately not gated here.
+
+    **Gate 2: Identity Context -> Policy Decision**, per transition kind, so
+    permission to record an objective is not permission to close one. Skipped
+    entirely when no IdentityContext is wired in -- additive, no new failure
+    mode for callers that don't opt in.
+
+    Fails closed: an unreadable governance state refuses the mutation. An
+    unreadable safety gate must never wave a write through.
+    """
+    try:
+        from bartholomew.orchestrator.safety.governance_store import (
+            engaged_state_fail_closed_off_loop,
+        )
+
+        state = await engaged_state_fail_closed_off_loop(
+            ctx.mem.db_path,
+            governance_store=getattr(ctx, "governance_store", None),
+            executor=getattr(ctx, "blocking_executor", None),
+        )
+        if state.engaged:
+            scopes = ", ".join(sorted(state.scopes)) or "global"
+            return ObjectiveAdmission(
+                False,
+                "parking_brake_denied",
+                f"Blocked by parking brake (engaged; scopes={scopes})",
+            )
+    except Exception:
+        logger.exception("Governance check failed for %s; failing closed", kind)
+        return ObjectiveAdmission(False, "parking_brake_denied", "Governance check errored")
+
+    identity_context = getattr(ctx, "identity_context", None)
+    if identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, kind)
+        if not decision.allowed:
+            return ObjectiveAdmission(
+                False,
+                "governance_denied",
+                f"Denied by Identity policy: {decision.reason}",
+            )
+
+    return ObjectiveAdmission(True)
+
+
 @dataclass
 class ObjectiveRuntimeResult:
     """Outcome of one objective transition through the Runtime Contract.
@@ -3264,40 +3347,10 @@ async def run_objective_through_runtime_contract(
     interpretation = Interpretation(observation=observation, prompt=prompt_subject)
     candidate_action = CandidateAction(kind=kind, interpretation=interpretation)
 
-    governance_allowed = True
-    outcome = "governance_denied"
-    denial_reason: str | None = None
-
-    # Governance gate 1: ParkingBrake("skills"), fail-closed.
-    try:
-        from bartholomew.orchestrator.safety.governance_store import (
-            is_blocked_fail_closed_off_loop,
-        )
-
-        blocked = await is_blocked_fail_closed_off_loop(
-            "skills",
-            ctx.mem.db_path,
-            governance_store=getattr(ctx, "governance_store", None),
-            executor=executor,
-        )
-        if blocked:
-            governance_allowed = False
-            outcome = "parking_brake_denied"
-            denial_reason = "Blocked by parking brake (scope=skills)"
-    except Exception:
-        logger.exception("Governance check failed for %s; failing closed", kind)
-        governance_allowed = False
-        outcome = "parking_brake_denied"
-        denial_reason = "Governance check errored"
-
-    # Governance gate 2: Identity Policy Decision, evaluated for real.
-    identity_context = getattr(ctx, "identity_context", None)
-    if governance_allowed and identity_context is not None:
-        decision = policy_engine.evaluate_tool_policy(identity_context, kind)
-        if not decision.allowed:
-            governance_allowed = False
-            outcome = "governance_denied"
-            denial_reason = f"Denied by Identity policy: {decision.reason}"
+    admission = await evaluate_objective_admission(ctx, kind)
+    governance_allowed = admission.allowed
+    outcome = admission.outcome or "governance_denied"
+    denial_reason = admission.reason
 
     objective = existing
     event = None
@@ -3337,14 +3390,34 @@ async def run_objective_through_runtime_contract(
         else:
             outcome = _OBJECTIVE_OUTCOME_BY_TRANSITION[transition]
 
-    await _record_objective_reflection(
-        ctx,
-        candidate_action,
-        outcome,
-        objective,
-        denial_reason,
-        {"event_kind": event_kind} if event_kind else None,
-    )
+    # Reflection -- for every outcome EXCEPT a brake refusal.
+    #
+    # `record_action_reflection()` writes to the `reflections` table through
+    # `MemoryStore.insert_reflection()`, so writing one here while the brake
+    # is engaged would be a memory mutation during a halt -- precisely what
+    # `MemoryStore._refuse_mutation_if_braked()` refuses for every other
+    # memory write, and what "inspect, but do not mutate" forbids. A halted
+    # system does no bookkeeping about work it declined to do.
+    #
+    # Nothing is hidden by this. The refusal is returned to the caller with
+    # its reason, and the brake's own engagement is already recorded in the
+    # GovernanceStore audit -- which clause (b) of that decision keeps
+    # exempt precisely so the halt stays inspectable. What is *not* recorded
+    # is a new row in the user's memory, because a refused transition did no
+    # work worth recording.
+    #
+    # An Identity-policy denial is different and still writes: that is an
+    # ordinary governed decision, not a halt, and it is the same posture
+    # chat and the awaiting_response seam already take for their denials.
+    if outcome != "parking_brake_denied":
+        await _record_objective_reflection(
+            ctx,
+            candidate_action,
+            outcome,
+            objective,
+            denial_reason,
+            {"event_kind": event_kind} if event_kind else None,
+        )
 
     return ObjectiveRuntimeResult(
         observation=observation,

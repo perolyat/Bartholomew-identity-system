@@ -740,7 +740,10 @@ async def drive_objective_continuity_check(ctx: Any) -> Nudge | None:
     persist is disposable.
     """
     from bartholomew.kernel import objective_intents
-    from bartholomew.kernel.runtime_contract import run_objective_through_runtime_contract
+    from bartholomew.kernel.runtime_contract import (
+        evaluate_objective_admission,
+        run_objective_through_runtime_contract,
+    )
 
     store = getattr(ctx, "objective_store", None)
     scheduler_store = getattr(ctx, "scheduler_store", None)
@@ -857,6 +860,33 @@ async def drive_objective_continuity_check(ctx: Any) -> Nudge | None:
             )
             continue
 
+        # Governance BEFORE any mutation of our own.
+        #
+        # The nudge insert below is a governed write on the user's queue, and
+        # the delivery after it is outbound contact. Neither may happen
+        # unless the `objective_surface` candidate action is admitted, so
+        # admission is evaluated here, first, through the one shared
+        # authority `run_objective_through_runtime_contract()` itself uses
+        # (`evaluate_objective_admission`) -- consulted twice, never
+        # reimplemented, so the two cannot drift apart.
+        #
+        # This read is not a second Governance decision and does not weaken
+        # the first: the seam re-evaluates it at the moment it writes, so the
+        # mutation is still gated at its own execution boundary. Evaluating
+        # admission without mutating is inspection, which
+        # `DECISIONS.md`'s "inspect, but do not mutate" explicitly permits.
+        admission = await evaluate_objective_admission(ctx, "objective_surface")
+        if not admission.allowed:
+            # Refused. Nothing is written, nothing is queued, nothing is
+            # sent -- there is no partial artefact of a re-engagement that
+            # governance did not permit.
+            log.info(
+                "[Scheduler] Objective %s re-engagement not admitted: %s",
+                objective.id,
+                admission.reason,
+            )
+            continue
+
         try:
             outcome = await scheduler_store.insert_nudge_contained(
                 OBJECTIVE_NUDGE_KIND,
@@ -871,7 +901,8 @@ async def drive_objective_continuity_check(ctx: Any) -> Nudge | None:
             persistence_failures.append(f"objective {objective.id}: nudge insert failed: {e}")
             log.error(
                 "[Scheduler] Objective re-engagement nudge persistence FAILED for %s: "
-                "%s -- nothing was raised and nothing is assumed to be represented",
+                "%s -- nothing was raised, the objective is NOT recorded as surfaced, "
+                "and it stays due so the next tick can try again",
                 objective.id,
                 e,
             )
@@ -881,48 +912,6 @@ async def drive_objective_continuity_check(ctx: Any) -> Nudge | None:
         if nudge_id is None:
             # Suppressed: an equivalent unresolved re-engagement provably
             # exists. A second copy is the nagging containment prevents.
-            continue
-
-        # Mark it raised through the governed seam -- both gates, its own
-        # Reflection -- before delivery, so a delivery that fails cannot
-        # leave the objective looking un-raised and get raised again next
-        # tick. The record of having raised it is the thing that must not
-        # be lost.
-        try:
-            surfaced = await run_objective_through_runtime_contract(
-                ctx,
-                "surface",
-                objective_id=objective.id,
-                actor="scheduler:objective_continuity",
-            )
-        except Exception as e:
-            persistence_failures.append(f"objective {objective.id}: surface failed: {e}")
-            log.error(
-                "[Scheduler] Objective %s could not be marked as surfaced: %s",
-                objective.id,
-                e,
-            )
-            continue
-
-        if not surfaced.governance_allowed:
-            # Governance said no. The nudge row stands and says so; nothing
-            # is delivered, and the objective is not recorded as raised.
-            log.info(
-                "[Scheduler] Objective %s re-engagement denied by governance: %s",
-                objective.id,
-                surfaced.reason,
-            )
-            try:
-                await scheduler_store.record_nudge_delivery(
-                    nudge_id,
-                    persistence.DELIVERY_NOT_ATTEMPTED,
-                    surfaced.reason,
-                    now_ts,
-                )
-            except Exception as e:
-                persistence_failures.append(
-                    f"objective {objective.id}: denial record failed: {e}",
-                )
             continue
 
         status, detail = await _deliver_objective_reengagement(ctx, title, message)
@@ -937,6 +926,54 @@ async def drive_objective_continuity_check(ctx: Any) -> Nudge | None:
                 objective.id,
                 status,
                 e,
+            )
+
+        # Mark it surfaced LAST, and only now.
+        #
+        # `surfaced` means "this was actually put in front of the user", and
+        # the queued nudge is what makes that true -- it is visible in the
+        # UI whether or not the outbound notification also got through, which
+        # is why a delivery failure (recorded on the nudge above) still
+        # counts as surfaced while a failed nudge insert does not.
+        #
+        # Ordering it last is what keeps that honest. Marking it first, as
+        # this originally did, meant a failed insert left an objective
+        # claiming it had been raised when the user had seen nothing -- and
+        # because the re-engagement window advances on surfacing, it would
+        # then have gone quiet on an obligation that was never delivered.
+        # Failing before this point instead leaves the objective untouched
+        # and still due, so the next tick retries it.
+        try:
+            surfaced = await run_objective_through_runtime_contract(
+                ctx,
+                "surface",
+                objective_id=objective.id,
+                actor="scheduler:objective_continuity",
+            )
+        except Exception as e:
+            persistence_failures.append(f"objective {objective.id}: surface failed: {e}")
+            log.error(
+                "[Scheduler] Objective %s was raised with the user but could NOT be "
+                "recorded as surfaced: %s -- the queue holds the nudge; the objective "
+                "is not assumed to have been raised",
+                objective.id,
+                e,
+            )
+            continue
+
+        if not surfaced.governance_allowed:
+            # The brake was engaged, or policy changed, between admission and
+            # this write. The seam refused, which is correct and fail-closed;
+            # record it rather than letting the objective silently look
+            # raised.
+            persistence_failures.append(
+                f"objective {objective.id}: surface refused by governance after "
+                f"admission: {surfaced.reason}",
+            )
+            log.error(
+                "[Scheduler] Objective %s surface refused at the write boundary: %s",
+                objective.id,
+                surfaced.reason,
             )
 
     if persistence_failures:

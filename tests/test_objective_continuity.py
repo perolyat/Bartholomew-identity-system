@@ -29,6 +29,7 @@ reason -- a mocked delivery proves only that the code called itself.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -51,6 +52,7 @@ from bartholomew.kernel.scheduler import drives as drives_module
 from bartholomew.kernel.scheduler import persistence as sp
 from bartholomew.kernel.scheduler.drives import (
     OBJECTIVE_CONTINUITY_DRIVE,
+    OBJECTIVE_NUDGE_KIND,
     drive_objective_continuity_check,
     resolve_registry,
 )
@@ -207,6 +209,22 @@ def _age_objective(store, objective_id: int, days: int) -> None:
             (past, past, objective_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _nudges(db_path: str, kind: str | None = None) -> list[sqlite3.Row]:
+    """Read the nudge queue directly, the way the schedule-reminder suite
+    does -- SchedulerStore exposes no list method."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        if kind is None:
+            return conn.execute("SELECT * FROM nudges ORDER BY id").fetchall()
+        return conn.execute(
+            "SELECT * FROM nudges WHERE kind = ? ORDER BY id",
+            (kind,),
+        ).fetchall()
     finally:
         conn.close()
 
@@ -727,3 +745,299 @@ class TestContinuityContent:
         body = _delivered_bodies(recorder)[0]
         assert "nothing has changed" in body.lower()
         assert "could chase them" not in body
+
+
+@pytest.mark.asyncio
+class TestBrakeEngagedForAnyScope:
+    """`DECISIONS.md`, "Parking Brake means inspect, but do not mutate"
+    (2026-08-18), clause (d): the gate is the engaged flag itself, not one
+    subsystem scope. A brake engaged for `voice` alone still refuses an
+    objective mutation.
+
+    An objective is durable user state in the same sense the user's memory
+    is -- it belongs to none of the existing subsystem scopes, so gating it
+    on any single one would be arbitrary. That is the reasoning
+    `MemoryStore._refuse_mutation_if_braked()` already records for memory,
+    and these cases pin it for objectives.
+
+    Every case here engages **voice** specifically. Under the original
+    `skills`-scoped check every one of them passed straight through and
+    mutated.
+    """
+
+    @staticmethod
+    def _brake(mem, scope="voice"):
+        governance = GovernanceStore(mem.db_path)
+        governance.engage(scope, reason="coordination review", actor="test")
+        assert governance.refresh().engaged is True
+        return governance
+
+    @pytest.mark.parametrize(
+        "scope",
+        ["voice", "sight", "scheduler", "training", "skills", "global"],
+    )
+    async def test_open_is_refused_under_a_brake_engaged_for_any_scope(
+        self,
+        mem,
+        objectives,
+        scope,
+    ):
+        governance = self._brake(mem, scope)
+        ctx = _Ctx(mem, objectives, governance_store=governance)
+
+        result = await run_objective_through_runtime_contract(
+            ctx,
+            "open",
+            title="get the roof repaired",
+        )
+
+        assert result.governance_allowed is False
+        assert result.outcome == "parking_brake_denied"
+        assert objectives.list() == []
+
+    @pytest.mark.parametrize(
+        "transition",
+        ["record", "surface", "block", "unblock", "complete", "abandon"],
+    )
+    async def test_every_mutation_is_refused_and_writes_nothing(
+        self,
+        mem,
+        objectives,
+        transition,
+    ):
+        """Established before the brake, so there is real state a leak could
+        modify."""
+        objective = objectives.open(title="get the roof repaired")
+        objectives.record(objective.id, event_kind=EVENT_DECISION, summary="chose a roofer")
+        before = objectives.get(objective.id)
+        events_before = objectives.events(objective.id)
+
+        governance = self._brake(mem)
+        ctx = _Ctx(mem, objectives, governance_store=governance)
+
+        kwargs = {"objective_id": objective.id}
+        if transition == "record":
+            kwargs |= {"event_kind": EVENT_FACT, "summary": "rain Thursday"}
+        if transition == "block":
+            kwargs |= {"reason": "waiting"}
+
+        result = await run_objective_through_runtime_contract(ctx, transition, **kwargs)
+
+        assert result.governance_allowed is False
+        assert result.outcome == "parking_brake_denied"
+
+        after = objectives.get(objective.id)
+        assert after.status == before.status
+        assert after.updated_at == before.updated_at
+        assert after.last_surfaced_at == before.last_surfaced_at
+        assert after.last_surfaced_event_id == before.last_surfaced_event_id
+        assert after.completed_at is None
+        assert after.resolution is None
+        # Not one new row in the history.
+        assert [e.id for e in objectives.events(objective.id)] == [e.id for e in events_before]
+
+    async def test_no_reflection_is_written_for_a_refused_mutation(self, mem, objectives):
+        """Even the Reflection is a write. A halted system does no
+        bookkeeping about work it refused to do."""
+        from bartholomew.kernel.reflection import REFLECTION_KIND
+
+        governance = self._brake(mem)
+        ctx = _Ctx(mem, objectives, governance_store=governance)
+
+        await run_objective_through_runtime_contract(
+            ctx,
+            "open",
+            title="get the roof repaired",
+        )
+
+        latest = await mem.latest_reflection(REFLECTION_KIND)
+        assert latest is None, "a Reflection was written while the brake was engaged"
+
+    async def test_reading_objectives_stays_allowed_under_a_brake(self, mem, objectives):
+        """Inspection is never blocked -- a halt that hides what Bartholomew
+        was about to do defeats the purpose of halting."""
+        objectives.open(title="get the roof repaired")
+        self._brake(mem)
+
+        # The store read, and the prompt block built from it, both still work.
+        from bartholomew.kernel.runtime_contract import render_objectives_for_prompt
+
+        live = objectives.list_live()
+        assert len(live) == 1
+        assert "get the roof repaired" in render_objectives_for_prompt(live)
+
+    async def test_the_drive_raises_nothing_and_queues_nothing(
+        self,
+        mem,
+        objectives,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """Requirement: zero objective/event, nudge, Reflection or delivery
+        mutation, and no outbound notification."""
+        from bartholomew.kernel.reflection import REFLECTION_KIND
+
+        server, recorder = webhook_server
+        registry = await _registry(mem, monkeypatch, _url(server))
+
+        objective = objectives.open(title="get the roof repaired")
+        _age_objective(objectives, objective.id, days=10)
+        before = objectives.get(objective.id)
+        events_before = objectives.events(objective.id)
+
+        governance = self._brake(mem)
+        ctx = _Ctx(mem, objectives, scheduler_store, registry, governance_store=governance)
+
+        await drive_objective_continuity_check(ctx)
+
+        # Nothing left the machine.
+        assert recorder.received == []
+        # No nudge was queued -- the ordering fix: governance is evaluated
+        # before any write of the drive's own.
+        assert _nudges(mem.db_path) == []
+        # The objective is untouched and still due, so a later tick can
+        # legitimately raise it once the brake is released.
+        after = objectives.get(objective.id)
+        assert after.last_surfaced_at is None
+        assert after.last_surfaced_event_id is None
+        assert after.updated_at == before.updated_at
+        assert [e.id for e in objectives.events(objective.id)] == [e.id for e in events_before]
+        assert await mem.latest_reflection(REFLECTION_KIND) is None
+
+    async def test_releasing_the_brake_restores_re_engagement(
+        self,
+        mem,
+        objectives,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """The brake defers; it does not cancel. The obligation is intact and
+        is raised once the halt is released."""
+        server, recorder = webhook_server
+        registry = await _registry(mem, monkeypatch, _url(server))
+
+        objective = objectives.open(title="get the roof repaired")
+        _age_objective(objectives, objective.id, days=10)
+
+        governance = self._brake(mem)
+        ctx = _Ctx(mem, objectives, scheduler_store, registry, governance_store=governance)
+        await drive_objective_continuity_check(ctx)
+        assert recorder.received == []
+
+        governance.disengage(reason="test", actor="test")
+        await drive_objective_continuity_check(ctx)
+
+        assert len(recorder.received) == 1
+        assert objectives.get(objective.id).last_surfaced_at is not None
+
+    async def test_forecast_evidence_attachment_is_refused_too(self, mem, objectives):
+        """The evidence path is a mutation like any other, and goes through
+        the same seam, so it inherits the same gate."""
+        objective = objectives.open(title="get the roof repaired")
+        governance = self._brake(mem)
+        ctx = _Ctx(mem, objectives, governance_store=governance)
+
+        result = await run_objective_through_runtime_contract(
+            ctx,
+            "record",
+            objective_id=objective.id,
+            event_kind=EVENT_FACT,
+            summary="rain likely Thursday",
+            provenance={"provider_host": "api.open-meteo.com", "evidence": True},
+        )
+
+        assert result.governance_allowed is False
+        assert objectives.evidence_events(objective.id) == []
+
+
+@pytest.mark.asyncio
+class TestNudgeIsNeverWrittenBeforeGovernance:
+    async def test_an_identity_denial_queues_no_nudge_and_sends_nothing(
+        self,
+        mem,
+        objectives,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """The second gate, not the brake: `objective_surface` is not
+        allowlisted, so nothing may be queued or sent either."""
+        server, recorder = webhook_server
+        registry = await _registry(mem, monkeypatch, _url(server))
+
+        objective = objectives.open(title="get the roof repaired")
+        _age_objective(objectives, objective.id, days=10)
+
+        ctx = _Ctx(
+            mem,
+            objectives,
+            scheduler_store,
+            registry,
+            identity=PRE_SLICE_DENY_CONTEXT,
+        )
+        await drive_objective_continuity_check(ctx)
+
+        assert recorder.received == []
+        assert _nudges(mem.db_path) == []
+        assert objectives.get(objective.id).last_surfaced_at is None
+
+    async def test_surfaced_is_not_claimed_when_the_nudge_could_not_be_queued(
+        self,
+        mem,
+        objectives,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """Honest `surfaced` semantics.
+
+        If the queue write fails the user has seen nothing, so the objective
+        must not record that it was raised -- otherwise the re-engagement
+        window advances and Bartholomew goes quiet on an obligation it never
+        actually delivered."""
+        server, recorder = webhook_server
+        registry = await _registry(mem, monkeypatch, _url(server))
+
+        objective = objectives.open(title="get the roof repaired")
+        _age_objective(objectives, objective.id, days=10)
+        ctx = _Ctx(mem, objectives, scheduler_store, registry)
+
+        async def _boom(*a, **kw):
+            raise RuntimeError("queue write failed")
+
+        monkeypatch.setattr(scheduler_store, "insert_nudge_contained", _boom)
+
+        with pytest.raises(RuntimeError, match="could not durably record"):
+            await drive_objective_continuity_check(ctx)
+
+        assert recorder.received == []
+        after = objectives.get(objective.id)
+        assert after.last_surfaced_at is None, "surfaced was claimed without the user seeing it"
+        assert after.last_surfaced_event_id is None
+
+    async def test_a_failed_delivery_still_counts_as_surfaced(
+        self,
+        mem,
+        objectives,
+        scheduler_store,
+        monkeypatch,
+        webhook_server,
+    ):
+        """The queued nudge is visible in the UI whether or not the outbound
+        notification got through, so it is a genuine surfacing -- and the
+        delivery failure is recorded on the nudge rather than hidden."""
+        server, recorder = webhook_server
+        registry = await _registry(mem, monkeypatch, _url(server))
+        recorder.status = 500
+
+        objective = objectives.open(title="get the roof repaired")
+        _age_objective(objectives, objective.id, days=10)
+        ctx = _Ctx(mem, objectives, scheduler_store, registry)
+
+        await drive_objective_continuity_check(ctx)
+
+        assert objectives.get(objective.id).last_surfaced_at is not None
+        [nudge] = _nudges(mem.db_path, OBJECTIVE_NUDGE_KIND)
+        assert nudge["delivery_status"] == sp.DELIVERY_FAILED

@@ -126,8 +126,20 @@ round — reachable only by actually surfacing, which advances the id — is a g
 obligation. A fixed per-objective key would have meant Bartholomew raised each objective exactly
 once, ever, then went quiet on live work.
 
-The objective is marked surfaced through the governed seam **before** delivery, so a failed
-delivery cannot leave it looking un-raised and get raised again next tick.
+**Ordering: admission → nudge → delivery → `surface`.** Nothing of the drive's own is written until
+`evaluate_objective_admission()` has admitted the `objective_surface` candidate action, so a refused
+re-engagement leaves no partial artefact — no queued nudge, no notification, no state change. The
+seam then re-evaluates admission at the moment it writes, so the mutation is still gated at its own
+execution boundary; the drive's earlier read is admission, not a second decision, and evaluating
+admission without mutating is inspection, which the brake decision explicitly permits.
+
+`surface` is marked **last**, and means "this was actually put in front of the user" — the queued
+nudge is what makes that true, which is why a failed *delivery* still counts as surfaced (the nudge
+is visible in the UI, and its delivery failure is recorded on it) while a failed *nudge insert* does
+not. An earlier draft marked it first; that left an objective claiming it had been raised when the
+user had seen nothing, and because the re-engagement window advances on surfacing, Bartholomew would
+then have gone quiet on an obligation it never delivered. Failing before that point instead leaves
+the objective untouched and still due, so the next tick retries it.
 
 ## 7. How governance applies
 
@@ -135,10 +147,42 @@ Every gate already existed; none was added, weakened or bypassed.
 
 | Gate | Where | Effect |
 |---|---|---|
-| Parking Brake (`skills`) | `run_objective_through_runtime_contract`, fail-closed | Engaged ⇒ **zero writes**. Objective state is governed state; a braked Bartholomew does not quietly keep bookkeeping. |
+| Parking Brake, **engaged at all** | `evaluate_objective_admission()`, fail-closed | Engaged for *any* scope ⇒ **zero writes**. See below. |
 | Identity policy | same, on `objective_<transition>` | Evaluated per transition, so permission to record an objective is not permission to close one. Not self-maintenance-exempt: an objective is specific user content. |
-| Reflection | same | One `ActionReflection` per transition into the single shared Memory sink, for every outcome including denials. |
+| Reflection | `run_objective_through_runtime_contract` | One `ActionReflection` per transition into the single shared Memory sink, for every outcome **except a brake refusal** — see below. |
 | Notification gates | `SkillRegistry.execute_action()` + `NotifySkill` | Unchanged: brake, `nudge.create`, `notify` allowlisting, quiet hours, mute. |
+
+### The brake is the engaged flag, not the `skills` scope
+
+`DECISIONS.md`'s "Parking Brake means inspect, but do not mutate" (2026-08-18),
+clause (d): the gate is whether the brake is engaged **at all**, not whether one subsystem scope is
+halted. A brake engaged for `voice` alone still refuses an objective mutation.
+
+An objective is durable user state in the same sense the user's memory is — it belongs to none of
+the existing subsystem scopes (`skills`, `sight`, `voice`, `scheduler`, `training`), so gating it on
+any single one would be arbitrary. That is exactly the reasoning
+`MemoryStore._refuse_mutation_if_braked()` already records for memory, and this uses the same helper
+that check uses, `engaged_state_fail_closed_off_loop()`, rather than a second one.
+
+**Reads stay allowed.** `_live_objectives()` and the Interpretation block are deliberately not
+gated: seeing what Bartholomew is carrying is inspection, and a halt that hides what the system was
+about to do defeats the purpose of halting.
+
+**A brake refusal writes no Reflection.** `record_action_reflection()` writes to the `reflections`
+table through `MemoryStore.insert_reflection()`, so writing one during a halt would be a memory
+mutation while braked — the very thing `_refuse_mutation_if_braked()` refuses for every other memory
+write. Nothing is hidden by this: the refusal is returned to the caller with its reason, and the
+brake's own engagement is recorded in the GovernanceStore audit, which clause (b) keeps exempt
+precisely so the halt stays inspectable. An Identity-policy denial is different and still writes —
+that is an ordinary governed decision, not a halt, and matches what chat and the awaiting_response
+seam already do.
+
+### One admission authority, consulted twice
+
+`evaluate_objective_admission()` is the single implementation of both gates.
+`run_objective_through_runtime_contract()` calls it immediately before it writes; the re-engagement
+drive calls it before it persists anything of its own. One authority consulted twice — never two
+implementations that can drift apart, and never a check the seam skips.
 
 **An objective existing authorises nothing.** This slice governs the *recording* of what the user
 wants and what has happened around it. It sends nothing, spends nothing, discloses nothing and
