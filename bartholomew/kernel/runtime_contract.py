@@ -1001,6 +1001,33 @@ def _forecast_error(result: Any) -> str:
     )
 
 
+#: Dispatch names, one per explicit-instruction recogniser. Constants rather
+#: than bare strings so the table below and the result-field reads in
+#: `run_chat_through_runtime_contract()` cannot drift apart silently.
+_DISPATCH_TASK = "task"
+_DISPATCH_FORECAST = "forecast"
+
+#: The chat surface's explicit-instruction recognisers, **in dispatch order**.
+#:
+#: This is a table, not a framework. There is no registration API, no
+#: discovery, no priority negotiation and no way for anything outside this
+#: module to add an entry: it is the same ordered `if/elif` chain the chat
+#: turn always had, written once so a further recogniser is one line rather
+#: than one more level of nesting.
+#:
+#: Order is behaviour and is pinned by test. Task control comes first because
+#: an explicit task instruction is unambiguous and must never be reinterpreted
+#: as something else; each handler returns None for anything it does not
+#: explicitly claim, so the common case reaches the model unchanged.
+_CHAT_DISPATCH: tuple[
+    tuple[str, Callable[[KernelDaemon, Observation], Awaitable[dict[str, Any] | None]]],
+    ...,
+] = (
+    (_DISPATCH_TASK, _handle_task_intent),
+    (_DISPATCH_FORECAST, _handle_forecast_intent),
+)
+
+
 async def run_chat_through_runtime_contract(
     daemon: KernelDaemon,
     user_input: str,
@@ -1108,37 +1135,37 @@ async def run_chat_through_runtime_contract(
     working_memory_item_id: str | None = None
     captured_facts: list[dict[str, Any]] = []
 
+    #: What each recogniser in `_CHAT_DISPATCH` produced, keyed by its
+    #: dispatch name. At most one entry: the first recogniser to claim the
+    #: utterance owns the turn. The per-recogniser result fields on
+    #: `RuntimeContractResult` are read back out of this below, so adding a
+    #: recogniser never changes this function's control flow.
+    recognised: dict[str, dict[str, Any]] = {}
     task_action: dict[str, Any] | None = None
     forecast_action: dict[str, Any] | None = None
 
     if governance_allowed:
         # Stage 5+6: Capability + Execution.
         #
-        # Conversational task control: an utterance that is an *explicit* task
-        # instruction is carried out through the governed skill path, and its
-        # real outcome becomes the turn's reply. The model is deliberately not
-        # asked for one in that case -- a generated sentence about an action
-        # that has already happened (or has just been refused) could contradict
-        # it, and the user would have no way to tell which was true. Anything
-        # that is not an explicit instruction returns None here and the turn
-        # proceeds exactly as it always has.
-        task_action = await _handle_task_intent(daemon, observation)
-        if task_action is not None:
-            response = task_action["reply"]
+        # Explicit-instruction dispatch, in the fixed order _CHAT_DISPATCH
+        # declares. The first recogniser that claims the utterance owns the
+        # turn's reply, and the model is deliberately not asked for one in
+        # that case -- a generated sentence about an action that has already
+        # happened (or has just been refused) could contradict it, and the
+        # user would have no way to tell which was true. When no recogniser
+        # claims it -- the overwhelmingly common case -- the turn falls
+        # through to the model exactly as it always has.
+        for name, handler in _CHAT_DISPATCH:
+            outcome = await handler(daemon, observation)
+            if outcome is not None:
+                recognised[name] = outcome
+                response = outcome["reply"]
+                break
         else:
-            # Golden Path first slice: an explicit forecast question is
-            # answered from evidence a governed external capability actually
-            # returned. As with task control, the model is deliberately not
-            # asked for a reply in that case -- a model asked "will it rain
-            # tomorrow" will produce a fluent answer it has no way to know,
-            # which is exactly the failure an external capability exists to
-            # remove. Anything that is not an explicit forecast request
-            # returns None and the turn proceeds as it always has.
-            forecast_action = await _handle_forecast_intent(daemon, observation)
-            if forecast_action is not None:
-                response = forecast_action["reply"]
-            else:
-                response = await respond_fn(interpretation.prompt)
+            response = await respond_fn(interpretation.prompt)
+
+        task_action = recognised.get(_DISPATCH_TASK)
+        forecast_action = recognised.get(_DISPATCH_FORECAST)
 
         # Stage 7: Reflection -- record the interaction in Working Memory
         # (chat's short-term context buffer; feeds get_context_string()).
