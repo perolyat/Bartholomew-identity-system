@@ -868,13 +868,25 @@
     **0% top-1** and returns something for **every** irrelevant query; FTS 31% top-1; hybrid 38%.
     The vector arm under the fallback is noise that ranks. This independently confirms the S5.3
     characterisation behind `competency_reasoning.DEFAULT_MIN_SHARED_TERMS`.
-    **What is NOT closed by this.** The real embedder is *enabled* but not *installed*:
-    `sentence-transformers` is an opt-in extra and the model must be provisioned deliberately
-    (`bartholomew embeddings provision`), because ordinary retrieval must never trigger a download.
-    Band C's "intended embedder enabled, or fallback explicitly approved with measured quality"
-    therefore still needs Taylor's decision on **which branch is being taken** — the measurement it
-    was waiting on now exists. The relevance gate was deliberately **not** retuned: recalibrating it
-    needs after-numbers from a real embedder, and only the before-numbers exist.
+    **OP-W003 itself remains OPEN — deferred, not closed (decided 2026-08-27).** Taylor took
+    **neither** of Band C's two branches. Specifically:
+    - **The real embedder is NOT adopted as the default or intended configuration.** The measured
+      evidence above is a bounded 15-case synthetic fixture; it characterises the *fallback*, and it
+      is not representative real-world retrieval evidence about a real model. It is therefore not a
+      basis for a policy change, and none was made. `sentence-transformers` stays an opt-in extra
+      that is not installed, `model_path` stays unset, `allow_download` stays false, and
+      `BARTHO_EMBED_ENABLED` stays off by default — retrieval runs FTS-first exactly as before.
+    - **The fallback is NOT "explicitly approved with measured quality" either.** The measurement
+      argues against approving it: a vector arm scoring 0% top-1 and answering every irrelevant
+      query is not a quality bar anyone should sign off.
+    - **What closes OP-W003 is stronger, representative real-world retrieval evidence** against a
+      provisioned real model, on real content rather than a synthetic fixture. Until that exists,
+      OP-W003 stands as a **Band C blocker**.
+    What *is* discharged by this work is the reporting half — the reason OP-W003 was recorded at all:
+    retrieval mode is now known, truthfully reported, and impossible to misread as semantic when it
+    is not. That is a prerequisite for the eventual decision, not the decision.
+    The relevance gate was deliberately **not** retuned: recalibrating it needs after-numbers from a
+    real embedder, and only the before-numbers exist.
 
 - **(2026-08-20) `config/policy.yaml`'s `parking_brake.affected_components` lists four scopes, not
   six — flagged, not changed.** The file reads `affected_components: [skills, sight, voice,

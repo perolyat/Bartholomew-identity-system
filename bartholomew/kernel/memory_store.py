@@ -168,9 +168,7 @@ def _get_embedding_components(db_path: str):
         return None, None
 
     try:
-        from bartholomew.kernel.embedding_engine import (
-            get_embedding_engine,
-        )
+        from bartholomew.kernel.embedding_engine import get_embedding_engine
         from bartholomew.kernel.vector_store import VectorStore
 
         if _embedding_engine is None:

@@ -29,9 +29,11 @@ The four approved stages, all on `claude/retrieval-quality-real-embedder-i4x3aw`
 - **The relevance gate is untouched.** `DEFAULT_MIN_SHARED_TERMS` and the
   lexical dominance rule are unchanged. Only the before-numbers exist; retuning
   needs after-numbers from a real embedder.
-- **OP-W003's branch decision is still Taylor's.** The evidence it was waiting
-  on now exists; choosing "intended embedder enabled" versus "fallback
-  explicitly approved" is a recorded decision, not something this branch takes.
+- **OP-W003 is deferred, not closed** (decided 2026-08-27). Neither branch was
+  taken: the real embedder is not adopted as the default, and the fallback is
+  not approved either. The synthetic fixture characterises the fallback; closing
+  OP-W003 needs representative real-world evidence against a provisioned real
+  model. It remains a Band C blocker.
 
 ## The one number worth carrying forward
 

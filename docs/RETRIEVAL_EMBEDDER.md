@@ -87,6 +87,27 @@ deleted: not the row, and certainly not the source memory. `bartholomew
 embeddings rebuild` regenerates them from the authoritative retained source
 text; rows with no retained source stay excluded and are reported.
 
+## Disposition of OP-W003 (2026-08-27): DEFERRED
+
+**OP-W003 is not closed by this work, and neither of Band C's two branches was taken.**
+
+- The real embedder is **not** adopted as the default or intended configuration. The measurement
+  below is a bounded synthetic fixture characterising the *fallback*; it is not representative
+  real-world evidence about a real model, and is not a basis for a policy change.
+- The fallback is **not** "explicitly approved with measured quality" either — the measurement
+  argues against approving it.
+- **What closes OP-W003 is stronger, representative real-world retrieval evidence** against a
+  provisioned real model on real content. Until then OP-W003 stands as a Band C blocker.
+
+What this work discharges is the *reporting* half — the reason OP-W003 was recorded at all.
+Retrieval mode is now known and truthfully reported. That is a prerequisite for the decision, not
+the decision.
+
+**Current shipped behaviour is the conservative one**, and the section below describes what an
+operator would have to do deliberately to change it: `sentence-transformers` is an uninstalled
+opt-in extra, `model_path` is unset, `allow_download` is false, and `BARTHO_EMBED_ENABLED` is off
+by default. Retrieval runs FTS-first, as it did before.
+
 ## Provisioning the real model
 
 `sentence-transformers` is an **extra**, not a core dependency — it pulls
@@ -116,6 +137,13 @@ dimension migration is needed. Changing the model still requires
 cases, in `tests/fixtures/retrieval_eval_corpus.py`) across `fts`, `vector` and
 `hybrid`, reporting top-1 and top-3 per mode and per category, always together
 with the embedder that produced the numbers.
+
+**Know what this fixture is and is not.** It is 15 synthetic cases over 12
+synthetic memories, written by the same author as the code it measures. It is
+enough to characterise gross behaviour — and it was: it showed the fallback
+vector arm is noise. It is **not** representative real-world retrieval evidence,
+and it must not be cited as though it were. That distinction is exactly why
+OP-W003 is deferred rather than closed.
 
 **The harness measures; it does not gate.** There is no pass mark, and the
 fixture tests assert nothing about quality — only that the apparatus is sound.
