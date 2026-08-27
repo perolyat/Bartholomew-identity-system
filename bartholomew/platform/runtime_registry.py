@@ -22,9 +22,15 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .principal import AuthenticationError, Principal
+from .principal import AuthenticationError, AuthorizationError, Principal
 
 DATA_ROOT_ENV = "BARTH_DATA_ROOT"
+# When set, this process serves exactly one personal Bartholomew, and every
+# authenticated request must resolve to it. This is how the "one runtime per
+# process behind the shared control plane" model is actually enforced rather
+# than merely intended: without it a process would serve whichever kernel it
+# happened to be launched with, to whoever authenticated.
+RUNTIME_USER_ID_ENV = "BARTH_RUNTIME_USER_ID"
 KEYRING_SERVICE_ENV = "BARTHO_MEMORY_KEYRING_SERVICE"
 
 # `user_id` values are server-generated UUID4 (see accounts.create_account).
@@ -168,3 +174,41 @@ def apply_runtime_environment(handle: RuntimeHandle) -> None:
     os.environ["BARTH_DB_PATH"] = handle.db_path
     os.environ["BARTHO_DB_PATH"] = handle.db_path
     os.environ[KEYRING_SERVICE_ENV] = handle.keyring_service
+
+
+def bound_runtime_user_id() -> str | None:
+    """
+    The `user_id` this process is dedicated to, if any.
+
+    None means the process is not bound to a personal runtime -- the current
+    single-runtime local deployment. Binding is what a multi-user front door
+    sets when it launches or routes to a per-user process.
+    """
+    value = (os.getenv(RUNTIME_USER_ID_ENV) or "").strip()
+    return value or None
+
+
+def assert_principal_owns_this_process(principal: Principal) -> None:
+    """
+    Refuse a principal that is not the user this process serves.
+
+    A no-op when the process is unbound. When bound, a mismatch is refused
+    rather than served: handing user B the runtime of user A is the exact
+    cross-user disclosure the isolation model exists to prevent, and "the
+    kernel that happens to be loaded" is never the right answer to "whose
+    Bartholomew is this?".
+    """
+    bound = bound_runtime_user_id()
+    if bound is None:
+        return
+    if principal.is_platform_admin:
+        # An administrator has no personal runtime, so a process dedicated to
+        # one is not a surface they may act through.
+        raise AuthorizationError(
+            "this process serves a single personal Bartholomew and does not "
+            "accept platform-administrative requests",
+        )
+    if principal.user_id != bound:
+        raise AuthorizationError(
+            "authenticated identity is not the user this runtime serves",
+        )

@@ -220,3 +220,63 @@ def test_runtime_resolution_takes_a_principal_not_a_string():
         Principal,
         "Principal",
     ), "runtime_handle_for must take a verified Principal, never a raw identifier"
+
+
+# ---------------------------------------------------------------------------
+# T2 -- a process dedicated to one user refuses every other identity
+# ---------------------------------------------------------------------------
+
+
+def test_a_bound_process_refuses_a_different_users_identity(monkeypatch):
+    """
+    T2. This is what makes "one runtime per process" an enforced boundary
+    rather than an intention. Alice's process must refuse Bob even though Bob
+    authenticated perfectly well.
+    """
+    from bartholomew.platform.principal import AuthorizationError
+    from bartholomew.platform.runtime_registry import (
+        RUNTIME_USER_ID_ENV,
+        assert_principal_owns_this_process,
+    )
+
+    alice, bob = _user("alice"), _user("bob")
+    monkeypatch.setenv(RUNTIME_USER_ID_ENV, alice.user_id)
+
+    assert_principal_owns_this_process(alice)  # the owner is fine
+    with pytest.raises(AuthorizationError):
+        assert_principal_owns_this_process(bob)
+
+
+def test_a_bound_process_refuses_platform_administrators(monkeypatch):
+    """
+    T10. A process serving one person's Bartholomew is not an administrative
+    surface, so an admin principal is refused there too.
+    """
+    from bartholomew.platform.principal import AuthorizationError
+    from bartholomew.platform.runtime_registry import (
+        RUNTIME_USER_ID_ENV,
+        assert_principal_owns_this_process,
+    )
+
+    alice = _user("alice")
+    ops = Principal(str(uuid.uuid4()), "ops", PrincipalKind.PLATFORM_ADMIN, "s")
+    monkeypatch.setenv(RUNTIME_USER_ID_ENV, alice.user_id)
+    with pytest.raises(AuthorizationError):
+        assert_principal_owns_this_process(ops)
+
+
+def test_an_unbound_process_does_not_silently_claim_an_identity(monkeypatch):
+    """
+    The unbound case is a no-op, not a fallback. It must not invent a binding
+    or accept one from anywhere -- an unbound process is simply not making the
+    ownership claim, and the multi-runtime front door is what sets it.
+    """
+    from bartholomew.platform.runtime_registry import (
+        RUNTIME_USER_ID_ENV,
+        assert_principal_owns_this_process,
+        bound_runtime_user_id,
+    )
+
+    monkeypatch.delenv(RUNTIME_USER_ID_ENV, raising=False)
+    assert bound_runtime_user_id() is None
+    assert_principal_owns_this_process(_user("anyone"))

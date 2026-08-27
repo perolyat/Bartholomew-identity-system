@@ -36,6 +36,7 @@ from .principal import (
     Principal,
 )
 from .route_policy import UnclassifiedRouteError, capability_for, is_public_path
+from .runtime_registry import assert_principal_owns_this_process
 from .sessions import SESSION_COOKIE_NAME, client_fingerprint, verify_session
 
 # The attribute the verified principal is published on. Handlers read
@@ -164,6 +165,10 @@ def authenticate_and_authorize(request: Any, *, db_path: str | None = None) -> P
 
     principal = resolve_principal(request, db_path=db_path)
     require_capability(principal, capability_for(request.method, template))
+    # Last: is this even the right process for this identity? Checked after
+    # authorisation so a wrong-runtime request cannot be used to probe which
+    # capabilities exist.
+    assert_principal_owns_this_process(principal)
     return principal
 
 
