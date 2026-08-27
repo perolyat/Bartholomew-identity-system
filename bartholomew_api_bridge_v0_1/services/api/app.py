@@ -38,10 +38,23 @@ except Exception:
 
 from prometheus_client import PlatformCollector, ProcessCollector
 
+from bartholomew.platform.exposure import assert_exposure_is_safe, describe_exposure
+from bartholomew.platform.http_identity import (
+    authenticate_and_authorize,
+)
+from bartholomew.platform.http_identity import error_response as platform_error_response
+from bartholomew.platform.principal import (
+    AuthenticationError,
+    AuthorizationError,
+    AuthUnavailableError,
+)
+from bartholomew.platform.route_policy import UnclassifiedRouteError
+
 from . import db_ctx
 from .db import DB_PATH, resolve_db_path
 from .models import ChatIn, ChatOut, ConversationList
 from .routes import (
+    auth,
     awaiting_response,
     consent,
     governance,
@@ -81,6 +94,7 @@ except Exception:
 app = FastAPI(title="Bartholomew API v0.1", version="0.1.0")
 
 # Include routers
+app.include_router(auth.router)
 app.include_router(liveness.router)
 app.include_router(self_state.router)
 app.include_router(governance.router)
@@ -311,12 +325,38 @@ async def admission_middleware(request: Request, call_next):
                 status_code=403,
                 content={
                     "detail": (
-                        "This Bartholomew API is loopback-only. It has no "
-                        "authentication, so it does not answer non-local "
-                        "callers. See DECISIONS.md (deployment architecture)."
+                        "This Bartholomew deployment is loopback-only and "
+                        "does not answer non-local callers. Reaching it "
+                        "remotely requires a deliberately exposed deployment, "
+                        "which is authenticated and TLS-only. See "
+                        "DECISIONS.md (deployment architecture, and the S8 "
+                        "Alpha authentication entry)."
                     ),
                 },
             )
+
+    # Authentication and authorisation (S8), in the one chokepoint rather
+    # than a second one -- deliberately *after* the network boundary above
+    # (may this peer reach the process at all) and *before* the admission
+    # and readiness checks below (is the kernel ready to take work).
+    #
+    # It is also before the admission exemption list, which exempts paths
+    # from *kernel readiness*, not from the question of who is asking. The
+    # genuinely unauthenticated paths are named in route_policy.PUBLIC_PATHS
+    # and are a deliberately shorter list.
+    #
+    # Nothing here decides whether Bartholomew may act. That remains
+    # Governance's answer, below the route handler, unchanged.
+    try:
+        principal = authenticate_and_authorize(request)
+    except (
+        AuthenticationError,
+        AuthorizationError,
+        AuthUnavailableError,
+        UnclassifiedRouteError,
+    ) as exc:
+        return platform_error_response(exc)
+    request.state.principal = principal
 
     if _admission_exempt(request.url.path):
         return await call_next(request)
@@ -367,6 +407,15 @@ _kernel_task = None
 @app.on_event("startup")
 async def startup():
     global _kernel, _kernel_task
+
+    # Fail closed on an unsafe exposure posture before anything is served.
+    # Raising here stops the process; the alternative -- discovering it on
+    # the first request -- is too late, because by then it is listening.
+    assert_exposure_is_safe()
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    print(f"[platform] exposure: {describe_exposure()}", file=sys.stderr)
 
     # Initialize state for liveness + metrics
     app.state.start_monotonic = _time.monotonic()

@@ -257,6 +257,20 @@
   pipeline exist.
 
 ## A9 — The current deployment serves exactly one personal Bartholomew identity
+
+> **Bounded 2026-08-27 (S8 Alpha foundation).** This assumption now has an end date rather than
+> being open-ended. Closed Alpha serves **several** personal identities, and the S8 work has begun
+> replacing the single-user conveniences named below: authentication exists, an unauthenticated
+> local API surface no longer "treats every caller as the owner" wherever `BARTH_AUTH_MODE` is
+> enforced, and per-user isolation is addressed by database file and keyring namespace rather than
+> by one path. What remains true, and remains the assumption, is the **claim underneath** it: that
+> today's deployment is the *first* personal identity on the future platform rather than a
+> different system needing replacement. The S8 model was chosen to keep that claim true — see
+> `DECISIONS.md`, "S8 Alpha authentication, exposure and per-user isolation model". The one seam
+> still unretired is the globally unique `memories(kind, key)` index, which per-user databases make
+> unique *per user*; merging those databases later would require the owner column that entry
+> anticipated.
+
 - **ASSUMPTION (added 2026-08-15):** The repository, as it stands, serves exactly **one** personal
   Bartholomew identity, and every single-user convenience it relies on — one process, one SQLite
   database at one filesystem path, module-level singletons holding personal runtime state, an

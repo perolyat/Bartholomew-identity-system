@@ -51,27 +51,30 @@ TEST_RESOLVER_LABEL = "test-resolver"
 
 @runtime_checkable
 class VerifiedInboundSource(Protocol):
-    """What the inbound route needs to know about a verified caller.
+    """What a verified inbound *source* is, and deliberately nothing more.
 
-    Structural, not nominal, and deliberately minimal -- three attributes.
-    The control plane's own `Principal` is expected to satisfy this shape
-    directly or through a thin adapter it owns; this is not a second principal
-    type and nothing here should be constructed as one in production code.
+    Two attributes, both about provenance:
 
-    * `source_id`  -- which external source this event is from. Provenance,
-                      and half of the idempotency key.
-    * `runtime_id` -- which isolated runtime the event belongs to, resolved by
-                      the control plane. `None` while a single runtime is the
-                      only one that exists.
-    * `verified_by`-- what actually verified this, recorded verbatim in the
-                      durable row. Never a value the caller supplied.
+    * `source_id`   -- which external source this event is from. Provenance,
+                       and half of the idempotency key.
+    * `verified_by` -- what actually verified this, recorded verbatim in the
+                       durable row. Never a value the caller supplied.
+
+    **A source cannot choose a runtime.** There is no `runtime_id` here, and
+    if a resolver grows one it is ignored (`resolved_runtime_id()` never reads
+    the source). Which isolated runtime an event belongs to is decided by the
+    authenticated principal and the process's own runtime binding -- the
+    platform's authority, not a claim travelling with the event. A source
+    that could name its target runtime would be a cross-user write primitive
+    dressed as provenance: verifying *that a webhook is genuinely from Acme*
+    says nothing whatever about *whose Bartholomew it belongs in*.
+
+    Structural, not nominal, and not a principal type. The control plane owns
+    identity; this describes only the sender.
     """
 
     @property
     def source_id(self) -> str: ...
-
-    @property
-    def runtime_id(self) -> str | None: ...
 
     @property
     def verified_by(self) -> str: ...
@@ -93,19 +96,22 @@ class InboundPrincipalResolver(Protocol):
 
 
 class _TestOnlySource:
-    """A verified source produced by the test resolver. Never used in production."""
+    """A verified source produced by the test resolver. Never used in production.
 
-    def __init__(self, source_id: str, runtime_id: str | None = None):
+    Carries a `runtime_id` attribute *on purpose* even though the contract has
+    none: it is what `test_a_source_cannot_choose_its_target_runtime` uses to
+    prove that a resolver claiming a runtime has no effect on where the event
+    lands. A spoofing attempt that no code path can express is not evidence.
+    """
+
+    def __init__(self, source_id: str, claimed_runtime_id: str | None = None):
         self._source_id = source_id
-        self._runtime_id = runtime_id
+        #: Deliberately ignored by everything. See the class docstring.
+        self.runtime_id = claimed_runtime_id
 
     @property
     def source_id(self) -> str:
         return self._source_id
-
-    @property
-    def runtime_id(self) -> str | None:
-        return self._runtime_id
 
     @property
     def verified_by(self) -> str:
@@ -122,10 +128,10 @@ class _TestResolver:
     provenance -- provable end-to-end before real authentication exists.
     """
 
-    def __init__(self, token: str, *, source_id: str, runtime_id: str | None = None):
+    def __init__(self, token: str, *, source_id: str, claimed_runtime_id: str | None = None):
         self._token = token
         self._source_id = source_id
-        self._runtime_id = runtime_id
+        self._claimed_runtime_id = claimed_runtime_id
 
     async def resolve(self, request: Any, body: bytes) -> VerifiedInboundSource | None:
         import hmac
@@ -136,7 +142,7 @@ class _TestResolver:
         # resolver later.
         if not presented or not hmac.compare_digest(presented, self._token):
             return None
-        return _TestOnlySource(self._source_id, self._runtime_id)
+        return _TestOnlySource(self._source_id, self._claimed_runtime_id)
 
 
 #: The installed resolver. `None` -- fail closed -- is the only default, and
@@ -175,7 +181,7 @@ def install_test_resolver(
     token: str,
     *,
     source_id: str = "test-source",
-    runtime_id: str | None = None,
+    claimed_runtime_id: str | None = None,
 ) -> None:
     """Install the test-only resolver. Refuses unless explicitly permitted.
 
@@ -199,7 +205,11 @@ def install_test_resolver(
         )
     if not token:
         raise RuntimeError("The test-only inbound resolver requires a non-empty token.")
-    _resolver = _TestResolver(token, source_id=source_id, runtime_id=runtime_id)
+    _resolver = _TestResolver(
+        token,
+        source_id=source_id,
+        claimed_runtime_id=claimed_runtime_id,
+    )
     _resolver_is_test_only = True
     logger.warning(
         "TEST-ONLY inbound resolver installed. Inbound events will be admitted on a "
@@ -241,6 +251,48 @@ def maybe_install_test_resolver_from_env() -> bool:
         return False
     install_test_resolver(token)
     return True
+
+
+def resolved_runtime_id(request: Any) -> str | None:
+    """Which isolated runtime an inbound event belongs to.
+
+    **The single authority for that question on this surface**, and it reads
+    exactly two things, both owned by the platform:
+
+    1. the verified principal the control plane put on `request.state`, and
+    2. this process's own runtime binding.
+
+    It does not read the source, the body, a header, or a query parameter.
+    That is the point: verifying who *sent* an event tells you nothing about
+    whose Bartholomew it belongs in, and a claim that travelled with the event
+    is not evidence of anything.
+
+    Returns None only when the process is unbound and no principal exists --
+    the single-runtime local development deployment, where there is exactly
+    one runtime and naming it would be inventing precision.
+    """
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if principal is not None:
+        user_id = getattr(principal, "user_id", None)
+        if user_id:
+            return str(user_id)
+
+    from bartholomew.platform.runtime_registry import bound_runtime_user_id
+
+    return bound_runtime_user_id()
+
+
+def principal_required() -> bool:
+    """True when a request must carry a verified principal to capture anything.
+
+    Delegates to the platform's own answer rather than keeping a second copy
+    of the rule: whenever authentication is enforced -- which a non-loopback
+    bind forces on and no variable can turn off -- an unauthenticated inbound
+    request is refused before it can capture.
+    """
+    from bartholomew.platform.exposure import auth_enforced
+
+    return auth_enforced()
 
 
 def clear_resolver() -> None:

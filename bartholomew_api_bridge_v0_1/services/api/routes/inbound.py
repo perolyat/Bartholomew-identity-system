@@ -89,6 +89,41 @@ def _kernel_or_503():
     return _kernel
 
 
+def _require_principal(request: Request):
+    """The verified principal, or refuse before anything is captured.
+
+    Two independent questions are answered on this route, and both must pass:
+
+    * **Whose Bartholomew is this?** -- the control plane's verified principal
+      plus this process's runtime binding. Platform authority.
+    * **Is this sender who it claims to be?** -- the source resolver, below.
+      Provenance only.
+
+    A verified source is emphatically not a substitute for the first: it says
+    an event genuinely came from Acme, not that Acme may write into Taylor's
+    runtime. Checked here as well as at the control plane's own chokepoint --
+    not because that boundary is doubted, but because a capture path that
+    silently depends on a middleware ordering it does not control is one
+    refactor away from being unauthenticated, and this is the surface where
+    that would be least visible.
+    """
+    if not inbound_auth.principal_required():
+        # Authentication is not enforced: the single-user loopback development
+        # deployment, where the platform itself returns no principal for any
+        # request. Capture is still gated by the source resolver, which is
+        # fail-closed by default.
+        return None
+
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        raise HTTPException(
+            401,
+            "Authentication is required to capture inbound events; "
+            "nothing was captured.",
+        )
+    return principal
+
+
 async def _verify_source(request: Request, body: bytes):
     """Resolve the verified source, or refuse with 401.
 
@@ -131,6 +166,9 @@ async def receive_event(request: Request) -> Any:
             f"Inbound payload exceeds {MAX_BODY_BYTES} bytes; nothing was captured.",
         )
 
+    # Identity before provenance: refuse an unauthenticated caller before a
+    # resolver ever sees the body.
+    _require_principal(request)
     source = await _verify_source(request, body)
 
     # Parse and validate only after verification.
@@ -171,7 +209,11 @@ async def receive_event(request: Request) -> Any:
             payload=event.payload,
             verified_by=source.verified_by,
             occurred_at=event.occurred_at,
-            runtime_id=source.runtime_id,
+            # From the platform's authority -- the verified principal and this
+            # process's runtime binding -- never from the source. A resolver
+            # that claims a runtime_id is ignored entirely; see
+            # `inbound_auth.resolved_runtime_id`.
+            runtime_id=inbound_auth.resolved_runtime_id(request),
             identity_context=getattr(kernel, "identity_context", None),
         )
     except ParkingBrakeEngagedError as e:
