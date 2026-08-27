@@ -35,7 +35,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from . import personal_facts, policy_engine, spoken_output, task_intents, training
+from . import (
+    forecast_intents,
+    personal_facts,
+    policy_engine,
+    spoken_output,
+    task_intents,
+    training,
+)
 from .blocking_executor import run_off_loop
 from .competency_reasoning import (
     EMPTY_CONTEXT,
@@ -160,6 +167,14 @@ class RuntimeContractResult:
     #: Reflection all see the same account of it. Defaulted so existing
     #: construction sites are unaffected.
     task_action: dict[str, Any] | None = None
+
+    #: Golden Path first slice: what this turn's explicit forecast question
+    #: did through the governed external-capability path, or None when the
+    #: turn contained none (the common case). Records the outcome, the
+    #: provider consulted and **exactly what was disclosed to it**, so the
+    #: caller, the audit reader and the Reflection all see one account of the
+    #: egress. Defaulted so existing construction sites are unaffected.
+    forecast_action: dict[str, Any] | None = None
 
     #: WP-A2b. True when this turn's Reflection -- on the chat surface the
     #: sole durable record of the governed decision context (S5.3 Decision
@@ -795,6 +810,197 @@ def _task_error(result: Any) -> str | None:
     return getattr(result, "error", None) or getattr(result, "message", None) or None
 
 
+# -----------------------------------------------------------------------------
+# Golden Path first slice: the Executive's route to an *external* capability.
+#
+# Structurally identical to the conversational task control above, and
+# deliberately so -- an external provider is reached through exactly the same
+# governed path as a local skill, because `DECISIONS.md` clause (c) makes an
+# external capability provider a **capability**, however intelligent it is
+# internally. There is no separate external-call machinery here, and adding
+# any would be the abstraction-before-use failure `docs/TILT.md` exists to
+# prevent.
+# -----------------------------------------------------------------------------
+
+FORECAST_OUTCOME_OBTAINED = "obtained"
+FORECAST_OUTCOME_UNSUPPORTED_PLACE = "unsupported_place"
+FORECAST_OUTCOME_FAILED = "failed"
+FORECAST_OUTCOME_UNAVAILABLE = "unavailable"
+FORECAST_OUTCOME_DENIED = "denied"
+
+
+async def _run_forecast_action(
+    daemon: KernelDaemon,
+    params: dict[str, Any],
+) -> Any:
+    """
+    Run one forecast lookup through the existing governed skill path.
+
+    Three lines, for the same reason `_run_task_action()` is three lines:
+    everything that matters -- the parking brake on the `skills` scope, the
+    Identity policy decision on `skill_id="forecast"`, the "ask"-level
+    `network.fetch` consent, the `skill_action_audit` row and the unified
+    Reflection -- already lives at `SkillRegistry.execute_action()`, and this
+    slice's whole claim is that an external capability needs no path around
+    it. Nothing here reaches around that; there is no second executor.
+    """
+    planner = getattr(daemon, "planner", None)
+    if planner is None:
+        return None
+    return await planner.handle_skill_request(
+        forecast_intents.FORECAST_SKILL_ID,
+        forecast_intents.INTENT_LOOKUP,
+        params,
+    )
+
+
+async def _handle_forecast_intent(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> dict[str, Any] | None:
+    """
+    Obtain external evidence for an explicit forecast question and let the
+    Executive answer with it.
+
+    Returns None when the utterance was not an explicit forecast request --
+    the overwhelmingly common case -- and the turn proceeds exactly as it did
+    before this existed. When it returns a dict, the `reply` is built from
+    what the governed skill actually returned: a failed, denied or
+    unconfigured lookup produces a truthful "I don't have one", never a
+    fall-through to the model, because falling through to a model that has
+    been asked about tomorrow's weather is precisely how a fabricated
+    forecast would reach the user.
+
+    **Why the turn's own CandidateAction stays `chat_response`.** Same reason
+    as `_handle_task_intent()`: the lookup is a *nested* governed action,
+    evaluated for real against `kind="forecast"` at `execute_action()`'s
+    Governance stage -- the grain `Identity.yaml`'s `tool_use.allowlist` uses.
+    The brake is unaffected either way: chat's own Governance stage fails
+    closed on the `skills` scope before this function is reached, and the
+    skill's own gate fails closed again, so a braked system makes no external
+    call by either route.
+
+    **The provider does not become the Executive.** It is asked one bounded
+    question with typed parameters and its answer comes back as evidence with
+    provenance. What that evidence means for what the user was actually
+    trying to decide is settled here and in `forecast_intents`, on
+    Bartholomew's side of the boundary.
+    """
+    try:
+        intent = forecast_intents.parse_intent(observation.raw_content or "")
+        if intent is None:
+            return None
+
+        record: dict[str, Any] = {
+            "requested": intent.described_as,
+            "action": intent.action,
+            "disclosed": None,
+            "provider_host": None,
+        }
+
+        if intent.action == forecast_intents.INTENT_UNSUPPORTED_PLACE:
+            # Declined without any external call at all -- the disclosure
+            # never happens for a question Bartholomew cannot answer.
+            record["outcome"] = FORECAST_OUTCOME_UNSUPPORTED_PLACE
+            record["reply"] = forecast_intents.render_unsupported_place(intent)
+            return record
+
+        if getattr(daemon, "planner", None) is None or not _forecast_capability_installed(daemon):
+            # The capability is not installed in this deployment at all --
+            # a different thing from a lookup that was tried and failed, and
+            # reported as such. Deliberately still not a fall-through to the
+            # model: a Bartholomew without the capability cannot answer a
+            # forecast question, and saying so is the whole point.
+            record["outcome"] = FORECAST_OUTCOME_UNAVAILABLE
+            record["reply"] = forecast_intents.render_unavailable(
+                "the forecast capability is not available in this session.",
+            )
+            return record
+
+        result = await _run_forecast_action(daemon, dict(intent.params))
+
+        if result is None:
+            record["outcome"] = FORECAST_OUTCOME_UNAVAILABLE
+            record["reply"] = forecast_intents.render_unavailable(
+                "the forecast capability is not available in this session.",
+            )
+            return record
+
+        # Provenance travels with the record whatever the outcome: "we asked
+        # this provider and got nothing" is evidence too, and a denial that
+        # sent nothing must be distinguishable from a call that failed.
+        data = result.data if isinstance(result.data, dict) else {}
+        provenance = data.get("provenance") or {}
+        record["provider_host"] = provenance.get("provider_host")
+        record["disclosed"] = provenance.get("disclosed")
+        record["attempted"] = bool(data.get("attempted", provenance.get("succeeded") is not None))
+
+        if getattr(result, "success", False):
+            record["outcome"] = FORECAST_OUTCOME_OBTAINED
+            record["reply"] = forecast_intents.render_forecast(data, intent)
+            record["days"] = len(data.get("days") or [])
+            return record
+
+        reason = _forecast_error(result)
+
+        if getattr(result, "status", None) is not None and (
+            getattr(result.status, "value", "") == "permission_denied"
+        ):
+            record["outcome"] = FORECAST_OUTCOME_DENIED
+            record["reply"] = forecast_intents.render_denied(f"{reason}.")
+            return record
+
+        if data.get("outcome") in ("unconfigured", "host_not_allowed"):
+            record["outcome"] = FORECAST_OUTCOME_UNAVAILABLE
+            record["reply"] = forecast_intents.render_unavailable(f"{reason}.")
+            return record
+
+        record["outcome"] = FORECAST_OUTCOME_FAILED
+        record["error"] = reason
+        record["reply"] = forecast_intents.render_failure(intent, reason)
+        return record
+    except Exception:
+        logger.exception("Forecast routing failed; reporting it rather than hiding it")
+        return {
+            "requested": "look up the forecast",
+            "action": forecast_intents.INTENT_LOOKUP,
+            "outcome": FORECAST_OUTCOME_FAILED,
+            "error": "an internal error interrupted the forecast lookup",
+            "reply": (
+                "I tried to look up the forecast and an internal error interrupted it. "
+                "I don't have a forecast to give you, and I'm not going to invent one."
+            ),
+        }
+
+
+def _forecast_capability_installed(daemon: KernelDaemon) -> bool:
+    """Whether this deployment has the forecast skill loaded at all.
+
+    Checked before dispatching so an uninstalled capability is reported as
+    *unavailable* rather than as a failed lookup -- and so the reply never
+    relays the registry's internal "Skill not loaded: forecast" wording at a
+    user who asked about the weather.
+    """
+    registry = getattr(daemon, "skill_registry", None)
+    if registry is None:
+        return False
+    try:
+        return forecast_intents.FORECAST_SKILL_ID in registry.list_loaded()
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+def _forecast_error(result: Any) -> str:
+    """The governed path's own words for why no forecast came back."""
+    if result is None:
+        return "the forecast capability is not available"
+    return (
+        getattr(result, "error", None)
+        or getattr(result, "message", None)
+        or "the lookup did not succeed"
+    )
+
+
 async def run_chat_through_runtime_contract(
     daemon: KernelDaemon,
     user_input: str,
@@ -903,6 +1109,7 @@ async def run_chat_through_runtime_contract(
     captured_facts: list[dict[str, Any]] = []
 
     task_action: dict[str, Any] | None = None
+    forecast_action: dict[str, Any] | None = None
 
     if governance_allowed:
         # Stage 5+6: Capability + Execution.
@@ -919,7 +1126,19 @@ async def run_chat_through_runtime_contract(
         if task_action is not None:
             response = task_action["reply"]
         else:
-            response = await respond_fn(interpretation.prompt)
+            # Golden Path first slice: an explicit forecast question is
+            # answered from evidence a governed external capability actually
+            # returned. As with task control, the model is deliberately not
+            # asked for a reply in that case -- a model asked "will it rain
+            # tomorrow" will produce a fluent answer it has no way to know,
+            # which is exactly the failure an external capability exists to
+            # remove. Anything that is not an explicit forecast request
+            # returns None and the turn proceeds as it always has.
+            forecast_action = await _handle_forecast_intent(daemon, observation)
+            if forecast_action is not None:
+                response = forecast_action["reply"]
+            else:
+                response = await respond_fn(interpretation.prompt)
 
         # Stage 7: Reflection -- record the interaction in Working Memory
         # (chat's short-term context buffer; feeds get_context_string()).
@@ -957,6 +1176,14 @@ async def run_chat_through_runtime_contract(
             # unchanged -- this is the chat surface's record that the turn
             # routed to one.
             details["task_action"] = task_action
+        if forecast_action is not None:
+            # Explanation-grade provenance for the chat surface: what was
+            # asked, which provider was consulted, **exactly what was
+            # disclosed to it**, and what came back. The disclosure record is
+            # the point -- an egress nobody recorded is an egress nobody can
+            # audit. The skill's own `skill_action_audit` row and unified
+            # Reflection still exist and are unchanged.
+            details["forecast_action"] = forecast_action
 
         reflection = ActionReflection(
             surface="chat",
@@ -1004,6 +1231,7 @@ async def run_chat_through_runtime_contract(
         working_memory_item_id=working_memory_item_id,
         personal_facts_captured=captured_facts,
         task_action=task_action,
+        forecast_action=forecast_action,
         provenance_degraded=reflection_outcome.error is not None,
         provenance_error=reflection_outcome.error,
     )

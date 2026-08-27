@@ -485,6 +485,22 @@ tool_use:
     # bartholomew/kernel/task_intents.py), so this entry does not put a
     # destructive operation behind an ordinary sentence.
     - "tasks"
+    # Golden Path first slice: Bartholomew's first *external* capability
+    # provider (bartholomew/skills/forecast.py, config/skills/forecast.yaml).
+    # Same grain and same reason as every entry above -- execute_action()
+    # evaluates tool_use.allowlist at the skill_id, so without this entry the
+    # Governance stage denies the lookup outright and no request is made.
+    #
+    # Scope note: this authorises one bounded outbound question (a forecast
+    # for an explicitly supplied location) to one host declared in the
+    # skill's manifest sandbox and enforced before any socket is opened. It
+    # authorises no other provider, no other host, and nothing inbound: the
+    # provider supplies capability, and the Executive decides what the
+    # returned evidence means for the user's objective. Permission level is
+    # "ask" (config/skills/forecast.yaml) because a location leaving this
+    # deployment is a disclosure, so this entry alone does not make the call
+    # possible -- consent is still resolved per action.
+    - "forecast"
     # Local spoken output (text-to-speech). Output only: this authorises one
     # utterance out of this machine's own speaker and authorises no capture
     # of any kind -- there is no microphone, listening or wake-word code

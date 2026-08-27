@@ -1,0 +1,82 @@
+# =============================================================================
+# Forecast Skill Manifest
+# =============================================================================
+# Bartholomew's first external capability provider (Golden Path slice).
+#
+# This manifest is the *declaration* half of the external-capability boundary
+# INTERFACES.md 6 requires: the capability is declared here, and whether it
+# can actually be performed is reported separately at runtime
+# (ForecastSkill.is_available -- false unless BARTHOLOMEW_FORECAST_API_URL is
+# configured). Declaring a capability never implies having it.
+
+skill_id: "forecast"
+name: "External Forecast Lookup"
+version: "1.0.0"
+description: >-
+  Obtain a bounded weather forecast from one external provider, returned as
+  evidence with provenance. Bartholomew must not model weather itself; this
+  is the capability being obtained rather than recreated.
+
+# Entry points
+entry_module: "bartholomew.skills.forecast"
+entry_class: "ForecastSkill"
+
+# Permissions
+permissions:
+  # "ask", not "auto". Sending a location to an external system is a
+  # disclosure, and INTERFACES.md 6 requires consent per capability and
+  # revocable. Resolved by SkillRegistry._resolve_permissions() through the
+  # same consent handler memory consent uses; session-scoped, never persisted;
+  # fails closed with no handler registered.
+  level: "ask"
+  requires:
+    - "network.fetch"     # The outbound call. The only permission needed.
+  sandbox:
+    filesystem: []
+    # Enforced, not merely declared: ForecastSkill._check_host_allowed()
+    # refuses any other host *before* a socket is opened, so a misconfigured
+    # endpoint cannot quietly become a different disclosure.
+    network:
+      - "api.open-meteo.com"
+
+# This skill observes nothing and reacts to nothing. It acts only when the
+# Executive asks it a bounded question.
+subscriptions: []
+emits: []
+depends_on: []
+auto_activate_on: []
+
+# Actions exposed by this skill
+actions:
+  - name: "lookup"
+    description: "Fetch a bounded forecast for a location as provenance-bearing evidence"
+    parameters:
+      - name: "latitude"
+        type: "number"
+        required: false
+        description: "Latitude; defaults to the configured location. Rounded before egress."
+      - name: "longitude"
+        type: "number"
+        required: false
+        description: "Longitude; defaults to the configured location. Rounded before egress."
+      - name: "days"
+        type: "integer"
+        required: false
+        description: "Forecast horizon in days, 1-7 (default 1)"
+      - name: "start_date"
+        type: "string"
+        required: false
+        description: "ISO 8601 start date (default today)"
+      - name: "timezone"
+        type: "string"
+        required: false
+        description: "IANA timezone for day boundaries (default UTC)"
+      - name: "place_label"
+        type: "string"
+        required: false
+        description: "Local-only label used in Bartholomew's reply. Never sent to the provider."
+
+# Metadata
+author: "system"
+license: "MIT"
+enabled: true

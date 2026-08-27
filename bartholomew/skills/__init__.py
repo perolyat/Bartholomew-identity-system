@@ -8,6 +8,7 @@ Skills:
 - tasks: Task management with reminders
 - notify: Notification and alert management
 - calendar_draft: Draft calendar events with .ics export
+- forecast: External forecast lookup (first external capability provider)
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ __all__ = [
     "TasksSkill",
     "NotifySkill",
     "CalendarDraftSkill",
+    "ForecastSkill",
 ]
 
 
@@ -33,4 +35,8 @@ def __getattr__(name: str):
         from .calendar_draft import CalendarDraftSkill  # noqa: PLC0415
 
         return CalendarDraftSkill
+    elif name == "ForecastSkill":
+        from .forecast import ForecastSkill  # noqa: PLC0415
+
+        return ForecastSkill
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
