@@ -113,6 +113,11 @@ asks *where authority sits*, not *whose Bartholomew this is*.
 
 The first item is the binding one. The rest are the questions that reveal whether it applies.
 
+- **PASS/BLOCKED — New API route classified for authority (added 2026-08-27, S8):** any new or
+  renamed HTTP route must have an entry in `bartholomew/platform/route_policy.py` — a capability,
+  or a deliberate place in `PUBLIC_PATHS`. Routes are **default-deny**: an unclassified route is
+  refused, and `tests/test_s8_route_policy_coverage.py` fails until it is classified. Adding a
+  route to `PUBLIC_PATHS` requires that it hold no personal data and touch no governed state.
 - **PASS/BLOCKED — Conflict surfaced, not silently resolved:** if this change would materially
   jeopardise any of the nine properties named in `CONSTITUTION.md`'s conflict-surfacing rule
   (one platform / many identities; strong isolation; persistence of individual identity;

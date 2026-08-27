@@ -11,15 +11,9 @@ endpoint after Alpha starts.
 
 from __future__ import annotations
 
-import os
 import tempfile
 
 import pytest
-
-_TMP = tempfile.mkdtemp(prefix="s8-routes-")
-os.environ.setdefault("BARTH_PLATFORM_DB_PATH", os.path.join(_TMP, "platform.db"))
-os.environ.setdefault("BARTH_DATA_ROOT", os.path.join(_TMP, "data"))
-os.environ.setdefault("BARTH_DB_PATH", os.path.join(_TMP, "kernel.db"))
 
 from bartholomew.platform.http_identity import _iter_routes  # noqa: E402
 from bartholomew.platform.route_policy import (  # noqa: E402
@@ -30,6 +24,29 @@ from bartholomew.platform.route_policy import (  # noqa: E402
     is_public_path,
 )
 from bartholomew_api_bridge_v0_1.services.api.app import app  # noqa: E402
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolated_environment():
+    """
+    Set this module's environment for its own duration and restore it after.
+
+    Module-level `os.environ[...]` assignment would leak `BARTH_AUTH_MODE` and
+    the database paths into every other test file in the same pytest session
+    -- silently enforcing authentication on suites written before it existed,
+    and pointing their kernels at this module's database. A module-scoped
+    MonkeyPatch keeps the change contained to this file.
+    """
+    mp = pytest.MonkeyPatch()
+    tmp = tempfile.mkdtemp(prefix="s8-routes-")
+    for var, value in {
+        "BARTH_PLATFORM_DB_PATH": "<tmp>/platform.db",
+        "BARTH_DATA_ROOT": "<tmp>/data",
+        "BARTH_DB_PATH": "<tmp>/kernel.db",
+    }.items():
+        mp.setenv(var, value.replace("<tmp>", tmp))
+    yield
+    mp.undo()
 
 
 def _declared_routes():

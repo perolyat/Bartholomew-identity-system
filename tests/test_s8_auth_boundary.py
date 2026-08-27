@@ -9,18 +9,11 @@ rather than "a test went red".
 
 from __future__ import annotations
 
-import os
 import tempfile
 
 import pytest
 
 # Isolate the control plane and every per-user runtime before app import.
-_TMP = tempfile.mkdtemp(prefix="s8-auth-")
-os.environ["BARTH_PLATFORM_DB_PATH"] = os.path.join(_TMP, "platform.db")
-os.environ["BARTH_DATA_ROOT"] = os.path.join(_TMP, "data")
-os.environ["BARTH_DB_PATH"] = os.path.join(_TMP, "kernel.db")
-os.environ["BARTH_AUTH_MODE"] = "enforced"
-
 from fastapi.testclient import TestClient  # noqa: E402
 
 from bartholomew.platform import accounts, sessions  # noqa: E402
@@ -30,6 +23,31 @@ from bartholomew.platform.http_identity import (  # noqa: E402
 from bartholomew.platform.principal import PrincipalKind  # noqa: E402
 from bartholomew.platform.store import init_platform_schema  # noqa: E402
 from bartholomew_api_bridge_v0_1.services.api.app import app  # noqa: E402
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolated_environment():
+    """
+    Set this module's environment for its own duration and restore it after.
+
+    Module-level `os.environ[...]` assignment would leak `BARTH_AUTH_MODE` and
+    the database paths into every other test file in the same pytest session
+    -- silently enforcing authentication on suites written before it existed,
+    and pointing their kernels at this module's database. A module-scoped
+    MonkeyPatch keeps the change contained to this file.
+    """
+    mp = pytest.MonkeyPatch()
+    tmp = tempfile.mkdtemp(prefix="s8-auth-")
+    for var, value in {
+        "BARTH_PLATFORM_DB_PATH": "<tmp>/platform.db",
+        "BARTH_DATA_ROOT": "<tmp>/data",
+        "BARTH_DB_PATH": "<tmp>/kernel.db",
+        "BARTH_AUTH_MODE": "enforced",
+    }.items():
+        mp.setenv(var, value.replace("<tmp>", tmp))
+    yield
+    mp.undo()
+
 
 PASSWORD = "alpha-participant-password"
 

@@ -636,6 +636,12 @@ Everything applicable from Band A, plus:
 > phone, wearable, or other non-localhost capability is involved**. A purely local Band B scenario
 > does **not** require S8. Do not record S8 as a blanket Band B prerequisite.
 >
+> **Closed Alpha triggers it (2026-08-27).** Alpha exercises the intended server-centric/hosted
+> architecture, which is non-localhost by construction, so **S8 is live for Alpha** — not because
+> Band B changed, but because the Alpha deployment meets S8's existing trigger. See `DECISIONS.md`,
+> "S8 Alpha authentication, exposure and per-user isolation model". This does **not** make S8 a
+> blanket Band B prerequisite: a purely local Band B scenario still does not require it.
+>
 > **What is *not* conditional:** D10's other clause. **Any local adapter that can control keyboard,
 > mouse, screen or browser, launch actions, or otherwise exercise consequential device agency
 > requires D11 and S9 regardless of network locality** — a localhost-only device-control prototype
@@ -687,7 +693,7 @@ is not permission to pretend Band C readiness exists.**
 | **S5** | **Direct** Parking Brake enforcement per selected capability: allowed when the scope does not apply, blocked when scope/global does, fail **closed** if the brake is unreadable, mid-stream engagement terminates in-flight capability, and **stop/teardown/disengage is never treated as a new gated start**. Precondition: C6 consolidation before real `sight`/`voice` | Band B |
 | **S6** | Ambient consent/capture/bystander: per-sensor opt-in; truthful state; OS/hardware indicator **where available, with availability assessed and recorded per sensor before the test**; immediate revocation; brake terminates and prevents capture; ungated teardown; retention defaults; bystander/household policy; jurisdiction assessment; no silent resume | Band B |
 | **S7** | Truthful critical state and output: an explicit **numeric** freshness target per critical state (brake, emergency readiness, sensor, recording, consent, governed action) defined **before scenario freeze**; stale state visibly marked; no undefined/blank/fabricated success; applies to voice; selected/configured distinguished from reachable/ready | Band B |
-| **S8** | Authentication / network exposure: reviewed threat model; device/client auth; correct personal-context authorisation; session/token/key lifecycle; replay and unauthorised-brake-change tests; a remote client cannot weaken local Governance; **no unreviewed "a simple token is enough" assumption** | **Conditional** — only when remote phone/wearable/non-localhost is involved |
+| **S8** | Authentication / network exposure: reviewed threat model; device/client auth; correct personal-context authorisation; session/token/key lifecycle; replay and unauthorised-brake-change tests; a remote client cannot weaken local Governance; **no unreviewed "a simple token is enough" assumption** | **Conditional** — only when remote phone/wearable/non-localhost is involved. **Live for Closed Alpha** (2026-08-27), which is hosted/non-localhost by decision |
 | **S9** | Independent emergency shutdown: outside the ordinary UI; works with the ordinary UI unavailable; works despite relevant normal-surface interference where applicable; terminates capture, output and device agency; independent of in-process goodwill; restart after emergency is deliberate | Band B; **and** for consequential local device agency under D10 regardless of network locality |
 | **S10** | Unattended failure/resource behaviour across crash/restart, sensor disconnect, disk pressure, DB unavailable or locked, network loss, model unavailable, companion disconnect: no silent continuation under uncertainty; no unsafe automatic resumption; no recursive burden under resource failure; observable failure; recovery preserves Governance and data integrity | Band B |
 | **S11** | **Verification of the D12 test-data policy** — not a second policy. Passes only when every D12 field is instantiated for the selected Test #2 scenario and capabilities, storage locations enumerated, test-created data distinguishable from durable memory, a post-test inventory generable, retained data inspectable, deletion/retention execution recordable, and retained evidence distinguished from retained personal content | Band B / Band C |

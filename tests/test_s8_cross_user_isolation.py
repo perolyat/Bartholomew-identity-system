@@ -10,15 +10,10 @@ database that merely filters well today.
 
 from __future__ import annotations
 
-import os
 import tempfile
 import uuid
 
 import pytest
-
-_TMP = tempfile.mkdtemp(prefix="s8-iso-")
-os.environ.setdefault("BARTH_DATA_ROOT", os.path.join(_TMP, "data"))
-os.environ.setdefault("BARTH_PLATFORM_DB_PATH", os.path.join(_TMP, "platform.db"))
 
 from bartholomew.platform.principal import (  # noqa: E402
     AuthenticationError,
@@ -31,6 +26,28 @@ from bartholomew.platform.runtime_registry import (  # noqa: E402
     runtime_handle_for,
     runtime_handle_for_user_id,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolated_environment():
+    """
+    Set this module's environment for its own duration and restore it after.
+
+    Module-level `os.environ[...]` assignment would leak `BARTH_AUTH_MODE` and
+    the database paths into every other test file in the same pytest session
+    -- silently enforcing authentication on suites written before it existed,
+    and pointing their kernels at this module's database. A module-scoped
+    MonkeyPatch keeps the change contained to this file.
+    """
+    mp = pytest.MonkeyPatch()
+    tmp = tempfile.mkdtemp(prefix="s8-iso-")
+    for var, value in {
+        "BARTH_PLATFORM_DB_PATH": "<tmp>/platform.db",
+        "BARTH_DATA_ROOT": "<tmp>/data",
+    }.items():
+        mp.setenv(var, value.replace("<tmp>", tmp))
+    yield
+    mp.undo()
 
 
 def _user(name="u"):

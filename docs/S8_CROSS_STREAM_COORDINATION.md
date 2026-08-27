@@ -64,3 +64,45 @@ Therefore, when the real embedder lands:
    `db_path`, not from a module-level singleton.
 3. Session B will assert this with an isolation test rather than modify
    retrieval internals. Relevance quality remains entirely Session C's.
+
+## For Session D — the container now requires a deployment decision
+
+**Status: flagged, not resolved. Session B did not change the Dockerfile or
+docker-compose.yml.**
+
+`BARTH_API_ALLOW_NON_LOOPBACK=1` now forces authentication **and** TLS on, and
+the process refuses to start otherwise (`bartholomew/platform/exposure.py`).
+That rule is deliberate and approved: it is what makes an unauthenticated
+remote deployment structurally impossible.
+
+The Dockerfile sets that variable — not because the container is LAN-exposed,
+but because Docker's bridge peer address is not loopback while the host
+publish (`127.0.0.1:5173:5173`) still confines reachability to the host. The
+variable therefore currently conflates two different questions:
+
+* *may the request boundary accept a non-loopback peer?* (the container's
+  actual need); and
+* *is this deployment genuinely reachable from a network?* (what forces
+  authentication and TLS).
+
+Consequence: **`docker compose up` will now fail to start** until either TLS
+material is provided or the deployment declares itself local. No test breaks —
+the container path is not exercised in CI — so this is an operational change,
+not a red build.
+
+Three options, for Session D to choose with Taylor, none of which Session B
+should decide alone:
+
+1. **Give the container TLS material** (a generated self-signed cert for local
+   use, real material for Alpha) and run it authenticated. Most honest;
+   highest local-dev friction, since it also needs a provisioned account.
+2. **Split the variable in two** — keep `BARTH_API_ALLOW_NON_LOOPBACK` for the
+   request boundary, and add an explicit deployment-reachability declaration
+   that drives the authentication/TLS requirement. Preserves local container
+   UX, but the new variable is an operator assertion about topology and must
+   be designed so it cannot become a quiet bypass.
+3. **Run the local container loopback-only** and reach it another way.
+
+Whatever is chosen, the invariant to preserve is the one the tests encode:
+**a genuinely network-reachable Bartholomew must never run unauthenticated or
+without TLS, and no environment variable may downgrade that to a warning.**
