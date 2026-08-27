@@ -1,0 +1,213 @@
+name: Bartholomew Autonomous Builder
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bartholomew-autonomous-builder
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+jobs:
+  autonomous-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Authentication preflight
+        id: auth
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [[ -n "$ANTHROPIC_API_KEY" || -n "$CLAUDE_CODE_OAUTH_TOKEN" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Claude authentication is configured." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "## Autonomous builder inactive" >> "$GITHUB_STEP_SUMMARY"
+            echo "Add either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN as an Actions secret." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check for an existing autonomous PR
+        if: steps.auth.outputs.ready == 'true'
+        id: pending
+        shell: bash
+        run: |
+          count=$(gh pr list --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("autonomous/run-"))] | length')
+          if [[ "$count" -gt 0 ]]; then
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            echo "An autonomous PR is already open; this run will not start overlapping work." >> "$GITHUB_STEP_SUMMARY"
+            gh pr list --state open --json number,title,headRefName,url --jq '.[] | select(.headRefName | startswith("autonomous/run-")) | "- PR #\(.number): \(.title) — \(.url)"' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create isolated run branch
+        if: steps.auth.outputs.ready == 'true' && steps.pending.outputs.blocked == 'false'
+        id: branch
+        shell: bash
+        run: |
+          branch="autonomous/run-${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.auth.outputs.ready == 'true' && steps.pending.outputs.blocked == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install project and verification tools
+        if: steps.auth.outputs.ready == 'true' && steps.pending.outputs.blocked == 'false'
+        shell: bash
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      - name: Build trusted run context
+        if: steps.auth.outputs.ready == 'true' && steps.pending.outputs.blocked == 'false'
+        shell: bash
+        run: |
+          {
+            cat automation/CLAUDE_AUTONOMOUS_PROMPT.md
+            echo
+            echo "## Current run context"
+            echo
+            echo "### Recent commits"
+            git log -n 12 --oneline
+            echo
+            echo "### Open pull requests"
+            gh pr list --state open --limit 30 --json number,title,headRefName,baseRefName,url --jq '.[] | "- #\(.number) [\(.headRefName) -> \(.baseRefName)] \(.title) — \(.url)"'
+          } > /tmp/bartholomew-autonomous-prompt.md
+
+      - name: Run bounded Claude Code worker
+        if: steps.auth.outputs.ready == 'true' && steps.pending.outputs.blocked == 'false'
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          prompt_file: /tmp/bartholomew-autonomous-prompt.md
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --max-turns 30
+            --disallowedTools "Bash(git push:*),Bash(gh:*),Bash(curl:*),Bash(wget:*)"
+
+      - name: Detect workspace changes
+        if: steps.auth.outputs.ready == 'true' && steps.pending.outputs.blocked == 'false'
+        id: changes
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Claude completed the run without a repository change." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Enforce autonomous authority guard
+        if: steps.changes.outputs.present == 'true'
+        id: guard
+        continue-on-error: true
+        shell: bash
+        run: |
+          python automation/autonomy_guard.py 2>&1 | tee /tmp/autonomy-guard.txt
+
+      - name: Escalate blocked autonomous diff
+        if: steps.changes.outputs.present == 'true' && steps.guard.outcome == 'failure'
+        shell: bash
+        run: |
+          {
+            echo "Autonomous run ${GITHUB_RUN_ID} produced a diff outside its delegated authority."
+            echo
+            echo "The branch was not pushed and no code was committed."
+            echo
+            echo '```text'
+            cat /tmp/autonomy-guard.txt
+            echo '```'
+            echo
+            echo "Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > /tmp/escalation.md
+          gh issue create --title "Autonomous builder escalation: authority boundary" --body-file /tmp/escalation.md
+          cat /tmp/escalation.md >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Ruff
+        if: steps.changes.outputs.present == 'true' && steps.guard.outcome == 'success'
+        run: python -m ruff check .
+
+      - name: Black check
+        if: steps.changes.outputs.present == 'true' && steps.guard.outcome == 'success'
+        run: python -m black --check .
+
+      - name: Default test suite
+        if: steps.changes.outputs.present == 'true' && steps.guard.outcome == 'success'
+        run: python -m pytest -p no:cacheprovider
+
+      - name: Commit and push bounded branch
+        if: steps.changes.outputs.present == 'true' && steps.guard.outcome == 'success'
+        shell: bash
+        run: |
+          git config user.name "bartholomew-autonomous-builder[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "autonomous: bounded Claude development run ${GITHUB_RUN_ID}"
+          git push origin "${{ steps.branch.outputs.name }}"
+
+      - name: Open pull request for normal CI
+        if: steps.changes.outputs.present == 'true' && steps.guard.outcome == 'success'
+        shell: bash
+        run: |
+          {
+            echo "## Autonomous development run"
+            echo
+            echo "Created by the bounded Bartholomew autonomous controller."
+            echo
+            echo "### Guardrails"
+            echo "- Claude could edit only the checked-out workspace."
+            echo "- Claude was denied direct git push, GitHub CLI, curl, and wget commands."
+            echo "- The workflow authority guard passed before commit."
+            echo "- Ruff, Black check-only, and the default pytest suite passed before push."
+            echo "- This workflow does not merge the PR; normal CI and independent oversight remain authoritative."
+            echo
+            echo "### Diff summary"
+            git show --stat --oneline --no-renames HEAD
+            echo
+            echo "### Rollback"
+            echo "Close this PR without merging, or revert the resulting merge commit if later merged."
+            echo
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > /tmp/pr-body.md
+
+          gh pr create \
+            --base main \
+            --head "${{ steps.branch.outputs.name }}" \
+            --title "autonomous: bounded Bartholomew development run ${GITHUB_RUN_ID}" \
+            --body-file /tmp/pr-body.md
+
+      - name: Record successful handoff
+        if: steps.changes.outputs.present == 'true' && steps.guard.outcome == 'success'
+        shell: bash
+        run: |
+          echo "A bounded autonomous branch and PR were created. Normal repository CI now owns verification." >> "$GITHUB_STEP_SUMMARY"
