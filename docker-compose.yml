@@ -26,8 +26,14 @@ services:
       # of flag that becomes a quiet bypass, and it would be indistinguishable
       # from inside the process from a genuinely exposed deployment.
       - BARTH_API_ALLOW_NON_LOOPBACK=1
-      - BARTH_API_HOST=0.0.0.0
       - BARTH_AUTH_MODE=enforced
+      #
+      # The namespace-local 0.0.0.0 bind lives in the Dockerfile, not here.
+      # That is where the container's own network namespace is configured,
+      # and keeping it there is what lets `test_no_launch_path_binds_all_
+      # interfaces_outside_a_container` hold: exactly one file in the
+      # repository may bind every interface, and it is the one whose bind is
+      # confined to a container namespace.
 
       # TLS terminates in this process. There is no reverse proxy and no
       # UNIX socket in front of it, both because none is part of this
