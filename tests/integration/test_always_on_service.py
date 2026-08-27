@@ -353,3 +353,129 @@ def test_refused_configurations_fail_fast_with_a_reason(tmp_path, args, reason):
     assert reason in proc.stderr
     # Nothing was started: no database file, no lock file.
     assert not (tmp_path / "refused.db.lock").exists()
+
+
+# ---------------------------------------------------------------------------
+# The supervisor contract, against a real process
+# ---------------------------------------------------------------------------
+#
+# The claim under test is about what a *service manager* observes, so it is
+# tested by observing exactly that: a real process, a real exit status. A
+# health field asserting "degraded" would prove the report, not the recovery.
+
+#: Runs `serve` with the autonomy loop replaced by one that dies shortly after
+#: startup. Everything else is the real thing -- real uvicorn, real kernel,
+#: real shutdown path; only the fault is injected, because a scheduler that
+#: reliably crashes on demand is not otherwise reachable from outside the
+#: process.
+_CRASHING_SCHEDULER_DRIVER = """
+import asyncio, sys
+
+import bartholomew.kernel.scheduler.loop as loop_module
+
+
+async def _exploding_scheduler(ctx):
+    # Let startup complete so the daemon is genuinely RUNNING -- a failure
+    # during startup is a different path with its own handling.
+    await asyncio.sleep(3)
+    raise RuntimeError("injected scheduler failure")
+
+
+# KernelDaemon.start() imports run_scheduler from this module at call time,
+# so replacing the attribute here is what the daemon will actually launch.
+loop_module.run_scheduler = _exploding_scheduler
+
+from bartholomew.runtime.serve import serve
+
+sys.exit(serve())
+"""
+
+
+def test_a_dead_scheduler_exits_non_zero_so_the_supervisor_restarts(tmp_path):
+    """A silently dead autonomy loop must become a restart, not a degraded field.
+
+    Before this, `_on_scheduler_task_done` recorded the failure and the HTTP
+    process carried on serving: `Restart=on-failure` never fired, Docker's
+    restart policy never fired, and Bartholomew stayed up while having stopped
+    being proactive. The exit status is the only signal a supervisor reads.
+    """
+    from bartholomew.runtime import supervision
+
+    driver = tmp_path / "crashing_scheduler.py"
+    driver.write_text(_CRASHING_SCHEDULER_DRIVER)
+
+    port = _free_port()
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, str(driver)],
+        check=False,
+        cwd=str(REPO_ROOT),
+        env=_env(tmp_path / "crash.db", port),
+        capture_output=True,
+        text=True,
+        timeout=STARTUP_TIMEOUT + SHUTDOWN_TIMEOUT,
+    )
+
+    assert proc.returncode == supervision.EXIT_RUNTIME_FAILURE, (
+        f"expected exit {supervision.EXIT_RUNTIME_FAILURE} so the supervisor "
+        f"restarts; got {proc.returncode}.\nstderr:\n{proc.stderr[-3000:]}"
+    )
+    assert "injected scheduler failure" in proc.stderr
+    assert "FATAL" in proc.stderr
+
+
+def test_the_escalated_shutdown_is_still_graceful(tmp_path):
+    """A restart must not be bought with an unclean shutdown.
+
+    The next startup would otherwise have to run its recovery path every time
+    the scheduler died -- turning one fault into two.
+    """
+    import sqlite3
+
+    driver = tmp_path / "crashing_scheduler.py"
+    driver.write_text(_CRASHING_SCHEDULER_DRIVER)
+
+    db_path = tmp_path / "crash_clean.db"
+    port = _free_port()
+    subprocess.run(  # noqa: S603
+        [sys.executable, str(driver)],
+        check=False,
+        cwd=str(REPO_ROOT),
+        env=_env(db_path, port),
+        capture_output=True,
+        text=True,
+        timeout=STARTUP_TIMEOUT + SHUTDOWN_TIMEOUT,
+    )
+
+    with sqlite3.connect(str(db_path)) as conn:
+        clean, fence_open = conn.execute(
+            "SELECT clean, write_fence_open FROM brake_runtime",
+        ).fetchone()
+
+    assert clean == 1, "the escalated shutdown did not complete cleanly"
+    assert fence_open == 0, "the governance write fence was left open"
+
+    # And the process lock was released: a supervisor's restart must not hit
+    # "another instance owns this database".
+    replacement = ServeProcess(db_path)
+    try:
+        replacement.start()
+        _, body = _get(replacement.port, "/api/health")
+        assert body["components"]["runtime"]["state"] == "running"
+    finally:
+        replacement.kill()
+
+
+def test_a_normal_stop_still_exits_without_asking_for_a_restart(service):
+    """Pinned separately: SIGTERM must never be mistaken for a fault.
+
+    If it were, every deliberate `systemctl stop` would be followed by a
+    restart, which is worse than the bug this mechanism fixes.
+    """
+    from bartholomew.runtime import supervision
+
+    code = service.stop()
+
+    assert (
+        code != supervision.EXIT_RUNTIME_FAILURE
+    ), "a normal SIGTERM shutdown reported itself as an unrecoverable failure"
+    assert code in (0, -signal.SIGTERM, 128 + signal.SIGTERM)

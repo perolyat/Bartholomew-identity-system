@@ -40,6 +40,8 @@ import logging
 import os
 import sys
 
+from bartholomew.runtime import supervision
+
 #: Exit code for "another Bartholomew already owns this database". Distinct
 #: from a generic failure so a supervisor (and an operator reading `systemctl
 #: status`) can tell a configuration conflict from a crash.
@@ -144,18 +146,29 @@ def serve(
         file=sys.stderr,
     )
 
+    # A Server built explicitly rather than `uvicorn.run()`, because the
+    # supervision path needs a handle on it: an unrecoverable component
+    # failure asks *this* server to stop gracefully, and the exit status is
+    # then decided below. `uvicorn.run()` constructs and discards the server
+    # internally, leaving no way to do either.
+    recorder = supervision.get_recorder()
+    recorder.reset()
+    config = uvicorn.Config(
+        app,
+        host=bind_host,
+        port=bind_port,
+        log_level=log_level,
+        # Explicit rather than defaulted, so the invariant is visible at the
+        # call site and not only in the check above.
+        workers=1,
+        reload=False,
+        timeout_graceful_shutdown=SHUTDOWN_BUDGET_SECONDS,
+    )
+    server = uvicorn.Server(config)
+    recorder.bind_server(server)
+
     try:
-        uvicorn.run(
-            app,
-            host=bind_host,
-            port=bind_port,
-            log_level=log_level,
-            # Explicit rather than defaulted, so the invariant is visible at
-            # the call site and not only in the check above.
-            workers=1,
-            reload=False,
-            timeout_graceful_shutdown=SHUTDOWN_BUDGET_SECONDS,
-        )
+        server.run()
     except ProcessLockHeldError as e:
         # Raised out of KernelDaemon.start() through uvicorn's startup.
         print(
@@ -166,5 +179,24 @@ def serve(
             file=sys.stderr,
         )
         return EXIT_LOCK_HELD
+    finally:
+        recorder.bind_server(None)
+
+    # A component this process cannot run without failed while it was
+    # serving. The shutdown above was graceful -- drain, background-task
+    # cancellation, WAL checkpoint, lock release all ran -- but the process
+    # must not exit 0, or `Restart=on-failure` reads a deliberate stop and
+    # leaves Bartholomew down. This is the entire point of escalating the
+    # failure rather than only reporting it in a health field.
+    failure = recorder.failure
+    if failure is not None:
+        print(
+            f"[bartholomew serve] FATAL: {failure.component} failed "
+            f"({failure.reason}) at {failure.at}. Shut down gracefully; "
+            f"exiting {supervision.EXIT_RUNTIME_FAILURE} so the service "
+            f"supervisor restarts this process.",
+            file=sys.stderr,
+        )
+        return supervision.EXIT_RUNTIME_FAILURE
 
     return 0

@@ -81,6 +81,7 @@ adding workers to one.**
 | 0 | Clean exit | — |
 | 3 | Another Bartholomew already owns this database | Stop it, or use a different `BARTH_DB_PATH` |
 | 4 | Refused configuration (`--workers`/`--reload`/bad bind) | Fix the unit file; retrying will not help |
+| 5 | An unrecoverable component failed (e.g. the autonomy loop died) | Nothing — the supervisor restarts it. Check logs if it recurs |
 | 143 / -15 | Terminated by SIGTERM | Normal. uvicorn re-raises the signal after a graceful shutdown |
 
 `systemd` is configured with `RestartPreventExitStatus=3 4`, so neither
@@ -131,9 +132,20 @@ when any of them has failed:
 `/api/health` is the one that can tell you the scheduler died.
 
 A `scheduler` that reports `failed` or `stalled: true` means the autonomy loop
-is no longer running in this process even though the API still answers. Restart
-the service and check the logs — that is the failure mode this field exists to
-stop being silent.
+is no longer running in this process even though the API still answers.
+
+**You should rarely see that state persist**, because an unexpected scheduler
+exit no longer only *reports* itself: the process shuts down gracefully and
+exits 5, and the supervisor restarts it. The health field remains the truthful
+in-process signal (and covers the stalled case, where the loop is alive but not
+progressing); the exit status is what actually produces recovery. A degraded
+field nothing acts on is a report, not a recovery — `systemd` and Docker only
+listen to exit statuses.
+
+If the unit keeps restarting, systemd gives up after 5 restarts in 5 minutes
+(`StartLimitBurst`) and marks it failed, so a genuinely unrecoverable fault
+surfaces to a human instead of looping invisibly. `journalctl -u bartholomew`
+carries the `FATAL:` line naming the component and reason.
 
 ## Exposure
 

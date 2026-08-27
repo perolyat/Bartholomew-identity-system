@@ -704,25 +704,65 @@ class KernelDaemon:
         Bartholomew had quietly stopped being proactive. That is precisely the
         "always-on software that silently dies" failure.
 
-        Records the outcome on the heartbeat rather than acting on it: a
-        supervisor restarting the service is the recovery mechanism, and
-        deciding that here would be a second, competing supervisor.
+        Two distinct outcomes, and conflating them would be a bug in both
+        directions -- a normal shutdown must never look like a fault, and a
+        fault must never be filed away as a normal shutdown:
+
+        * **Expected stop.** The task was cancelled, or the daemon is no
+          longer RUNNING (`stop()` is already under way). This is the
+          autonomy loop working as designed. Recorded, and nothing else.
+        * **Unexpected exit.** The loop raised, or returned on its own, while
+          the daemon believes itself to be RUNNING. The loop is supposed to
+          run until cancelled, so either is a fault the process cannot
+          continue meaningfully past: Bartholomew would keep answering HTTP
+          while having silently stopped being proactive.
+
+        An unexpected exit is escalated to the service layer, which turns it
+        into a graceful shutdown and a non-zero exit status so the external
+        supervisor restarts the process. That escalation is *reporting a
+        fault upward*, not supervising: nothing here restarts anything or
+        decides a policy, and outside `bartholomew serve` (a test, an
+        embedded daemon) no hook is installed and nothing is terminated at
+        all. See `bartholomew.runtime.supervision`.
         """
         if task.cancelled():
             self.scheduler_heartbeat.mark_stopped()
             return
+
+        if self.lifecycle_state is not DaemonLifecycleState.RUNNING:
+            # Already stopping: whatever the loop did on its way out, it is
+            # not a fault and must not trigger a restart.
+            exc = None if task.cancelled() else task.exception()
+            if exc is not None:
+                logger.warning("Scheduler loop raised during shutdown: %s", exc)
+            self.scheduler_heartbeat.mark_stopped()
+            return
+
         exc = task.exception()
         if exc is not None:
             logger.error("Scheduler loop exited unexpectedly: %s", exc, exc_info=exc)
             self.scheduler_heartbeat.mark_failed(exc)
+            self._escalate_fatal("scheduler", f"{type(exc).__name__}: {exc}")
             return
-        # A clean return is still wrong while the daemon is running: the loop
-        # is supposed to run until cancelled.
-        if self.lifecycle_state is DaemonLifecycleState.RUNNING:
-            logger.error("Scheduler loop returned while the daemon is still RUNNING")
-            self.scheduler_heartbeat.mark_failed("scheduler loop returned unexpectedly")
-        else:
-            self.scheduler_heartbeat.mark_stopped()
+
+        logger.error("Scheduler loop returned while the daemon is still RUNNING")
+        self.scheduler_heartbeat.mark_failed("scheduler loop returned unexpectedly")
+        self._escalate_fatal("scheduler", "the autonomy loop returned unexpectedly")
+
+    def _escalate_fatal(self, component: str, reason: str) -> None:
+        """Report an unrecoverable component failure to the service layer.
+
+        Best-effort by construction: a daemon running outside a supervised
+        service (tests, an embedded use) has no escalation path, and failing
+        to escalate must never turn a recorded fault into a raised exception
+        inside an asyncio done-callback, where nothing could handle it.
+        """
+        try:
+            from bartholomew.runtime.supervision import record_fatal_failure
+
+            record_fatal_failure(component, reason)
+        except Exception:  # pragma: no cover - escalation must never itself raise
+            logger.exception("Failed to escalate %s failure for supervision", component)
 
     async def stop(self) -> None:
         """Gracefully stop the kernel daemon."""
@@ -844,6 +884,27 @@ class KernelDaemon:
                 except asyncio.TimeoutError:
                     producer_tasks_terminal = False
                     print(f"[Kernel] Task {task.get_name()} did not terminate within timeout")
+                except Exception as e:
+                    # A task that died on its own before shutdown began.
+                    # Awaiting it here re-raises whatever killed it, which
+                    # previously aborted stop() partway through: no clean
+                    # marker, no lock release, no WAL checkpoint -- one
+                    # background-task failure silently became an unclean
+                    # shutdown the next startup had to recover from.
+                    #
+                    # It is still CONFIRMED TERMINAL, which is what this flag
+                    # actually tracks (B5 clean-marker honesty): the task has
+                    # finished and is not still running against the database.
+                    # A task that failed is not a task that might still be
+                    # writing, so the shutdown can legitimately be marked
+                    # clean -- what failed was the task, not the shutdown.
+                    # The failure itself is reported by whoever owns the task
+                    # (see _on_scheduler_task_done, which escalates it), not
+                    # swallowed here.
+                    print(
+                        f"[Kernel] Task {task.get_name()} had already failed before "
+                        f"shutdown: {type(e).__name__}: {e}",
+                    )
 
         # Close the scheduler's dedicated DB worker thread and the shared
         # blocking-call worker thread (Phase B stage B2) before the memory

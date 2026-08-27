@@ -35,19 +35,29 @@ def test_beating_marks_it_running_and_records_the_drive():
     assert hb.snapshot()["last_drive"] == "self_check"
 
 
-def test_a_loop_that_stops_beating_is_reported_stalled(monkeypatch):
+def _age(hb: health.SchedulerHeartbeat, seconds: float) -> None:
+    """Backdate a heartbeat's own recorded times by `seconds`.
+
+    Deliberately not a monkeypatch of `time.monotonic`. Patching the stdlib
+    module is a process-wide mutation in a shared test process: correct only
+    for as long as nothing else in the run reads the clock, and exactly the
+    kind of thing that becomes someone else's ordering bug months later.
+    Backdating the record under test is both narrower and a more faithful
+    simulation of what actually happens -- the loop stops beating; the clock
+    does not lurch.
+    """
+    if hb.last_beat_monotonic is not None:
+        hb.last_beat_monotonic -= seconds
+    hb._started_monotonic -= seconds
+
+
+def test_a_loop_that_stops_beating_is_reported_stalled():
     """A heartbeat that merely exists is not evidence the loop is alive."""
     hb = health.SchedulerHeartbeat()
     hb.beat()
     assert hb.stalled is False
 
-    # Advance the monotonic clock past the stall threshold.
-    real = health.time.monotonic
-    monkeypatch.setattr(
-        health.time,
-        "monotonic",
-        lambda: real() + health.STALL_AFTER_SECONDS + 1,
-    )
+    _age(hb, health.STALL_AFTER_SECONDS + 1)
 
     assert hb.stalled is True
     assert hb.healthy is False
@@ -56,16 +66,11 @@ def test_a_loop_that_stops_beating_is_reported_stalled(monkeypatch):
     assert "no scheduler activity" in snapshot["error"]
 
 
-def test_a_loop_that_never_beats_does_not_stay_healthy_by_default(monkeypatch):
+def test_a_loop_that_never_beats_does_not_stay_healthy_by_default():
     """Absence of evidence must not read as evidence of health."""
     hb = health.SchedulerHeartbeat()
     hb.state = health.SCHEDULER_RUNNING  # claims to run, never beat
-    real = health.time.monotonic
-    monkeypatch.setattr(
-        health.time,
-        "monotonic",
-        lambda: real() + health.STALL_AFTER_SECONDS + 1,
-    )
+    _age(hb, health.STALL_AFTER_SECONDS + 1)
     assert hb.stalled is True
 
 
@@ -371,3 +376,193 @@ def test_a_context_without_a_heartbeat_does_not_break_the_loop():
     from bartholomew.kernel.scheduler import loop as loop_module
 
     loop_module._beat(SimpleNamespace())  # does not raise
+
+
+# ---------------------------------------------------------------------------
+# Failure escalation: a dead component must become a restart, not a JSON field
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_recorder():
+    from bartholomew.runtime import supervision
+
+    supervision.get_recorder().reset()
+    yield
+    supervision.get_recorder().reset()
+
+
+class _FakeServer:
+    should_exit = False
+
+
+def test_a_fatal_failure_asks_the_server_to_stop_gracefully():
+    """Graceful, not a kill: the existing shutdown path must still run."""
+    from bartholomew.runtime import supervision
+
+    server = _FakeServer()
+    recorder = supervision.get_recorder()
+    recorder.bind_server(server)
+
+    supervision.record_fatal_failure("scheduler", "loop died")
+
+    assert server.should_exit is True
+    assert recorder.failure.component == "scheduler"
+    assert recorder.failure.reason == "loop died"
+
+
+def test_the_first_fatal_failure_wins():
+    """A cascade is reported by its cause, not by its last consequence."""
+    from bartholomew.runtime import supervision
+
+    supervision.get_recorder().bind_server(_FakeServer())
+    supervision.record_fatal_failure("scheduler", "the cause")
+    supervision.record_fatal_failure("something-else", "the consequence")
+
+    assert supervision.get_recorder().failure.component == "scheduler"
+
+
+def test_recording_without_a_bound_server_terminates_nothing():
+    """A daemon outside `serve` is not under this module's supervision."""
+    from bartholomew.runtime import supervision
+
+    supervision.record_fatal_failure("scheduler", "no server here")
+
+    assert supervision.get_recorder().failure is not None  # recorded
+    # Nothing to assert about termination precisely because nothing happened:
+    # no server was bound, so no shutdown was requested and no exception rose.
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_scheduler_exit_escalates_for_restart():
+    import asyncio
+
+    from bartholomew.kernel.daemon import DaemonLifecycleState, KernelDaemon
+    from bartholomew.runtime import supervision
+
+    supervision.get_recorder().bind_server(server := _FakeServer())
+
+    daemon = KernelDaemon.__new__(KernelDaemon)
+    daemon.lifecycle_state = DaemonLifecycleState.RUNNING
+    daemon.scheduler_heartbeat = health.SchedulerHeartbeat()
+    daemon.scheduler_heartbeat.beat()
+
+    async def dies():
+        raise RuntimeError("scheduler exploded")
+
+    task = asyncio.create_task(dies())
+    task.add_done_callback(daemon._on_scheduler_task_done)
+    with pytest.raises(RuntimeError):
+        await task
+    await asyncio.sleep(0)
+
+    assert daemon.scheduler_heartbeat.state == health.SCHEDULER_FAILED
+    assert server.should_exit is True, "a dead scheduler did not escalate for restart"
+    assert "scheduler exploded" in supervision.get_recorder().failure.reason
+
+
+@pytest.mark.asyncio
+async def test_a_scheduler_that_returns_on_its_own_also_escalates():
+    """The loop runs until cancelled; returning is as wrong as raising."""
+    import asyncio
+
+    from bartholomew.kernel.daemon import DaemonLifecycleState, KernelDaemon
+    from bartholomew.runtime import supervision
+
+    supervision.get_recorder().bind_server(server := _FakeServer())
+
+    daemon = KernelDaemon.__new__(KernelDaemon)
+    daemon.lifecycle_state = DaemonLifecycleState.RUNNING
+    daemon.scheduler_heartbeat = health.SchedulerHeartbeat()
+
+    async def returns_early():
+        return None
+
+    task = asyncio.create_task(returns_early())
+    task.add_done_callback(daemon._on_scheduler_task_done)
+    await task
+    await asyncio.sleep(0)
+
+    assert server.should_exit is True
+
+
+@pytest.mark.asyncio
+async def test_normal_cancellation_never_escalates():
+    """Shutdown must not look like a fault, or every stop becomes a restart."""
+    import asyncio
+
+    from bartholomew.kernel.daemon import DaemonLifecycleState, KernelDaemon
+    from bartholomew.runtime import supervision
+
+    supervision.get_recorder().bind_server(server := _FakeServer())
+
+    daemon = KernelDaemon.__new__(KernelDaemon)
+    daemon.lifecycle_state = DaemonLifecycleState.STOPPING
+    daemon.scheduler_heartbeat = health.SchedulerHeartbeat()
+    daemon.scheduler_heartbeat.beat()
+
+    async def forever():
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(forever())
+    task.add_done_callback(daemon._on_scheduler_task_done)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    assert daemon.scheduler_heartbeat.state == health.SCHEDULER_STOPPED
+    assert server.should_exit is False, "a normal shutdown escalated as a fault"
+    assert supervision.get_recorder().failure is None
+
+
+@pytest.mark.asyncio
+async def test_a_loop_that_raises_during_shutdown_is_not_a_fault():
+    """Already stopping: whatever the loop did on the way out, don't restart."""
+    import asyncio
+
+    from bartholomew.kernel.daemon import DaemonLifecycleState, KernelDaemon
+    from bartholomew.runtime import supervision
+
+    supervision.get_recorder().bind_server(server := _FakeServer())
+
+    daemon = KernelDaemon.__new__(KernelDaemon)
+    daemon.lifecycle_state = DaemonLifecycleState.STOPPING
+    daemon.scheduler_heartbeat = health.SchedulerHeartbeat()
+
+    async def dies():
+        raise RuntimeError("torn down mid-flight")
+
+    task = asyncio.create_task(dies())
+    task.add_done_callback(daemon._on_scheduler_task_done)
+    with pytest.raises(RuntimeError):
+        await task
+    await asyncio.sleep(0)
+
+    assert server.should_exit is False
+    assert supervision.get_recorder().failure is None
+
+
+def test_the_restart_exit_code_is_not_prevented_by_the_unit_file():
+    """The unit must actually restart on the code the failure path returns.
+
+    A `RestartPreventExitStatus` that happened to include the runtime-failure
+    code would silently undo this whole mechanism: the process would exit
+    correctly and systemd would decline to restart it.
+    """
+    from pathlib import Path
+
+    from bartholomew.runtime import serve, supervision
+
+    unit = (Path(__file__).resolve().parents[1] / "deploy" / "bartholomew.service").read_text()
+    prevented_line = next(
+        line for line in unit.splitlines() if line.startswith("RestartPreventExitStatus=")
+    )
+    prevented = {int(code) for code in prevented_line.split("=", 1)[1].split()}
+
+    assert supervision.EXIT_RUNTIME_FAILURE not in prevented
+    # The configuration codes, which will never succeed on retry, still are.
+    assert serve.EXIT_LOCK_HELD in prevented
+    assert serve.EXIT_BAD_CONFIG in prevented
+    assert "Restart=on-failure" in unit

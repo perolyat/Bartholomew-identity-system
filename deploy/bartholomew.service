@@ -18,6 +18,14 @@ Documentation=file:///opt/bartholomew/deploy/README.md
 After=network-online.target
 Wants=network-online.target
 
+# Bound the restart rate so a genuinely unrecoverable fault (a corrupt
+# database that kills the scheduler on every boot) surfaces as a failed unit
+# a human looks at, rather than an invisible restart loop. These live in
+# [Unit], not [Service]: systemd moved them in v230 and silently ignores
+# them in [Service].
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 
@@ -45,7 +53,13 @@ RestartSec=5s
 # Do not restart-loop on a configuration that cannot succeed: exit 3 is
 # "another instance owns this database" and exit 4 is "refused configuration".
 # Both need a human, and hammering them hides the message.
+#
+# Exit 5 -- an unrecoverable component failure, such as the autonomy loop
+# dying -- is deliberately NOT listed: that is precisely the case a restart
+# exists for, and it is why the process exits non-zero rather than sitting
+# there serving HTTP with a dead scheduler. Restarting is the recovery.
 RestartPreventExitStatus=3 4
+
 
 # Must exceed serve.SHUTDOWN_BUDGET_SECONDS (30s). KernelDaemon.stop() drains
 # in-flight requests, cancels background tasks and checkpoints the WAL; a
