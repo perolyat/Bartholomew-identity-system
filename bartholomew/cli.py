@@ -84,7 +84,9 @@ def embeddings_stats(
             for kind, count in sorted(by_kind.items()):
                 note = ""
                 if kind == KIND_UNVERIFIED:
-                    note = "  [yellow](excluded from retrieval -- run `embeddings rebuild`)[/yellow]"
+                    note = (
+                        "  [yellow](excluded from retrieval -- run `embeddings rebuild`)[/yellow]"
+                    )
                 console.print(f"  {kind}: {count}{note}")
     except Exception as e:
         console.print(f"[red]Error reading embedding kinds: {e}[/red]")
@@ -274,8 +276,9 @@ def embeddings_rebuild(
         raise typer.Exit(code=1) from e
 
     if not rows:
-        console.print("[green]Nothing to rebuild.[/green] Every embedding matches the "
-                      "current embedder.\n")
+        console.print(
+            "[green]Nothing to rebuild.[/green] Every embedding matches the current embedder.\n",
+        )
         return
 
     console.print(f"Candidates: {len(rows)}")
@@ -327,6 +330,92 @@ def embeddings_rebuild(
             console.print(f"  memory {memory_id}: {reason}")
         if len(skipped) > 10:
             console.print(f"  ... and {len(skipped) - 10} more")
+
+    console.print()
+
+
+@embeddings_app.command("evaluate")
+def embeddings_evaluate(
+    db: str = typer.Option(None, help="Scratch database to seed (default: a temp file)"),
+):
+    """Measure retrieval behaviour against the bounded evaluation fixture.
+
+    Reports top-1 and top-3 behaviour per mode and per query category, together
+    with the embedding status that produced those numbers -- because a score
+    without the embedder that produced it is not evidence of anything.
+
+    This measures; it does not gate. There is no pass mark here, and relevance
+    thresholds must not be tuned until these numbers say what tuning them would
+    actually do.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from bartholomew.kernel.retrieval_eval import EVAL_MODES, run_evaluation
+
+    try:
+        from tests.fixtures.retrieval_eval_corpus import CASES, CORPUS
+    except ImportError:
+        console.print(
+            "[red]Evaluation fixture not found.[/red] "
+            "It ships with the tests; run this from a source checkout.",
+        )
+        raise typer.Exit(code=1) from None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = db or str(Path(tmp) / "retrieval-eval.db")
+        results = run_evaluation(db_path, CORPUS, CASES, modes=EVAL_MODES)
+
+    retrieval = results["retrieval"]
+    embedding = retrieval["embedding"]
+
+    console.print("\n[bold]Retrieval evaluation[/bold]")
+    console.print(
+        f"Embedder: [cyan]{embedding['mode']}[/cyan] "
+        f"({embedding['provider']}/{embedding['model']}), "
+        f"semantic={'yes' if embedding['semantic'] else 'NO'}",
+    )
+    console.print(
+        f"Retrieval: {retrieval['mode_configured']} configured, "
+        f"{retrieval['mode_effective']} effective",
+    )
+    if retrieval["degraded"]:
+        console.print(f"[yellow]Degraded:[/yellow] {retrieval['reason']}")
+    console.print(
+        f"Corpus: {results['corpus_size']} memories, {results['case_count']} cases\n",
+    )
+
+    summary = Table(title="Top-1 / Top-3 by mode (answerable cases)")
+    summary.add_column("Mode", style="cyan")
+    summary.add_column("Top-1", style="green")
+    summary.add_column("Top-3", style="green")
+    summary.add_column("Notes", style="yellow")
+
+    for mode, report in results["reports"].items():
+        if report.error:
+            summary.add_row(mode, "-", "-", f"could not run: {report.error[:60]}")
+            continue
+        noise = sum(case.returned_anything for case in report.irrelevant)
+        summary.add_row(
+            mode,
+            f"{report.top1:.0%}" if report.top1 is not None else "-",
+            f"{report.top3:.0%}" if report.top3 is not None else "-",
+            f"{noise}/{len(report.irrelevant)} irrelevant queries returned something",
+        )
+
+    console.print(summary)
+
+    for mode, report in results["reports"].items():
+        if report.error:
+            continue
+        table = Table(title=f"{mode}: top-1 / top-3 by category")
+        table.add_column("Category", style="cyan")
+        table.add_column("Cases")
+        table.add_column("Top-1", style="green")
+        table.add_column("Top-3", style="green")
+        for category, (count, t1, t3) in sorted(report.by_category().items()):
+            table.add_row(category, str(count), f"{t1}/{count}", f"{t3}/{count}")
+        console.print(table)
 
     console.print()
 

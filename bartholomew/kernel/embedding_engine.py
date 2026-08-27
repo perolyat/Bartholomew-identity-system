@@ -298,7 +298,9 @@ class LocalSBERTProvider(EmbeddingProvider):
         if isinstance(exc, ImportError):
             return (
                 "sentence-transformers is not installed, so the configured "
-                f"embedder {self.model_id!r} cannot be loaded."
+                f"embedder {self.model_id!r} cannot be loaded. Install the "
+                "embeddings extra (`pip install -e '.[embeddings]'`) and "
+                "provision the model with `bartholomew embeddings provision`."
             )
         return (
             f"Failed to load embedding model {self.model_id!r} "

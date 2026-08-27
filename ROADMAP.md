@@ -653,7 +653,11 @@ Everything applicable from Bands A and B, plus:
 - **PT-F001** startup/readiness closure — a supported fresh start reaches ready through canonical
   host/config, with no manual process override;
 - **OP-W003** retrieval-mode decision — intended embedder enabled, or fallback explicitly approved
-  with measured quality and degraded-state reporting;
+  with measured quality and degraded-state reporting. **Degraded-state reporting and measured
+  quality are implemented (2026-08-27, `docs/RETRIEVAL_EMBEDDER.md`); the decision between the two
+  branches is still outstanding**, and the real model is enabled-but-not-installed by design —
+  `sentence-transformers` is an opt-in extra and the model is provisioned deliberately, so ordinary
+  startup never depends on an uncontrolled download;
 - technical defect closure where relevant: **TECH-F001**, **MF-F001**, **MF-F002**,
   **PB-F001** / **PB-F002**, and the **UI-SYNC001** critical-state issues;
 - **HU-F002** conversational quality addressed — relevance, non-repetition, truthful failure;

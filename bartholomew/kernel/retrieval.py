@@ -72,7 +72,6 @@ def _check_fts5_once(db_path: str) -> bool:
     return available
 
 
-
 def resolve_embedding_engine() -> tuple[EmbeddingEngine | None, Any]:
     """The engine to retrieve with, and the truthful status behind it.
 

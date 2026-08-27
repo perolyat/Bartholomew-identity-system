@@ -58,9 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_mememb_dim
 #: Created after `_migrate_embedder_kind`, never inside VECTOR_SCHEMA: on a
 #: database predating the column, `executescript` would reach this index before
 #: the migration had added the column it indexes.
-KIND_INDEX_SQL = (
-    "CREATE INDEX IF NOT EXISTS idx_mememb_kind ON memory_embeddings(embedder_kind)"
-)
+KIND_INDEX_SQL = "CREATE INDEX IF NOT EXISTS idx_mememb_kind ON memory_embeddings(embedder_kind)"
 
 
 class VectorStore:
