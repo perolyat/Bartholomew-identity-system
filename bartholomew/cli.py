@@ -27,47 +27,45 @@ app.add_typer(brake_app, name="brake")
 def embeddings_stats(
     db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
 ):
-    """Show embeddings statistics and configuration"""
+    """Show embeddings statistics and the live retrieval mode"""
     import os
     import sqlite3
 
-    from bartholomew.kernel.embedding_engine import get_embedding_engine
+    from bartholomew.kernel.embedding_engine import KIND_UNVERIFIED, get_embedding_status
+    from bartholomew.kernel.retrieval import describe_retrieval
     from bartholomew.kernel.vector_store import VectorStore
 
     console.print("\n[bold]Embeddings Statistics[/bold]")
     console.print(f"Database: {db}\n")
 
-    # Check if embeddings are enabled
-    enabled = os.getenv("BARTHO_EMBED_ENABLED") == "1"
-    console.print(
-        f"Enabled: {'✓' if enabled else '✗'} "
-        f"(BARTHO_EMBED_ENABLED={'1' if enabled else 'not set'})",
-    )
+    # The truthful mode, from the same accessor /api/health reads -- never
+    # reconstructed from configuration here, so the two cannot disagree.
+    status = get_embedding_status()
+    colour = "green" if status.semantic else ("yellow" if status.degraded else "cyan")
+    console.print(f"Mode: [{colour}]{status.mode.value}[/{colour}]")
+    console.print(f"Semantic retrieval: {'yes' if status.semantic else 'NO'}")
+    console.print(f"Provider: {status.provider}")
+    console.print(f"Model: {status.model}")
+    console.print(f"Dimension: {status.dim}")
+    if status.reason:
+        console.print(f"Reason: {status.reason}")
 
-    if not enabled:
-        console.print("\n[yellow]Enable with: BARTHO_EMBED_ENABLED=1[/yellow]\n")
-        return
-
-    # Get engine config
     try:
-        engine = get_embedding_engine()
-        cfg = engine.config
-        console.print(f"Provider: {cfg.provider}")
-        console.print(f"Model: {cfg.model}")
-        console.print(f"Dimension: {cfg.dim}")
-
-        # Check fallback status
-        if hasattr(engine.provider, "fallback"):
-            fallback_status = "yes" if engine.provider.fallback else "no"
-            console.print(f"Fallback mode: {fallback_status}")
+        described = describe_retrieval()
+        console.print(
+            f"Retrieval mode: {described['mode_configured']} configured, "
+            f"{described['mode_effective']} effective",
+        )
     except Exception as e:
-        console.print(f"[red]Error loading engine: {e}[/red]")
-        return
+        console.print(f"[red]Could not resolve retrieval mode: {e}[/red]")
+
+    if not os.getenv("BARTHO_EMBED_ENABLED"):
+        console.print("\n[yellow]Enable with: BARTHO_EMBED_ENABLED=1[/yellow]\n")
 
     # Check VSS availability
     try:
         vec_store = VectorStore(db)
-        vss_status = "✓ enabled" if vec_store.vss_available else "✗ disabled"
+        vss_status = "\u2713 enabled" if vec_store.vss_available else "\u2717 disabled"
         console.print(f"SQLite VSS: {vss_status}")
     except Exception as e:
         console.print(f"[red]Error loading vector store: {e}[/red]")
@@ -77,6 +75,19 @@ def embeddings_stats(
     if not os.path.exists(db):
         console.print(f"\n[yellow]Database not found: {db}[/yellow]\n")
         return
+
+    # The honest inventory: what is actually retrievable, and what is not.
+    try:
+        by_kind = vec_store.count_by_kind()
+        if by_kind:
+            console.print("\n[bold]Embeddings by embedder kind:[/bold]")
+            for kind, count in sorted(by_kind.items()):
+                note = ""
+                if kind == KIND_UNVERIFIED:
+                    note = "  [yellow](excluded from retrieval -- run `embeddings rebuild`)[/yellow]"
+                console.print(f"  {kind}: {count}{note}")
+    except Exception as e:
+        console.print(f"[red]Error reading embedding kinds: {e}[/red]")
 
     try:
         with sqlite3.connect(db) as conn:
@@ -126,6 +137,198 @@ def embeddings_stats(
             console.print()
     except Exception as e:
         console.print(f"[red]Database error: {e}[/red]\n")
+
+
+@embeddings_app.command("provision")
+def embeddings_provision(
+    target: str = typer.Option(
+        None,
+        help="Directory to write the model into (default: embeddings.yaml model_path)",
+    ),
+):
+    """Download the configured embedding model into a local directory.
+
+    This is the ONE place model assets are fetched. Ordinary retrieval never
+    downloads anything: an unprovisioned model fails closed and reports itself,
+    rather than making first-run startup depend on an uncontrolled several
+    hundred megabyte fetch. Run this deliberately, once, per deployment.
+    """
+    from bartholomew.kernel.embedding_engine import _embedding_factory
+
+    cfg = _embedding_factory._load_config()
+    destination = target or cfg.model_path
+
+    if not destination:
+        console.print(
+            "[red]No destination.[/red] Set `embeddings.model_path` in "
+            "embeddings.yaml (or BARTHO_EMBED_MODEL_PATH), or pass --target.",
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        console.print(
+            "[red]sentence-transformers is not installed.[/red]\n"
+            "Install the embeddings extra first:  pip install -e '.[embeddings]'",
+        )
+        raise typer.Exit(code=1) from None
+
+    console.print(f"Fetching [cyan]{cfg.model}[/cyan] into [magenta]{destination}[/magenta]")
+    console.print("[yellow]This downloads model assets over the network.[/yellow]")
+
+    try:
+        # Deliberately NOT wrapped in `_hub_offline`: this command exists
+        # precisely to be the authorised online step.
+        model = SentenceTransformer(cfg.model, device="cpu")
+        model.save(destination)
+    except Exception as e:
+        console.print(f"[red]Provisioning failed: {e}[/red]")
+        raise typer.Exit(code=1) from e
+
+    console.print(f"[green]Provisioned.[/green] Model saved to {destination}")
+    if not cfg.model_path:
+        console.print(
+            "Set `embeddings.model_path` (or BARTHO_EMBED_MODEL_PATH) to this "
+            "path so ordinary startup loads it.",
+        )
+    console.print("Verify with:  bartholomew embeddings stats")
+
+
+@embeddings_app.command("rebuild")
+def embeddings_rebuild(
+    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    dry_run: bool = typer.Option(False, help="Report what would change, write nothing"),
+):
+    """Regenerate embeddings that cannot honestly be used for retrieval.
+
+    Targets two populations:
+
+      `unverified`        rows predating the embedder_kind column, whose true
+                          embedder is unknowable from the row;
+      mismatched kinds    rows produced by a different embedder than the one
+                          now configured (e.g. deterministic-hash rows left
+                          over from before a real model was provisioned).
+
+    Each is re-embedded from the authoritative retained source text on the
+    memory itself. Where no such text is retained, the row is left alone and
+    reported: it stays excluded from retrieval rather than being presented as
+    something it is not.
+
+    Never deletes a memory. A row that cannot be regenerated is excluded, not
+    destroyed, so nothing is lost that a later provisioning run could recover.
+    """
+    import sqlite3
+
+    from bartholomew.kernel.embedding_engine import (
+        EmbedderUnavailableError,
+        get_embedding_engine,
+        get_embedding_status,
+    )
+    from bartholomew.kernel.vector_store import VectorStore
+
+    status = get_embedding_status()
+    console.print(f"\n[bold]Rebuild embeddings[/bold]  (database: {db})")
+    console.print(f"Current embedder: {status.mode.value} -- {status.provider}/{status.model}")
+
+    if status.mode.value == "unavailable":
+        console.print(f"[red]Cannot rebuild: {status.reason}[/red]")
+        raise typer.Exit(code=1)
+
+    if not status.semantic:
+        # Rebuilding into the deterministic embedder is legitimate for
+        # development, but it must be a deliberate, visible choice -- not
+        # something that quietly refills the store with non-semantic vectors.
+        console.print(
+            "[yellow]Warning:[/yellow] the current embedder is NOT semantic. "
+            "Rebuilt vectors will be stored as deterministic-hash and will not "
+            "provide meaning-based retrieval.",
+        )
+
+    try:
+        engine = get_embedding_engine()
+    except EmbedderUnavailableError as e:
+        console.print(f"[red]Cannot rebuild: {e}[/red]")
+        raise typer.Exit(code=1) from e
+
+    provider, model, embedder_kind = engine.storage_identity
+    vec_store = VectorStore(db)
+
+    # Candidates: anything not already carrying the current embedder's kind.
+    try:
+        with sqlite3.connect(db) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT e.embedding_id, e.memory_id, e.source, e.embedder_kind,
+                       m.summary, m.value
+                FROM memory_embeddings e
+                LEFT JOIN memories m ON m.id = e.memory_id
+                WHERE e.embedder_kind != ?
+                ORDER BY e.embedding_id
+                """,
+                (embedder_kind,),
+            ).fetchall()
+    except sqlite3.Error as e:
+        console.print(f"[red]Database error: {e}[/red]")
+        raise typer.Exit(code=1) from e
+
+    if not rows:
+        console.print("[green]Nothing to rebuild.[/green] Every embedding matches the "
+                      "current embedder.\n")
+        return
+
+    console.print(f"Candidates: {len(rows)}")
+
+    rebuilt = 0
+    skipped: list[tuple[int, str]] = []
+
+    for row in rows:
+        # Authoritative retained source text, preferring the summary -- the
+        # same precedence the write path uses, so a rebuilt vector matches what
+        # a fresh write would have produced.
+        text = (row["summary"] or "") if row["source"] == "summary" else (row["value"] or "")
+        if not text.strip():
+            text = (row["value"] or "").strip()[:500]
+
+        if not text.strip():
+            # No retained source: cannot regenerate honestly. Leave the row
+            # excluded rather than inventing a vector for it.
+            skipped.append((row["memory_id"], "no retained source text"))
+            continue
+
+        if dry_run:
+            rebuilt += 1
+            continue
+
+        try:
+            vec = engine.embed_texts([text])[0]
+            vec_store.upsert(
+                row["memory_id"],
+                vec,
+                row["source"],
+                provider,
+                model,
+                embedder_kind,
+            )
+            rebuilt += 1
+        except Exception as e:
+            skipped.append((row["memory_id"], str(e)))
+
+    verb = "would be rebuilt" if dry_run else "rebuilt"
+    console.print(f"[green]{rebuilt}[/green] embedding(s) {verb}.")
+
+    if skipped:
+        console.print(
+            f"[yellow]{len(skipped)}[/yellow] left excluded from retrieval "
+            "(no memory was deleted):",
+        )
+        for memory_id, reason in skipped[:10]:
+            console.print(f"  memory {memory_id}: {reason}")
+        if len(skipped) > 10:
+            console.print(f"  ... and {len(skipped) - 10} more")
+
+    console.print()
 
 
 @embeddings_app.command("rebuild-vss")

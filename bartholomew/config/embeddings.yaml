@@ -11,6 +11,24 @@ embeddings:
   # Default embedding dimension
   default_dim: 384
 
+  # Provisioned local directory holding the model assets.
+  #
+  # This is the reproducible deployment path: when set and present on disk,
+  # the model is loaded from here rather than resolved through the model hub.
+  # Populate it with `bartholomew embeddings provision`. Overridden by the
+  # BARTHO_EMBED_MODEL_PATH environment variable, so a deployment can point at
+  # its own location without editing tracked configuration.
+  model_path: null
+
+  # Whether loading the model may reach the network.
+  #
+  # Keep this false. Ordinary retrieval must never trigger a model download:
+  # startup would depend on an uncontrolled first-run fetch of several hundred
+  # megabytes, which is neither reproducible nor offline-first. Fetching model
+  # assets is a deliberate bootstrap step (`embeddings provision`), which sets
+  # this for its own single operation only.
+  allow_download: false
+
   # Default embedding mode
   # Options: none, summary, full, both
   default_mode: summary
@@ -31,5 +49,11 @@ embeddings:
 
 # Notes:
 # - To enable embeddings globally, set BARTHO_EMBED_ENABLED=1
+# - If the configured model cannot be loaded, embeddings fail CLOSED: no
+#   vectors are written and retrieval reports itself as FTS-only. It does not
+#   quietly degrade to the deterministic hash embedder -- that serves only when
+#   BARTHO_EMBED_ALLOW_FALLBACK=1 is set deliberately, for development and
+#   tests, and its vectors are stored and searched as a separate population.
+# - `bartholomew embeddings stats` reports which of those states is live.
 # - Per-rule overrides in memory_rules.yaml take precedence
 # - Embeddings happen AFTER summarization, BEFORE encryption
