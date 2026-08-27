@@ -639,6 +639,46 @@ async def _model_health() -> dict[str, Any]:
     return info
 
 
+def _retrieval_health() -> dict[str, Any]:
+    """What retrieval will actually do if a query arrives right now.
+
+    The same shape of answer as `_model_health()` above, for the same reason:
+    what was *configured* and what is *running* are different questions, and
+    reporting only the first is how OP-W003 happened -- Real-World Test #1 ran
+    its retrieval on a deterministic fallback embedder, and nothing said so.
+
+    `retrieval_semantic` is the field that answers it directly: False means
+    matching is lexical only, whatever `retrieval_mode_configured` says.
+    Degrading the health *answer* rather than the health *endpoint*: any
+    failure here reports unknown instead of raising.
+    """
+    try:
+        from bartholomew.kernel.retrieval import describe_retrieval
+
+        described = describe_retrieval()
+        embedding = described["embedding"]
+        return {
+            "retrieval_mode_configured": described["mode_configured"],
+            "retrieval_mode_effective": described["mode_effective"],
+            "retrieval_semantic": described["semantic"],
+            "retrieval_degraded": described["degraded"],
+            "retrieval_degraded_reason": described["reason"],
+            "embedding_mode": embedding["mode"],
+            "embedding_model": embedding["model"],
+            "embedding_provider": embedding["provider"],
+        }
+    except Exception as e:
+        # Unknown, never assumed-good.
+        return {
+            "retrieval_mode_configured": "unknown",
+            "retrieval_mode_effective": "unknown",
+            "retrieval_semantic": None,
+            "retrieval_degraded": None,
+            "retrieval_degraded_reason": f"Retrieval state could not be determined: {e}",
+            "embedding_mode": "unknown",
+        }
+
+
 @app.get("/api/health")
 async def health():
     kernel_info = {}
@@ -666,6 +706,7 @@ async def health():
         kernel_info = {"kernel_online": False}
 
     model_info = await _model_health()
+    retrieval_info = _retrieval_health()
 
     return {
         "status": "ok",
@@ -674,6 +715,7 @@ async def health():
         "orchestrator": getattr(orch, "__class__", type("x", (object,), {})).__name__,
         "version": app.version,
         **model_info,
+        **retrieval_info,
         **kernel_info,
     }
 

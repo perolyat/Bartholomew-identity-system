@@ -847,6 +847,46 @@
     was unavailable and a deterministic fallback embedder was used. This compounds R3 above: the
     risk is not the fallback itself but that retrieval mode and quality were not known and truthfully
     reported at the time.
+    **Amended 2026-08-27 — the truthfulness half is IMPLEMENTED; the register remains the authority
+    on formal closure.** See `docs/RETRIEVAL_EMBEDDER.md`. Three things changed, none of which
+    installs a model:
+    - **The fallback is no longer automatic.** A failed model load raises `EmbedderUnavailableError`
+      and produces no vectors; the deterministic embedder serves only under an explicit
+      `BARTHO_EMBED_ALLOW_FALLBACK=1` (which `conftest.py` sets, and which is the only reason CI
+      runs without a model).
+    - **Stored provenance is truthful.** `memory_embeddings.embedder_kind` records what actually
+      produced each vector, writers use `EmbeddingEngine.storage_identity` rather than the
+      configured identity, and `VectorStore.search()` keeps semantic and deterministic vectors in
+      separate populations. Rows predating the column are marked `unverified` and **excluded from
+      retrieval** — not deleted, and no memory is deleted; `bartholomew embeddings rebuild`
+      regenerates them from authoritative retained source text.
+    - **The state is reported.** `/api/health` carries `retrieval_semantic` alongside
+      `retrieval_mode_configured` / `retrieval_mode_effective`, from the same accessor
+      `bartholomew embeddings stats` reads.
+    **Quality is now measured, and the measurement is unflattering.** `bartholomew embeddings
+    evaluate` against a bounded 15-case fixture, on the fallback embedder: vector-only scores
+    **0% top-1** and returns something for **every** irrelevant query; FTS 31% top-1; hybrid 38%.
+    The vector arm under the fallback is noise that ranks. This independently confirms the S5.3
+    characterisation behind `competency_reasoning.DEFAULT_MIN_SHARED_TERMS`.
+    **OP-W003 itself remains OPEN — deferred, not closed (decided 2026-08-27).** Taylor took
+    **neither** of Band C's two branches. Specifically:
+    - **The real embedder is NOT adopted as the default or intended configuration.** The measured
+      evidence above is a bounded 15-case synthetic fixture; it characterises the *fallback*, and it
+      is not representative real-world retrieval evidence about a real model. It is therefore not a
+      basis for a policy change, and none was made. `sentence-transformers` stays an opt-in extra
+      that is not installed, `model_path` stays unset, `allow_download` stays false, and
+      `BARTHO_EMBED_ENABLED` stays off by default — retrieval runs FTS-first exactly as before.
+    - **The fallback is NOT "explicitly approved with measured quality" either.** The measurement
+      argues against approving it: a vector arm scoring 0% top-1 and answering every irrelevant
+      query is not a quality bar anyone should sign off.
+    - **What closes OP-W003 is stronger, representative real-world retrieval evidence** against a
+      provisioned real model, on real content rather than a synthetic fixture. Until that exists,
+      OP-W003 stands as a **Band C blocker**.
+    What *is* discharged by this work is the reporting half — the reason OP-W003 was recorded at all:
+    retrieval mode is now known, truthfully reported, and impossible to misread as semantic when it
+    is not. That is a prerequisite for the eventual decision, not the decision.
+    The relevance gate was deliberately **not** retuned: recalibrating it needs after-numbers from a
+    real embedder, and only the before-numbers exist.
 
 - **(2026-08-20) `config/policy.yaml`'s `parking_brake.affected_components` lists four scopes, not
   six — flagged, not changed.** The file reads `affected_components: [skills, sight, voice,
