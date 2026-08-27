@@ -348,6 +348,7 @@ async def test_failed_integrity_check_aborts_startup_as_unsafe(config_files, mon
         "mem",
         "governance_store",
         "awaiting_response_store",
+        "objective_store",
     }
     assert "scheduler_schema" in json.loads(not_started)
 
@@ -385,6 +386,7 @@ async def test_failed_startup_records_incident_with_accurate_progress(config_fil
         "mem",
         "governance_store",
         "awaiting_response_store",
+        "objective_store",
     }
     assert "scheduler_schema" in json.loads(not_started)
     assert "skills" in json.loads(not_started)

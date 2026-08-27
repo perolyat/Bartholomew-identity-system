@@ -62,6 +62,7 @@ _STARTUP_RESOURCE_ORDER = [
     "mem",
     "governance_store",
     "awaiting_response_store",
+    "objective_store",
     "scheduler_schema",
     "experience_kernel",
     "skills",
@@ -182,6 +183,7 @@ class KernelDaemon:
         # it's constructed off the event loop in start(), not here. None
         # until then.
         self.awaiting_response_store = None
+        self.objective_store = None
 
         # Owned by this daemon instance for its entire lifetime -- closed
         # in stop(). Construction is cheap (no I/O, no thread spawned
@@ -388,6 +390,18 @@ class KernelDaemon:
                 executor=self.blocking_executor,
             )
             resources_started.append("awaiting_response_store")
+
+            # Golden Path slice 2: the durable objective store. Constructed
+            # off the event loop for the same reason as the two stores above
+            # (blocking schema I/O in __init__()), into the same database.
+            from bartholomew.kernel.objective_store import ObjectiveStore
+
+            self.objective_store = await run_off_loop(
+                ObjectiveStore,
+                self.mem.db_path,
+                executor=self.blocking_executor,
+            )
+            resources_started.append("objective_store")
 
             # Phase B stage B5: read whether the previous runtime (if any)
             # against this db_path confirmed a clean shutdown, then open

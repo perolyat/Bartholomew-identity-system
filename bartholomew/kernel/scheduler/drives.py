@@ -5,10 +5,12 @@ Each drive is a lightweight async function that performs a specific
 autonomy task and optionally emits a Nudge.
 """
 
+import calendar
+import functools
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from bartholomew.kernel import schedule_noticing
@@ -587,6 +589,365 @@ async def drive_schedule_reminder_check(ctx: Any) -> Nudge | None:
     return None
 
 
+OBJECTIVE_CONTINUITY_DRIVE = "objective_continuity_check"
+
+#: Kind and reason for the nudges this drive raises.
+OBJECTIVE_NUDGE_KIND = "objective"
+OBJECTIVE_NUDGE_REASON = "objective_reengagement"
+
+#: How long an objective stays quiet after being surfaced before it may be
+#: raised again. Scaffolding tuned from real use, not a frozen boundary --
+#: the same posture the schedule-reminder constants carry. Deliberately
+#: generous: the failure this slice exists to remove is Bartholomew adding
+#: burden, and an assistant that raises the same objective daily is adding
+#: burden however good its record-keeping is.
+DEFAULT_QUIET_INTERVAL_S = 3 * 24 * 3600
+
+#: How near a horizon has to be before an objective is raised regardless of
+#: the quiet interval.
+DEFAULT_HORIZON_WINDOW_DAYS = 3
+
+#: Most objectives raised in one tick.
+DEFAULT_MAX_OBJECTIVES_PER_TICK = 2
+
+
+def _objective_is_due(
+    objective: Any,
+    now_ts: int,
+    today,
+    *,
+    quiet_s: int,
+    window_days: int,
+) -> bool:
+    """Whether this objective has earned a re-engagement right now.
+
+    Two independent reasons, and nothing else:
+
+      1. its horizon is inside the look-ahead window -- the deadline is
+         approaching and the user would want to know;
+      2. it has gone quiet for longer than the quiet interval -- nobody has
+         mentioned it and it is at risk of being forgotten, which is the
+         thing Bartholomew is supposed to prevent.
+
+    An objective never surfaced at all is due on the second ground, measured
+    from when it was opened: a brand-new objective is not raised back at the
+    user in the same breath they established it.
+
+    Note what is absent: there is no "surface it because we have new
+    evidence" ground. Evidence arriving is not by itself a reason to
+    interrupt someone.
+    """
+    from bartholomew.kernel import objective_store
+
+    horizon_kind = getattr(objective, "horizon_kind", None)
+    horizon_date = getattr(objective, "horizon_date", None)
+    if horizon_kind == objective_store.HORIZON_BY_DATE and horizon_date:
+        try:
+            due = date.fromisoformat(horizon_date)
+        except ValueError:
+            due = None
+        if due is not None and (due - today).days <= window_days:
+            return True
+
+    anchor = getattr(objective, "last_surfaced_at", None) or getattr(objective, "opened_at", None)
+    anchor_ts = _parse_iso_ts(anchor)
+    if anchor_ts is None:
+        # No usable timestamp: not raised. Without an anchor there is no
+        # honest answer to "has this gone quiet", and guessing produces
+        # exactly the unpredictable interruptions this drive must not make.
+        return False
+    return (now_ts - anchor_ts) >= quiet_s
+
+
+def _parse_iso_ts(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return calendar.timegm(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, TypeError):
+        return None
+
+
+async def _deliver_objective_reengagement(ctx: Any, title: str, message: str):
+    """Send one re-engagement through the existing governed notification path.
+
+    Byte-for-byte the shape `_deliver_reminder()` uses, and for the same
+    reason: `run_skill_through_runtime_contract(registry, "notify", "send")`
+    runs `SkillRegistry.execute_action()`'s own independent Governance pass
+    and `NotifySkill`'s quiet-hours and mute rules. No second notification
+    mechanism exists, and this slice does not add one.
+
+    Never raises: a delivery failure is recorded, not propagated.
+    """
+    registry = getattr(ctx, "skill_registry", None)
+    if registry is None:
+        return persistence.DELIVERY_NOT_ATTEMPTED, "no skill registry on the scheduler context"
+
+    from bartholomew.kernel.runtime_contract import run_skill_through_runtime_contract
+
+    try:
+        result = await run_skill_through_runtime_contract(
+            registry,
+            "notify",
+            "send",
+            {"message": message, "title": title, "priority": "normal"},
+        )
+    except Exception as e:
+        log.exception("Objective re-engagement delivery raised for %s", title)
+        return persistence.DELIVERY_FAILED, f"{type(e).__name__}: {e}"
+
+    return _classify_delivery(result)
+
+
+async def drive_objective_continuity_check(ctx: Any) -> Nudge | None:
+    """
+    Proactive objective re-engagement (Golden Path slice 2).
+
+    Scans the objectives Bartholomew is still carrying and, for each one that
+    has earned it, surfaces exactly one re-engagement: a WP-A1-contained
+    nudge in the existing queue *and* one governed notification through the
+    existing NotifySkill path -- carrying the continuity summary derived from
+    that objective's own events, so the user is told what has changed rather
+    than being asked to reconstruct it.
+
+    **This drive records and reports. It advances nothing.** It contacts
+    nobody except the user, through the one notification path that already
+    existed. An objective saying "get the roof repaired" does not authorise
+    ringing a roofer, and there is no code path here by which it could.
+
+    **Registration is conditional and default OFF** (`config/kernel.yaml`'s
+    `proactive.objective_continuity`). When the flag is off this function is
+    never registered, so there are no ticks, no queue impact and no behaviour
+    change of any kind -- see `resolve_registry()`.
+
+    **A terminal objective is unreachable from here.** `list_live()` cannot
+    return one. That is the third of the three independent stops behind the
+    promise that a completed objective goes quiet permanently -- the others
+    being the store's terminal-transition refusal and the chat
+    interpretation block's live-only listing. Three, because a completed
+    objective that keeps resurfacing is the worst outcome this slice can
+    produce, and one filter that someone later forgets is not enough.
+
+    Returns None always, like the two drives it follows: a tick can produce
+    several re-engagements, each with its own nudge and delivery outcome,
+    which the loop's single-Nudge return cannot represent.
+
+    Failure posture, matching `drive_schedule_reminder_check` exactly: a
+    delivery failure is recorded on the nudge and never raised; a
+    nudge-persistence failure is logged per objective, the remaining
+    objectives are still attempted, and the drive then raises so the tick is
+    recorded as a failure. Nothing infers that an item which failed to
+    persist is disposable.
+    """
+    from bartholomew.kernel import objective_intents
+    from bartholomew.kernel.runtime_contract import run_objective_through_runtime_contract
+
+    store = getattr(ctx, "objective_store", None)
+    scheduler_store = getattr(ctx, "scheduler_store", None)
+    if store is None or scheduler_store is None:
+        return None
+
+    cfg = getattr(ctx, "cfg", None) or {}
+    proactive_cfg = cfg.get("proactive") or {}
+    quiet_s = int(proactive_cfg.get("objective_quiet_interval_s", DEFAULT_QUIET_INTERVAL_S))
+    window_days = int(
+        proactive_cfg.get("objective_horizon_window_days", DEFAULT_HORIZON_WINDOW_DAYS),
+    )
+    per_tick = int(
+        proactive_cfg.get("objective_max_per_tick", DEFAULT_MAX_OBJECTIVES_PER_TICK),
+    )
+
+    executor = getattr(ctx, "blocking_executor", None)
+    objectives = await run_off_loop(store.list_live, executor=executor)
+    now_ts = int(time.time())
+    today = _local_today(ctx)
+
+    due = [
+        objective
+        for objective in objectives
+        if _objective_is_due(
+            objective,
+            now_ts,
+            today,
+            quiet_s=quiet_s,
+            window_days=window_days,
+        )
+    ][:per_tick]
+    if not due:
+        return None
+
+    persistence_failures: list[str] = []
+
+    for objective in due:
+        # The continuity summary, derived from this objective's own events
+        # since it was last raised. Never stored: a kept summary is a
+        # fabrication the moment the events move on.
+        try:
+            events = await run_off_loop(
+                functools.partial(
+                    store.evidence_events,
+                    objective.id,
+                    after_event_id=objective.last_surfaced_event_id,
+                ),
+                executor=executor,
+            )
+        except Exception as e:
+            persistence_failures.append(f"objective {objective.id}: history read failed: {e}")
+            log.error(
+                "[Scheduler] Objective %s history read FAILED: %s -- not raised, "
+                "and no continuity is assumed",
+                objective.id,
+                e,
+            )
+            continue
+
+        message = objective_intents.render_reengagement(objective, events)
+        title = objective_intents.reengagement_title(objective)
+
+        # Identity is the objective plus the *round* -- the surfacing it
+        # follows -- supplied explicitly, because the message is a rendering
+        # of a history that changes and keying on it would let one objective
+        # occupy unbounded queue slots.
+        #
+        # The round matters, and this is where an objective differs from a
+        # schedule reminder. A reminder's obligation is "(this fact, this due
+        # date)": inherently one-shot, so `nudge_exists_for_dedup_key()`'s
+        # any-row-ever semantics are exactly right for it. An objective is
+        # not one-shot -- re-engaging after the quiet interval is the entire
+        # point of the drive -- so a fixed per-objective key would silently
+        # mean Bartholomew raised each objective exactly once, ever, and then
+        # went quiet on work that was still live.
+        #
+        # Keying on the last surfacing gives both properties: two ticks
+        # inside one round collapse to a single unresolved item (containment
+        # intact, NUDGE-F001 prevented), while the next round -- reached only
+        # by actually surfacing, which advances the id -- is a genuinely new
+        # obligation.
+        round_marker = objective.last_surfaced_event_id or "first"
+        identity = f"objective:{objective.id}:{round_marker}"
+        dedup_key = containment.dedup_key_for(
+            OBJECTIVE_NUDGE_KIND,
+            message,
+            OBJECTIVE_NUDGE_REASON,
+            None,
+            identity,
+        )
+        if dedup_key is None:
+            persistence_failures.append(
+                f"objective {objective.id}: reason {OBJECTIVE_NUDGE_REASON!r} "
+                "is not containment-eligible",
+            )
+            log.error(
+                "[Scheduler] Objective re-engagement reason %r is not "
+                "containment-eligible; nothing was raised",
+                OBJECTIVE_NUDGE_REASON,
+            )
+            continue
+
+        try:
+            if await scheduler_store.nudge_exists_for_dedup_key(dedup_key):
+                continue
+        except Exception as e:
+            persistence_failures.append(f"objective {objective.id}: dedup read failed: {e}")
+            log.error(
+                "[Scheduler] Objective re-engagement dedup read FAILED for %s: %s -- "
+                "nothing was raised and none is assumed to exist",
+                objective.id,
+                e,
+            )
+            continue
+
+        try:
+            outcome = await scheduler_store.insert_nudge_contained(
+                OBJECTIVE_NUDGE_KIND,
+                message,
+                [{"label": "Still going", "cmd": "ack"}, {"label": "Dismiss", "cmd": "dismiss"}],
+                OBJECTIVE_NUDGE_REASON,
+                now_ts,
+                None,
+                identity,
+            )
+        except Exception as e:
+            persistence_failures.append(f"objective {objective.id}: nudge insert failed: {e}")
+            log.error(
+                "[Scheduler] Objective re-engagement nudge persistence FAILED for %s: "
+                "%s -- nothing was raised and nothing is assumed to be represented",
+                objective.id,
+                e,
+            )
+            continue
+
+        nudge_id = outcome.get("nudge_id")
+        if nudge_id is None:
+            # Suppressed: an equivalent unresolved re-engagement provably
+            # exists. A second copy is the nagging containment prevents.
+            continue
+
+        # Mark it raised through the governed seam -- both gates, its own
+        # Reflection -- before delivery, so a delivery that fails cannot
+        # leave the objective looking un-raised and get raised again next
+        # tick. The record of having raised it is the thing that must not
+        # be lost.
+        try:
+            surfaced = await run_objective_through_runtime_contract(
+                ctx,
+                "surface",
+                objective_id=objective.id,
+                actor="scheduler:objective_continuity",
+            )
+        except Exception as e:
+            persistence_failures.append(f"objective {objective.id}: surface failed: {e}")
+            log.error(
+                "[Scheduler] Objective %s could not be marked as surfaced: %s",
+                objective.id,
+                e,
+            )
+            continue
+
+        if not surfaced.governance_allowed:
+            # Governance said no. The nudge row stands and says so; nothing
+            # is delivered, and the objective is not recorded as raised.
+            log.info(
+                "[Scheduler] Objective %s re-engagement denied by governance: %s",
+                objective.id,
+                surfaced.reason,
+            )
+            try:
+                await scheduler_store.record_nudge_delivery(
+                    nudge_id,
+                    persistence.DELIVERY_NOT_ATTEMPTED,
+                    surfaced.reason,
+                    now_ts,
+                )
+            except Exception as e:
+                persistence_failures.append(
+                    f"objective {objective.id}: denial record failed: {e}",
+                )
+            continue
+
+        status, detail = await _deliver_objective_reengagement(ctx, title, message)
+
+        try:
+            await scheduler_store.record_nudge_delivery(nudge_id, status, detail, now_ts)
+        except Exception as e:
+            persistence_failures.append(f"objective {objective.id}: delivery record failed: {e}")
+            log.error(
+                "[Scheduler] Objective re-engagement delivery outcome NOT RECORDED "
+                "for %s (status=%s): %s",
+                objective.id,
+                status,
+                e,
+            )
+
+    if persistence_failures:
+        raise RuntimeError(
+            "objective_continuity_check could not durably record "
+            f"{len(persistence_failures)} item(s): {'; '.join(persistence_failures)}",
+        )
+
+    return None
+
+
 # Drive registry with default cadences
 REGISTRY: dict[str, dict[str, Any]] = {
     "self_check": {
@@ -626,6 +987,13 @@ OPTIONAL_REGISTRY: dict[str, dict[str, Any]] = {
         # Coarse on purpose: reminders are day-granular (planning note §7).
         "cadence": "every:3600",  # Hourly
     },
+    OBJECTIVE_CONTINUITY_DRIVE: {
+        "fn": drive_objective_continuity_check,
+        # Coarser still: the quiet interval is measured in days, so a
+        # tighter cadence would only re-check what it already declined to
+        # raise.
+        "cadence": "every:10800",  # Every 3 hours
+    },
 }
 
 
@@ -644,6 +1012,20 @@ def proactive_schedule_reminders_enabled(ctx: Any) -> bool:
     return bool(proactive.get("schedule_reminders", False))
 
 
+def proactive_objective_continuity_enabled(ctx: Any) -> bool:
+    """
+    Whether the operator has turned proactive objective re-engagement on.
+
+    One authority: `config/kernel.yaml`'s `proactive.objective_continuity`,
+    default `false`, and deliberately no environment-variable override --
+    same single-deliberate-act reasoning as
+    `proactive_schedule_reminders_enabled()` immediately above.
+    """
+    cfg = getattr(ctx, "cfg", None) or {}
+    proactive = cfg.get("proactive") or {}
+    return bool(proactive.get("objective_continuity", False))
+
+
 def resolve_registry(ctx: Any) -> dict[str, dict[str, Any]]:
     """
     The drives this context actually runs: the always-on REGISTRY, plus any
@@ -657,4 +1039,6 @@ def resolve_registry(ctx: Any) -> dict[str, dict[str, Any]]:
     resolved = dict(REGISTRY)
     if proactive_schedule_reminders_enabled(ctx):
         resolved[SCHEDULE_REMINDER_DRIVE] = OPTIONAL_REGISTRY[SCHEDULE_REMINDER_DRIVE]
+    if proactive_objective_continuity_enabled(ctx):
+        resolved[OBJECTIVE_CONTINUITY_DRIVE] = OPTIONAL_REGISTRY[OBJECTIVE_CONTINUITY_DRIVE]
     return resolved

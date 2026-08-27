@@ -85,6 +85,16 @@ _SELF_CHECK_DRIFT = "self_check_drift"
 # see `_explicit_identity` and `bartholomew.kernel.schedule_noticing
 # .NoticedReminder.identity`.
 _SCHEDULE_REMINDER = "schedule_reminder"
+# Golden Path slice 2. An objective re-engagement is the same shape as a
+# schedule reminder: the drive re-notices the same live objective on every
+# firing until it is closed, and two unresolved copies of "about getting the
+# roof repaired" is NUDGE-F001, not two obligations. Its identity is the
+# objective's own id, supplied explicitly by the drive -- the message is a
+# rendering of the objective's *current* history and changes as events
+# arrive, so keying on the message would let one objective occupy an
+# unbounded number of queue slots, which is precisely the failure this
+# module removes.
+_OBJECTIVE_REENGAGEMENT = "objective_reengagement"
 
 # A self-check drift string is "<class>" or "<class>:<detail>", where the
 # detail is a volatile measurement (a count, an age in hours). Equivalence
@@ -162,6 +172,7 @@ _POLICY: dict[str, Callable[[str, str, str | None], str]] = {
     _CURIOSITY_PROBE: _curiosity_identity,
     _SELF_CHECK_DRIFT: _drift_class,
     _SCHEDULE_REMINDER: _explicit_identity,
+    _OBJECTIVE_REENGAGEMENT: _explicit_identity,
 }
 
 
