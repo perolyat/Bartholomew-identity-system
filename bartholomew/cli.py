@@ -19,8 +19,12 @@ app = typer.Typer(help="Bartholomew Admin CLI")
 console = Console()
 embeddings_app = typer.Typer(help="Embeddings management commands")
 brake_app = typer.Typer(help="Parking brake safety controls")
+accounts_app = typer.Typer(help="Alpha account provisioning (operator only)")
+platform_brake_app = typer.Typer(help="Platform/Admin parking brake (all users)")
 app.add_typer(embeddings_app, name="embeddings")
 app.add_typer(brake_app, name="brake")
+app.add_typer(accounts_app, name="accounts")
+app.add_typer(platform_brake_app, name="platform-brake")
 
 
 @embeddings_app.command("stats")
@@ -558,6 +562,176 @@ def say(
             "`sudo apt-get install espeak-ng`. On macOS, `say` is built in.[/dim]",
         )
     raise typer.Exit(code=1)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Alpha account provisioning (S8)
+# ---------------------------------------------------------------------------
+#
+# Operator-only, and local-only by construction: these commands talk to the
+# control-plane database on disk, not over HTTP. There is deliberately no
+# remote account-management endpoint -- an authenticated remote surface that
+# can create accounts is an authenticated remote surface that can create an
+# account for an attacker.
+
+
+@accounts_app.command("create")
+def accounts_create(
+    username: str = typer.Argument(..., help="Alpha participant's username"),
+    admin: bool = typer.Option(
+        False,
+        "--admin",
+        help="Create a platform administrator instead of an ordinary user. "
+        "A distinct authority kind, not a user with extra powers: it has no "
+        "personal Bartholomew and cannot read anyone's memory.",
+    ),
+    password: str = typer.Option(
+        None,
+        help="Password. Omit to generate a strong one and print it once.",
+    ),
+):
+    """Provision an Alpha account."""
+    from bartholomew.platform import accounts as _accounts
+    from bartholomew.platform.principal import PrincipalKind
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    generated = password is None
+    secret = password or _accounts.generate_password()
+    kind = PrincipalKind.PLATFORM_ADMIN if admin else PrincipalKind.USER
+
+    try:
+        user_id = _accounts.create_account(username, secret, kind=kind)
+    except _accounts.AccountError as e:
+        console.print(f"\n[red]✗ {e}[/red]\n")
+        raise typer.Exit(1) from e
+
+    console.print(f"\n[green]✓ Created {kind.value}[/green] {username}")
+    console.print(f"  user_id: {user_id}")
+    if generated:
+        # Printed once, never stored anywhere in readable form.
+        console.print(f"  password: [bold]{secret}[/bold]")
+        console.print("  [yellow]Shown once. Record it now.[/yellow]")
+    console.print()
+
+
+@accounts_app.command("list")
+def accounts_list():
+    """List Alpha accounts. Never prints password material."""
+    from bartholomew.platform.accounts import list_accounts
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    table = Table(title="Alpha accounts")
+    for col in ("username", "kind", "user_id", "status"):
+        table.add_column(col)
+    for row in list_accounts():
+        table.add_row(
+            row["username"],
+            row["kind"],
+            row["user_id"],
+            "disabled" if row["disabled_at"] else "active",
+        )
+    console.print(table)
+
+
+@accounts_app.command("disable")
+def accounts_disable(
+    user_id: str = typer.Argument(..., help="user_id from `accounts list`"),
+):
+    """
+    Disable an account and revoke every live session it holds.
+
+    Immediate: the next request on any of that account's sessions fails.
+    """
+    from bartholomew.platform.accounts import set_account_disabled
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    set_account_disabled(user_id, True)
+    console.print(f"\n[yellow]⚠ Account disabled and sessions revoked:[/yellow] {user_id}\n")
+
+
+@accounts_app.command("enable")
+def accounts_enable(
+    user_id: str = typer.Argument(..., help="user_id from `accounts list`"),
+):
+    """Re-enable a disabled account. Previously revoked sessions stay revoked."""
+    from bartholomew.platform.accounts import set_account_disabled
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    set_account_disabled(user_id, False)
+    console.print(f"\n[green]✓ Account enabled:[/green] {user_id}\n")
+
+
+# ---------------------------------------------------------------------------
+# Platform/Admin parking brake tier
+# ---------------------------------------------------------------------------
+#
+# A separate command group from `brake`, against a separate store, on
+# purpose. `bartholomew brake off` is a user releasing their own halt and
+# must never release a platform-wide one.
+
+
+@platform_brake_app.command("on")
+def platform_brake_on(
+    scope: list[str] = typer.Option(None, "--scope", help="Scopes to halt platform-wide"),
+    reason: str = typer.Option(None, help="Why this halt was engaged"),
+    actor: str = typer.Option(..., help="Who is engaging it (recorded in the audit trail)"),
+):
+    """Engage the Platform/Admin halt across every user's Bartholomew."""
+    from bartholomew.platform import authority
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    state = authority.engage(*(scope or ["global"]), reason=reason, actor=actor)
+    console.print(
+        f"\n[red]⚠ PLATFORM halt ENGAGED[/red] - scopes: "
+        f"{', '.join(sorted(state.scopes))} (revision {state.revision})\n",
+    )
+
+
+@platform_brake_app.command("off")
+def platform_brake_off(
+    reason: str = typer.Option(None, help="Why this halt was released"),
+    actor: str = typer.Option(..., help="Who is releasing it (recorded in the audit trail)"),
+    expected_revision: int = typer.Option(
+        None, help="Refuse if the platform brake has moved since you read it"
+    ),
+):
+    """Release the Platform/Admin halt. Does not touch any Personal brake."""
+    from bartholomew.platform import authority
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    try:
+        state = authority.disengage(
+            reason=reason, actor=actor, expected_revision=expected_revision
+        )
+    except authority.StalePlatformWriteError as e:
+        console.print(f"\n[yellow]{e}[/yellow]\n")
+        raise typer.Exit(1) from e
+    console.print(f"\n[green]✓ PLATFORM halt RELEASED[/green] (revision {state.revision})\n")
+
+
+@platform_brake_app.command("status")
+def platform_brake_status():
+    """Show the Platform/Admin halt state."""
+    from bartholomew.platform import authority
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    state = authority.get_state()
+    if state.engaged:
+        console.print(
+            f"\n[red]PLATFORM halt ENGAGED[/red] - scopes: "
+            f"{', '.join(sorted(state.scopes))} (revision {state.revision})\n",
+        )
+    else:
+        console.print(f"\n[green]PLATFORM halt released[/green] (revision {state.revision})\n")
 
 
 def main():

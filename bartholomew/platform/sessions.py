@@ -36,10 +36,16 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import sqlite3
 import time
 import uuid
 
-from .principal import AuthenticationError, Principal, PrincipalKind
+from .principal import (
+    AuthenticationError,
+    AuthUnavailableError,
+    Principal,
+    PrincipalKind,
+)
 from .store import platform_connection, record_platform_audit
 
 SESSION_COOKIE_NAME = "barth_session"
@@ -149,6 +155,26 @@ def verify_session(
     now = int(now if now is not None else time.time())
     token_hash = _hash_token(token)
 
+    try:
+        return _verify_session_locked(
+            token_hash, fingerprint=fingerprint, db_path=db_path,
+            idle_timeout_s=idle_timeout_s, now=now,
+        )
+    except sqlite3.Error as exc:
+        # The control-plane store itself could not answer. This is the case a
+        # permissive default would silently turn into an open door, so it has
+        # its own exception and its own 503 -- never a fallback identity.
+        raise AuthUnavailableError("control-plane session store unavailable") from exc
+
+
+def _verify_session_locked(
+    token_hash: str,
+    *,
+    fingerprint: str,
+    db_path: str | None,
+    idle_timeout_s: int,
+    now: int,
+) -> Principal:
     with platform_connection(db_path) as conn:
         row = conn.execute(
             "SELECT s.*, a.username, a.kind, a.disabled_at "

@@ -176,10 +176,23 @@ def test_forwarded_headers_cannot_spoof_a_local_caller():
     assert response.status_code == 403
 
 
-def test_the_override_also_opens_the_request_boundary(monkeypatch):
-    """The container case: one deliberate switch, both layers."""
+def test_the_override_also_opens_the_request_boundary(monkeypatch, tmp_path):
+    """
+    The container case: one deliberate switch, both layers.
+
+    Since S8 the same switch also makes authentication and TLS mandatory
+    (bartholomew/platform/exposure.py), so startup now refuses without TLS
+    material -- see test_non_loopback_requires_tls below, which covers that
+    property directly. This test is about the *request boundary* opening, so
+    it satisfies the TLS precondition and leaves the assertion unchanged.
+    """
+    cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
+    cert.write_text("cert"); key.write_text("key")
     monkeypatch.setenv(ALLOW_NON_LOOPBACK_ENV, "1")
+    monkeypatch.setenv("BARTH_API_TLS_CERTFILE", str(cert))
+    monkeypatch.setenv("BARTH_API_TLS_KEYFILE", str(key))
     with TestClient(app, client=("172.17.0.1", 51234)) as client:
+        # /healthz is public, so this reaches the handler rather than a 401.
         assert client.get("/healthz").status_code == 200
 
 
