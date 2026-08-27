@@ -15,10 +15,12 @@ Everything changes the moment the deployment is non-loopback:
 |---|---|---|---|
 | unset | unset | — | Loopback-only, unauthenticated. The existing local behaviour. |
 | unset | `enforced` | — | Loopback-only, authenticated. Use this to develop against the boundary. |
-| `1` | unset or `enforced` | required | Authenticated, TLS-only. The Alpha posture. |
+| `1` | unset or `enforced` | required | Authenticated, TLS-only, **and a bound runtime user is required**. The Alpha posture. |
 | `1` | `disabled` | — | **Refuses to start.** |
 | `1` | anything | missing | **Refuses to start.** |
 | any | typo | — | **Refuses to start.** |
+| `1` | any | present | **Refuses to start** without `BARTH_RUNTIME_USER_ID`, or if it names no account, a disabled account, or an administrator. |
+| `1` | any | present | **Refuses to start** if `BARTH_DB_PATH` or `BARTHO_MEMORY_KEYRING_SERVICE` is not the bound user's. |
 
 There is no environment variable that downgrades a refusal to a warning, and
 a test asserts that none appears.
@@ -42,6 +44,29 @@ bartholomew accounts list
 # next request.
 bartholomew accounts disable <user_id>
 ```
+
+## Running an exposed deployment
+
+Launch through the canonical serve path, which configures TLS on the socket
+and runs the exposure checks *before* binding:
+
+```bash
+export BARTH_API_ALLOW_NON_LOOPBACK=1
+export BARTH_API_TLS_CERTFILE=/path/cert.pem BARTH_API_TLS_KEYFILE=/path/key.pem
+export BARTH_RUNTIME_USER_ID=<user_id from `bartholomew accounts list`>
+export BARTH_DB_PATH=<that user's database>
+export BARTHO_MEMORY_KEYRING_SERVICE=<that user's keyring namespace>
+python -c "import app; app.serve()"
+```
+
+Do **not** start it with the `uvicorn` CLI and a non-loopback `--host`: that
+bypasses `serve()`, so nothing configures TLS. The request boundary refuses
+every plaintext request in that case rather than failing open, but the fix is
+to use the supported path.
+
+One process serves **one** personal Bartholomew. The bound user is verified
+against the database and keyring namespace actually in use, and any other
+authenticated identity is refused by that process.
 
 ## Per-user isolation
 

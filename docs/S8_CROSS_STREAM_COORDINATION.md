@@ -106,3 +106,37 @@ should decide alone:
 Whatever is chosen, the invariant to preserve is the one the tests encode:
 **a genuinely network-reachable Bartholomew must never run unauthenticated or
 without TLS, and no environment variable may downgrade that to a warning.**
+
+## Update 2026-08-27 — container posture decided, inbound contract published
+
+Two items above are now resolved, and both were resolved by B rather than
+left open:
+
+**The container question is decided**, not offered as three options. The
+posture is: **authenticated, TLS on the socket, published to host loopback
+only, with a provisioned account and an explicit runtime binding.** Option 2
+from the earlier list — splitting the variable so an operator could declare
+the deployment "really local" — was rejected: from inside the process a
+topology assertion is indistinguishable from a genuinely exposed deployment,
+so it would become exactly the bypass that survives into Alpha. The Dockerfile
+and `docker-compose.yml` now express this posture, and the compose file fails
+fast if TLS material, the account binding or the matching database/keyring are
+absent.
+
+D still owns service lifecycle and hosting. What B has fixed is the
+*contract* the lifecycle must satisfy:
+
+* the canonical serve path is `app.serve()`, which configures TLS on the
+  socket and runs the exposure checks before binding;
+* an exposed process must be bound to exactly one provisioned personal
+  Bartholomew, and its database and keyring namespace must be that user's;
+* a plaintext request to an exposed deployment is refused at the request
+  boundary regardless of how the process was launched.
+
+**The inbound-capture contract is published** at
+`docs/S8_INBOUND_CAPTURE_CONTRACT.md`. Its routes are already classified, so
+D's handlers arrive authenticated rather than hitting default-deny. The one
+rule to read before writing a handler: **a source verifier proves the sender,
+never the recipient** — identity comes from the verified `Principal` and the
+process's runtime binding, and nothing in a payload, header, query parameter
+or path may select or override a runtime.

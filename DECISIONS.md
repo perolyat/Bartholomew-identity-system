@@ -2544,6 +2544,31 @@
     start; a client-supplied user/tenant header is never read for identity.
   - **A non-loopback container or host deployment now requires TLS material.** This is a
     behavioural change for any deployment setting `BARTH_API_ALLOW_NON_LOOPBACK=1`.
+  - **Corrections applied 2026-08-27 after coordination review**, each closing a gap between a
+    stated property and its enforcement:
+    - **TLS reaches the socket.** Validating that certificate files exist is not serving TLS.
+      `app.serve()` now passes them to the listener, and the request boundary independently
+      refuses a plaintext request on an exposed deployment, so the guarantee holds however the
+      process was launched. Proven by a live HTTPS request and a live plaintext refusal against
+      a real uvicorn server, with the negative control verified.
+    - **No unbound remote personal-runtime mode.** An exposed deployment must name a
+      provisioned, enabled user in `BARTH_RUNTIME_USER_ID`, and startup verifies that the
+      database and keyring namespace in use are that user's. Previously an absent binding made
+      the ownership check a no-op and different accounts reached one global kernel.
+    - **The Platform/Admin tier composes into real execution.** It is registered into
+      `is_blocked_fail_closed` -- the function skill execution and the runtime contract's
+      autonomous work and governed mutations already call -- by a registration hook rather than
+      an import, so Governance keeps no dependency on the platform package and the local
+      Personal brake still engages and releases with the control plane destroyed. An unreadable
+      *active* platform state fails closed; an absent tier in a purely local deployment is inert.
+    - **Container posture decided:** authenticated, TLS, loopback-only host publishing, a
+      provisioned account and an explicit runtime binding. **No topology-assertion bypass** --
+      from inside the process, an operator asserting "this is really only local" is
+      indistinguishable from a genuinely exposed deployment.
+    - **Inbound capture (Session D) has a B-owned route/capability contract**
+      (`docs/S8_INBOUND_CAPTURE_CONTRACT.md`): routes pre-classified, `inbound:submit` and
+      `inbound:read` separate, and the rule that a source verifier proves the *sender* and must
+      never select or override the runtime.
   - `ROADMAP.md`'s S8 row and its "S8 is conditional" note record the Alpha trigger. `ASSUMPTIONS.md`
     A9 is bounded rather than open-ended. `CHECKLISTS.md` gains one authentication-boundary line.
   - **Deferred, and not authorised here:** device/client authentication, multi-runtime supervision
