@@ -2453,5 +2453,20 @@
     `COGNITIVE_RUNTIME.md`'s ownership table already records that the live routing path does not
     consult the Identity selection policy. That seam — not a new broker — is where any future
     capability-need-to-provider mapping belongs.
+  - **No rework is required now, and none is recommended.** This entry is an evolutionary
+    refinement, not permission for a rewrite: it introduces no new architectural concept, assigns
+    external capability supply to the **existing** Skill Registry owner rather than a new one, and
+    reuses `INTERFACES.md`'s already-recorded device-capability properties rather than inventing a
+    second boundary shape. The repository-grounded check behind that claim: the first external
+    capability can be built as an ordinary skill on the **existing** `SkillBase` / manifest /
+    `PermissionChecker` / `SkillRegistry.execute_action()` path, because an outbound network call
+    from inside a governed skill is already a shipped and tested pattern —
+    `NotifySkill._deliver_notification()`'s real webhook POST, delivered in Usable POC slice 1, run
+    off the event loop per the B2/B8 discipline, and reporting *attempted* separately from
+    *delivered* precisely so a failure cannot read as a success. **The seam this direction needs
+    already exists and has already carried real traffic.** No refactor, rename, generalisation or
+    parallel system is justified by this entry; refactoring would need its own justification —
+    demonstrably blocking a useful vertical slice, violating an established invariant, or material
+    technical risk — and none of those is currently demonstrated.
   - **Nothing about the current system changes.** No code is authorised by this entry.
 - **Date:** 2026-08-27
