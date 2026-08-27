@@ -41,6 +41,13 @@ _SALT_BYTES = 16
 
 _MIN_PASSWORD_LENGTH = 12
 
+# Login throttling. Generous enough that a participant fat-fingering their
+# password is not locked out, tight enough that online guessing is futile:
+# with scrypt at ~100ms a guess, ten attempts per quarter hour caps an
+# attacker at a rate no password of the generated shape will ever yield to.
+_MAX_FAILED_ATTEMPTS = 10
+_LOCKOUT_SECONDS = 15 * 60
+
 
 class AccountError(Exception):
     """Provisioning or credential-shape failure. Never raised on a login attempt."""
@@ -199,21 +206,53 @@ def authenticate(username: str, password: str, *, db_path: str | None = None) ->
     does not exist, so that "no such account" and "wrong password" take
     comparable time and do not become a user-enumeration oracle.
     """
+    now = int(time.time())
     with platform_connection(db_path) as conn:
         row = conn.execute(
             "SELECT * FROM platform_accounts WHERE username = ? COLLATE NOCASE",
             ((username or "").strip(),),
         ).fetchone()
 
-    if row is None:
-        verify_password(password or "", hash_password("dummy-account-does-not-exist"))
-        return None
-    if row["disabled_at"] is not None:
-        verify_password(password or "", row["password_hash"])
-        return None
-    if not verify_password(password or "", row["password_hash"]):
-        return None
-    return dict(row)
+        if row is None:
+            verify_password(password or "", hash_password("dummy-account-does-not-exist"))
+            return None
+        if row["disabled_at"] is not None:
+            verify_password(password or "", row["password_hash"])
+            return None
+        if row["locked_until"] is not None and now < row["locked_until"]:
+            # Locked accounts are refused without verifying, so a lockout also
+            # stops the CPU cost of the guessing it exists to prevent.
+            return None
+
+        if not verify_password(password or "", row["password_hash"]):
+            attempts = int(row["failed_attempts"] or 0) + 1
+            locked = now + _LOCKOUT_SECONDS if attempts >= _MAX_FAILED_ATTEMPTS else None
+            conn.execute(
+                "UPDATE platform_accounts SET failed_attempts = ?, locked_until = ? "
+                "WHERE user_id = ?",
+                (attempts, locked, row["user_id"]),
+            )
+            if locked is not None:
+                record_platform_audit(
+                    conn,
+                    "account.locked",
+                    user_id=row["user_id"],
+                    detail=f"failed_attempts={attempts}",
+                    ts=now,
+                )
+            # Committed before returning: `with conn` commits on a clean exit,
+            # but returning early from inside the block is exactly where a
+            # future refactor could lose the increment.
+            conn.commit()
+            return None
+
+        if row["failed_attempts"] or row["locked_until"]:
+            conn.execute(
+                "UPDATE platform_accounts SET failed_attempts = 0, locked_until = NULL "
+                "WHERE user_id = ?",
+                (row["user_id"],),
+            )
+        return dict(row)
 
 
 def generate_password(length: int = 24) -> str:

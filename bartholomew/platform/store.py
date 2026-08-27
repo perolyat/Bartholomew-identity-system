@@ -36,7 +36,12 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
   kind           TEXT NOT NULL,          -- PrincipalKind value
   password_hash  TEXT NOT NULL,          -- scrypt, self-describing parameters
   created_at     INTEGER NOT NULL,
-  disabled_at    INTEGER                 -- non-NULL disables login immediately
+  disabled_at    INTEGER,                -- non-NULL disables login immediately
+  -- Throttling state. A hosted login endpoint with no cost to guessing is a
+  -- credential-stuffing target; scrypt makes each guess expensive but not
+  -- expensive enough to leave unbounded.
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until    INTEGER
 );
 -- NOCASE: usernames differing only by case must not be two accounts, or
 -- "Taylor" and "taylor" become an impersonation vector at provisioning time.
@@ -118,10 +123,24 @@ def platform_connection(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first schema shipped. Applied as additive ALTERs so
+# an existing control-plane database upgrades in place rather than needing a
+# migration tool -- and additively only, so no existing row or column is
+# rewritten and there is no data-loss path.
+_ADDITIVE_COLUMNS = (
+    ("platform_accounts", "failed_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("platform_accounts", "locked_until", "INTEGER"),
+)
+
+
 def init_platform_schema(db_path: str | None = None) -> None:
-    """Create the control-plane schema if absent. Idempotent."""
+    """Create or upgrade the control-plane schema. Idempotent."""
     with platform_connection(db_path) as conn:
         conn.executescript(_SCHEMA)
+        for table, column, decl in _ADDITIVE_COLUMNS:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def record_platform_audit(

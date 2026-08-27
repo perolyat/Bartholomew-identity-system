@@ -315,3 +315,68 @@ def test_audit_rows_never_contain_credentials(users):
     blob = " ".join(str(dict(r)) for r in rows)
     assert token not in blob
     assert PASSWORD not in blob
+
+
+# ---------------------------------------------------------------------------
+# T1/T3 -- online guessing must not be free
+# ---------------------------------------------------------------------------
+
+
+def test_repeated_failed_logins_lock_the_account_temporarily(client):
+    """
+    T1. A hosted login endpoint with no cost to guessing is a
+    credential-stuffing target. After the threshold, further attempts are
+    refused without even verifying -- so the lockout also stops the CPU cost
+    of the guessing it exists to prevent.
+    """
+    init_platform_schema()
+    uid = accounts.create_account("throttled", PASSWORD)
+
+    for _ in range(10):
+        assert accounts.authenticate("throttled", "wrong-password") is None
+
+    # Locked: even the correct password is refused while the lockout holds.
+    assert accounts.authenticate("throttled", PASSWORD) is None
+
+    # And it is recorded, so an operator can see it happened.
+    from bartholomew.platform.store import platform_connection
+
+    with platform_connection() as conn:
+        locked = conn.execute(
+            "SELECT locked_until FROM platform_accounts WHERE user_id = ?",
+            (uid,),
+        ).fetchone()
+    assert locked["locked_until"] is not None
+
+
+def test_a_successful_login_clears_the_failure_counter(client):
+    """A participant who mistypes twice and then succeeds is not penalised."""
+    init_platform_schema()
+    accounts.create_account("recovers", PASSWORD)
+
+    assert accounts.authenticate("recovers", "wrong") is None
+    assert accounts.authenticate("recovers", "wrong") is None
+    assert accounts.authenticate("recovers", PASSWORD) is not None
+
+    from bartholomew.platform.store import platform_connection
+
+    with platform_connection() as conn:
+        row = conn.execute(
+            "SELECT failed_attempts, locked_until FROM platform_accounts "
+            "WHERE username = 'recovers'",
+        ).fetchone()
+    assert row["failed_attempts"] == 0
+    assert row["locked_until"] is None
+
+
+def test_the_schema_upgrade_is_additive_and_idempotent():
+    """
+    The throttling columns are added by ALTER on an existing control-plane
+    database. Re-running must be safe and must not rewrite existing rows --
+    there is no data-loss path here.
+    """
+    init_platform_schema()
+    init_platform_schema()
+    before = {a["username"] for a in accounts.list_accounts()}
+    init_platform_schema()
+    assert {a["username"] for a in accounts.list_accounts()} == before
