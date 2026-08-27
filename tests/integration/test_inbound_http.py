@@ -22,6 +22,7 @@ import pytest
 
 from tests.integration.test_always_on_service import (
     REPO_ROOT,
+    STARTUP_TIMEOUT,
     TEST_RESOLVER_ENV,
     TEST_TOKEN,
     ServeProcess,
@@ -194,24 +195,43 @@ def test_a_caller_cannot_claim_another_source(service):
     assert _rows(service) == 0
 
 
-def test_non_loopback_opt_in_does_not_authorise_inbound(tmp_path):
+def test_non_loopback_opt_in_cannot_produce_an_unauthenticated_surface(tmp_path):
     """Relaxing the *network* boundary must not open the *authentication* one.
 
     `BARTH_API_ALLOW_NON_LOOPBACK=1` exists so a container can publish its
-    port. It decides where the API is reachable from -- it has never decided
-    who may capture events, and this proves it still does not.
+    port. It decides where the API is reachable from, and it has never decided
+    who may capture events.
+
+    Under S8 the guarantee is stronger than it was, and this asserts the
+    stronger form: that variable now *forces* authentication and TLS on, and
+    the process refuses to start without TLS material at all. So there is no
+    configuration in which the opt-in yields a reachable, unauthenticated
+    inbound surface -- not one that refuses callers, but one that cannot be
+    brought up.
+
+    The other half -- that with TLS and enforced authentication a verified
+    source still captures nothing without a principal -- is proven against a
+    real authenticated server in `test_inbound_authenticated.py`.
     """
+    from bartholomew.runtime.serve import EXIT_BAD_CONFIG
+
     svc = ServeProcess(
         tmp_path / "inbound_nonloopback.db",
         env_extra={"BARTH_API_ALLOW_NON_LOOPBACK": "1", "BARTH_API_HOST": "127.0.0.1"},
     )
+    for var in ("BARTH_API_TLS_CERTFILE", "BARTH_API_TLS_KEYFILE"):
+        svc.env.pop(var, None)
+
     try:
-        svc.start()
-        status, _ = _post(svc.port, "/api/inbound/events", _event("e-open"), AUTH)
-        assert status == 401
-        assert _rows(svc) == 0
+        svc.start(wait=False)
+        svc.proc.wait(timeout=STARTUP_TIMEOUT)
     finally:
         svc.kill()
+
+    assert svc.proc.returncode == EXIT_BAD_CONFIG, (
+        "a non-loopback bind started without TLS"
+    )
+    assert _rows(svc) == 0
 
 
 def test_test_resolver_cannot_enable_itself_from_one_variable(tmp_path):
