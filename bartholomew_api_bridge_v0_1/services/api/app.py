@@ -328,6 +328,35 @@ async def admission_middleware(request: Request, call_next):
                 },
             )
 
+    # Transport check, before identity: on an exposed deployment every
+    # request must have arrived over TLS.
+    #
+    # This exists because file-existence validation and an actual TLS socket
+    # are different things. `serve()` configures TLS properly, but a process
+    # started by hand -- `uvicorn app:app --host 0.0.0.0` -- never calls it,
+    # and would happily carry session cookies in clear text. Checking the
+    # scheme of the request that actually arrived closes that gap however the
+    # process was launched, and fails closed rather than warning.
+    #
+    # `scope["scheme"]` is set by the ASGI server from its own listener, not
+    # from any client-supplied header, so it cannot be spoofed by a caller.
+    # X-Forwarded-Proto is deliberately NOT consulted: no trusted proxy is
+    # part of this architecture, and honouring it would let any client assert
+    # that its plaintext request was really TLS.
+    if non_loopback_allowed() and request.url.scheme not in ("https", "wss"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": (
+                    "This deployment is exposed beyond loopback and accepts "
+                    "TLS only. The request arrived over plaintext, so it was "
+                    "refused before authentication. Launch through "
+                    "`bartholomew-api` / app.serve(), which configures TLS on "
+                    "the socket."
+                ),
+            },
+        )
+
     # Authentication and authorisation (S8), in the one chokepoint rather
     # than a second one -- deliberately *after* the network boundary above
     # (may this peer reach the process at all) and *before* the admission

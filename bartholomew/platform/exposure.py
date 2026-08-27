@@ -31,6 +31,14 @@ import os
 from enum import Enum
 from pathlib import Path
 
+from .accounts import get_account
+from .runtime_registry import (
+    RUNTIME_USER_ID_ENV,
+    RuntimeResolutionError,
+    bound_runtime_user_id,
+    runtime_handle_for_user_id,
+)
+
 AUTH_MODE_ENV = "BARTH_AUTH_MODE"
 ALLOW_NON_LOOPBACK_ENV = "BARTH_API_ALLOW_NON_LOOPBACK"
 TLS_CERT_ENV = "BARTH_API_TLS_CERTFILE"
@@ -144,11 +152,116 @@ def resolve_tls_material() -> tuple[str, str] | None:
     return cert, key
 
 
+def uvicorn_tls_kwargs() -> dict:
+    """
+    TLS keyword arguments for `uvicorn.run()`, or `{}` when TLS is not required.
+
+    Validating that certificate files *exist* is not the same as serving TLS,
+    and the gap between the two was a real hole: a deployment could pass every
+    exposure check and still speak plaintext, because nothing handed the
+    material to the socket. This is the function that closes it, and every
+    supported launch path must use it.
+    """
+    material = resolve_tls_material()
+    if material is None:
+        return {}
+    cert, key = material
+    return {"ssl_certfile": cert, "ssl_keyfile": key}
+
+
+def require_bound_runtime_user() -> str:
+    """
+    The `user_id` this process serves, required whenever it is exposed.
+
+    **There is no unbound remote personal-runtime mode.** An exposed process
+    that does not know whose Bartholomew it is serving would hand every
+    authenticated account the one global kernel it happens to be running --
+    which is cross-user disclosure, not a configuration gap. So a non-loopback
+    deployment must name its user, and the identity/persistence agreement is
+    then verified rather than assumed.
+
+    Returns the bound `user_id`. Raises `ExposureConfigurationError` if it is
+    missing, malformed, names no account, or disagrees with the database and
+    keyring namespace this process is actually configured to use.
+    """
+    user_id = bound_runtime_user_id()
+    if not user_id:
+        raise ExposureConfigurationError(
+            f"An exposed deployment must name the personal Bartholomew it "
+            f"serves. Set {RUNTIME_USER_ID_ENV} to a provisioned user_id "
+            f"(see `bartholomew accounts list`). There is no unbound remote "
+            f"mode: without it, every authenticated account would reach one "
+            f"shared kernel.",
+        )
+
+    try:
+        handle = runtime_handle_for_user_id(user_id)
+    except RuntimeResolutionError as exc:
+        raise ExposureConfigurationError(
+            f"{RUNTIME_USER_ID_ENV}={user_id!r} is not a usable identifier: {exc}",
+        ) from exc
+
+    account = get_account(user_id)
+    if account is None:
+        raise ExposureConfigurationError(
+            f"{RUNTIME_USER_ID_ENV}={user_id!r} names no provisioned account. "
+            f"Provision one with `bartholomew accounts create`.",
+        )
+    if account["disabled_at"] is not None:
+        raise ExposureConfigurationError(
+            f"{RUNTIME_USER_ID_ENV}={user_id!r} names a disabled account.",
+        )
+    if account["kind"] != "user":
+        raise ExposureConfigurationError(
+            f"{RUNTIME_USER_ID_ENV}={user_id!r} names a {account['kind']}, which "
+            f"has no personal Bartholomew runtime.",
+        )
+
+    # The agreement that actually matters: the database and keyring namespace
+    # this process will use must be the bound user's own. A process bound to
+    # one user while pointed at another's database would authenticate
+    # correctly and serve the wrong person's memory.
+    active_db = (os.getenv("BARTH_DB_PATH") or "").strip()
+    if not active_db:
+        raise ExposureConfigurationError(
+            f"An exposed deployment must set BARTH_DB_PATH explicitly, to the "
+            f"bound user's database ({handle.db_path}).",
+        )
+    if Path(active_db).resolve() != Path(handle.db_path).resolve():
+        raise ExposureConfigurationError(
+            f"BARTH_DB_PATH={active_db!r} is not the database of the bound user "
+            f"{user_id!r} (expected {handle.db_path!r}). Refusing to serve one "
+            f"identity from another identity's persistence.",
+        )
+
+    active_keyring = (os.getenv("BARTHO_MEMORY_KEYRING_SERVICE") or "").strip()
+    if active_keyring != handle.keyring_service:
+        raise ExposureConfigurationError(
+            f"BARTHO_MEMORY_KEYRING_SERVICE={active_keyring!r} is not the bound "
+            f"user's keyring namespace (expected {handle.keyring_service!r}). "
+            f"Refusing to serve one identity's memory under another's key.",
+        )
+    return user_id
+
+
+def platform_tier_active() -> bool:
+    """
+    True when this deployment has a platform tier at all.
+
+    A single-user loopback development deployment has no platform to halt and
+    no administrator distinct from the user, so the Platform/Admin brake is
+    simply not part of it -- and must not be, or an absent control-plane
+    database would fail-closed a purely local Bartholomew into uselessness.
+    Where the tier *is* active, an unreadable platform state fails closed.
+    """
+    return non_loopback_enabled() or auth_enforced()
+
+
 def assert_exposure_is_safe() -> None:
     """
     Validate the whole exposure posture. Call once at startup, before serving.
 
-    Raises `ExposureConfigurationError` on any unsafe combination. Calling it
+    raises `ExposureConfigurationError` on any unsafe combination. Calling it
     early means an unsafe deployment fails at launch rather than on the first
     request -- by which point it is already listening.
     """

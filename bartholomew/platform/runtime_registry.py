@@ -31,6 +31,9 @@ DATA_ROOT_ENV = "BARTH_DATA_ROOT"
 # than merely intended: without it a process would serve whichever kernel it
 # happened to be launched with, to whoever authenticated.
 RUNTIME_USER_ID_ENV = "BARTH_RUNTIME_USER_ID"
+# The shared exposure contract, by variable name rather than by import -- see
+# assert_principal_owns_this_process for why this is not a function call.
+ALLOW_NON_LOOPBACK_ENV = "BARTH_API_ALLOW_NON_LOOPBACK"
 KEYRING_SERVICE_ENV = "BARTHO_MEMORY_KEYRING_SERVICE"
 
 # `user_id` values are server-generated UUID4 (see accounts.create_account).
@@ -200,6 +203,30 @@ def assert_principal_owns_this_process(principal: Principal) -> None:
     """
     bound = bound_runtime_user_id()
     if bound is None:
+        # Defence in depth. Startup already refuses to launch an exposed
+        # process without a binding (exposure.require_bound_runtime_user), so
+        # reaching here on an exposed deployment means that check was bypassed
+        # -- a hand-launched uvicorn, an embedding harness, a future entry
+        # point. Refusing is the only safe answer: an exposed unbound process
+        # would hand whichever kernel it happens to be running to every
+        # account that authenticates.
+        #
+        # Read straight from the environment rather than calling
+        # `exposure.non_loopback_enabled()`. `exposure` imports this module,
+        # so calling back into it would be a circular import -- and that
+        # module already states that the *variable*, not the function, is the
+        # shared contract between them.
+        exposed = (os.getenv(ALLOW_NON_LOOPBACK_ENV) or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if exposed:
+            raise AuthorizationError(
+                "this process is exposed but is not bound to a personal "
+                "Bartholomew; refusing to serve an unbound runtime",
+            )
         return
     if principal.is_platform_admin:
         # An administrator has no personal runtime, so a process dedicated to
