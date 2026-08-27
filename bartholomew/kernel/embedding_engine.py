@@ -1,20 +1,172 @@
 """
 Embedding Engine for Bartholomew
 Implements privacy-first, offline-first vector embeddings for memory retrieval
+
+Retrieval-mode truthfulness (OP-W003)
+-------------------------------------
+Every embedding this module produces carries a truthful *kind*, and the engine
+can always say which of four states it is in (`EmbeddingMode`):
+
+  ``real``          a genuine semantic model is loaded and serving;
+  ``disabled``      embeddings are intentionally off (``BARTHO_EMBED_ENABLED``);
+  ``unavailable``   a model was configured and could not be loaded -- fail
+                    closed, no vectors are produced;
+  ``dev_fallback``  the deterministic hash embedder is serving, and only
+                    because it was **explicitly** enabled for development or
+                    test via ``BARTHO_EMBED_ALLOW_FALLBACK=1``.
+
+The deterministic embedder is not a semantic embedder and must never be
+reported, stored, or searched as though it were. It produces stable normalized
+vectors so tests and offline development have deterministic behaviour -- it
+carries no meaning, and its similarity scores were measured *anti-correlated*
+with relevance (see `competency_reasoning.DEFAULT_MIN_SHARED_TERMS`). It is
+therefore written to storage under its own provider/model identity and its own
+`embedder_kind`, so that `VectorStore` can keep the two populations strictly
+apart rather than silently blending them.
+
+**The fallback is never automatic.** Before this was the case, an absent
+`sentence-transformers` install silently produced hash vectors labelled as
+`local-sbert` / `BAAI/bge-small-en-v1.5`, which is precisely the condition
+OP-W003 records: retrieval mode was not known and not truthfully reported.
+Loading failure now raises `EmbedderUnavailableError` unless the fallback is
+explicitly permitted.
+
+**Model assets are never downloaded as a side effect of retrieval.** Ordinary
+operation loads the model from a provisioned local path (or an existing local
+cache) with the hub forced offline. Fetching model assets is a deliberate
+bootstrap step -- `bartholomew embeddings provision` -- never something an
+ordinary query can trigger.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+#: Storage identity of the deterministic hash embedder. Deliberately shares no
+#: provider or model string with any real model, so a hash vector can never
+#: satisfy a semantic engine's provider/model filter even by accident.
+FALLBACK_PROVIDER = "deterministic-hash"
+FALLBACK_MODEL = "sha256-v1"
+
+#: `memory_embeddings.embedder_kind` values. `UNVERIFIED` is not written by any
+#: current code path: it is the migration default for rows created before the
+#: kind was recorded, whose true embedder is unknowable from the row alone.
+#: Unverified rows are excluded from every retrieval population until
+#: `bartholomew embeddings rebuild` regenerates them from authoritative source
+#: text -- excluded, never deleted.
+KIND_SEMANTIC = "semantic"
+KIND_DETERMINISTIC = "deterministic-hash"
+KIND_UNVERIFIED = "unverified"
+
+
+class EmbeddingMode(str, Enum):
+    """The four states the embedding layer can truthfully be in."""
+
+    REAL = "real"
+    DISABLED = "disabled"
+    UNAVAILABLE = "unavailable"
+    DEV_FALLBACK = "dev_fallback"
+
+
+@dataclass(frozen=True)
+class EmbeddingStatus:
+    """A truthful description of what the embedding layer is actually doing.
+
+    `semantic` is the load-bearing field: it is True only when a real model is
+    serving. Callers deciding whether vector similarity means anything must
+    read `semantic`, never `mode != DISABLED` and never the configured model
+    name -- the configured name is what was *asked for*, which is exactly the
+    thing that was previously mistaken for what was *running*.
+    """
+
+    mode: EmbeddingMode
+    provider: str
+    model: str
+    dim: int
+    #: True only for `REAL`: vector similarity carries semantic meaning.
+    semantic: bool
+    #: True when retrieval is running in a state weaker than intended.
+    degraded: bool
+    #: Human-readable explanation, always present for non-REAL modes.
+    reason: str | None = None
+
+    def as_dict(self) -> dict:
+        """Serializable form for health/readiness surfaces and CLI output."""
+        return {
+            "mode": self.mode.value,
+            "provider": self.provider,
+            "model": self.model,
+            "dim": self.dim,
+            "semantic": self.semantic,
+            "degraded": self.degraded,
+            "reason": self.reason,
+        }
+
+
+class EmbedderUnavailableError(RuntimeError):
+    """The configured embedder could not be loaded and fallback is not allowed.
+
+    Raised rather than degraded-to-hash so that an unavailable model fails
+    closed and visibly, instead of quietly producing meaningless vectors.
+    """
+
+
+def fallback_explicitly_allowed() -> bool:
+    """Whether the deterministic fallback has been deliberately enabled.
+
+    Development and test only. Read at call time, not import time, so tests
+    can set it per-case with `monkeypatch.setenv`.
+    """
+    return os.getenv("BARTHO_EMBED_ALLOW_FALLBACK", "").strip().lower() in ("1", "true", "yes")
+
+
+def embeddings_enabled() -> bool:
+    """Whether embeddings are switched on at all (the pre-existing gate)."""
+    return bool(os.getenv("BARTHO_EMBED_ENABLED"))
+
+
+#: Environment variables that force the HuggingFace hub / transformers stack to
+#: refuse network access. Set around model loading in ordinary operation so a
+#: missing local model fails fast and loudly instead of silently downloading
+#: several hundred megabytes on the first query.
+_OFFLINE_ENV = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")
+
+
+@contextlib.contextmanager
+def _hub_offline(offline: bool):
+    """Temporarily force (or leave alone) the model hub's offline flags.
+
+    Restores the previous values on exit, including absence, so this never
+    leaks a global setting into the rest of the process -- which matters when
+    one runtime provisions a model while another is serving queries.
+    """
+    if not offline:
+        yield
+        return
+
+    previous = {name: os.environ.get(name) for name in _OFFLINE_ENV}
+    for name in _OFFLINE_ENV:
+        os.environ[name] = "1"
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @dataclass
@@ -24,6 +176,12 @@ class EmbeddingConfig:
     provider: str  # 'local-sbert', 'openai', etc.
     model: str  # Model identifier
     dim: int  # Embedding dimension
+    #: Provisioned local directory holding the model assets. When set and
+    #: present, this is what is loaded -- the reproducible deployment path.
+    model_path: str | None = None
+    #: Whether loading may reach the network for model assets. False in
+    #: ordinary operation; only the explicit provisioning command sets it.
+    allow_download: bool = False
 
 
 class EmbeddingProvider:
@@ -45,45 +203,138 @@ class EmbeddingProvider:
 
 class LocalSBERTProvider(EmbeddingProvider):
     """
-    Local sentence-transformers provider with fallback
+    Local sentence-transformers provider.
 
-    Attempts to use sentence-transformers library with specified model.
-    If import fails or model can't be loaded (e.g., offline, CI), falls back
-    to a deterministic hashing-based embedder that produces stable normalized
-    vectors for consistent behavior across environments.
+    Loads the configured model from a provisioned local path (or an existing
+    local cache) with the model hub forced offline, so ordinary retrieval can
+    never trigger a model download.
+
+    **Failure is explicit.** If the library is missing or the model cannot be
+    loaded, this raises `EmbedderUnavailableError` -- unless
+    `BARTHO_EMBED_ALLOW_FALLBACK=1` deliberately permits the deterministic
+    development embedder, in which case the provider serves that embedder and
+    says so through `status()`. There is no path by which a load failure
+    quietly becomes hash vectors wearing the real model's name.
     """
 
-    def __init__(self, model_id: str = "BAAI/bge-small-en-v1.5", dim: int = 384):
+    def __init__(
+        self,
+        model_id: str = "BAAI/bge-small-en-v1.5",
+        dim: int = 384,
+        model_path: str | None = None,
+        allow_download: bool = False,
+    ):
         """
         Initialize provider
 
         Args:
             model_id: HuggingFace model identifier
-            dim: Embedding dimension (used for fallback)
+            dim: Embedding dimension
+            model_path: Provisioned local directory holding the model assets.
+                Preferred over `model_id` when present on disk.
+            allow_download: Whether loading may reach the network. False in
+                ordinary operation.
+
+        Raises:
+            EmbedderUnavailableError: the model could not be loaded and the
+                deterministic fallback was not explicitly allowed.
         """
         self.model_id = model_id
         self.dim = dim
+        self.model_path = model_path
+        self.allow_download = allow_download
         self.model = None
         self.fallback = False
+        self.unavailable_reason: str | None = None
 
         try:
-            from sentence_transformers import SentenceTransformer
-
-            self.model = SentenceTransformer(model_id, device="cpu")
-            logger.info(f"Loaded sentence-transformers model: {model_id}")
-        except Exception as e:
-            logger.warning(
-                f"Failed to load sentence-transformers model {model_id}: {e}. "
-                "Using deterministic fallback embedder.",
+            self.model = self._load_model()
+            logger.info(
+                "Loaded sentence-transformers model: %s (source=%s)",
+                model_id,
+                self._load_source(),
             )
+        except Exception as e:
+            reason = self._describe_failure(e)
+            if not fallback_explicitly_allowed():
+                # Fail closed. Silently degrading here is exactly the OP-W003
+                # condition: retrieval running on an embedder nobody chose,
+                # reported as the one they did.
+                raise EmbedderUnavailableError(reason) from e
+
             self.fallback = True
+            self.unavailable_reason = reason
+            logger.warning(
+                "%s BARTHO_EMBED_ALLOW_FALLBACK is set, so the deterministic "
+                "development embedder is serving instead. This is NOT semantic "
+                "retrieval and is stored and searched separately.",
+                reason,
+            )
+
+    def _load_source(self) -> str:
+        """Where the model was loaded from, for logging and status."""
+        if self.model_path and os.path.isdir(self.model_path):
+            return self.model_path
+        return f"local cache ({self.model_id})"
+
+    def _load_model(self):
+        """Load the model, offline unless downloading is explicitly allowed."""
+        from sentence_transformers import SentenceTransformer
+
+        target = self.model_id
+        if self.model_path:
+            if os.path.isdir(self.model_path):
+                target = self.model_path
+            elif not self.allow_download:
+                raise FileNotFoundError(
+                    f"configured model_path does not exist: {self.model_path}",
+                )
+
+        with _hub_offline(not self.allow_download):
+            return SentenceTransformer(target, device="cpu")
+
+    def _describe_failure(self, exc: Exception) -> str:
+        """A reason string that names the actual remedy, not just the error."""
+        if isinstance(exc, ImportError):
+            return (
+                "sentence-transformers is not installed, so the configured "
+                f"embedder {self.model_id!r} cannot be loaded."
+            )
+        return (
+            f"Failed to load embedding model {self.model_id!r} "
+            f"(model_path={self.model_path!r}, downloads "
+            f"{'allowed' if self.allow_download else 'disabled'}): {exc}. "
+            "Provision the model locally with "
+            "`bartholomew embeddings provision` before enabling embeddings."
+        )
+
+    def status(self, cfg_provider: str, cfg_model: str) -> EmbeddingStatus:
+        """Truthful description of what this provider is actually serving."""
+        if self.fallback:
+            return EmbeddingStatus(
+                mode=EmbeddingMode.DEV_FALLBACK,
+                provider=FALLBACK_PROVIDER,
+                model=FALLBACK_MODEL,
+                dim=self.dim,
+                semantic=False,
+                degraded=True,
+                reason=self.unavailable_reason,
+            )
+        return EmbeddingStatus(
+            mode=EmbeddingMode.REAL,
+            provider=cfg_provider,
+            model=cfg_model,
+            dim=self.dim,
+            semantic=True,
+            degraded=False,
+            reason=None,
+        )
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        """Generate embeddings (real or fallback)"""
+        """Generate embeddings (real model, or the explicit dev fallback)"""
         if not self.fallback and self.model is not None:
             return self._embed_real(texts)
-        else:
-            return self._embed_fallback(texts)
+        return self._embed_fallback(texts)
 
     def _embed_real(self, texts: list[str]) -> np.ndarray:
         """Use actual sentence-transformers model"""
@@ -97,12 +348,19 @@ class LocalSBERTProvider(EmbeddingProvider):
 
     def _embed_fallback(self, texts: list[str]) -> np.ndarray:
         """
-        Deterministic hash-based embedder for testing/offline environments
+        Deterministic hash-based embedder for testing/development.
 
         Produces normalized float32 vectors that are:
         - Deterministic (same text -> same vector)
-        - Reasonably distributed (uses multiple hash seeds)
         - L2-normalized (cosine similarity works via dot product)
+
+        **These vectors carry no semantic meaning.** Similarity between two of
+        them reflects SHA-256 avalanche, not relatedness -- measured
+        anti-correlated with relevance during the S5.3 characterisation. They
+        exist so that offline development and CI have stable, cheap, dependency
+        free behaviour, and they are stored under `FALLBACK_PROVIDER` /
+        `FALLBACK_MODEL` with `embedder_kind = deterministic-hash` so nothing
+        downstream can mistake them for real retrieval.
         """
         embeddings = []
         for text in texts:
@@ -196,11 +454,51 @@ class EmbeddingEngine:
             )
 
         if cfg.provider == "local-sbert":
-            return provider_class(model_id=cfg.model, dim=cfg.dim)
+            return provider_class(
+                model_id=cfg.model,
+                dim=cfg.dim,
+                model_path=cfg.model_path,
+                allow_download=cfg.allow_download,
+            )
         elif cfg.provider == "openai":
             return provider_class(model=cfg.model, dim=cfg.dim)
         else:
             return provider_class()
+
+    def status(self) -> EmbeddingStatus:
+        """What this engine is actually doing right now.
+
+        Delegates to the provider when the provider can answer, because only
+        the provider knows whether the model it was asked for is the model it
+        loaded. A provider that cannot answer is reported as REAL only if it
+        is not the local-sbert family -- there is no "probably fine" state.
+        """
+        provider_status = getattr(self.provider, "status", None)
+        if callable(provider_status):
+            return provider_status(self.config.provider, self.config.model)
+
+        return EmbeddingStatus(
+            mode=EmbeddingMode.REAL,
+            provider=self.config.provider,
+            model=self.config.model,
+            dim=self.config.dim,
+            semantic=True,
+            degraded=False,
+            reason=None,
+        )
+
+    @property
+    def storage_identity(self) -> tuple[str, str, str]:
+        """`(provider, model, embedder_kind)` to record with every vector.
+
+        This is the *effective* identity -- what actually produced the vector
+        -- not the configured one. Writing `cfg.provider` / `cfg.model` here
+        regardless of what served the request is the specific defect that made
+        hash vectors indistinguishable from semantic ones in storage.
+        """
+        status = self.status()
+        kind = KIND_SEMANTIC if status.semantic else KIND_DETERMINISTIC
+        return status.provider, status.model, kind
 
     def embed_texts(self, texts: Iterable[str]) -> np.ndarray:
         """
@@ -295,6 +593,10 @@ class EmbeddingEngineFactory:
         self._watch_thread: threading.Thread | None = None
         self._stop_watching = threading.Event()
         self._banner_shown = False
+        # A cached load failure. Set once, cleared by an explicit rebuild or
+        # config reload, so an operator who provisions the model and reloads
+        # gets a fresh attempt without restarting the process.
+        self._unavailable: EmbedderUnavailableError | None = None
 
         # Find config path
         for path in [
@@ -311,14 +613,77 @@ class EmbeddingEngineFactory:
         Get the current embedding engine, creating on first use
 
         Thread-safe: multiple callers always get a consistent engine
+
+        Raises:
+            EmbedderUnavailableError: the configured embedder could not be
+                loaded and the deterministic fallback is not explicitly
+                allowed. The failure is cached, so a broken configuration
+                costs one load attempt rather than one per query.
         """
         with self._lock:
+            if self._unavailable is not None:
+                raise EmbedderUnavailableError(str(self._unavailable))
+
             if self._engine is None:
                 # First build: load from config and show banner
                 cfg = self._load_config()
-                self._engine = EmbeddingEngine(cfg)
+                try:
+                    self._engine = EmbeddingEngine(cfg)
+                except EmbedderUnavailableError as e:
+                    self._unavailable = e
+                    logger.error(
+                        "Embeddings are configured but unavailable, so no vectors "
+                        "will be produced and vector retrieval is off: %s",
+                        e,
+                    )
+                    raise
                 self._show_banner_once()
             return self._engine
+
+    def status(self) -> EmbeddingStatus:
+        """The current embedding state, without raising.
+
+        This is what health, readiness and CLI surfaces read: asking "what is
+        retrieval actually doing" must never itself fail, and must never
+        answer by guessing from configuration.
+        """
+        cfg = self._load_config()
+
+        if not embeddings_enabled():
+            return EmbeddingStatus(
+                mode=EmbeddingMode.DISABLED,
+                provider=cfg.provider,
+                model=cfg.model,
+                dim=cfg.dim,
+                semantic=False,
+                # Deliberately off is not degraded: the system is doing what
+                # it was told. FTS retrieval still works.
+                degraded=False,
+                reason="Embeddings are disabled (BARTHO_EMBED_ENABLED is not set).",
+            )
+
+        try:
+            return self.get().status()
+        except EmbedderUnavailableError as e:
+            return EmbeddingStatus(
+                mode=EmbeddingMode.UNAVAILABLE,
+                provider=cfg.provider,
+                model=cfg.model,
+                dim=cfg.dim,
+                semantic=False,
+                degraded=True,
+                reason=str(e),
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            return EmbeddingStatus(
+                mode=EmbeddingMode.UNAVAILABLE,
+                provider=cfg.provider,
+                model=cfg.model,
+                dim=cfg.dim,
+                semantic=False,
+                degraded=True,
+                reason=f"Embedding engine could not be constructed: {e}",
+            )
 
     def rebuild(self, cfg: EmbeddingConfig) -> None:
         """
@@ -326,10 +691,20 @@ class EmbeddingEngineFactory:
 
         Thread-safe: readers never see half-initialized engine
         """
-        new_engine = EmbeddingEngine(cfg)
+        try:
+            new_engine = EmbeddingEngine(cfg)
+        except EmbedderUnavailableError as e:
+            # Keep serving nothing rather than serving the previous engine
+            # under a configuration that no longer describes it.
+            with self._lock:
+                self._engine = None
+                self._unavailable = e
+            logger.error("Embedding engine rebuild failed, embeddings unavailable: %s", e)
+            raise
 
         with self._lock:
             self._engine = new_engine
+            self._unavailable = None
 
         logger.info(
             f"Rebuilt embedding engine: provider={cfg.provider} model={cfg.model} dim={cfg.dim}",
@@ -354,9 +729,19 @@ class EmbeddingEngineFactory:
         provider = "local-sbert"
         model = "BAAI/bge-small-en-v1.5"
         dim = 384
+        model_path: str | None = None
+        # Never download by default. Fetching model assets is a deliberate
+        # provisioning step, not something ordinary retrieval can trigger.
+        allow_download = False
 
         if not self._config_path:
-            return EmbeddingConfig(provider=provider, model=model, dim=dim)
+            return EmbeddingConfig(
+                provider=provider,
+                model=model,
+                dim=dim,
+                model_path=os.getenv("BARTHO_EMBED_MODEL_PATH"),
+                allow_download=allow_download,
+            )
 
         try:
             import yaml
@@ -368,10 +753,23 @@ class EmbeddingEngineFactory:
             provider = emb.get("default_provider", provider)
             model = emb.get("default_model", model)
             dim = emb.get("default_dim", dim)
+            model_path = emb.get("model_path", model_path)
+            allow_download = bool(emb.get("allow_download", allow_download))
         except Exception as e:
             logger.warning(f"Failed to load embeddings.yaml: {e}, using defaults")
 
-        return EmbeddingConfig(provider=provider, model=model, dim=dim)
+        # The environment wins over the file for the local path, so a
+        # deployment can point at its own provisioned model directory without
+        # editing tracked configuration.
+        model_path = os.getenv("BARTHO_EMBED_MODEL_PATH") or model_path
+
+        return EmbeddingConfig(
+            provider=provider,
+            model=model,
+            dim=dim,
+            model_path=model_path,
+            allow_download=allow_download,
+        )
 
     def _show_banner_once(self) -> None:
         """Show startup banner exactly once when env gate is ON"""
@@ -396,18 +794,20 @@ class EmbeddingEngineFactory:
         except Exception:
             pass
 
-        # Determine fallback status
-        fallback = "unknown"
-        if self._engine and hasattr(self._engine.provider, "fallback"):
-            fallback = str(self._engine.provider.fallback).lower()
+        status = self._engine.status() if self._engine else self.status()
 
-        cfg = self._engine.config if self._engine else self._load_config()
-
-        logger.info(
-            f"Embeddings enabled: provider={cfg.provider} "
-            f"model={cfg.model} dim={cfg.dim} "
-            f"vss={vss_status} fallback={fallback}",
+        # The banner reports the *effective* mode, not the configured model.
+        # Reporting the configured name while the hash embedder was serving is
+        # the OP-W003 condition this line used to reproduce.
+        message = (
+            f"Embeddings enabled: mode={status.mode.value} "
+            f"provider={status.provider} model={status.model} dim={status.dim} "
+            f"semantic={str(status.semantic).lower()} vss={vss_status}"
         )
+        if status.degraded:
+            logger.warning("%s -- DEGRADED: %s", message, status.reason)
+        else:
+            logger.info(message)
 
     def start_watcher(self) -> None:
         """Start background file watcher for hot-reload"""
@@ -458,5 +858,24 @@ def get_embedding_engine() -> EmbeddingEngine:
 
     Thread-safe: uses factory for atomic hot-reload support
     Uses default configuration (local-sbert, BAAI/bge-small-en-v1.5, dim=384)
+
+    Raises:
+        EmbedderUnavailableError: the configured embedder could not be loaded
+            and the deterministic fallback was not explicitly allowed.
+
+    Per-runtime isolation note: this singleton holds an immutable loaded model
+    and configuration only. It holds no user text, no query, and no derived
+    cache, so it is safe to share within one runtime process. It is **not** a
+    place to add any user-derived cache -- per-user isolation lives at the
+    runtime/data boundary, and a shared content cache here would cross it.
     """
     return _embedding_factory.get()
+
+
+def get_embedding_status() -> EmbeddingStatus:
+    """The current, truthful embedding mode. Never raises.
+
+    The single accessor for health, readiness, CLI and retrieval-result
+    surfaces, so they cannot drift apart or answer from configuration.
+    """
+    return _embedding_factory.status()

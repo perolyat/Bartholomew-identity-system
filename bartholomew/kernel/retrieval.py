@@ -15,7 +15,13 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from bartholomew.kernel.embedding_engine import EmbeddingEngine, get_embedding_engine
+from bartholomew.kernel.embedding_engine import (
+    EmbedderUnavailableError,
+    EmbeddingEngine,
+    EmbeddingMode,
+    get_embedding_engine,
+    get_embedding_status,
+)
 from bartholomew.kernel.fts_client import fts5_available
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
 from bartholomew.kernel.vector_store import VectorStore
@@ -64,6 +70,95 @@ def _check_fts5_once(db_path: str) -> bool:
         logger.debug("FTS5 is available")
 
     return available
+
+
+
+def resolve_embedding_engine() -> tuple[EmbeddingEngine | None, Any]:
+    """The engine to retrieve with, and the truthful status behind it.
+
+    Returns `(None, status)` only when no engine can be built at all -- the
+    configured embedder is unavailable and degrading to the deterministic
+    embedder was not authorised. In that state there is nothing to search a
+    vector population with, so vector retrieval genuinely cannot run.
+
+    Note that `DISABLED` is *not* such a state. `BARTHO_EMBED_ENABLED` gates
+    whether new embeddings are written; a caller that explicitly constructs a
+    vector retriever still gets an engine, exactly as before. What changes is
+    that the status travelling alongside it says so, so the caller can report
+    what it is really doing instead of implying semantic retrieval.
+    """
+    status = get_embedding_status()
+    if status.mode is EmbeddingMode.UNAVAILABLE:
+        return None, status
+    try:
+        return get_embedding_engine(), status
+    except EmbedderUnavailableError:  # pragma: no cover - status covers this
+        return None, get_embedding_status()
+
+
+def describe_retrieval(mode: str | None = None) -> dict[str, Any]:
+    """A truthful description of what retrieval will actually do right now.
+
+    One accessor for every reporting surface -- health, CLI, result contracts
+    -- so none of them has to reconstruct the answer from configuration and
+    none of them can drift from the others.
+
+    Two separate questions, deliberately not collapsed into one field, for the
+    same reason `/api/health` separates a model being *selected* from being
+    *reachable*:
+
+      `mode_effective`  which retrieval arms will actually run;
+      `semantic`        whether vector similarity means anything when they do.
+
+    A hybrid configuration serving the deterministic development embedder is
+    still structurally hybrid -- and is not semantic retrieval. Reporting only
+    the mode would call that hybrid and be believed, which is precisely the
+    OP-W003 condition: retrieval mode and quality not known and not truthfully
+    reported at the time.
+    """
+    configured_mode = _resolve_mode(mode)
+    embedding_status = get_embedding_status()
+
+    effective_mode = configured_mode
+    degraded = embedding_status.degraded
+    reasons: list[str] = []
+    if embedding_status.reason:
+        reasons.append(embedding_status.reason)
+
+    if configured_mode in ("hybrid", "vector"):
+        if embedding_status.mode is EmbeddingMode.UNAVAILABLE:
+            # No engine at all: this mirrors what `get_retriever` will build.
+            effective_mode = "fts" if configured_mode == "hybrid" else "none"
+            degraded = True
+            reasons.append(
+                f"{configured_mode} retrieval was requested but no embedder could "
+                "be loaded, so vector similarity is not contributing at all.",
+            )
+        elif embedding_status.mode is EmbeddingMode.DISABLED:
+            # Nothing is writing vectors, so the vector arm exists but has
+            # nothing meaningful in it. Not "degraded" -- the system is doing
+            # what it was configured to do -- but not semantic either.
+            reasons.append(
+                f"{configured_mode} retrieval is configured, but with embeddings "
+                "disabled no vectors are written, so matching is lexical only.",
+            )
+        elif not embedding_status.semantic:
+            degraded = True
+            reasons.append(
+                f"{configured_mode} retrieval is running on the deterministic "
+                "development embedder; its similarity scores carry no semantic "
+                "meaning and are searched as a separate vector population.",
+            )
+
+    return {
+        "mode_configured": configured_mode,
+        "mode_effective": effective_mode,
+        # True only when a vector arm is running AND it is genuinely semantic.
+        "semantic": embedding_status.semantic and effective_mode in ("hybrid", "vector"),
+        "degraded": degraded,
+        "reason": " ".join(reasons) or None,
+        "embedding": embedding_status.as_dict(),
+    }
 
 
 @dataclass
@@ -154,19 +249,23 @@ class Retriever:
 
         # Vector search with strict model matching (Phase 2d+)
         try:
-            cfg = self.embedding_engine.config
+            provider, model, embedder_kind = self.embedding_engine.storage_identity
             candidates = self.vector_store.search(
                 qvec,
                 top_k=top_k * 2,  # Get more candidates for filtering
-                provider=cfg.provider,
-                model=cfg.model,
-                dim=cfg.dim,
+                provider=provider,
+                model=model,
+                dim=self.embedding_engine.config.dim,
                 source=filters.source,
                 # Phase 2d Fixpack v3: relax provider/model matching for
                 # vector-only Retriever while keeping dim strict, to ensure
                 # tests that use ad-hoc model names (e.g. "test-model") can
                 # still retrieve their embeddings.
                 allow_mismatch=True,
+                # NOT relaxed by allow_mismatch: the query vector came from
+                # this engine, so only vectors from the same kind of embedder
+                # can be meaningfully scored against it.
+                embedder_kind=embedder_kind,
             )
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
@@ -909,6 +1008,34 @@ def get_retriever(
             "will operate with vector-only (empty FTS candidates)",
         )
 
+    # Vector-bearing modes need an embedder that actually works. When one is
+    # not available, hybrid degrades to FTS rather than failing the whole
+    # retrieval path -- lexical retrieval is genuinely useful and genuinely
+    # honest. The degradation is logged and is visible through
+    # `describe_retrieval()`; it is never silent.
+    if resolved_mode in ("hybrid", "vector"):
+        engine, embedding_status = resolve_embedding_engine()
+        if engine is None:
+            if resolved_mode == "hybrid":
+                logger.warning(
+                    "Hybrid retrieval requested but semantic embeddings are not "
+                    "operational (%s: %s); serving FTS-only. Vector similarity is "
+                    "NOT contributing to these results.",
+                    embedding_status.mode.value,
+                    embedding_status.reason,
+                )
+                resolved_mode = "fts"
+            else:
+                # An explicit vector-only request cannot be honoured by
+                # quietly returning lexical results under a vector label.
+                raise EmbedderUnavailableError(
+                    "Vector-only retrieval was requested but semantic embeddings "
+                    f"are not operational ({embedding_status.mode.value}): "
+                    f"{embedding_status.reason}",
+                )
+        elif embedding_engine is None:
+            embedding_engine = engine
+
     logger.debug(f"Creating retriever: mode={resolved_mode}, db_path={resolved_db_path}")
 
     # Route to appropriate retriever
@@ -926,12 +1053,6 @@ def get_retriever(
     elif resolved_mode == "vector":
         # Create vector store
         vector_store = VectorStore(resolved_db_path)
-
-        # Get embedding engine if not provided
-        if embedding_engine is None:
-            from bartholomew.kernel.embedding_engine import get_embedding_engine
-
-            embedding_engine = get_embedding_engine()
 
         # Create vector-only retriever
         retriever = Retriever(
