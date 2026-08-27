@@ -520,6 +520,20 @@ async def shutdown():
     if _kernel:
         await _kernel.stop()
 
+    # Remove the Platform/Admin halt hook this app installed at startup.
+    #
+    # The registration is process-global module state, so leaving it behind
+    # would outlive the app instance that installed it -- harmless in a real
+    # deployment (one app, one process, then exit), but in a test session it
+    # would keep answering for every later Governance check against whatever
+    # control-plane path happened to be configured at the time. Installed at
+    # startup, removed at shutdown, symmetrically.
+    from bartholomew.orchestrator.safety.governance_store import (
+        register_additional_halt_check,
+    )
+
+    register_additional_halt_check(None)
+
 
 # --- Kernel-facing helpers ---
 def set_last_tick(ts: dt.datetime | None = None, drive: str | None = None) -> None:
