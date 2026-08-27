@@ -685,6 +685,7 @@ def platform_brake_on(
     from bartholomew.platform.store import init_platform_schema
 
     init_platform_schema()
+    authority.install_platform_halt_hook()
     state = authority.engage(*(scope or ["global"]), reason=reason, actor=actor)
     console.print(
         f"\n[red]⚠ PLATFORM halt ENGAGED[/red] - scopes: "

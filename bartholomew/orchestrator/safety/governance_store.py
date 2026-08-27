@@ -74,6 +74,7 @@ import json
 import sqlite3
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from bartholomew.kernel.blocking_executor import SingleWorkerExecutor, run_off_loop
@@ -703,6 +704,40 @@ async def engaged_state_fail_closed_off_loop(
     )
 
 
+# ---------------------------------------------------------------------------
+# Additional halt authority (S8 Platform/Admin tier)
+# ---------------------------------------------------------------------------
+#
+# A deployment with a higher-scope halt authority registers a check here. It
+# is a *registration hook* rather than an import for one load-bearing reason:
+# the dependency must point one way only. This module -- the Personal/User
+# brake, the thing a person uses to stop their own Bartholomew -- must never
+# depend on any platform, control plane or network, so that a platform outage
+# can never leave local autonomous execution unstoppable. Importing the
+# platform package here would invert that and put a shared service on the
+# local kill switch's path.
+#
+# The hook composes **restrictively**: execution proceeds only if neither
+# authority blocks it, and it can only ever add a halt. It cannot release one,
+# because `is_blocked_fail_closed` returns True as soon as the local store
+# says so, without consulting the hook at all.
+# A holder rather than a bare module global, so registration mutates a
+# container instead of rebinding a module attribute.
+_HALT_AUTHORITY: dict[str, Callable[[str], bool] | None] = {"check": None}
+
+
+def register_additional_halt_check(check: Callable[[str], bool] | None) -> None:
+    """
+    Register (or clear, with None) a higher-scope halt authority.
+
+    `check(scope)` returns True if that authority halts `scope`. It is called
+    only when the local brake has *not* already blocked, and any exception it
+    raises is treated as a halt -- an unreadable safety halt is not evidence
+    of the absence of one.
+    """
+    _HALT_AUTHORITY["check"] = check
+
+
 def is_blocked_fail_closed(
     scope: str,
     db_path: str,
@@ -717,10 +752,31 @@ def is_blocked_fail_closed(
     the retired governance_bridge.is_blocked_fail_closed()'s name and
     signature) so callers with no live GovernanceStore instance handy
     (e.g. a synchronous, non-daemon caller) can pass just a db_path.
+
+    Since S8 this is also the single composition point for a registered
+    higher-scope halt authority (the Platform/Admin tier). Composing here
+    rather than at each call site means every downstream execution boundary
+    that already consults Governance -- skill execution, the runtime
+    contract's autonomous work and its governed state mutations -- gets the
+    composed answer without any of them changing.
     """
     store = governance_store or GovernanceStore(db_path)
     store.refresh()
-    return store.is_blocked(scope)
+    if store.is_blocked(scope):
+        # The local brake alone is sufficient to halt, and is answered
+        # without consulting anything else. This is the path that keeps
+        # working when every remote service is gone.
+        return True
+
+    check = _HALT_AUTHORITY["check"]
+    if check is None:
+        return False
+    try:
+        return bool(check(scope))
+    except Exception:
+        # Fail closed: a higher-scope authority we cannot read is treated as
+        # engaged, matching this module's contract for an unreadable brake.
+        return True
 
 
 async def is_blocked_fail_closed_off_loop(

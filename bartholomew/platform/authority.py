@@ -37,6 +37,11 @@ import json
 import time
 from dataclasses import dataclass
 
+from bartholomew.orchestrator.safety.governance_store import (
+    register_additional_halt_check,
+)
+
+from .exposure import platform_tier_active
 from .store import platform_connection, record_platform_audit
 
 # The same subsystem axis the Personal tier uses. The tiers are orthogonal to
@@ -188,3 +193,39 @@ def is_blocked(scope: str, *, personal_blocked: bool, db_path: str | None = None
     if not state.engaged:
         return False
     return "global" in state.scopes or scope in state.scopes
+
+
+def platform_halt_check(scope: str) -> bool:
+    """
+    The Platform/Admin tier's answer for one scope, for Governance to compose.
+
+    Inert in a deployment that has no platform tier (a single-user loopback
+    development install): there is no platform to halt and no administrator
+    distinct from the user, and treating an absent control-plane database as
+    an unreadable safety halt would fail-close a purely local Bartholomew into
+    uselessness for no safety gain.
+
+    Where the tier *is* active, an unreadable platform state raises, and
+    `is_blocked_fail_closed` turns that into a halt.
+    """
+    if not platform_tier_active():
+        return False
+    state = get_state()
+    if not state.engaged:
+        return False
+    return "global" in state.scopes or scope in state.scopes
+
+
+def install_platform_halt_hook() -> None:
+    """
+    Wire the Platform tier into Governance's composition point.
+
+    Called from API startup and from the platform-brake CLI, so that every
+    downstream execution boundary already consulting Governance -- skill
+    execution, the runtime contract's autonomous work and governed state
+    mutations -- composes both tiers without any of those call sites
+    changing. Registration is one-directional by design: Governance never
+    imports this package, so the local Personal brake keeps working with the
+    control plane destroyed.
+    """
+    register_additional_halt_check(platform_halt_check)

@@ -434,9 +434,15 @@ async def startup():
     # Raising here stops the process; the alternative -- discovering it on
     # the first request -- is too late, because by then it is listening.
     assert_exposure_is_safe()
+    from bartholomew.platform.authority import install_platform_halt_hook
     from bartholomew.platform.store import init_platform_schema
 
     init_platform_schema()
+    # Compose the Platform/Admin tier into Governance before the kernel
+    # starts, so autonomous work, skill execution and governed state
+    # mutations are all subject to both tiers from the first tick rather
+    # than from the first HTTP request.
+    install_platform_halt_hook()
     print(f"[platform] exposure: {describe_exposure()}", file=sys.stderr)
 
     # Initialize state for liveness + metrics
