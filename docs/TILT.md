@@ -6,7 +6,13 @@
 > non-authoritative reference — this specific document governs near-term execution sequencing and
 > is binding, the same way `ROADMAP.md` and `DECISIONS.md` are.
 >
-> **Last updated:** 2026-08-20 — **D7 reconciliation added** (documentation-only). One new section,
+> **Last updated:** 2026-08-27 — **one bullet added** to "What this does NOT change", recording
+> that `DECISIONS.md`'s external-intelligence/capability-provider decision does not change this
+> document's principle, its prioritisation test, or its sequencing. Documentation-only; **nothing
+> below is weakened**, and that decision explicitly names this document as the near-term sequencing
+> authority over it.
+>
+> **Previously (2026-08-20):** **D7 reconciliation added** (documentation-only). One new section,
 > "Reconciliation with the Post-Test #1 readiness bands (D7)", records the reconciliation Taylor
 > approved on 2026-08-20 as part of Post-Test #1 Decision Register v2.2. **The principle below is
 > unchanged and is not weakened**: what is added is the distinction between a narrow attended
@@ -130,6 +136,22 @@ something, per the six exceptions above.
 - **`CONSTITUTION.md`'s engineering standards** (fail-closed safety, privacy-first handling,
   verification-first engineering, one authority per concept, testability, explainability) remain
   in force. This document does not lower them.
+- **The external-intelligence/capability-provider direction does not change sequencing (added
+  2026-08-27).** `DECISIONS.md`'s "Bartholomew is the persistent executive above an ecosystem of
+  external intelligence and capability providers" — and `CONSTITUTION.md`'s "Bartholomew employs an
+  ecosystem; it does not become it" — record enduring principle and TARGET direction. That decision
+  **names this document as the near-term sequencing authority over it** and authorises no
+  implementation: no capability broker, provider registry, selection or routing mechanism,
+  external-agent integration, or provider-performance learning. It is explicitly *not* permission to
+  design a universal interoperability platform before real use requires one. The trajectory it names
+  is a vertical slice in this document's sense — one narrowly scoped external provider performing
+  **one bounded task** through the existing Runtime Contract seam and the existing Governance, with
+  the result returning as evidence carrying its provenance and the Executive using it toward a real
+  user objective. A second meaningfully different provider is what would first create a genuine
+  selection problem; observed real-world outcomes are what would first create a genuine need for
+  capability-performance learning. Complexity is earned by real use, which is this document's whole
+  point. **Slice scoping is unchanged**: any such slice is scoped from real feedback and needs its
+  own explicit approval, the same as every other slice.
 - **`CONSTITUTION.md`'s "Development Philosophy" section already states this document's principle
   directly** (amended 2026-08-12) — architecture-first discipline still governs *how* a slice is
   built, narrowed so it no longer holds a slice back from real use once that slice is already

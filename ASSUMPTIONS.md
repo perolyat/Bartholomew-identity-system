@@ -291,3 +291,35 @@
   review of 2026-08-15 found no current code that contradicts it (no model is equated with
   Bartholomew's identity; no personal state is structurally unable to acquire an owner), which is
   supporting evidence, not verification.
+
+## A10 — External capability providers remain available and substitutable on acceptable terms
+- **ASSUMPTION (added 2026-08-27):** `DECISIONS.md`'s "Bartholomew is the persistent executive above
+  an ecosystem of external intelligence and capability providers" rests on the assumption that
+  useful external intelligence and capability — frontier and specialist models, agents, APIs, SaaS
+  applications, OS services, web services — will **remain obtainable, and remain substitutable one
+  for another**, on terms compatible with Bartholomew's Governance: acceptable cost, acceptable
+  privacy and data-handling terms, acceptable reliability, and without a provider acquiring
+  authority over the user's data, objectives or autonomy boundaries as a condition of access.
+- **Why it matters:** the competitive argument for the whole direction is that ecosystem progress
+  becomes *supply* rather than obsolescence, and that Bartholomew therefore need not duplicate a
+  capability it can obtain externally. That argument depends on obtainability and on **more than one
+  possible supplier per needed capability**. If a capability class is available from exactly one
+  provider on terms that require surrendering personal data or control, the correct answer is not to
+  accept the terms — it is either to build the capability locally or to do without it, which is a
+  materially different cost profile than the decision assumes.
+- **Risk if wrong:** capability regression when a provider changes terms, pricing, availability or
+  policy; pressure to weaken privacy or Governance to retain a capability; or a de facto lock-in in
+  which "replaceable supplier" is true architecturally and false commercially. The specific failure
+  to design against is a personal-data or continuity dependency that cannot be moved — which is why
+  `CONSTITUTION.md`'s identity-portability and data-portability invariants, and the rule that
+  external output is evidence rather than memory, are the mitigations rather than optional extras.
+- **How to validate:** cannot be validated in the abstract, and **is not scheduled for validation**.
+  The cheap partial validation available now is the one the existing model seam already demonstrates:
+  `ModelRouter` dispatches to interchangeable local and cloud adapters, and a local backend carries
+  the routine, personal-fact-bearing traffic with cloud off unless deliberately configured. Each
+  future external capability should be able to answer the same two questions on paper before it is
+  integrated — *what happens to the user if this provider disappears tomorrow?* and *what personal
+  context does using it disclose?* The first integration that cannot answer both is the signal to
+  revisit this assumption rather than proceed.
+- **Status:** unverified — deliberately. No external capability provider beyond the optional cloud
+  model backend exists in the repository, so there is as yet nothing to validate against.

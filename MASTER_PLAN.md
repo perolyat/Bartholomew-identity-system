@@ -226,6 +226,23 @@ logs/    (runtime logs)
   **FUTURE** is `ROADMAP.md`'s "What we will not do yet". The "Next 3 Moves" below are unaffected:
   real-world use of slice 1 is still next, per `docs/TILT.md`.
 
+- **External intelligence and capability are supply, not architecture** *(added 2026-08-27)*.
+  `DECISIONS.md`'s "Bartholomew is the persistent executive above an ecosystem of external
+  intelligence and capability providers" — reconciled through `CONSTITUTION.md`'s existing
+  "Responsibilities, Not Technologies", "Bartholomew is not the LLM" and capability/competency
+  principles — establishes that models, specialist agents, APIs, SaaS applications, OS services,
+  web services, device agents and sensors are **replaceable suppliers beneath one persistent
+  governed executive**, never entities that become Bartholomew. Bartholomew retains identity,
+  memory, objectives, learned competence, provenance, Governance and executive authority across
+  them; an external provider executes a bounded task and never owns the user's objective; external
+  output is evidence with provenance, not truth or memory. **This changes nothing about the current
+  system or the current plan.** It is enduring principle plus TARGET direction: no capability
+  broker, provider registry, selection/routing mechanism or provider-performance learning exists or
+  is authorised — the only external-provider seam in the repository today is `ModelRouter`'s
+  local/cloud model adapters, with cloud off unless deliberately configured. The four-state reading
+  above is unchanged and the "Next 3 Moves" below are unaffected; `docs/TILT.md` still governs what
+  is worked on next.
+
 ## Stage gates / milestones
 
 > **Rewritten 2026-07-27.** This section had gone stale: it listed only Stage 0 as complete,
