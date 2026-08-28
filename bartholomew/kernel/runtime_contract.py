@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import functools
 import inspect
 import logging
 import time
@@ -37,6 +38,8 @@ from typing import TYPE_CHECKING, Any
 
 from . import (
     forecast_intents,
+    objective_intents,
+    objective_store,
     personal_facts,
     policy_engine,
     spoken_output,
@@ -176,6 +179,20 @@ class RuntimeContractResult:
     #: egress. Defaulted so existing construction sites are unaffected.
     forecast_action: dict[str, Any] | None = None
 
+    #: Golden Path slice 2: what this turn's explicit objective instruction
+    #: did through the governed objective seam, or None when the turn
+    #: contained none (the common case). Records the recognised operation,
+    #: the governed outcome and whether anything actually changed.
+    #: Defaulted so existing construction sites are unaffected.
+    objective_action: dict[str, Any] | None = None
+
+    #: Set when a forecast this turn obtained was recorded as evidence
+    #: against a live objective. Names the objective and the event kind, so
+    #: the audit reader can see that external content entered an
+    #: objective's history and on what footing. None whenever nothing was
+    #: attached -- which is most turns.
+    objective_evidence: dict[str, Any] | None = None
+
     #: WP-A2b. True when this turn's Reflection -- on the chat surface the
     #: sole durable record of the governed decision context (S5.3 Decision
     #: E.2's explanation-grade applied-competency/personal-fact record) --
@@ -192,11 +209,48 @@ class RuntimeContractResult:
     provenance_error: str | None = None
 
 
+def render_objectives_for_prompt(objectives: list[Any]) -> str:
+    """The Interpretation-stage block naming what Bartholomew is carrying.
+
+    Golden Path slice 2, and the point at which continuity actually reaches
+    a conversation: a later turn knows what the user is trying to achieve
+    without the user restating it.
+
+    Only *live* objectives are ever passed in (`_live_objectives()` reads
+    `list_live()`, which cannot return a terminal one). That is the second
+    of the three independent stops on resurfacing a finished objective: even
+    if something else were to raise one, it would not be here to be
+    mentioned.
+
+    Deliberately not merged into the existing "Active goals:" line.
+    `ExperienceKernel`'s active goals are a redacted `list[str]` of
+    process-lifetime state with no outcome, history or completion semantics;
+    an objective is durable, has all three, and conflating them would make
+    "complete this goal" ambiguous between two stores with different rules.
+    """
+    if not objectives:
+        return ""
+    lines = ["Objectives you are carrying for the user (do not invent others):"]
+    for objective in objectives:
+        horizon = ""
+        kind = getattr(objective, "horizon_kind", None)
+        if kind == objective_store.HORIZON_BY_DATE and getattr(objective, "horizon_date", None):
+            horizon = f" (by {objective.horizon_date})"
+        elif kind == objective_store.HORIZON_THIS_WEEK:
+            horizon = " (this week)"
+        status = ""
+        if getattr(objective, "status", None) == objective_store.STATUS_BLOCKED:
+            status = " [blocked]"
+        lines.append(f"- {objective.title}{horizon}{status}")
+    return "\n".join(lines)
+
+
 def _build_interpretation(
     daemon: KernelDaemon,
     observation: Observation,
     competency_block: str = "",
     personal_facts_block: str = "",
+    objectives_block: str = "",
 ) -> Interpretation:
     """
     Stage 2: give the raw observation structure/context -- specifically,
@@ -269,6 +323,13 @@ def _build_interpretation(
     # distinct. Same passed-in-not-fetched reason as the competency block.
     if personal_facts_block:
         context_lines.append(personal_facts_block)
+
+    # Golden Path slice 2: the durable objectives, in their own block for the
+    # same passed-in-not-fetched reason as the two above -- the read is
+    # asynchronous and must run off the event loop, while this function is
+    # deliberately synchronous and called by every surface.
+    if objectives_block:
+        context_lines.append(objectives_block)
 
     if not context_lines:
         return Interpretation(observation=observation, prompt=observation.raw_content)
@@ -1001,6 +1062,274 @@ def _forecast_error(result: Any) -> str:
     )
 
 
+OBJECTIVE_OUTCOME_EXECUTED = "executed"
+OBJECTIVE_OUTCOME_NOT_FOUND = "not_found"
+OBJECTIVE_OUTCOME_AMBIGUOUS = "ambiguous"
+OBJECTIVE_OUTCOME_UNAVAILABLE = "unavailable"
+OBJECTIVE_OUTCOME_FAILED = "failed"
+OBJECTIVE_OUTCOME_DENIED = "denied"
+
+
+async def _live_objectives(daemon: KernelDaemon) -> list[Any]:
+    """The objectives Bartholomew is currently carrying.
+
+    One read, `list_live()`, which cannot return a completed or abandoned
+    objective. Everything downstream -- listing, matching, the interpretation
+    block -- goes through here, so nothing has to remember to filter out
+    finished work."""
+    store = getattr(daemon, "objective_store", None)
+    if store is None:
+        return []
+    return await run_off_loop(
+        store.list_live,
+        executor=getattr(daemon, "blocking_executor", None),
+    )
+
+
+def _objective_denied(result: Any) -> bool:
+    return not getattr(result, "governance_allowed", True)
+
+
+async def _handle_objective_intent(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> dict[str, Any] | None:
+    """
+    Objective continuity: take on, report, close or drop an objective the
+    user stated in ordinary conversation, and say truthfully what happened.
+
+    Returns None when the utterance contained no explicit objective
+    instruction -- the overwhelmingly common case -- and the turn proceeds
+    exactly as it did before this existed.
+
+    Like task control and the forecast slice, the reply is built from what
+    the governed path actually did, never from what was asked for, so the
+    model is never in a position to narrate a change that did not happen.
+
+    **Why the turn's own CandidateAction stays `chat_response`.** Each
+    objective operation is a *nested* governed transition, evaluated for real
+    at `run_objective_through_runtime_contract()`'s two gates against
+    `kind="objective_<transition>"` -- the same grain `Identity.yaml`'s
+    `tool_use.allowlist` uses. This follows the recorded precedent set by
+    `_handle_task_intent`: re-evaluating the same decision at the chat gate
+    would replace a truthful "I'm not permitted to record that, and nothing
+    changed" with a denial of the whole conversation turn.
+
+    **Never raises.** Objective routing must not be able to break a chat
+    turn -- but it never silently swallows either. An unexpected failure
+    becomes a truthful "it didn't go through", because falling through to
+    the model is exactly how a fabricated confirmation would reach the user.
+    """
+    try:
+        intent = objective_intents.parse_intent(observation.raw_content or "")
+        if intent is None:
+            return None
+
+        record: dict[str, Any] = {
+            "requested": intent.described_as,
+            "action": intent.action,
+            "changed": False,
+        }
+
+        if getattr(daemon, "objective_store", None) is None:
+            record["outcome"] = OBJECTIVE_OUTCOME_UNAVAILABLE
+            record["reply"] = objective_intents.render_failure(
+                intent.described_as,
+                "objective tracking is not available in this session",
+            )
+            return record
+
+        if intent.action == objective_intents.INTENT_LIST:
+            objectives = await _live_objectives(daemon)
+            record["outcome"] = OBJECTIVE_OUTCOME_EXECUTED
+            record["count"] = len(objectives)
+            record["reply"] = objective_intents.render_list(objectives)
+            return record
+
+        if intent.action == objective_intents.INTENT_OPEN:
+            result = await run_objective_through_runtime_contract(
+                daemon,
+                "open",
+                title=intent.title,
+                outcome_statement=intent.outcome_statement,
+                horizon_kind=intent.horizon_kind,
+                horizon_date=intent.horizon_date,
+                actor="chat",
+            )
+            if _objective_denied(result):
+                record["outcome"] = OBJECTIVE_OUTCOME_DENIED
+                record["error"] = result.reason
+                record["reply"] = objective_intents.render_failure(
+                    intent.described_as,
+                    result.reason,
+                )
+                return record
+            record["outcome"] = OBJECTIVE_OUTCOME_EXECUTED
+            record["changed"] = True
+            record["objective_id"] = getattr(result.objective, "id", None)
+            record["reply"] = objective_intents.render_opened(result.objective)
+            return record
+
+        # complete / abandon: both need a real objective, which nobody names
+        # by id. Resolution can decline, and declining is not a change.
+        objectives = await _live_objectives(daemon)
+        matched = objective_intents.match_objective(intent.subject or "", objectives)
+        if matched is None:
+            candidates = [
+                o for o in objectives if objective_intents.relates_to(o, intent.subject or "")
+            ]
+            if len(candidates) > 1:
+                record["outcome"] = OBJECTIVE_OUTCOME_AMBIGUOUS
+                record["reply"] = objective_intents.render_ambiguous(
+                    intent.subject or "",
+                    candidates,
+                )
+                return record
+            record["outcome"] = OBJECTIVE_OUTCOME_NOT_FOUND
+            record["reply"] = objective_intents.render_not_found(intent.subject or "")
+            return record
+
+        transition = "complete" if intent.action == objective_intents.INTENT_COMPLETE else "abandon"
+        result = await run_objective_through_runtime_contract(
+            daemon,
+            transition,
+            objective_id=matched.id,
+            resolution=(objective_store.RESOLUTION_ACHIEVED if transition == "complete" else None),
+            outcome_note=observation.raw_content,
+            actor="chat",
+        )
+        if _objective_denied(result):
+            record["outcome"] = OBJECTIVE_OUTCOME_DENIED
+            record["error"] = result.reason
+            record["reply"] = objective_intents.render_failure(
+                intent.described_as,
+                result.reason,
+            )
+            return record
+
+        record["outcome"] = OBJECTIVE_OUTCOME_EXECUTED
+        record["changed"] = True
+        record["objective_id"] = matched.id
+        record["reply"] = (
+            objective_intents.render_completed(result.objective)
+            if transition == "complete"
+            else objective_intents.render_abandoned(result.objective)
+        )
+        return record
+    except Exception:
+        logger.exception("Objective routing failed; reporting it rather than hiding it")
+        return {
+            "requested": "update what you're working towards",
+            "action": "unknown",
+            "outcome": OBJECTIVE_OUTCOME_FAILED,
+            "changed": False,
+            "error": "an internal error interrupted it",
+            "reply": (
+                "I tried to update what I'm keeping track of and an internal error "
+                "interrupted it. Nothing was recorded, so please tell me again."
+            ),
+        }
+
+
+async def _attach_forecast_evidence(
+    daemon: KernelDaemon,
+    observation: Observation,
+    forecast_action: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Attach a forecast this turn obtained to the objective it bears on.
+
+    The external provider contributes **evidence**, and only evidence. It
+    does not decide anything, does not become the Executive and cannot reach
+    an objective on its own: the Executive matched the utterance to one
+    objective and recorded the provider's own provenance block against it,
+    with `event_kind="fact"`. The forecast skill is unchanged and has no
+    knowledge that objectives exist.
+
+    Bounded deliberately:
+      * only when the lookup actually succeeded -- a failed or denied lookup
+        is not evidence of anything, and recording "we asked and got nothing"
+        against an objective would clutter its history with non-events;
+      * only when exactly one live objective matches. Ambiguity records
+        nothing, because a fact filed against the wrong objective is read
+        back later as if it belonged there;
+      * never raises, and never affects the turn's reply. This is
+        bookkeeping in service of the *next* interaction.
+    """
+    if forecast_action.get("outcome") != FORECAST_OUTCOME_OBTAINED:
+        return None
+    try:
+        objectives = await _live_objectives(daemon)
+        related = [
+            o for o in objectives if objective_intents.relates_to(o, observation.raw_content or "")
+        ]
+        if len(related) != 1:
+            return None
+        objective = related[0]
+
+        provenance = {
+            "source_kind": "external_capability",
+            "provider_host": forecast_action.get("provider_host"),
+            "disclosed": forecast_action.get("disclosed"),
+            # The same posture DECISIONS.md clause (d) established for the
+            # forecast slice, carried into the objective's own history: this
+            # is an external assertion, not an established fact.
+            "evidence": True,
+        }
+        result = await run_objective_through_runtime_contract(
+            daemon,
+            "record",
+            objective_id=objective.id,
+            event_kind=objective_store.EVENT_FACT,
+            summary=(forecast_action.get("reply") or "forecast obtained")[:300],
+            provenance=provenance,
+            actor="chat:forecast",
+        )
+        if _objective_denied(result):
+            return None
+        return {
+            "objective_id": objective.id,
+            "objective_title": objective.title,
+            "event_kind": objective_store.EVENT_FACT,
+        }
+    except Exception:
+        logger.exception("Attaching forecast evidence to an objective failed")
+        return None
+
+
+#: Dispatch names, one per explicit-instruction recogniser. Constants rather
+#: than bare strings so the table below and the result-field reads in
+#: `run_chat_through_runtime_contract()` cannot drift apart silently.
+_DISPATCH_TASK = "task"
+_DISPATCH_FORECAST = "forecast"
+_DISPATCH_OBJECTIVE = "objective"
+
+#: The chat surface's explicit-instruction recognisers, **in dispatch order**.
+#:
+#: This is a table, not a framework. There is no registration API, no
+#: discovery, no priority negotiation and no way for anything outside this
+#: module to add an entry: it is the same ordered `if/elif` chain the chat
+#: turn always had, written once so a further recogniser is one line rather
+#: than one more level of nesting.
+#:
+#: Order is behaviour and is pinned by test. Task control comes first because
+#: an explicit task instruction is unambiguous and must never be reinterpreted
+#: as something else; each handler returns None for anything it does not
+#: explicitly claim, so the common case reaches the model unchanged.
+_CHAT_DISPATCH: tuple[
+    tuple[str, Callable[[KernelDaemon, Observation], Awaitable[dict[str, Any] | None]]],
+    ...,
+] = (
+    (_DISPATCH_TASK, _handle_task_intent),
+    (_DISPATCH_FORECAST, _handle_forecast_intent),
+    # Golden Path slice 2. Last, deliberately: "add a task to ring the
+    # roofer" is a task instruction and "will it rain on Thursday" is a
+    # forecast question, and neither should be reinterpreted as establishing
+    # an objective. The objective recogniser is the broadest of the three,
+    # so it goes where a broad recogniser belongs -- after the narrow ones.
+    (_DISPATCH_OBJECTIVE, _handle_objective_intent),
+)
+
+
 async def run_chat_through_runtime_contract(
     daemon: KernelDaemon,
     user_input: str,
@@ -1037,11 +1366,13 @@ async def run_chat_through_runtime_contract(
     memory_context = await _retrieve_memory_context(daemon, observation)
     competency_context = memory_context.competency
     personal_fact_context = memory_context.personal
+    live_objectives = await _live_objectives(daemon)
     interpretation = _build_interpretation(
         daemon,
         observation,
         competency_block=render_for_prompt(competency_context),
         personal_facts_block=personal_facts.render_facts_for_prompt(personal_fact_context),
+        objectives_block=render_objectives_for_prompt(live_objectives),
     )
 
     # Stage 3: Executive -- propose a candidate action, now carrying whichever
@@ -1108,37 +1439,52 @@ async def run_chat_through_runtime_contract(
     working_memory_item_id: str | None = None
     captured_facts: list[dict[str, Any]] = []
 
+    #: What each recogniser in `_CHAT_DISPATCH` produced, keyed by its
+    #: dispatch name. At most one entry: the first recogniser to claim the
+    #: utterance owns the turn. The per-recogniser result fields on
+    #: `RuntimeContractResult` are read back out of this below, so adding a
+    #: recogniser never changes this function's control flow.
+    recognised: dict[str, dict[str, Any]] = {}
     task_action: dict[str, Any] | None = None
     forecast_action: dict[str, Any] | None = None
+    objective_action: dict[str, Any] | None = None
+    objective_evidence: dict[str, Any] | None = None
 
     if governance_allowed:
         # Stage 5+6: Capability + Execution.
         #
-        # Conversational task control: an utterance that is an *explicit* task
-        # instruction is carried out through the governed skill path, and its
-        # real outcome becomes the turn's reply. The model is deliberately not
-        # asked for one in that case -- a generated sentence about an action
-        # that has already happened (or has just been refused) could contradict
-        # it, and the user would have no way to tell which was true. Anything
-        # that is not an explicit instruction returns None here and the turn
-        # proceeds exactly as it always has.
-        task_action = await _handle_task_intent(daemon, observation)
-        if task_action is not None:
-            response = task_action["reply"]
+        # Explicit-instruction dispatch, in the fixed order _CHAT_DISPATCH
+        # declares. The first recogniser that claims the utterance owns the
+        # turn's reply, and the model is deliberately not asked for one in
+        # that case -- a generated sentence about an action that has already
+        # happened (or has just been refused) could contradict it, and the
+        # user would have no way to tell which was true. When no recogniser
+        # claims it -- the overwhelmingly common case -- the turn falls
+        # through to the model exactly as it always has.
+        for name, handler in _CHAT_DISPATCH:
+            outcome = await handler(daemon, observation)
+            if outcome is not None:
+                recognised[name] = outcome
+                response = outcome["reply"]
+                break
         else:
-            # Golden Path first slice: an explicit forecast question is
-            # answered from evidence a governed external capability actually
-            # returned. As with task control, the model is deliberately not
-            # asked for a reply in that case -- a model asked "will it rain
-            # tomorrow" will produce a fluent answer it has no way to know,
-            # which is exactly the failure an external capability exists to
-            # remove. Anything that is not an explicit forecast request
-            # returns None and the turn proceeds as it always has.
-            forecast_action = await _handle_forecast_intent(daemon, observation)
-            if forecast_action is not None:
-                response = forecast_action["reply"]
-            else:
-                response = await respond_fn(interpretation.prompt)
+            response = await respond_fn(interpretation.prompt)
+
+        task_action = recognised.get(_DISPATCH_TASK)
+        forecast_action = recognised.get(_DISPATCH_FORECAST)
+        objective_action = recognised.get(_DISPATCH_OBJECTIVE)
+
+        # Golden Path slice 2: a forecast obtained during this turn becomes
+        # evidence on the objective it bears on. After the reply is settled
+        # and never able to change it -- continuity is a property of the
+        # *next* interaction, and bookkeeping must not be able to alter what
+        # the user is told now.
+        if forecast_action is not None:
+            objective_evidence = await _attach_forecast_evidence(
+                daemon,
+                observation,
+                forecast_action,
+            )
 
         # Stage 7: Reflection -- record the interaction in Working Memory
         # (chat's short-term context buffer; feeds get_context_string()).
@@ -1184,6 +1530,15 @@ async def run_chat_through_runtime_contract(
             # audit. The skill's own `skill_action_audit` row and unified
             # Reflection still exist and are unchanged.
             details["forecast_action"] = forecast_action
+        if objective_action is not None:
+            # Explanation-grade, same posture as the records above: what the
+            # user asked for, what the governed objective seam did, and
+            # whether anything actually changed.
+            details["objective_action"] = objective_action
+        if objective_evidence is not None:
+            # External content entering an objective's durable history is
+            # exactly the kind of thing that must be visible afterwards.
+            details["objective_evidence"] = objective_evidence
 
         reflection = ActionReflection(
             surface="chat",
@@ -1232,6 +1587,8 @@ async def run_chat_through_runtime_contract(
         personal_facts_captured=captured_facts,
         task_action=task_action,
         forecast_action=forecast_action,
+        objective_action=objective_action,
+        objective_evidence=objective_evidence,
         provenance_degraded=reflection_outcome.error is not None,
         provenance_error=reflection_outcome.error,
     )
@@ -2643,3 +3000,431 @@ async def run_training_through_runtime_contract(
     result.provenance_error = ingest_reflection.error
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Golden Path slice 2: Objective Continuity
+# ---------------------------------------------------------------------------
+
+_OBJECTIVE_TRANSITIONS = frozenset(
+    {"open", "record", "surface", "block", "unblock", "complete", "abandon"},
+)
+
+_OBJECTIVE_OUTCOME_BY_TRANSITION = {
+    "open": "opened",
+    "record": "recorded",
+    "surface": "surfaced",
+    "block": "blocked",
+    "unblock": "unblocked",
+    "complete": "completed",
+    "abandon": "abandoned",
+}
+
+
+@dataclass(frozen=True)
+class ObjectiveAdmission:
+    """Whether one objective transition is admitted, and why not if not.
+
+    `outcome` is the value a refused transition reports
+    ("parking_brake_denied" or "governance_denied"), so the caller never has
+    to reconstruct it.
+    """
+
+    allowed: bool
+    outcome: str | None = None
+    reason: str | None = None
+
+
+async def evaluate_objective_admission(ctx: Any, kind: str) -> ObjectiveAdmission:
+    """The single Governance authority for every objective mutation.
+
+    Both gates, in one place, so there is exactly one implementation of the
+    decision. `run_objective_through_runtime_contract()` calls this
+    immediately before it writes, and the re-engagement drive calls it before
+    it persists anything of its own -- one authority consulted twice, never
+    two implementations that can drift apart.
+
+    **Gate 1: the Parking Brake, engaged AT ALL -- not scoped to `skills`.**
+    This is `DECISIONS.md`'s "Parking Brake means inspect, but do not mutate"
+    (2026-08-18), clause (d): the gate is the engaged flag itself, not any one
+    subsystem scope, so a brake engaged for `voice` alone still refuses an
+    objective mutation. An objective is durable user state in the same sense
+    the user's memory is -- it belongs to none of the existing subsystem
+    scopes (`skills`, `sight`, `voice`, `scheduler`, `training`), so gating it
+    on any single one would be arbitrary, which is exactly the reasoning
+    `MemoryStore._refuse_mutation_if_braked()` already records for memory.
+    This uses the same helper that check uses,
+    `engaged_state_fail_closed_off_loop()`, rather than a second one.
+
+    Reading objectives stays allowed under a halt, because seeing what
+    Bartholomew is carrying is inspection, and clause (b)'s reasoning applies:
+    a halt that hides what the system was about to do defeats the purpose of
+    halting. `_live_objectives()` and the Interpretation block are therefore
+    deliberately not gated here.
+
+    **Gate 2: Identity Context -> Policy Decision**, per transition kind, so
+    permission to record an objective is not permission to close one. Skipped
+    entirely when no IdentityContext is wired in -- additive, no new failure
+    mode for callers that don't opt in.
+
+    Fails closed: an unreadable governance state refuses the mutation. An
+    unreadable safety gate must never wave a write through.
+    """
+    try:
+        from bartholomew.orchestrator.safety.governance_store import (
+            engaged_state_fail_closed_off_loop,
+        )
+
+        state = await engaged_state_fail_closed_off_loop(
+            ctx.mem.db_path,
+            governance_store=getattr(ctx, "governance_store", None),
+            executor=getattr(ctx, "blocking_executor", None),
+        )
+        if state.engaged:
+            scopes = ", ".join(sorted(state.scopes)) or "global"
+            return ObjectiveAdmission(
+                False,
+                "parking_brake_denied",
+                f"Blocked by parking brake (engaged; scopes={scopes})",
+            )
+    except Exception:
+        logger.exception("Governance check failed for %s; failing closed", kind)
+        return ObjectiveAdmission(False, "parking_brake_denied", "Governance check errored")
+
+    identity_context = getattr(ctx, "identity_context", None)
+    if identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, kind)
+        if not decision.allowed:
+            return ObjectiveAdmission(
+                False,
+                "governance_denied",
+                f"Denied by Identity policy: {decision.reason}",
+            )
+
+    return ObjectiveAdmission(True)
+
+
+@dataclass
+class ObjectiveRuntimeResult:
+    """Outcome of one objective transition through the Runtime Contract.
+
+    `outcome` is one of the values in `_OBJECTIVE_OUTCOME_BY_TRANSITION`, or
+    "parking_brake_denied", "governance_denied", "error"."""
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    outcome: str
+    reason: str | None
+    objective: Any = None
+    event: Any = None
+
+
+async def _record_objective_reflection(
+    ctx: Any,
+    candidate_action: CandidateAction,
+    outcome: str,
+    objective: Any,
+    reason: str | None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Exactly one ActionReflection per objective transition, into the same
+    shared Memory sink every other surface writes to.
+
+    Best-effort in the same sense `_record_awaiting_response_reflection` is:
+    `record_action_reflection` swallows and logs its own failure, so a lost
+    Reflection never destabilises the transition that produced it. The
+    objective's own `objective_events` row is the queryable per-objective
+    detail view; this is the cross-surface stream.
+    """
+    details: dict[str, Any] = dict(extra or {})
+    if reason:
+        details["reason"] = reason
+    if objective is not None:
+        details["objective"] = {
+            "id": getattr(objective, "id", None),
+            "title": getattr(objective, "title", None),
+            "status": getattr(objective, "status", None),
+        }
+    reflection = ActionReflection(
+        surface="objective",
+        action=candidate_action.kind,
+        outcome=outcome,
+        summary=f"Objective ({candidate_action.kind}): {outcome}",
+        details=details,
+    )
+    await record_action_reflection(getattr(ctx, "mem", None), reflection)
+
+
+async def _execute_objective_transition(
+    ctx: Any,
+    store: Any,
+    transition: str,
+    *,
+    objective_id: int | None,
+    title: str | None,
+    outcome_statement: str | None,
+    horizon_kind: str,
+    horizon_date: str | None,
+    event_kind: str | None,
+    summary: str | None,
+    provenance: dict[str, Any] | None,
+    reason: str | None,
+    resolution: str | None,
+    outcome_note: str | None,
+    actor: str | None,
+) -> tuple[Any, Any]:
+    """Run the store call for one transition, off the event loop.
+
+    Returns (objective, event) -- `event` is populated only by "record",
+    whose product is the event rather than a status change.
+    """
+    executor = getattr(ctx, "blocking_executor", None)
+
+    if transition == "open":
+        objective = await run_off_loop(
+            functools.partial(
+                store.open,
+                title=title,
+                outcome_statement=outcome_statement,
+                horizon_kind=horizon_kind,
+                horizon_date=horizon_date,
+                actor=actor,
+            ),
+            executor=executor,
+        )
+        return objective, None
+
+    if transition == "record":
+        event = await run_off_loop(
+            functools.partial(
+                store.record,
+                objective_id,
+                event_kind=event_kind,
+                summary=summary,
+                provenance=provenance,
+                actor=actor,
+            ),
+            executor=executor,
+        )
+        objective = await run_off_loop(store.get, objective_id, executor=executor)
+        return objective, event
+
+    if transition == "surface":
+        objective = await run_off_loop(
+            functools.partial(store.surface, objective_id, actor=actor),
+            executor=executor,
+        )
+        return objective, None
+
+    if transition == "block":
+        objective = await run_off_loop(
+            functools.partial(store.block, objective_id, reason=reason or "", actor=actor),
+            executor=executor,
+        )
+        return objective, None
+
+    if transition == "unblock":
+        objective = await run_off_loop(
+            functools.partial(store.unblock, objective_id, actor=actor),
+            executor=executor,
+        )
+        return objective, None
+
+    if transition == "complete":
+        objective = await run_off_loop(
+            functools.partial(
+                store.complete,
+                objective_id,
+                resolution=resolution or objective_store.RESOLUTION_ACHIEVED,
+                outcome_note=outcome_note,
+                actor=actor,
+            ),
+            executor=executor,
+        )
+        return objective, None
+
+    # abandon -- the only remaining member of _OBJECTIVE_TRANSITIONS.
+    objective = await run_off_loop(
+        functools.partial(
+            store.abandon,
+            objective_id,
+            outcome_note=outcome_note,
+            actor=actor,
+        ),
+        executor=executor,
+    )
+    return objective, None
+
+
+async def run_objective_through_runtime_contract(
+    ctx: Any,
+    transition: str,
+    *,
+    objective_id: int | None = None,
+    title: str | None = None,
+    outcome_statement: str | None = None,
+    horizon_kind: str = objective_store.HORIZON_OPEN,
+    horizon_date: str | None = None,
+    event_kind: str | None = None,
+    summary: str | None = None,
+    provenance: dict[str, Any] | None = None,
+    reason: str | None = None,
+    resolution: str | None = None,
+    outcome_note: str | None = None,
+    actor: str | None = None,
+) -> ObjectiveRuntimeResult:
+    """
+    Trace one objective transition through the Runtime Contract seam.
+
+    `transition` is one of "open" (requires title), "record" (requires
+    objective_id, event_kind and summary), or "surface"/"block"/"unblock"/
+    "complete"/"abandon" (all require objective_id).
+
+    `ctx` needs `.mem.db_path` and `.objective_store`; `.governance_store`,
+    `.blocking_executor` and `.identity_context` are consulted via getattr
+    with the same additive fallbacks every other seam function here uses.
+
+    **An objective existing authorises nothing.** This function governs the
+    recording of what the user wants and what has happened around it -- and
+    nothing else. It sends no message, contacts nobody, spends nothing and
+    reaches no external provider. Any action that might advance an
+    objective is a separate governed action with its own gates; remembering
+    "get the roof repaired" does not become permission to email a roofer.
+    That separation is the whole reason this seam writes to a store rather
+    than dispatching anything.
+
+    Governance is two independent gates, both before any store write, in the
+    shape `run_awaiting_response_through_runtime_contract` established:
+
+      1. ParkingBrake("skills"), fail-closed. An engaged brake produces zero
+         writes -- the objective record is governed state, and a braked
+         Bartholomew does not quietly keep bookkeeping.
+      2. Identity Context -> Policy Decision against the kind
+         "objective_<transition>". Deliberately NOT exempted the way
+         `_SELF_MAINTENANCE_DRIVES` scheduler drives are: an objective is
+         specific user content, not kernel housekeeping. Skipped entirely
+         when no IdentityContext is wired in -- additive, no new failure
+         mode for callers that don't opt in.
+
+    A caller-input error (unknown objective_id, or any transition against an
+    objective already completed or abandoned) raises ObjectiveNotFoundError/
+    InvalidTransitionError directly. These are the caller's mistake, not a
+    governance denial, so they propagate rather than being folded into
+    `outcome` -- and in particular an attempt to touch a finished objective
+    is loud, never silently absorbed.
+    """
+    from .objective_store import InvalidTransitionError, ObjectiveNotFoundError
+
+    if transition not in _OBJECTIVE_TRANSITIONS:
+        raise ValueError(
+            f"transition must be one of {sorted(_OBJECTIVE_TRANSITIONS)}, got {transition!r}",
+        )
+    # Malformed-call validation, before any Observation/Governance/store
+    # work -- same posture as the awaiting_response seam: a missing required
+    # argument is a programming mistake, not a governed event.
+    if transition == "open":
+        if not title:
+            raise ValueError("objective 'open' requires a title")
+    elif objective_id is None:
+        raise ValueError(f"objective {transition!r} requires objective_id")
+    if transition == "record" and (not event_kind or not summary):
+        raise ValueError("objective 'record' requires event_kind and summary")
+
+    store = ctx.objective_store
+    kind = f"objective_{transition}"
+    executor = getattr(ctx, "blocking_executor", None)
+
+    existing = None
+    if objective_id is not None:
+        existing = await run_off_loop(store.get, objective_id, executor=executor)
+    prompt_subject = title or (getattr(existing, "title", None) or "objective")
+
+    observation = Observation(
+        source="objective",
+        raw_content=f"{transition}:{objective_id if objective_id is not None else 'new'}",
+    )
+    interpretation = Interpretation(observation=observation, prompt=prompt_subject)
+    candidate_action = CandidateAction(kind=kind, interpretation=interpretation)
+
+    admission = await evaluate_objective_admission(ctx, kind)
+    governance_allowed = admission.allowed
+    outcome = admission.outcome or "governance_denied"
+    denial_reason = admission.reason
+
+    objective = existing
+    event = None
+    if governance_allowed:
+        try:
+            objective, event = await _execute_objective_transition(
+                ctx,
+                store,
+                transition,
+                objective_id=objective_id,
+                title=title,
+                outcome_statement=outcome_statement,
+                horizon_kind=horizon_kind,
+                horizon_date=horizon_date,
+                event_kind=event_kind,
+                summary=summary,
+                provenance=provenance,
+                reason=reason,
+                resolution=resolution,
+                outcome_note=outcome_note,
+                actor=actor,
+            )
+        except (ObjectiveNotFoundError, InvalidTransitionError) as exc:
+            await _record_objective_reflection(
+                ctx,
+                candidate_action,
+                "rejected",
+                existing,
+                str(exc),
+            )
+            raise
+        except Exception as exc:
+            logger.exception("objective transition %s failed", kind)
+            governance_allowed = False
+            outcome = "error"
+            denial_reason = str(exc)
+        else:
+            outcome = _OBJECTIVE_OUTCOME_BY_TRANSITION[transition]
+
+    # Reflection -- for every outcome EXCEPT a brake refusal.
+    #
+    # `record_action_reflection()` writes to the `reflections` table through
+    # `MemoryStore.insert_reflection()`, so writing one here while the brake
+    # is engaged would be a memory mutation during a halt -- precisely what
+    # `MemoryStore._refuse_mutation_if_braked()` refuses for every other
+    # memory write, and what "inspect, but do not mutate" forbids. A halted
+    # system does no bookkeeping about work it declined to do.
+    #
+    # Nothing is hidden by this. The refusal is returned to the caller with
+    # its reason, and the brake's own engagement is already recorded in the
+    # GovernanceStore audit -- which clause (b) of that decision keeps
+    # exempt precisely so the halt stays inspectable. What is *not* recorded
+    # is a new row in the user's memory, because a refused transition did no
+    # work worth recording.
+    #
+    # An Identity-policy denial is different and still writes: that is an
+    # ordinary governed decision, not a halt, and it is the same posture
+    # chat and the awaiting_response seam already take for their denials.
+    if outcome != "parking_brake_denied":
+        await _record_objective_reflection(
+            ctx,
+            candidate_action,
+            outcome,
+            objective,
+            denial_reason,
+            {"event_kind": event_kind} if event_kind else None,
+        )
+
+    return ObjectiveRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=governance_allowed,
+        outcome=outcome,
+        reason=denial_reason,
+        objective=objective,
+        event=event,
+    )

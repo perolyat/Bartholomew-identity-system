@@ -514,6 +514,39 @@ tool_use:
     # (default false), and the `voice` Parking Brake scope silences it
     # regardless. All three must line up.
     - "voice_speak"
+    # Golden Path slice 2 (Objective Continuity): the objective seam's own
+    # transition kinds. Deliberately NOT exempted the way self-maintenance
+    # scheduler drives are -- an objective is specific user content, so
+    # without these entries run_objective_through_runtime_contract() denies
+    # every transition at its Identity gate. Same shape and same reason as
+    # the four awaiting_response_* entries above.
+    #
+    # Scope note, and it is the important one: these entries authorise
+    # *recording* what the user is trying to achieve and what has happened
+    # around it. They authorise no action that might advance an objective.
+    # Remembering "get the roof repaired" does not become permission to send
+    # a message, spend money, disclose anything or reach any external
+    # provider -- each of those remains a separate governed action behind
+    # its own gate. An objective existing authorises nothing.
+    - "objective_open"
+    - "objective_record"
+    - "objective_surface"
+    - "objective_block"
+    - "objective_unblock"
+    - "objective_complete"
+    - "objective_abandon"
+    # The scheduler drive that re-engages with live objectives whose horizon
+    # is near or which have gone quiet, and sends one notification per
+    # objective through the existing NotifySkill path. Same precedent as
+    # awaiting_response_check and schedule_reminder_check above: genuine
+    # outbound contact about specific user content, so not self-maintenance
+    # exempt.
+    #
+    # As with schedule_reminder_check, this entry does not by itself make
+    # Bartholomew proactive: the drive is only registered when
+    # config/kernel.yaml's proactive.objective_continuity is true (default
+    # false). Both are required.
+    - "objective_continuity_check"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]

@@ -359,7 +359,16 @@ class TestDistinctObligationsStayDistinct:
         # policy exists for. The property this test is really about is
         # unchanged and is asserted below: anything NOT listed is ineligible.
         assert containment.eligible_reasons() == frozenset(
-            {"curiosity_probe", SELF_CHECK_DRIFT_REASON, "schedule_reminder"},
+            {
+                "curiosity_probe",
+                SELF_CHECK_DRIFT_REASON,
+                "schedule_reminder",
+                # Golden Path slice 2. Added here consciously, which is the
+                # point of pinning the allowlist: a drive does not get
+                # containment by writing a new reason string, only by being
+                # named in both places.
+                "objective_reengagement",
+            },
         )
         for reason in [None, "", "user_task", "awaiting_response", "notify", "reminder"]:
             assert not containment.is_policy_eligible(reason)
