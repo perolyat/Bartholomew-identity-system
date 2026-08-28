@@ -529,10 +529,12 @@ async def shutdown():
     # control-plane path happened to be configured at the time. Installed at
     # startup, removed at shutdown, symmetrically.
     from bartholomew.orchestrator.safety.governance_store import (
+        register_additional_engaged_check,
         register_additional_halt_check,
     )
 
     register_additional_halt_check(None)
+    register_additional_engaged_check(None)
 
 
 # --- Kernel-facing helpers ---

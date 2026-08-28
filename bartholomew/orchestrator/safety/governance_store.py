@@ -684,7 +684,35 @@ def engaged_state_fail_closed(
     aborting the caller before it mutates anything.
     """
     store = governance_store or GovernanceStore(db_path)
-    return store.refresh()
+    state = store.refresh()
+    if state.engaged:
+        # The local brake alone is sufficient, and is answered without
+        # consulting anything else -- the path that keeps working when every
+        # remote service is gone.
+        return state
+
+    # A registered higher-scope authority (the S8 Platform/Admin tier) halts
+    # on the same "engaged at all" question. Composed here as well as in
+    # is_blocked_fail_closed() because these are different questions with
+    # different callers: this one gates operations that belong to no subsystem
+    # scope -- objective mutation, consent resolution, memory writes -- and a
+    # platform-wide safety halt must stop those too, or the tier would halt
+    # skills while durable user state kept changing underneath it.
+    check = _HALT_AUTHORITY["engaged"]
+    if check is None:
+        return state
+    try:
+        engaged_elsewhere = bool(check())
+    except Exception:
+        # Fail closed, matching this module's contract for an unreadable brake.
+        engaged_elsewhere = True
+    if not engaged_elsewhere:
+        return state
+    # Reported as engaged, at the local revision. The revision is the local
+    # store's because that is what a subsequent revision-guarded local
+    # disengage must match; the platform tier keeps its own revision and is
+    # released through its own authority, never through this one.
+    return GovernanceState(engaged=True, scopes=state.scopes, revision=state.revision)
 
 
 async def engaged_state_fail_closed_off_loop(
@@ -723,7 +751,7 @@ async def engaged_state_fail_closed_off_loop(
 # says so, without consulting the hook at all.
 # A holder rather than a bare module global, so registration mutates a
 # container instead of rebinding a module attribute.
-_HALT_AUTHORITY: dict[str, Callable[[str], bool] | None] = {"check": None}
+_HALT_AUTHORITY: dict[str, Callable[..., bool] | None] = {"check": None, "engaged": None}
 
 
 def register_additional_halt_check(check: Callable[[str], bool] | None) -> None:
@@ -736,6 +764,20 @@ def register_additional_halt_check(check: Callable[[str], bool] | None) -> None:
     of the absence of one.
     """
     _HALT_AUTHORITY["check"] = check
+
+
+def register_additional_engaged_check(check: Callable[[], bool] | None) -> None:
+    """
+    Register (or clear) the higher-scope authority's "engaged at all" answer.
+
+    Separate from `register_additional_halt_check` because the two answer
+    genuinely different questions -- "is scope X halted?" versus "is anything
+    halted?" -- and `engaged_state_fail_closed()` exists precisely because
+    some operations belong to no scope. Same contract otherwise: consulted
+    only when the local brake has not already engaged, and an exception is
+    treated as engaged.
+    """
+    _HALT_AUTHORITY["engaged"] = check
 
 
 def is_blocked_fail_closed(

@@ -38,6 +38,7 @@ import time
 from dataclasses import dataclass
 
 from bartholomew.orchestrator.safety.governance_store import (
+    register_additional_engaged_check,
     register_additional_halt_check,
 )
 
@@ -216,6 +217,20 @@ def platform_halt_check(scope: str) -> bool:
     return "global" in state.scopes or scope in state.scopes
 
 
+def platform_engaged_check() -> bool:
+    """
+    Whether the Platform/Admin tier is engaged **at all**, for Governance to
+    compose into operations that belong to no subsystem scope.
+
+    Inert when the deployment has no platform tier, for the same reason as
+    `platform_halt_check`. Where the tier is active, an unreadable state
+    raises and the caller treats that as engaged.
+    """
+    if not platform_tier_active():
+        return False
+    return get_state().engaged
+
+
 def install_platform_halt_hook() -> None:
     """
     Wire the Platform tier into Governance's composition point.
@@ -229,3 +244,4 @@ def install_platform_halt_hook() -> None:
     control plane destroyed.
     """
     register_additional_halt_check(platform_halt_check)
+    register_additional_engaged_check(platform_engaged_check)

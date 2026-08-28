@@ -18,7 +18,9 @@ import pytest
 
 from bartholomew.orchestrator.safety.governance_store import (
     GovernanceStore,
+    engaged_state_fail_closed,
     is_blocked_fail_closed,
+    register_additional_engaged_check,
     register_additional_halt_check,
 )
 
@@ -37,6 +39,7 @@ def _isolated(monkeypatch):
     install_platform_halt_hook()
     yield tmp
     register_additional_halt_check(None)
+    register_additional_engaged_check(None)
 
 
 @pytest.fixture
@@ -222,3 +225,75 @@ def test_an_admin_still_holds_no_personal_data_capability():
         Capability.TRAINING_SUBMIT,
     ):
         assert forbidden not in held, forbidden
+
+
+# ---------------------------------------------------------------------------
+# Integration with Session A's scope-less gate (added at merge time)
+# ---------------------------------------------------------------------------
+#
+# `engaged_state_fail_closed` gates operations that belong to no subsystem
+# scope -- objective mutation, consent resolution, memory writes. It is a
+# different helper from `is_blocked_fail_closed`, so composing the tier into
+# one did not compose it into the other: a platform-wide halt would have
+# stopped skills while durable user state kept changing underneath it.
+
+
+def test_a_platform_halt_stops_scope_less_governed_mutation(user_db):
+    """
+    The integration gap this closes. A platform halt must register on the
+    "is the brake engaged at all" gate, not only the per-scope one.
+    """
+    from bartholomew.platform import authority
+
+    assert engaged_state_fail_closed(user_db).engaged is False
+    authority.engage("global", actor="ops", reason="platform emergency")
+    assert engaged_state_fail_closed(user_db).engaged is True
+
+
+def test_a_scoped_platform_halt_also_stops_scope_less_mutation(user_db):
+    """
+    Session A's own reasoning: the gate is whether the brake is engaged AT
+    ALL, not whether one subsystem is halted. A platform halt scoped to
+    `voice` must therefore still stop objective mutation.
+    """
+    from bartholomew.platform import authority
+
+    authority.engage("voice", actor="ops", reason="defective capability")
+    assert engaged_state_fail_closed(user_db).engaged is True
+
+
+def test_the_scope_less_gate_still_reports_the_local_brake_alone(user_db):
+    """The local path is unchanged, and short-circuits before the tier."""
+    from bartholomew.platform import authority
+
+    authority.disengage(actor="test-reset", reason="clean slate")
+    GovernanceStore(user_db).engage("global", reason="user halt", actor="alice")
+    assert engaged_state_fail_closed(user_db).engaged is True
+
+
+def test_the_scope_less_gate_fails_closed_when_the_tier_is_unreadable(user_db, monkeypatch):
+    monkeypatch.setenv("BARTH_PLATFORM_DB_PATH", "/proc/1/definitely/not/a/db")
+    assert engaged_state_fail_closed(user_db).engaged is True
+
+
+def test_the_scope_less_gate_is_inert_in_a_purely_local_deployment(user_db, monkeypatch):
+    """An absent tier must not fail-close a single-user local install."""
+    from bartholomew.platform import authority
+
+    authority.engage("global", actor="ops", reason="engaged while active")
+    assert engaged_state_fail_closed(user_db).engaged is True
+
+    monkeypatch.delenv("BARTH_AUTH_MODE", raising=False)
+    monkeypatch.delenv("BARTH_API_ALLOW_NON_LOOPBACK", raising=False)
+    assert engaged_state_fail_closed(user_db).engaged is False
+
+
+def test_releasing_the_platform_tier_does_not_release_a_local_scope_less_halt(
+    user_db,
+):
+    from bartholomew.platform import authority
+
+    GovernanceStore(user_db).engage("global", reason="user halt", actor="alice")
+    authority.engage("global", actor="ops", reason="platform halt")
+    authority.disengage(actor="ops", reason="platform fixed")
+    assert engaged_state_fail_closed(user_db).engaged is True
