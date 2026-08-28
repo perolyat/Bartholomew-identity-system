@@ -32,6 +32,7 @@ from bartholomew_api_bridge_v0_1.services.api.app import (
     non_loopback_allowed,
     resolve_bind_host,
 )
+from tests.helpers.exposed_posture import establish_exposed_posture
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -176,10 +177,25 @@ def test_forwarded_headers_cannot_spoof_a_local_caller():
     assert response.status_code == 403
 
 
-def test_the_override_also_opens_the_request_boundary(monkeypatch):
-    """The container case: one deliberate switch, both layers."""
-    monkeypatch.setenv(ALLOW_NON_LOOPBACK_ENV, "1")
-    with TestClient(app, client=("172.17.0.1", 51234)) as client:
+def test_the_override_also_opens_the_request_boundary(monkeypatch, tmp_path):
+    """
+    The container case: one deliberate switch, both layers.
+
+    Since S8 the same switch also makes authentication and TLS mandatory
+    (bartholomew/platform/exposure.py): startup refuses without TLS material,
+    and the request boundary refuses a plaintext request. Both are covered
+    directly elsewhere (test_non_loopback_requires_tls below, and
+    tests/test_s8_tls_live_socket.py). This test is about the *request
+    boundary* opening to a non-loopback peer, so it satisfies both
+    preconditions -- the full exposed posture, and an https request -- and
+    leaves the assertion unchanged.
+    """
+    # An exposed deployment now also requires a provisioned account and an
+    # explicit runtime binding (no unbound remote mode), so the posture is
+    # established wholesale rather than by setting TLS alone.
+    establish_exposed_posture(monkeypatch, tmp_path)
+    with TestClient(app, client=("172.17.0.1", 51234), base_url="https://testserver") as client:
+        # /healthz is public, so this reaches the handler rather than a 401.
         assert client.get("/healthz").status_code == 200
 
 

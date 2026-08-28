@@ -2470,3 +2470,108 @@
     technical risk — and none of those is currently demonstrated.
   - **Nothing about the current system changes.** No code is authorised by this entry.
 - **Date:** 2026-08-27
+
+## Decision: S8 Alpha authentication, exposure and per-user isolation model
+- **Decision:** Closed Alpha exercises Bartholomew's intended **server-centric/hosted**
+  architecture, so **safety gate S8 is live for Alpha** rather than conditional on a later
+  commercial deployment. The Alpha architecture is **one shared, authenticated control plane in
+  front of per-user isolated Bartholomew kernel runtimes and data boundaries.** Specifically:
+  **(a)** identity, authentication, sessions, request routing and platform authority live in a
+  shared control plane with its own database, holding **no personal memory**;
+  **(b)** each personal Bartholomew has its **own database file, data directory and keyring
+  namespace**, addressed by a server-generated opaque `user_id` — isolation is enforced by the
+  process and filesystem boundary, **not** by every query remembering an owner predicate;
+  **(c)** authentication is **username/password with server-side opaque sessions** (scrypt password
+  hashing, SHA-256-hashed session tokens, absolute expiry, idle timeout, client-fingerprint
+  binding, immediate revocation). **Accounts are operator-created only**: there is no
+  self-registration, no password-reset flow and no remote account-management surface;
+  **(d)** authorisation is a **default-deny route→capability table**; a route with no entry is
+  refused, so a new route from any stream is unreachable until classified;
+  **(e)** **a non-loopback bind forces authentication on and TLS on, and neither can be disabled
+  while it is in effect.** The process refuses to start otherwise. `BARTH_AUTH_MODE=disabled`
+  remains the loopback-only development default and is structurally incapable of applying to a
+  non-loopback deployment;
+  **(f)** `platform:admin` is a **distinct principal kind**, not an `admin=true` flag on a user
+  account, and it holds **no capability over any user's personal memory**. The Platform/Admin
+  Parking Brake is a **separate tier in the control-plane store**, composing restrictively with
+  each user's Personal brake;
+  **(g)** authentication and authorisation are **additional boundaries only**. Governance — the
+  Parking Brake, the consent gate, policy — remains downstream of both and is not relaxed by any
+  capability.
+- **Recorded S8 replay review (the gate's "no unreviewed 'a simple token is enough' assumption"
+  clause):** a bearer session cookie **is replayable by anyone who captures it**. The Alpha
+  defences are transport (mandatory TLS), short idle and absolute expiry, client-fingerprint
+  binding that revokes on mismatch, and immediate revocation. Per-request signing and device-bound
+  keys — genuine replay *resistance* rather than containment — are **deliberately deferred to the
+  device/client authentication layer**, where key material has somewhere to live. This is a
+  reviewed decision, not an omission.
+- **Alternatives considered:** (a) **Shared runtime with per-user row filtering** — rejected:
+  41 tables plus FTS mirrors, a chunk table and an embedding index mean every missed predicate is
+  a silent cross-user leak, and threading a user dimension through the kernel, scheduler, working
+  memory and governance would collide with every other parallel stream for months. (b) **Per-user
+  isolated *stacks*** (the model this document's 2026-08-15 entry rejected as alternative (c)) —
+  not adopted: the shared control plane is built once and shared from day one, so upgrades remain
+  one deployment and identity is not pinned to an installation. (c) **JWT/self-contained tokens** —
+  rejected: revocation must be effective on the very next request, and a signed token with a
+  server-side denylist is a session store with extra cryptography. (d) **Argon2id** — not adopted
+  in favour of stdlib `hashlib.scrypt`: both are memory-hard KDFs, and scrypt adds no dependency to
+  a repository whose CI enforces a packaging contract. (e) **A "TLS terminated by a proxy" opt-out**
+  — rejected: no trusted proxy is part of this architecture, the request boundary already ignores
+  `X-Forwarded-*` for that reason, and from inside the process such a flag is indistinguishable
+  from a plaintext deployment.
+- **Why:** `docs/FIRST_REAL_WORLD_TEST.md` §0 records that an unauthenticated `curl` could engage
+  **and disengage** the Parking Brake, and that Test #1 was contained by binding `127.0.0.1` — a
+  test condition, not an architecture. A Closed Alpha with other people necessarily crosses that
+  boundary. Building the control plane now, while there is one user, is the cheap moment; doing it
+  after participants exist is a migration of live personal data.
+- **Relationship to existing decisions:** **Implements** the D10/S8 clause of "Authentication /
+  network exposure boundary, and consequential local device agency" (2026-08-20), which left
+  production authentication architecture unresolved. **Consistent with** "One shared Bartholomew
+  platform; many strongly isolated personal Bartholomew identities" (2026-08-15) clause (f) — the
+  shared platform/runtime infrastructure is the control plane, and per-user isolation is
+  structural. **Implements the first tier of** "Parking Brake authority tiers — Personal/User and
+  Platform/Admin" (2026-08-17), honouring its rejection of `"platform"` as a brake *scope*.
+  **Bounded by** the hybrid local-first requirement, retained by the server-centric entry, that
+  Governance and emergency shutdown never depend on cloud availability — see the next clause.
+- **Consequences:**
+  - **Local Governance authority is preserved and now tested.** The Personal Parking Brake lives in
+    the user's own database and is reachable through the CLI with no session, no network and no
+    control plane. A test asserts that engaging it still works with the control-plane store
+    destroyed, and a structural test asserts `governance_store.py` and `parking_brake.py` never
+    import the platform package.
+  - **Authentication fails closed.** No anonymous principal kind exists; an unavailable
+    control-plane store yields **503, never 200**; an unrecognised `BARTH_AUTH_MODE` refuses to
+    start; a client-supplied user/tenant header is never read for identity.
+  - **A non-loopback container or host deployment now requires TLS material.** This is a
+    behavioural change for any deployment setting `BARTH_API_ALLOW_NON_LOOPBACK=1`.
+  - **Corrections applied 2026-08-27 after coordination review**, each closing a gap between a
+    stated property and its enforcement:
+    - **TLS reaches the socket.** Validating that certificate files exist is not serving TLS.
+      `app.serve()` now passes them to the listener, and the request boundary independently
+      refuses a plaintext request on an exposed deployment, so the guarantee holds however the
+      process was launched. Proven by a live HTTPS request and a live plaintext refusal against
+      a real uvicorn server, with the negative control verified.
+    - **No unbound remote personal-runtime mode.** An exposed deployment must name a
+      provisioned, enabled user in `BARTH_RUNTIME_USER_ID`, and startup verifies that the
+      database and keyring namespace in use are that user's. Previously an absent binding made
+      the ownership check a no-op and different accounts reached one global kernel.
+    - **The Platform/Admin tier composes into real execution.** It is registered into
+      `is_blocked_fail_closed` -- the function skill execution and the runtime contract's
+      autonomous work and governed mutations already call -- by a registration hook rather than
+      an import, so Governance keeps no dependency on the platform package and the local
+      Personal brake still engages and releases with the control plane destroyed. An unreadable
+      *active* platform state fails closed; an absent tier in a purely local deployment is inert.
+    - **Container posture decided:** authenticated, TLS, loopback-only host publishing, a
+      provisioned account and an explicit runtime binding. **No topology-assertion bypass** --
+      from inside the process, an operator asserting "this is really only local" is
+      indistinguishable from a genuinely exposed deployment.
+    - **Inbound capture (Session D) has a B-owned route/capability contract**
+      (`docs/S8_INBOUND_CAPTURE_CONTRACT.md`): routes pre-classified, `inbound:submit` and
+      `inbound:read` separate, and the rule that a source verifier proves the *sender* and must
+      never select or override the runtime.
+  - `ROADMAP.md`'s S8 row and its "S8 is conditional" note record the Alpha trigger. `ASSUMPTIONS.md`
+    A9 is bounded rather than open-ended. `CHECKLISTS.md` gains one authentication-boundary line.
+  - **Deferred, and not authorised here:** device/client authentication, multi-runtime supervision
+    and front-door routing across per-user processes, and any administrative capability over a
+    user's personal data. Each needs its own decision.
+- **Date:** 2026-08-27

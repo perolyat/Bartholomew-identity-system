@@ -38,10 +38,23 @@ except Exception:
 
 from prometheus_client import PlatformCollector, ProcessCollector
 
+from bartholomew.platform.exposure import assert_exposure_is_safe, describe_exposure
+from bartholomew.platform.http_identity import (
+    authenticate_and_authorize,
+)
+from bartholomew.platform.http_identity import error_response as platform_error_response
+from bartholomew.platform.principal import (
+    AuthenticationError,
+    AuthorizationError,
+    AuthUnavailableError,
+)
+from bartholomew.platform.route_policy import UnclassifiedRouteError
+
 from . import db_ctx
 from .db import DB_PATH, resolve_db_path
 from .models import ChatIn, ChatOut, ConversationList
 from .routes import (
+    auth,
     awaiting_response,
     consent,
     governance,
@@ -80,6 +93,7 @@ except Exception:
 app = FastAPI(title="Bartholomew API v0.1", version="0.1.0")
 
 # Include routers
+app.include_router(auth.router)
 app.include_router(liveness.router)
 app.include_router(self_state.router)
 app.include_router(governance.router)
@@ -304,12 +318,67 @@ async def admission_middleware(request: Request, call_next):
                 status_code=403,
                 content={
                     "detail": (
-                        "This Bartholomew API is loopback-only. It has no "
-                        "authentication, so it does not answer non-local "
-                        "callers. See DECISIONS.md (deployment architecture)."
+                        "This Bartholomew deployment is loopback-only and "
+                        "does not answer non-local callers. Reaching it "
+                        "remotely requires a deliberately exposed deployment, "
+                        "which is authenticated and TLS-only. See "
+                        "DECISIONS.md (deployment architecture, and the S8 "
+                        "Alpha authentication entry)."
                     ),
                 },
             )
+
+    # Transport check, before identity: on an exposed deployment every
+    # request must have arrived over TLS.
+    #
+    # This exists because file-existence validation and an actual TLS socket
+    # are different things. `serve()` configures TLS properly, but a process
+    # started by hand -- `uvicorn app:app --host 0.0.0.0` -- never calls it,
+    # and would happily carry session cookies in clear text. Checking the
+    # scheme of the request that actually arrived closes that gap however the
+    # process was launched, and fails closed rather than warning.
+    #
+    # `scope["scheme"]` is set by the ASGI server from its own listener, not
+    # from any client-supplied header, so it cannot be spoofed by a caller.
+    # X-Forwarded-Proto is deliberately NOT consulted: no trusted proxy is
+    # part of this architecture, and honouring it would let any client assert
+    # that its plaintext request was really TLS.
+    if non_loopback_allowed() and request.url.scheme not in ("https", "wss"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": (
+                    "This deployment is exposed beyond loopback and accepts "
+                    "TLS only. The request arrived over plaintext, so it was "
+                    "refused before authentication. Launch through "
+                    "`bartholomew-api` / app.serve(), which configures TLS on "
+                    "the socket."
+                ),
+            },
+        )
+
+    # Authentication and authorisation (S8), in the one chokepoint rather
+    # than a second one -- deliberately *after* the network boundary above
+    # (may this peer reach the process at all) and *before* the admission
+    # and readiness checks below (is the kernel ready to take work).
+    #
+    # It is also before the admission exemption list, which exempts paths
+    # from *kernel readiness*, not from the question of who is asking. The
+    # genuinely unauthenticated paths are named in route_policy.PUBLIC_PATHS
+    # and are a deliberately shorter list.
+    #
+    # Nothing here decides whether Bartholomew may act. That remains
+    # Governance's answer, below the route handler, unchanged.
+    try:
+        principal = authenticate_and_authorize(request)
+    except (
+        AuthenticationError,
+        AuthorizationError,
+        AuthUnavailableError,
+        UnclassifiedRouteError,
+    ) as exc:
+        return platform_error_response(exc)
+    request.state.principal = principal
 
     if _admission_exempt(request.url.path):
         return await call_next(request)
@@ -360,6 +429,21 @@ _kernel_task = None
 @app.on_event("startup")
 async def startup():
     global _kernel, _kernel_task
+
+    # Fail closed on an unsafe exposure posture before anything is served.
+    # Raising here stops the process; the alternative -- discovering it on
+    # the first request -- is too late, because by then it is listening.
+    assert_exposure_is_safe()
+    from bartholomew.platform.authority import install_platform_halt_hook
+    from bartholomew.platform.store import init_platform_schema
+
+    init_platform_schema()
+    # Compose the Platform/Admin tier into Governance before the kernel
+    # starts, so autonomous work, skill execution and governed state
+    # mutations are all subject to both tiers from the first tick rather
+    # than from the first HTTP request.
+    install_platform_halt_hook()
+    print(f"[platform] exposure: {describe_exposure()}", file=sys.stderr)
 
     # Initialize state for liveness + metrics
     app.state.start_monotonic = _time.monotonic()
@@ -435,6 +519,22 @@ async def startup():
 async def shutdown():
     if _kernel:
         await _kernel.stop()
+
+    # Remove the Platform/Admin halt hook this app installed at startup.
+    #
+    # The registration is process-global module state, so leaving it behind
+    # would outlive the app instance that installed it -- harmless in a real
+    # deployment (one app, one process, then exit), but in a test session it
+    # would keep answering for every later Governance check against whatever
+    # control-plane path happened to be configured at the time. Installed at
+    # startup, removed at shutdown, symmetrically.
+    from bartholomew.orchestrator.safety.governance_store import (
+        register_additional_engaged_check,
+        register_additional_halt_check,
+    )
+
+    register_additional_halt_check(None)
+    register_additional_engaged_check(None)
 
 
 # --- Kernel-facing helpers ---

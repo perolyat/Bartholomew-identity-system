@@ -27,18 +27,40 @@ RUN mkdir -p /app/data
 # Expose port
 EXPOSE 5173
 
-# Run uvicorn
-# The API has no authentication and is loopback-only by default
-# (DECISIONS.md, INTERFACES.md). A container must bind 0.0.0.0 *inside its own
-# network namespace* or published ports cannot reach it at all -- that is not
-# the same as being LAN-exposed, and it is not sufficient on its own.
+# Run through the canonical serve path
 #
-# Two things keep it safe, and both are required:
-#   1. Publish to loopback on the host: `-p 127.0.0.1:5173:5173`
-#      (docker-compose.yml does this). A bare `-p 5173:5173` publishes on
-#      every host interface and must not be used.
-#   2. BARTH_API_ALLOW_NON_LOOPBACK=1, set deliberately below, because the
-#      request boundary sees the Docker bridge address rather than loopback.
-#      This prints a conspicuous warning at every startup.
+# The container posture is decided (2026-08-27, S8): **authenticated, TLS on
+# the socket, published to host loopback only, with a provisioned account and
+# an explicit runtime binding.** There is deliberately no way for an operator
+# to assert "this container is really only reachable locally, so relax" --
+# a topology assertion is indistinguishable, from inside this process, from a
+# genuinely exposed deployment, and would become the bypass that survives
+# into Alpha.
+#
+# A container must bind 0.0.0.0 *inside its own network namespace* or
+# published ports cannot reach it at all. That is not the same as being
+# LAN-exposed, but this process cannot verify the difference, so it treats
+# the bind as exposed and requires the full posture:
+#
+#   1. Publish to host loopback: `-p 127.0.0.1:5173:5173` (docker-compose.yml
+#      does this). A bare `-p 5173:5173` publishes on every host interface.
+#   2. BARTH_API_ALLOW_NON_LOOPBACK=1, set below, because the request boundary
+#      sees the Docker bridge address rather than loopback. This now also
+#      forces authentication and TLS on -- neither can be disabled while it
+#      is in effect.
+#   3. TLS material at BARTH_API_TLS_CERTFILE / BARTH_API_TLS_KEYFILE. Mount
+#      it in; the image ships no key. Startup refuses without it.
+#   4. A provisioned account (`bartholomew accounts create`) and
+#      BARTH_RUNTIME_USER_ID naming it, plus BARTH_DB_PATH and
+#      BARTHO_MEMORY_KEYRING_SERVICE matching that user. Startup verifies the
+#      agreement and refuses to serve one identity from another's persistence.
+#
+# See docs/S8_ALPHA_OPERATOR_GUIDE.md for the provisioning steps.
+#
+# Launched via `app.serve()` rather than the `uvicorn` CLI: serve() is what
+# puts TLS on the socket and runs the exposure checks before binding. A bare
+# `uvicorn app:app --host 0.0.0.0` bypasses both, and the request boundary
+# then refuses every plaintext request rather than failing open.
 ENV BARTH_API_ALLOW_NON_LOOPBACK=1
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5173"]
+ENV BARTH_API_HOST=0.0.0.0
+CMD ["python", "-c", "import app; app.serve()"]
