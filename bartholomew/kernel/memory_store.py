@@ -162,6 +162,8 @@ def _get_embedding_components(db_path: str):
     # Check if embeddings are enabled
     import os
 
+    from bartholomew.kernel.embedding_engine import EmbedderUnavailableError
+
     if not os.getenv("BARTHO_EMBED_ENABLED"):
         return None, None
 
@@ -178,6 +180,17 @@ def _get_embedding_components(db_path: str):
             _vector_store = VectorStore(db_path)
 
         return _embedding_engine, _vector_store
+    except EmbedderUnavailableError as e:
+        # Fail closed: embeddings were switched on, the configured embedder
+        # could not be loaded, and degrading to the deterministic embedder was
+        # not authorised. No vectors are written, which is the honest outcome
+        # -- writing meaningless ones would be worse than writing none.
+        logger.error(
+            "Embeddings are enabled but the configured embedder is unavailable, "
+            "so no embeddings will be written: %s",
+            e,
+        )
+        return None, None
     except Exception as e:
         logger.warning(f"Failed to load embedding components: {e}")
         return None, None
@@ -955,11 +968,22 @@ class MemoryStore:
             # Persist embeddings (Phase B stage B8: off the event loop --
             # see the run_off_loop import note above this method's own
             # VectorStore construction).
-            cfg = embed_engine.config
+            # The identity that actually produced these vectors, from the
+            # engine's live status -- not `embed_engine.config`, which is what
+            # was asked for and which is exactly what made hash vectors
+            # indistinguishable from semantic ones in storage (OP-W003).
+            provider, model, embedder_kind = embed_engine.storage_identity
 
             def _upsert_all() -> None:
                 for src, vec in zip(sources, vecs, strict=False):
-                    vec_store.upsert(result.memory_id, vec, src, cfg.provider, cfg.model)
+                    vec_store.upsert(
+                        result.memory_id,
+                        vec,
+                        src,
+                        provider,
+                        model,
+                        embedder_kind,
+                    )
 
             await run_off_loop(_upsert_all, executor=self._blocking_executor)
             logger.debug(f"Stored {len(vecs)} embedding(s) for memory {result.memory_id}")
@@ -2003,7 +2027,9 @@ class MemoryStore:
 
         try:
             vecs = embed_engine.embed_texts(texts_to_embed)
-            cfg = embed_engine.config
+            # Effective identity, not configured identity -- see the same
+            # note in `_handle_embeddings` above.
+            provider, model, embedder_kind = embed_engine.storage_identity
 
             # Phase 2d+: Record consent for embeddings
             async with aiosqlite.connect(self.db_path) as db:
@@ -2017,7 +2043,7 @@ class MemoryStore:
             # VectorStore-construction call above).
             def _upsert_all() -> None:
                 for src, vec in zip(sources_to_store, vecs, strict=False):
-                    vec_store.upsert(memory_id, vec, src, cfg.provider, cfg.model)
+                    vec_store.upsert(memory_id, vec, src, provider, model, embedder_kind)
 
             await run_off_loop(_upsert_all, executor=self._blocking_executor)
 

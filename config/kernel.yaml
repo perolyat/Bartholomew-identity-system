@@ -75,10 +75,34 @@ drives:
 #
 # look_ahead_days / max_per_tick are provisional POC constants (planning note
 # section 7) -- tuned from real use, not frozen here.
+#
+# objective_continuity: DEFAULT OFF (Golden Path slice 2). When on,
+# Bartholomew re-engages with the objectives it is carrying: every three
+# hours it looks for a live objective whose horizon is near or which has gone
+# quiet longer than objective_quiet_interval_s, and raises exactly one nudge
+# and one governed notification carrying what has changed since it last
+# mentioned it. Off means zero ticks and zero queue impact -- the drive is
+# not registered at all, not registered and inert.
+#
+# It records and reports; it advances nothing. An objective existing
+# authorises no action toward it: every such action remains separately
+# governed.
+#
+# A completed or abandoned objective is unreachable from this drive by
+# construction -- it reads only live objectives -- so completing something is
+# all it takes to stop hearing about it.
+#
+# The three objective_* constants below are provisional, tuned from real use.
+# The quiet interval is deliberately generous: an assistant that raises the
+# same objective daily is adding burden however good its records are.
 proactive:
   schedule_reminders: false
   look_ahead_days: 3
   max_per_tick: 3
+  objective_continuity: false
+  objective_quiet_interval_s: 259200  # 3 days
+  objective_horizon_window_days: 3
+  objective_max_per_tick: 2
 
 # Local spoken output (text-to-speech).
 #

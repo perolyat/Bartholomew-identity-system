@@ -294,10 +294,15 @@ ahead of need.
   **S5.5–S5.7** (initiative safety scaffolding, dry-run, controlled live initiative) — real,
   approved-in-direction work; resequenced to follow slice 1 and be informed by its feedback rather
   than preceding it. Not abandoned; see "Direction for later slices" above.
-- Activating a real embeddings model (`sentence-transformers` is currently commented out in
-  `requirements.txt`; retrieval runs on a deterministic fallback embedder today) — worth doing
-  once there is real content to retrieve; not blocking a first slice that can run on FTS-only
-  retrieval.
+- Activating a real embeddings model — worth doing once there is real content to retrieve; not
+  blocking a first slice that can run on FTS-only retrieval.
+  **Updated 2026-08-27** (`docs/RETRIEVAL_EMBEDDER.md`): `sentence-transformers` is now an opt-in
+  extra rather than a commented-out line, and the model is provisioned deliberately
+  (`bartholomew embeddings provision`) so ordinary startup never depends on a first-run download.
+  What changed is not that the model is installed — it still is not, by design — but that running
+  without it is now a *reported* state rather than a silent one: retrieval says so through
+  `/api/health`, the deterministic embedder serves only when explicitly enabled, and its vectors
+  are stored and searched separately from real ones. Deciding to install it is still deferred.
 - A second competency domain (e.g. Vehicle Management) per `ROADMAP.md`'s "Estate Management as
   architecture acceptance test" sequence — correct plan, too early until domain-general personal
   memory (this track) is proven.
