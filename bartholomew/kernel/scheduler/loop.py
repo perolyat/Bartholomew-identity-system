@@ -117,6 +117,23 @@ def resolve_cadences(ctx: Any) -> dict:
     return resolved
 
 
+def _beat(ctx: Any, *, drive: str | None = None) -> None:
+    """Record one loop iteration on the context's scheduler heartbeat.
+
+    Tolerant of a ctx without one: `run_scheduler()` accepts any duck-typed
+    context (tests drive it with stubs), and a missing heartbeat must not be
+    able to stop the autonomy loop -- the health surface degrades to "unknown",
+    which is the truthful answer for a context that keeps no heartbeat.
+    """
+    heartbeat = getattr(ctx, "scheduler_heartbeat", None)
+    if heartbeat is None:
+        return
+    try:
+        heartbeat.beat(drive=drive)
+    except Exception:  # pragma: no cover - a health record must never break the loop
+        log.exception("[Scheduler] Heartbeat update failed")
+
+
 async def run_scheduler(ctx: Any) -> None:
     """
     Main scheduler loop.
@@ -183,6 +200,12 @@ async def run_scheduler(ctx: Any) -> None:
         # Main loop
         while True:
             try:
+                # Beat first, unconditionally: this is the "the loop got round
+                # again" signal the health surface reports, so it must be
+                # recorded before any await that could block or fail. An idle
+                # iteration with nothing due is a live scheduler.
+                _beat(ctx)
+
                 now_ts = int(time.time())
 
                 # Get next due task
@@ -264,6 +287,7 @@ async def run_scheduler(ctx: Any) -> None:
                 # Execute drive with timeout and exception guard
                 drive_fn = registry[task_id]["fn"]
                 nudge, success = await _run_drive(ctx, task_id, drive_fn)
+                _beat(ctx, drive=task_id)
                 result_meta: dict[str, Any] = {}
 
                 # Persist the nudge (if any) BEFORE the tick, so the tick can

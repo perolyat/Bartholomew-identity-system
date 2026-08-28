@@ -57,10 +57,18 @@ EXPOSE 5173
 #
 # See docs/S8_ALPHA_OPERATOR_GUIDE.md for the provisioning steps.
 #
-# Launched via `app.serve()` rather than the `uvicorn` CLI: serve() is what
-# puts TLS on the socket and runs the exposure checks before binding. A bare
-# `uvicorn app:app --host 0.0.0.0` bypasses both, and the request boundary
-# then refuses every plaintext request rather than failing open.
+# Launched via `python -m bartholomew serve` (Session D's service entry
+# point) rather than the `uvicorn` CLI. `serve` resolves the bind through the
+# access boundary, hands the platform's resolved TLS material to the real
+# socket, and runs the exposure checks before binding. A bare `uvicorn` launch
+# bypasses all of that, and the request boundary then refuses every plaintext
+# request rather than failing open.
+#
+# One process, no reload, no extra workers -- `serve` refuses those outright,
+# because persistence is single-writer and the daemon takes an exclusive
+# process lock on the database at startup.
 ENV BARTH_API_ALLOW_NON_LOOPBACK=1
+# `serve` takes no --host flag, so the container's namespace-local bind is
+# expressed here.
 ENV BARTH_API_HOST=0.0.0.0
-CMD ["python", "-c", "import app; app.serve()"]
+CMD ["python", "-m", "bartholomew", "serve"]
