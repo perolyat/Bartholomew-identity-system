@@ -99,8 +99,12 @@ def test_the_policy_table_has_no_entries_for_routes_that_do_not_exist():
     #     from the exemption once D has landed them.
     exempt = {
         ("GET", "/internal/metrics"),
-        ("POST", "/api/inbound/events"),
-        ("GET", "/api/inbound/events"),
+        # Session D implements POST and GET /api/inbound/events, so those are
+        # no longer exempt -- they are real routes and the coverage assertion
+        # above now checks them. The per-event read stays classified ahead of
+        # its handler, on the same reasoning as before: default-deny means a
+        # route that arrives unclassified is refused, and pre-classifying is
+        # what stops that becoming a reason to reach for a bypass.
         ("GET", "/api/inbound/events/{event_id}"),
     }
     stale = [

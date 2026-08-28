@@ -298,6 +298,15 @@ class KernelDaemon:
         self._last_daily_reflection = None
         self._last_weekly_reflection = None
 
+        # Always-on health: what this process's autonomy loop is doing.
+        # Written by the scheduler loop itself (see scheduler/loop.py's
+        # `_beat()`), read by the health surface. In-memory by design -- it
+        # answers "is *this* process's scheduler alive right now", which no
+        # previous process's durable state can answer.
+        from bartholomew.runtime.health import SchedulerHeartbeat
+
+        self.scheduler_heartbeat = SchedulerHeartbeat()
+
         # Lifecycle state (Phase B stage B5) -- see DaemonLifecycleState.
         self.lifecycle_state = DaemonLifecycleState.NOT_STARTED
         self._runtime_id: str | None = None
@@ -519,6 +528,7 @@ class KernelDaemon:
             from .scheduler.loop import run_scheduler
 
             self._scheduler_task = asyncio.create_task(run_scheduler(self))
+            self._scheduler_task.add_done_callback(self._on_scheduler_task_done)
             resources_started.append("scheduler_task")
         except BaseException:  # includes CancelledError; re-raised below
             self.lifecycle_state = DaemonLifecycleState.FAILED
@@ -698,6 +708,76 @@ class KernelDaemon:
         except Exception as e:
             print(f"[Kernel] Experience kernel init warning: {e}")
 
+    def _on_scheduler_task_done(self, task: asyncio.Task[None]) -> None:
+        """Turn a dead autonomy loop into an observable state.
+
+        `run_scheduler()` is created fire-and-forget, so before this the loop
+        could exit -- on cancellation during shutdown, or on an exception that
+        escaped its own guards -- and nothing anywhere would notice. The
+        process kept serving, the health endpoint kept saying ok, and
+        Bartholomew had quietly stopped being proactive. That is precisely the
+        "always-on software that silently dies" failure.
+
+        Two distinct outcomes, and conflating them would be a bug in both
+        directions -- a normal shutdown must never look like a fault, and a
+        fault must never be filed away as a normal shutdown:
+
+        * **Expected stop.** The task was cancelled, or the daemon is no
+          longer RUNNING (`stop()` is already under way). This is the
+          autonomy loop working as designed. Recorded, and nothing else.
+        * **Unexpected exit.** The loop raised, or returned on its own, while
+          the daemon believes itself to be RUNNING. The loop is supposed to
+          run until cancelled, so either is a fault the process cannot
+          continue meaningfully past: Bartholomew would keep answering HTTP
+          while having silently stopped being proactive.
+
+        An unexpected exit is escalated to the service layer, which turns it
+        into a graceful shutdown and a non-zero exit status so the external
+        supervisor restarts the process. That escalation is *reporting a
+        fault upward*, not supervising: nothing here restarts anything or
+        decides a policy, and outside `bartholomew serve` (a test, an
+        embedded daemon) no hook is installed and nothing is terminated at
+        all. See `bartholomew.runtime.supervision`.
+        """
+        if task.cancelled():
+            self.scheduler_heartbeat.mark_stopped()
+            return
+
+        if self.lifecycle_state is not DaemonLifecycleState.RUNNING:
+            # Already stopping: whatever the loop did on its way out, it is
+            # not a fault and must not trigger a restart.
+            exc = None if task.cancelled() else task.exception()
+            if exc is not None:
+                logger.warning("Scheduler loop raised during shutdown: %s", exc)
+            self.scheduler_heartbeat.mark_stopped()
+            return
+
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Scheduler loop exited unexpectedly: %s", exc, exc_info=exc)
+            self.scheduler_heartbeat.mark_failed(exc)
+            self._escalate_fatal("scheduler", f"{type(exc).__name__}: {exc}")
+            return
+
+        logger.error("Scheduler loop returned while the daemon is still RUNNING")
+        self.scheduler_heartbeat.mark_failed("scheduler loop returned unexpectedly")
+        self._escalate_fatal("scheduler", "the autonomy loop returned unexpectedly")
+
+    def _escalate_fatal(self, component: str, reason: str) -> None:
+        """Report an unrecoverable component failure to the service layer.
+
+        Best-effort by construction: a daemon running outside a supervised
+        service (tests, an embedded use) has no escalation path, and failing
+        to escalate must never turn a recorded fault into a raised exception
+        inside an asyncio done-callback, where nothing could handle it.
+        """
+        try:
+            from bartholomew.runtime.supervision import record_fatal_failure
+
+            record_fatal_failure(component, reason)
+        except Exception:  # pragma: no cover - escalation must never itself raise
+            logger.exception("Failed to escalate %s failure for supervision", component)
+
     async def stop(self) -> None:
         """Gracefully stop the kernel daemon."""
         # Phase B stage B5 lifecycle guard: NOT_STARTED/FAILED have no
@@ -818,6 +898,27 @@ class KernelDaemon:
                 except asyncio.TimeoutError:
                     producer_tasks_terminal = False
                     print(f"[Kernel] Task {task.get_name()} did not terminate within timeout")
+                except Exception as e:
+                    # A task that died on its own before shutdown began.
+                    # Awaiting it here re-raises whatever killed it, which
+                    # previously aborted stop() partway through: no clean
+                    # marker, no lock release, no WAL checkpoint -- one
+                    # background-task failure silently became an unclean
+                    # shutdown the next startup had to recover from.
+                    #
+                    # It is still CONFIRMED TERMINAL, which is what this flag
+                    # actually tracks (B5 clean-marker honesty): the task has
+                    # finished and is not still running against the database.
+                    # A task that failed is not a task that might still be
+                    # writing, so the shutdown can legitimately be marked
+                    # clean -- what failed was the task, not the shutdown.
+                    # The failure itself is reported by whoever owns the task
+                    # (see _on_scheduler_task_done, which escalates it), not
+                    # swallowed here.
+                    print(
+                        f"[Kernel] Task {task.get_name()} had already failed before "
+                        f"shutdown: {type(e).__name__}: {e}",
+                    )
 
         # Close the scheduler's dedicated DB worker thread and the shared
         # blocking-call worker thread (Phase B stage B2) before the memory

@@ -58,6 +58,7 @@ from .routes import (
     awaiting_response,
     consent,
     governance,
+    inbound,
     liveness,
     memory,
     metrics,
@@ -103,6 +104,12 @@ app.include_router(memory.router)
 app.include_router(awaiting_response.router)
 app.include_router(onboarding.router)
 app.include_router(training.router)
+
+# Governed inbound capture (Session D). Deliberately NOT added to
+# `_ADMISSION_EXEMPT_PATHS`: unlike health and static UI, capture writes
+# governed state and needs a live kernel, so it must be refused during the
+# startup and shutdown windows like every other real ingress point.
+app.include_router(inbound.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)
@@ -189,14 +196,23 @@ ALLOW_NON_LOOPBACK_ENV = "BARTH_API_ALLOW_NON_LOOPBACK"
 BIND_HOST_ENV = "BARTH_API_HOST"
 DEFAULT_BIND_HOST = "127.0.0.1"
 
+# Kept as a conspicuous notice, but no longer as the claim it used to make.
+# It said "This API has NO AUTHENTICATION", which was true when the boundary
+# was the only protection and is now false: a non-loopback bind forces
+# authentication and TLS on, and no environment variable downgrades either
+# (bartholomew/platform/exposure.py). A security banner that overstates the
+# danger is not harmlessly cautious -- it trains operators to discount the
+# banners that are accurate.
 _NON_LOOPBACK_WARNING = (
     "\n"
     "  ****************************************************************\n"
     "  *  Bartholomew's API is bound to a NON-LOOPBACK address.       *\n"
     "  *                                                              *\n"
-    "  *  This API has NO AUTHENTICATION. Anything that can reach     *\n"
-    "  *  this port can read, correct, delete and export your entire  *\n"
-    "  *  personal memory, and can release the Parking Brake.         *\n"
+    "  *  Authentication and TLS are therefore ENFORCED and cannot    *\n"
+    "  *  be disabled while this bind is in effect. Anything that can *\n"
+    "  *  reach this port and hold valid credentials can read,        *\n"
+    "  *  correct, delete and export that user's personal memory,     *\n"
+    "  *  and can release their Parking Brake.                        *\n"
     "  *                                                              *\n"
     "  *  Bound to: %s\n"
     "  *  Enabled by: %s=1\n"
@@ -356,7 +372,6 @@ async def admission_middleware(request: Request, call_next):
                 ),
             },
         )
-
     # Authentication and authorisation (S8), in the one chokepoint rather
     # than a second one -- deliberately *after* the network boundary above
     # (may this peer reach the process at all) and *before* the admission
@@ -459,6 +474,15 @@ async def startup():
         PlatformCollector(registry=REGISTRY)
     except Exception:
         pass
+
+    # Inbound capture stays fail-closed unless the authenticated control
+    # plane installs a principal resolver. The one exception is the
+    # double-gated test resolver, which exists so the end-to-end HTTP path is
+    # provable against a real server process and which announces itself
+    # everywhere it applies -- see inbound_auth's module docstring.
+    from . import inbound_auth
+
+    inbound_auth.maybe_install_test_resolver_from_env()
 
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
@@ -739,6 +763,77 @@ async def _model_health() -> dict[str, Any]:
     return info
 
 
+def _component_health() -> dict[str, Any]:
+    """Whether each always-on component is actually alive (Session D).
+
+    Four components an operator needs distinguished, because "the process is
+    up" answers none of them:
+
+    * **service**  -- this HTTP process. If you are reading this, it is up.
+    * **runtime**  -- the kernel daemon, and which lifecycle state it is in.
+    * **scheduler**-- the autonomy loop, from its own heartbeat. A loop that
+      died, or that stopped beating, reports failed rather than silently
+      leaving the service looking healthy.
+    * **inbound**  -- whether the capture door is open, and on what. Fail-closed
+      (no resolver) is a normal, reportable state, not a fault; a test-only
+      resolver is flagged loudly so a running service can never be admitting
+      events on test credentials unnoticed.
+
+    Returns the components plus a private `_overall` key: "ok" only when
+    nothing is failed, "degraded" otherwise. Never raises -- a health endpoint
+    that 500s tells an operator nothing.
+    """
+    from bartholomew.runtime.health import ComponentHealth
+
+    components: dict[str, Any] = {"service": {"status": "ok"}}
+
+    if _kernel is None:
+        components["runtime"] = {"status": "failed", "state": "not_initialized"}
+        components["scheduler"] = {"status": "unknown", "state": "unknown"}
+    else:
+        state = getattr(_kernel.lifecycle_state, "value", str(_kernel.lifecycle_state))
+        running = state == "running"
+        components["runtime"] = ComponentHealth(
+            "runtime",
+            ok=running,
+            detail={"state": state},
+        ).as_dict()
+
+        heartbeat = getattr(_kernel, "scheduler_heartbeat", None)
+        if heartbeat is None:
+            components["scheduler"] = {"status": "unknown", "state": "unknown"}
+        else:
+            snapshot = heartbeat.snapshot()
+            components["scheduler"] = ComponentHealth(
+                "scheduler",
+                ok=snapshot["healthy"],
+                detail=snapshot,
+            ).as_dict()
+
+    try:
+        from . import inbound_auth
+
+        open_for_capture = inbound_auth.get_resolver() is not None
+        components["inbound"] = {
+            # An intentionally closed door is working correctly, so this is
+            # "ok" either way -- what matters is that it says which it is.
+            "status": "ok",
+            "open": open_for_capture,
+            "test_resolver_active": inbound_auth.resolver_is_test_only(),
+            "detail": (
+                "Inbound capture is closed: no principal resolver installed."
+                if not open_for_capture
+                else "Inbound capture is open."
+            ),
+        }
+    except Exception:
+        components["inbound"] = {"status": "unknown"}
+
+    failed = any(isinstance(v, dict) and v.get("status") == "failed" for v in components.values())
+    components["_overall"] = "degraded" if failed else "ok"
+    return components
+
+
 def _retrieval_health() -> dict[str, Any]:
     """What retrieval will actually do if a query arrives right now.
 
@@ -806,15 +901,25 @@ async def health():
         kernel_info = {"kernel_online": False}
 
     model_info = await _model_health()
+    components = _component_health()
     retrieval_info = _retrieval_health()
 
     return {
-        "status": "ok",
+        # Not hardcoded any more. An always-on service whose scheduler has
+        # died must not answer "ok" -- that is the failure this endpoint
+        # exists to make visible (Session D).
+        "status": components["_overall"],
         "tz": str(TZ),
         "time": datetime.now(TZ).isoformat(),
         "orchestrator": getattr(orch, "__class__", type("x", (object,), {})).__name__,
         "version": app.version,
+        "components": {k: v for k, v in components.items() if not k.startswith("_")},
         **model_info,
+        # Retrieval's own truthful answer (Session C): what retrieval will
+        # actually do, not what it was configured to do. Reported alongside
+        # component liveness rather than folded into it -- "is the scheduler
+        # alive" and "is matching actually semantic" are different questions,
+        # and neither should be able to mask the other.
         **retrieval_info,
         **kernel_info,
     }
