@@ -3593,46 +3593,30 @@ async def run_inbound_through_runtime_contract(
     interpretation = Interpretation(observation=observation, prompt=event_type)
     candidate_action = CandidateAction(kind=INBOUND_CAPTURE_KIND, interpretation=interpretation)
 
-    # Governance gate 1: the Parking Brake, composed across both authority
-    # tiers. Before anything is written, and fail-closed on either.
+    # Governance gate 1: the Parking Brake. Before anything is written, and
+    # fail-closed.
     #
-    # Personal/User tier: gated on the brake being engaged *at all* rather
-    # than on a subsystem scope, matching the existing memory-mutation gate --
-    # capture mutates governed state and belongs to none of the existing
-    # scopes. `engaged_state_fail_closed_off_loop` propagates its own read
-    # failures, which is the fail-closed behaviour: the exception aborts the
-    # caller before capture.
+    # Gated on the brake being engaged *at all* rather than on a subsystem
+    # scope, matching the existing memory-mutation gate: capture mutates
+    # governed state and belongs to none of the existing scopes.
+    #
+    # **Both authority tiers are composed here, and this call is how.**
+    # `engaged_state_fail_closed` consults the higher-scope check that S8's
+    # `install_platform_halt_hook()` registers, so a Platform/Admin halt stops
+    # capture through the same read as the Personal brake. This seam
+    # deliberately does NOT call `authority.is_blocked()` itself: composition
+    # is Governance's job at its own composition point, and doing it again
+    # here was both redundant and wrong -- it bypassed the platform tier's
+    # `platform_tier_active()` inertness, so a deployment with no control
+    # plane (the single-user loopback install, and any test with only a kernel
+    # database) read an uninitialised platform store, failed closed, and
+    # refused every inbound event with a halt message that was not true.
+    #
+    # `engaged_state_fail_closed_off_loop` propagates its own read failures,
+    # which is the fail-closed behaviour: the exception aborts the caller
+    # before capture.
     state = await engaged_state_fail_closed_off_loop(db_path)
-    personal_blocked = state.engaged
-
-    # Platform/Admin tier: composed restrictively through the platform's own
-    # `authority.is_blocked()` -- an OR, where either tier halts and neither
-    # release implies the other. Passed the Personal answer rather than
-    # letting the platform module reach into a user's runtime, which is what
-    # keeps the Personal tier working when the platform store is absent.
-    # Fails closed inside `is_blocked`: an unreadable platform store is
-    # treated as a halt.
-    #
-    # Scope "inbound" is a name, not a registered brake scope: no new scope is
-    # introduced here, so in practice a *global* platform halt is what stops
-    # capture -- which is the intended reading of "any applicable halt".
-    blocked = personal_blocked
-    try:
-        from bartholomew.platform import authority
-
-        blocked = await run_off_loop(
-            authority.is_blocked,
-            "inbound",
-            personal_blocked=personal_blocked,
-        )
-    except ImportError:
-        # No control plane in this deployment: the Personal tier is the whole
-        # answer, and it has already been read. Deliberately not a silent
-        # pass for other failures -- `is_blocked` fails closed internally, so
-        # anything it raises has already been converted to "blocked".
-        blocked = personal_blocked
-
-    if blocked:
+    if state.engaged:
         raise ParkingBrakeEngagedError(
             "A parking brake or platform halt is engaged: inbound events are "
             "not being captured. Nothing was recorded, and the sender may "
