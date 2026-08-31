@@ -80,6 +80,12 @@ ALLOWED_TRAINING_SOURCE_TYPES: frozenset[str] = frozenset(
 #: not happen is the restriction lapsing incidentally.
 S5_4_RESERVED_SOURCE_TYPES: frozenset[str] = frozenset({"experience", "system_observation"})
 
+#: The subset of the above that S5.4's *consolidation* seam may use, and only
+#: by passing `allow_consolidation_source=True` explicitly. `experience` is
+#: what an accepted candidate lesson carries; `system_observation` stays
+#: reserved, being outside this slice's outcome-based-procedural scope.
+CONSOLIDATION_SOURCE_TYPES: frozenset[str] = frozenset({"experience"})
+
 TRAINING_OBSERVATION_SOURCE = "training"
 TRAINING_ACTION_KIND = "training_ingest"
 TRAINING_BRAKE_SCOPE = "training"
@@ -124,22 +130,42 @@ class TrainingSubmission:
     source_detail: str
     records: list[TrainingRecord] = field(default_factory=list)
 
-    def validate(self) -> list[str]:
+    def validate(self, *, allow_consolidation_source: bool = False) -> list[str]:
+        """Validate this submission.
+
+        `allow_consolidation_source` lifts the `experience` reservation for
+        S5.4's consolidation path, and nothing else. It defaults to False, so
+        every pre-existing caller -- the HTTP route, the CLI, any future
+        user-facing ingestion surface -- keeps the S5.2 behaviour and cannot
+        claim that user-supplied material came from Bartholomew's own
+        experience. `system_observation` stays reserved unconditionally: it
+        is not in this slice's scope.
+
+        This is the deliberate lift the S5.2 design anticipated ("when S5.4's
+        consolidation path is designed and approved it may deliberately lift
+        this"), narrowed to one source type and one caller rather than
+        widening `ALLOWED_TRAINING_SOURCE_TYPES` for everybody.
+        """
         errors: list[str] = []
 
         if not self.competency_id:
             errors.append("competency_id is required")
 
-        if self.source_type in S5_4_RESERVED_SOURCE_TYPES:
+        allowed = set(ALLOWED_TRAINING_SOURCE_TYPES)
+        reserved = set(S5_4_RESERVED_SOURCE_TYPES)
+        if allow_consolidation_source:
+            allowed |= CONSOLIDATION_SOURCE_TYPES
+            reserved -= CONSOLIDATION_SOURCE_TYPES
+
+        if self.source_type in reserved:
             errors.append(
                 f"source_type {self.source_type!r} is reserved for S5.4 "
                 "(Bartholomew-originated learning) and cannot be submitted as training; "
-                f"allowed: {sorted(ALLOWED_TRAINING_SOURCE_TYPES)}",
+                f"allowed: {sorted(allowed)}",
             )
-        elif self.source_type not in ALLOWED_TRAINING_SOURCE_TYPES:
+        elif self.source_type not in allowed:
             errors.append(
-                f"source_type must be one of {sorted(ALLOWED_TRAINING_SOURCE_TYPES)}, "
-                f"got {self.source_type!r}",
+                f"source_type must be one of {sorted(allowed)}, got {self.source_type!r}",
             )
 
         if not self.records:
