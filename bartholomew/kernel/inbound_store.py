@@ -270,3 +270,30 @@ def recent_events(db_path: str, limit: int = 50, offset: int = 0) -> list[dict[s
             (limit, offset),
         ).fetchall()
     return [_row_to_event(r, duplicate=False).as_dict() for r in rows]
+
+
+def get_event_payload(db_path: str, source_id: str, event_id: str) -> Any | None:
+    """The payload exactly as it was accepted, for downstream interpretation.
+
+    Additive read, nothing else. Capture stores canonical JSON precisely so
+    that a later reader can ask "what did we actually accept?" without the
+    sender being asked again -- and `recent_events()` deliberately does not
+    re-emit payloads into a list surface, so a single-event read is the only
+    honest way to get one.
+
+    Returns `None` when there is no such row, and when the stored JSON cannot
+    be parsed: a payload that cannot be read is reported as absent rather
+    than guessed at. The row itself is untouched either way.
+    """
+    with wal_db(db_path, timeout=5.0, label="inbound_get_event_payload") as conn:
+        conn.execute("PRAGMA busy_timeout = 3000")
+        row = conn.execute(
+            "SELECT payload_json FROM inbound_events WHERE source_id = ? AND event_id = ?",
+            (source_id, event_id),
+        ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
