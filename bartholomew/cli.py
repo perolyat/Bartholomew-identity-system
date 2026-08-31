@@ -1056,6 +1056,44 @@ def serve_command(
         raise typer.Exit(code=code)
 
 
+@app.command("unattended-report")
+def unattended_report_command(
+    run_id: str = typer.Argument(..., help="The BARTH_UNATTENDED_RUN_ID the run used."),
+    db: str = typer.Option("data/bartholomew.db", help="Path to the runtime database file."),
+    out: str = typer.Option(None, help="Write the frozen report here instead of stdout."),
+    item_limit: int = typer.Option(200, help="Max rows inlined per evidence source."),
+) -> None:
+    """
+    Freeze the evidence record for an unattended run.
+
+    Reads the run ledger and the records the runtime already wrote (ticks,
+    governance audit, governed skill actions, inbound events, startup
+    incidents) and seals them into one deterministic JSON document with a
+    digest over its content. Read-only: it never writes to, corrects, or
+    reconciles the runtime's own records.
+
+    Run it after the run has stopped. An incarnation that is still open is
+    reported as still open -- which, for a run that is supposed to be over,
+    is the finding.
+    """
+    import json as _json
+
+    from bartholomew.runtime.evidence_report import freeze, write_frozen_report
+
+    if out:
+        envelope = write_frozen_report(db, run_id, out, item_limit=item_limit)
+        console.print(f"[green]Frozen[/green] {out}")
+    else:
+        envelope = freeze(db, run_id, item_limit=item_limit)
+        print(_json.dumps(envelope, indent=2, sort_keys=True, default=str))
+
+    summary = envelope["record"]["summary"]
+    complete = summary["complete"]
+    colour = "green" if complete else ("yellow" if complete is None else "red")
+    console.print(f"digest: {envelope['digest']}")
+    console.print(f"[{colour}]{summary['verdict']}[/{colour}]")
+
+
 def main():
     """Entry point for CLI"""
     app()
