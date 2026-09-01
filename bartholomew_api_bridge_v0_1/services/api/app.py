@@ -531,6 +531,19 @@ async def startup():
         except Exception as e:
             print(f"[api] Real model path unavailable, staying on stub: {e}")
 
+    # Unattended-run evidence (Session A). Inert unless
+    # BARTH_UNATTENDED_RUN_ID is set, so a normal deployment gains no writer
+    # and no table. It observes: the runtime_id it records is the kernel's
+    # own (bartholomew.runtime.evidence's module docstring says why a second
+    # one would be wrong), and nothing here decides anything about lifecycle
+    # or health.
+    from bartholomew.runtime import evidence as _evidence
+
+    _evidence.record_process_start(
+        resolve_db_path(),
+        runtime_id=getattr(_kernel, "runtime_id", None),
+    )
+
     # Keep kernel running
     async def keep_alive():
         while True:
@@ -543,6 +556,25 @@ async def startup():
 async def shutdown():
     if _kernel:
         await _kernel.stop()
+
+    # Recorded after the kernel has actually stopped, never before: the whole
+    # value of this row is that it distinguishes a process that completed its
+    # shutdown from one that did not, and writing it on the way in would make
+    # every ending look clean. A process killed before reaching here leaves
+    # its incarnation open, and the next start closes it as `lost`.
+    from bartholomew.runtime import evidence as _evidence
+    from bartholomew.runtime import supervision as _supervision
+
+    _fatal = _supervision.get_recorder().failure
+    _evidence.record_process_stop(
+        resolve_db_path(),
+        end_kind=_evidence.END_CLEAN if _fatal is None else _evidence.END_FAILED,
+        detail=(
+            None
+            if _fatal is None
+            else f"{_fatal.component} failed ({_fatal.reason}) at {_fatal.at}"
+        ),
+    )
 
     # Remove the Platform/Admin halt hook this app installed at startup.
     #
