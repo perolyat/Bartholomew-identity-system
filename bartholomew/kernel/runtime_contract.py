@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 from . import (
     candidate_learning,
     forecast_intents,
+    learning_authorization,
     objective_intents,
     objective_store,
     personal_facts,
@@ -3793,6 +3794,17 @@ LEARNING_OUTCOME_NO_EXPERIENCE = "no_experience"
 LEARNING_OUTCOME_NOT_STORED = "not_stored"
 LEARNING_OUTCOME_BRAKE_DENIED = "parking_brake_denied"
 LEARNING_OUTCOME_GOVERNANCE_DENIED = "governance_denied"
+#: Acceptance was refused because no valid, candidate-bound authorization
+#: exists. Deliberately distinct from `governance_denied`: "nobody has
+#: approved consolidating *this* lesson" is a different fact from "this
+#: deployment does not permit learning actions at all", and an operator
+#: reading an audit trail needs to be able to tell them apart.
+LEARNING_OUTCOME_APPROVAL_REQUIRED = "acceptance_approval_required"
+
+#: The Reflection action kind recorded when an approval is granted. Not a
+#: member of `_LEARNING_ACTIONS`: granting authorization is a human act about
+#: the loop, not a step of the loop.
+LEARNING_ACTION_APPROVE_ACCEPTANCE = "learning_accept_approval_grant"
 
 
 @dataclass
@@ -3823,18 +3835,82 @@ class CandidateLessonResult:
         )
 
 
-async def evaluate_learning_admission(ctx: Any, kind: str) -> ObjectiveAdmission:
+async def evaluate_learning_admission(
+    ctx: Any,
+    kind: str,
+    *,
+    lesson: Any = None,
+) -> ObjectiveAdmission:
     """The single Governance authority for every candidate-learning action.
 
-    Deliberately the same two-gate shape and the same `ObjectiveAdmission`
-    result type as `evaluate_objective_admission()`, rather than a third
-    variant: gate 1 is the fail-closed Parking Brake on the `training` scope
-    (the same helper the training seam uses), gate 2 is Identity policy per
-    action kind, so permission to *propose* a lesson is not permission to
-    *accept* one. Skipped entirely when no IdentityContext is wired in, the
-    same additive fallback every other seam here uses.
+    Deliberately the same `ObjectiveAdmission` result type as
+    `evaluate_objective_admission()`, rather than a third variant.
 
-    Fails closed: an unreadable governance state refuses the action.
+    Gate 1, for every kind: the fail-closed Parking Brake on the `training`
+    scope (the same helper the training seam uses). Nothing below can reach
+    past it -- an explicit acceptance approval is *not* a brake override, and
+    a broader deny stays authoritative.
+
+    Gate 2 depends on the kind, and this is the governance decision itself:
+
+      * `learning_propose` / `learning_reject` -- Identity policy, i.e. the
+        `tool_use.allowlist`, exactly like every other seam kind. A standing
+        grant is the right shape here: proposing creates a candidate that
+        nothing can reason from, and rejecting is conservative by
+        construction.
+      * `learning_accept` -- a valid `LearningAcceptanceApproval` bound to
+        *this exact candidate*, found in Memory by the caller and passed in as
+        `lesson`. The Identity allowlist is neither consulted nor sufficient
+        here: acceptance is the durable mutation that makes a lesson
+        retrievable, so allowlisting `learning_accept` would be a standing
+        "learning enabled" switch, which is precisely what this design
+        refuses. Bartholomew may conclude it *may* have learned something; it
+        may not conclude on its own that the lesson is now trusted.
+
+    Fails closed: an unreadable governance state refuses the action, and a
+    missing or mismatched approval refuses acceptance.
+    """
+    brake = await _evaluate_learning_brake(ctx, kind)
+    if not brake.allowed:
+        return brake
+
+    if kind == LEARNING_ACTION_ACCEPT:
+        approval = await _load_learning_approval(ctx, lesson)
+        if approval is None:
+            return ObjectiveAdmission(
+                False,
+                LEARNING_OUTCOME_APPROVAL_REQUIRED,
+                (
+                    "consolidating a candidate lesson requires explicit authorization "
+                    "bound to that candidate; none is recorded"
+                ),
+            )
+        allowed, reason = approval.authorizes(lesson)
+        if not allowed:
+            return ObjectiveAdmission(False, LEARNING_OUTCOME_APPROVAL_REQUIRED, reason)
+        return ObjectiveAdmission(True)
+
+    identity_context = getattr(ctx, "identity_context", None)
+    if identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, kind)
+        if not decision.allowed:
+            return ObjectiveAdmission(
+                False,
+                LEARNING_OUTCOME_GOVERNANCE_DENIED,
+                f"Denied by Identity policy: {decision.reason}",
+            )
+
+    return ObjectiveAdmission(True)
+
+
+async def _evaluate_learning_brake(ctx: Any, kind: str) -> ObjectiveAdmission:
+    """Gate 1 alone: the fail-closed Parking Brake on the `training` scope.
+
+    Extracted so the accept branch can refuse under a brake *before* it reads
+    a candidate, and still run the complete admission (this check included)
+    immediately before the mutation itself. Nothing downstream can override
+    it: an acceptance approval authorises consolidating one lesson, never
+    acting while a broader deny is in force.
     """
     try:
         from bartholomew.orchestrator.safety.governance_store import (
@@ -3860,16 +3936,6 @@ async def evaluate_learning_admission(ctx: Any, kind: str) -> ObjectiveAdmission
             LEARNING_OUTCOME_BRAKE_DENIED,
             "Governance check errored",
         )
-
-    identity_context = getattr(ctx, "identity_context", None)
-    if identity_context is not None:
-        decision = policy_engine.evaluate_tool_policy(identity_context, kind)
-        if not decision.allowed:
-            return ObjectiveAdmission(
-                False,
-                LEARNING_OUTCOME_GOVERNANCE_DENIED,
-                f"Denied by Identity policy: {decision.reason}",
-            )
 
     return ObjectiveAdmission(True)
 
@@ -3957,6 +4023,157 @@ async def _load_candidate_lesson(ctx: Any, competency_id: str, slug: str) -> Any
     except (TypeError, ValueError, KeyError):
         logger.warning("Stored candidate lesson %s is not parseable", key)
         return None
+
+
+async def _load_learning_approval(ctx: Any, lesson: Any) -> Any:
+    """The recorded acceptance authorization for `lesson`, or None.
+
+    Keyed by the candidate's own key, so there is exactly one live approval
+    per candidate and no ambient "learning is approved" state to find. Reads
+    fail closed: an unreadable or unparseable approval row is no approval.
+    """
+    import json as _json
+
+    if lesson is None:
+        return None
+    key = candidate_learning.key_for(lesson.competency_id, lesson.slug)
+    try:
+        row = await ctx.mem.get_memory(learning_authorization.KIND, key)
+    except Exception:
+        logger.exception("Failed to read learning acceptance approval %s", key)
+        return None
+    if not row:
+        return None
+    try:
+        return learning_authorization.LearningAcceptanceApproval.from_dict(
+            _json.loads(row["value"]),
+        )
+    except (TypeError, ValueError, KeyError):
+        logger.warning("Stored learning acceptance approval %s is not parseable", key)
+        return None
+
+
+@dataclass
+class LearningApprovalResult:
+    """Outcome of one attempt to authorise accepting a specific candidate."""
+
+    granted: bool
+    outcome: str
+    reason: str | None = None
+    approval: Any = None
+
+
+async def grant_learning_acceptance_approval(
+    ctx: Any,
+    *,
+    competency_id: str,
+    slug: str,
+    approver: str,
+    note: str | None = None,
+) -> LearningApprovalResult:
+    """Explicitly authorise consolidating one named candidate lesson.
+
+    This is the *only* way `learning_accept` becomes reachable, and it is
+    deliberately per-candidate: the approval records who approved it, when,
+    and a fingerprint of the candidate's material content, so it authorises
+    that lesson and nothing else. Re-proposing over the same key changes the
+    fingerprint and silently invalidates the approval -- acceptance then fails
+    until someone approves what the candidate now says.
+
+    Called by a human review flow, never by Bartholomew's own seams. It grants
+    no standing permission, so calling it twice for two candidates is two
+    decisions, not a mode. It is also inert on its own: it writes an approval
+    row and an audit Reflection, and consolidates nothing -- every other gate
+    (Parking Brake first among them) is still evaluated when acceptance
+    actually runs.
+    """
+    import json as _json
+
+    if not competency_id or not slug:
+        return LearningApprovalResult(
+            False,
+            LEARNING_OUTCOME_INVALID,
+            "competency_id and slug are required to approve a candidate lesson",
+        )
+    if not approver:
+        return LearningApprovalResult(
+            False,
+            LEARNING_OUTCOME_INVALID,
+            "an approver is required -- authorization is never anonymous",
+        )
+
+    lesson = await _load_candidate_lesson(ctx, competency_id, slug)
+    if lesson is None:
+        return LearningApprovalResult(
+            False,
+            LEARNING_OUTCOME_NOT_FOUND,
+            f"no candidate lesson {candidate_learning.key_for(competency_id, slug)!r}",
+        )
+    if lesson.review_state != candidate_learning.REVIEW_PROPOSED:
+        return LearningApprovalResult(
+            False,
+            LEARNING_OUTCOME_INVALID,
+            f"cannot approve a candidate in state {lesson.review_state!r}; "
+            "review decisions are terminal",
+        )
+
+    approval = learning_authorization.LearningAcceptanceApproval(
+        competency_id=competency_id,
+        slug=slug,
+        candidate_fingerprint=learning_authorization.fingerprint_for(lesson),
+        approver=approver,
+        note=note,
+        objective_id=lesson.source.objective_id,
+        candidate_revision=lesson.revision,
+    )
+    errors = approval.validate()
+    if errors:
+        return LearningApprovalResult(False, LEARNING_OUTCOME_INVALID, "; ".join(errors))
+
+    store_result = await ctx.mem.upsert_memory(
+        learning_authorization.KIND,
+        approval.key(),
+        _json.dumps(approval.to_dict()),
+        datetime.now(timezone.utc).isoformat(),
+        summary=approval.to_summary_text(),
+    )
+    if not getattr(store_result, "stored", False):
+        return LearningApprovalResult(
+            False,
+            LEARNING_OUTCOME_NOT_STORED,
+            "the acceptance approval was not stored (policy or consent)",
+        )
+
+    # Provenance through the existing cross-surface audit authority, so
+    # "who authorised this, and when?" is answerable from the Reflection
+    # trail alone -- the same place the acceptance itself is recorded.
+    observation = Observation(
+        source=LEARNING_OBSERVATION_SOURCE,
+        raw_content=(
+            f"{LEARNING_ACTION_APPROVE_ACCEPTANCE} candidate={approval.key()} "
+            f"approver={approver}"
+        ),
+    )
+    interpretation = _build_interpretation(ctx, observation)
+    await _record_learning_reflection(
+        ctx,
+        CandidateAction(
+            kind=LEARNING_ACTION_APPROVE_ACCEPTANCE,
+            interpretation=interpretation,
+        ),
+        "approved",
+        lesson,
+        None,
+        {
+            "approver": approver,
+            "approval_note": note,
+            "candidate_fingerprint": approval.candidate_fingerprint,
+            "candidate_revision": approval.candidate_revision,
+            "granted_at": approval.granted_at,
+            "consolidated": False,
+        },
+    )
+    return LearningApprovalResult(True, "approved", None, approval)
 
 
 async def _consolidate_accepted_lesson(
@@ -4050,26 +4267,34 @@ async def run_candidate_lesson_through_runtime_contract(
             errors=errors or [],
         )
 
-    # --- Governance: fail-closed, before anything is read or written ------
-    admission = await evaluate_learning_admission(ctx, action)
-    if not admission.allowed:
+    async def _refuse_by_governance(admission, lesson=None):
         result = CandidateLessonResult(
             observation=observation,
             candidate_action=candidate_action,
             governance_allowed=False,
             outcome=admission.outcome or LEARNING_OUTCOME_GOVERNANCE_DENIED,
             reason=admission.reason,
+            lesson=lesson,
         )
         await _record_learning_reflection(
             ctx,
             candidate_action,
             result.outcome,
-            None,
+            lesson,
             admission.reason,
+            {"consolidated": False},
         )
         return result
 
+    # --- Governance gate 1: fail-closed brake, before anything is read ----
+    brake = await _evaluate_learning_brake(ctx, action)
+    if not brake.allowed:
+        return await _refuse_by_governance(brake)
+
     if action == LEARNING_ACTION_PROPOSE:
+        admission = await evaluate_learning_admission(ctx, action)
+        if not admission.allowed:
+            return await _refuse_by_governance(admission)
         return await _propose_candidate_lesson(
             ctx,
             observation,
@@ -4099,6 +4324,16 @@ async def run_candidate_lesson_through_runtime_contract(
             LEARNING_OUTCOME_NOT_FOUND,
             f"no candidate lesson {candidate_learning.key_for(competency_id, slug)!r}",
         )
+
+    # --- Governance gate 2, on the candidate as it stands right now -------
+    # Evaluated *before* the review transition mutates it, so an acceptance
+    # approval is checked against exactly the content it was granted for.
+    # For `learning_reject` this is the ordinary Identity allowlist check;
+    # for `learning_accept` it is the candidate-bound authorization, which no
+    # allowlist entry can stand in for.
+    admission = await evaluate_learning_admission(ctx, action, lesson=lesson)
+    if not admission.allowed:
+        return await _refuse_by_governance(admission, lesson)
 
     try:
         if action == LEARNING_ACTION_ACCEPT:

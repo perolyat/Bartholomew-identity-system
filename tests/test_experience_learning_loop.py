@@ -43,6 +43,7 @@ from bartholomew.kernel.runtime_contract import (
     LEARNING_OUTCOME_NO_EXPERIENCE,
     LEARNING_OUTCOME_PROPOSED,
     LEARNING_OUTCOME_REJECTED,
+    grant_learning_acceptance_approval,
     run_candidate_lesson_through_runtime_contract,
     run_chat_through_runtime_contract,
 )
@@ -176,6 +177,22 @@ _BOILER_RULE = (
 )
 
 
+async def _approve(ctx, slug: str, approver: str = REVIEWER, note: str | None = None):
+    """The explicit, candidate-bound authorization `learning_accept` requires.
+
+    Every acceptance below goes through this first, because there is no
+    standing permission to accept: `learning_accept` is absent from
+    `Identity.yaml`'s allowlist and adding it would not help.
+    """
+    return await grant_learning_acceptance_approval(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=slug,
+        approver=approver,
+        note=note,
+    )
+
+
 async def _competency_rows(ctx) -> list[dict]:
     return await ctx.mem.list_memories_by_kind(list(COMPETENCY_KINDS), limit=50)
 
@@ -287,6 +304,9 @@ class TestAcceptanceScenario:
         """Rejection is terminal -- not merely a state a later call can undo."""
         objective_id = _run_the_experience(ctx)
         proposed = await _propose(ctx, objective_id, inferred_rule=_BOILER_RULE)
+        # Approved *before* rejection, so the later accept fails on the
+        # terminal review state rather than merely on missing authorization.
+        await _approve(ctx, proposed.lesson.slug)
         await run_candidate_lesson_through_runtime_contract(
             ctx,
             LEARNING_ACTION_REJECT,
@@ -313,6 +333,7 @@ class TestAcceptanceScenario:
         write, with its provenance and its low confidence intact."""
         objective_id = _run_the_experience(ctx)
         proposed = await _propose(ctx, objective_id, inferred_rule=_BOILER_RULE)
+        await _approve(ctx, proposed.lesson.slug)
 
         accepted = await run_candidate_lesson_through_runtime_contract(
             ctx,
@@ -356,6 +377,7 @@ class TestAcceptanceScenario:
         chat turn, days later as far as the system is concerned."""
         objective_id = _run_the_experience(ctx)
         proposed = await _propose(ctx, objective_id, inferred_rule=_BOILER_RULE)
+        await _approve(ctx, proposed.lesson.slug)
         await run_candidate_lesson_through_runtime_contract(
             ctx,
             LEARNING_ACTION_ACCEPT,
@@ -403,6 +425,7 @@ class TestAcceptanceScenario:
         await run_chat_through_runtime_contract(ctx, question, mid)
         assert mid.prompt == before.prompt
 
+        await _approve(ctx, proposed.lesson.slug)
         await run_candidate_lesson_through_runtime_contract(
             ctx,
             LEARNING_ACTION_ACCEPT,

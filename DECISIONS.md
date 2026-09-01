@@ -2575,3 +2575,61 @@
     and front-door routing across per-user processes, and any administrative capability over a
     user's personal data. Each needs its own decision.
 - **Date:** 2026-08-27
+
+## Decision: Learning acceptance requires candidate-bound authorization; proposal and rejection do not
+
+- **Context:** The S5.4 learning loop (experience -> candidate lesson -> review -> consolidation)
+  was integrated into main with all three of its action kinds -- `learning_propose`,
+  `learning_accept`, `learning_reject` -- absent from `Identity.yaml`'s deny-by-default
+  `tool_use.allowlist`. Integration deliberately declined to grant them, so the loop existed in
+  code but was refused at Governance in any normal deployment. The question left open was not
+  *whether* to make it reachable, but on what terms.
+- **Decision:** Split the three kinds by what they actually do, rather than granting or denying
+  them as a set.
+  - **`learning_propose` is allowlisted.** A proposal creates only a candidate lesson, stored
+    under the `candidate_lesson` kind, which is absent from `competency.COMPETENCY_KINDS` and so
+    structurally invisible to the retrieval seam. Proposing asserts nothing and changes no
+    future reasoning, so a standing grant is the right shape -- the same relationship
+    `objective_record` has to acting on an objective.
+  - **`learning_reject` is allowlisted.** Rejection creates no accepted learning and, because
+    consolidation refuses any review state but `accepted`, permanently forecloses it. Standing
+    permission here can only ever reduce what Bartholomew retains.
+  - **`learning_accept` is not allowlisted, and allowlisting it would not make it reachable.**
+    Acceptance is the durable mutation that turns a candidate into a `competency_heuristic` a
+    later, unrelated turn can retrieve. It requires a `LearningAcceptanceApproval`
+    (`bartholomew/kernel/learning_authorization.py`) bound to one specific candidate, and
+    `runtime_contract.evaluate_learning_admission()` requires it regardless of Identity policy.
+    There is deliberately no "learning enabled" switch to find.
+- **The rule this encodes:** Bartholomew may autonomously conclude *"I may have learned
+  something."* It may not autonomously conclude *"this lesson is now trusted knowledge."*
+- **How the binding works:** an approval is keyed by the candidate's own key
+  (`<competency_id>.<slug>`) and carries a SHA-256 `candidate_fingerprint` over the candidate's
+  material content -- rule, conditions, classification, confidence, epistemic status, and the
+  objective and evidence-event ids it stands on. Approving candidate A therefore cannot accept
+  candidate B, and re-proposing over the same key changes the fingerprint and silently
+  invalidates the prior approval: acceptance then fails until someone approves what the
+  candidate now says. Review bookkeeping (`review_state`, `reviewer`, `reviewed_at`, `revision`,
+  `updated_at`) is excluded from the fingerprint, because acceptance itself mutates it and an
+  approval its own use invalidated would be unusable.
+- **Provenance and audit:** the approval record carries the approver's identity, the grant time,
+  the note, the candidate revision and the originating objective, written through
+  `MemoryStore.upsert_memory()` like every other record. The decision to grant is audited
+  through the existing `ActionReflection` authority as a `learning_accept_approval_grant` on the
+  `learning` surface -- no new store and no new audit log. Acceptance remains a separate, later
+  Reflection, so "who authorised this, and who accepted it?" are separately answerable.
+- **What this does not weaken:** the Parking Brake (`training` scope) is evaluated first, for
+  every learning action, and an approval is not an override -- an approved candidate is still
+  refused while a broader deny is in force, and the approval survives the refusal rather than
+  being spent by it. The Identity allowlist remains authoritative for `learning_propose` and
+  `learning_reject`. Review is still never anonymous, rejection is still terminal, an accepted
+  lesson still carries its low single-experience confidence and `requires_review` supervision,
+  and nothing here promotes a lesson between classifications or across users or instances.
+- **Deliberately not built:** any blanket learning permission, automatic or confidence-based
+  acceptance, cross-user or cross-instance learning, system-level promotion, and any general
+  authorization framework beyond this one seam. A review UI was not required: the approval seam
+  is exercised through `grant_learning_acceptance_approval()`.
+- **Proven by:** `tests/test_learning_acceptance_authorization.py` (propose, reject, accept
+  without authorization, accept with authorization, approval binding, and brake/governance
+  primacy), with `tests/test_wave_cross_stream_integration.py` running the integrated wave on
+  the shipped allowlist.
+- **Date:** 2026-09-01
