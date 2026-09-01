@@ -469,6 +469,33 @@ tool_use:
     # exactly one kind here, not one per provider, so allowlisting capture
     # can never widen into allowlisting a domain.
     - "inbound_capture"
+    # Package A: the canonical event backbone (docs/EVENT_PROCESSING_BACKBONE.md).
+    # Two entries, and the split between them is the point.
+    #
+    # `inbound_event_processing` is the scheduler drive that runs one bounded
+    # processing pass. Deliberately NOT in _SELF_MAINTENANCE_DRIVES -- reading
+    # third-party events into a user's objectives is specific user content,
+    # not kernel housekeeping, and the same precedent awaiting_response_check
+    # and objective_continuity_check record applies. Without this entry the
+    # drive is denied outright and no event is ever processed.
+    #
+    # `inbound_event_process` is the Executive kind for the pass itself,
+    # evaluated before any event is claimed. Removing it stops processing
+    # while *preserving the backlog*: nothing is claimed, no attempt is spent
+    # and no event is discarded, so restoring it resumes exactly the queue
+    # that existed. That is why it is separate from the drive entry -- one
+    # switch stops the scheduler running the pass, the other stops the pass
+    # touching anything, and an operator may want either.
+    #
+    # What these authorise is narrow and additive to nothing. Processing
+    # sends no message, contacts nobody, reaches no external provider, and
+    # creates no objective. Its single durable effect is one `fact` row on an
+    # objective the user already opened, written through the existing
+    # governed objective seam -- so it is gated by "objective_record" above
+    # as well, and by the Parking Brake, exactly like every other objective
+    # write. Neither entry can make an event mean something it did not.
+    - "inbound_event_processing"
+    - "inbound_event_process"
     # Usable POC slice 2 (docs/POC_SLICE_2_PROACTIVE_REMINDERS.md): the
     # scheduler drive that notices stored date-bearing facts falling due and
     # sends one governed reminder for each. Follows the same recorded
