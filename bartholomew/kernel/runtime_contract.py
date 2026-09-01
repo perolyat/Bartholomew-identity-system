@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import (
+    candidate_learning,
     forecast_intents,
     objective_intents,
     objective_store,
@@ -2772,6 +2773,7 @@ async def run_training_through_runtime_contract(
     submission: training.TrainingSubmission,
     *,
     recorded_by: str = "user",
+    allow_consolidation_source: bool = False,
 ) -> training.TrainingRuntimeResult:
     """
     Trace one training submission through the Runtime Contract seam.
@@ -2792,6 +2794,14 @@ async def run_training_through_runtime_contract(
     submission or a request body (design Sec.5.3): a caller must not be able
     to claim material came from the user when it came from elsewhere. Its
     companion `recorded_at` is the server clock, for the same reason.
+
+    `allow_consolidation_source` is the S5.4 lift, and is passed by exactly
+    one caller: `run_candidate_lesson_through_runtime_contract()`'s accept
+    branch, consolidating a human-reviewed candidate lesson. Every
+    user-facing ingestion surface leaves it at False, so nothing outside the
+    review-gated learning loop can write a record claiming `experience`
+    provenance. Consolidation reuses this seam rather than acquiring a second
+    governed write path.
     """
     import json as _json
 
@@ -2810,7 +2820,9 @@ async def run_training_through_runtime_contract(
         )
         return result
 
-    submission_errors = submission.validate()
+    submission_errors = submission.validate(
+        allow_consolidation_source=allow_consolidation_source,
+    )
     if submission_errors:
         result.errors.extend(submission_errors)
         return result
@@ -3726,4 +3738,550 @@ async def run_inbound_through_runtime_contract(
         stored=stored,
         provenance_degraded=reflection.error is not None,
         provenance_error=reflection.error,
+    )
+
+
+# =============================================================================
+# Stage 5 S5.4 (narrow slice): experience -> candidate learning -> review ->
+# consolidation.
+#
+# One governed loop, and only one: a recorded *objective outcome* produces one
+# bounded procedural candidate lesson, which a human reviewer accepts or
+# rejects, and which -- only if accepted -- is consolidated into the existing
+# S5.1 competency substrate through S5.2's existing governed write, where
+# S5.3's existing retrieval seam can find it.
+#
+# What this section deliberately is not: an autonomous learner. Nothing here
+# runs on a tick, a drive, or a schedule. Every function below is called by
+# something that already had a reason to act, and the accept branch requires a
+# named reviewer. `candidate_learning.CandidateLesson.requires_review` is an
+# unconditional property, so there is no "high-confidence, low-impact"
+# auto-consolidation branch to fall through -- see its docstring for why this
+# slice omits the one `COGNITIVE_RUNTIME.md` describes.
+#
+# Rejection is real, structurally: consolidation happens in exactly one place
+# (`_consolidate_accepted_lesson`), it is reachable only from the accept
+# branch, and `to_competency_heuristic()` raises for any state but `accepted`.
+# A rejected candidate therefore leaves behind only its own audit row, under
+# the `candidate_lesson` kind, which is absent from `COMPETENCY_KINDS` and so
+# structurally invisible to `_retrieve_memory_context()`'s kind filter.
+# =============================================================================
+
+#: Observation source for the learning surface.
+LEARNING_OBSERVATION_SOURCE = "learning"
+
+#: Brake scope. Reused from training rather than invented, because these
+#: writes *are* training-shaped writes into the same substrate: anyone who has
+#: halted training has halted Bartholomew learning from its own experience
+#: too, which is the stricter and more obviously correct reading.
+LEARNING_BRAKE_SCOPE = training.TRAINING_BRAKE_SCOPE
+
+LEARNING_ACTION_PROPOSE = "learning_propose"
+LEARNING_ACTION_ACCEPT = "learning_accept"
+LEARNING_ACTION_REJECT = "learning_reject"
+
+_LEARNING_ACTIONS = frozenset(
+    {LEARNING_ACTION_PROPOSE, LEARNING_ACTION_ACCEPT, LEARNING_ACTION_REJECT},
+)
+
+LEARNING_OUTCOME_PROPOSED = "proposed"
+LEARNING_OUTCOME_ACCEPTED = "accepted"
+LEARNING_OUTCOME_REJECTED = "rejected"
+LEARNING_OUTCOME_INVALID = "invalid"
+LEARNING_OUTCOME_NOT_FOUND = "not_found"
+LEARNING_OUTCOME_NO_EXPERIENCE = "no_experience"
+LEARNING_OUTCOME_NOT_STORED = "not_stored"
+LEARNING_OUTCOME_BRAKE_DENIED = "parking_brake_denied"
+LEARNING_OUTCOME_GOVERNANCE_DENIED = "governance_denied"
+
+
+@dataclass
+class CandidateLessonResult:
+    """Outcome of one candidate-learning action through the Runtime Contract.
+
+    `lesson` is the candidate as it stands after the action. `consolidation`
+    is the `TrainingRuntimeResult` of the accepted lesson's write into the
+    competency substrate, and is None for every outcome except a successful
+    accept -- which is the result contract's way of saying that a rejection
+    consolidated nothing.
+    """
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    outcome: str
+    reason: str | None = None
+    lesson: Any = None
+    consolidation: training.TrainingRuntimeResult | None = None
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def consolidated(self) -> bool:
+        """Whether a retrievable competency record now exists for this lesson."""
+        return bool(
+            self.consolidation is not None and self.consolidation.stored_count > 0,
+        )
+
+
+async def evaluate_learning_admission(ctx: Any, kind: str) -> ObjectiveAdmission:
+    """The single Governance authority for every candidate-learning action.
+
+    Deliberately the same two-gate shape and the same `ObjectiveAdmission`
+    result type as `evaluate_objective_admission()`, rather than a third
+    variant: gate 1 is the fail-closed Parking Brake on the `training` scope
+    (the same helper the training seam uses), gate 2 is Identity policy per
+    action kind, so permission to *propose* a lesson is not permission to
+    *accept* one. Skipped entirely when no IdentityContext is wired in, the
+    same additive fallback every other seam here uses.
+
+    Fails closed: an unreadable governance state refuses the action.
+    """
+    try:
+        from bartholomew.orchestrator.safety.governance_store import (
+            is_blocked_fail_closed_off_loop,
+        )
+
+        blocked = await is_blocked_fail_closed_off_loop(
+            LEARNING_BRAKE_SCOPE,
+            ctx.mem.db_path,
+            governance_store=getattr(ctx, "governance_store", None),
+            executor=getattr(ctx, "blocking_executor", None),
+        )
+        if blocked:
+            return ObjectiveAdmission(
+                False,
+                LEARNING_OUTCOME_BRAKE_DENIED,
+                f"parking brake engaged for scope {LEARNING_BRAKE_SCOPE!r}",
+            )
+    except Exception:
+        logger.exception("Governance check failed for %s; failing closed", kind)
+        return ObjectiveAdmission(
+            False,
+            LEARNING_OUTCOME_BRAKE_DENIED,
+            "Governance check errored",
+        )
+
+    identity_context = getattr(ctx, "identity_context", None)
+    if identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, kind)
+        if not decision.allowed:
+            return ObjectiveAdmission(
+                False,
+                LEARNING_OUTCOME_GOVERNANCE_DENIED,
+                f"Denied by Identity policy: {decision.reason}",
+            )
+
+    return ObjectiveAdmission(True)
+
+
+async def _record_learning_reflection(
+    ctx: Any,
+    candidate_action: CandidateAction,
+    outcome: str,
+    lesson: Any,
+    reason: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> ReflectionWriteOutcome:
+    """Exactly one ActionReflection per candidate-learning action, into the
+    same shared Memory sink every other surface writes to.
+
+    The Reflection is the cross-surface audit trail of *what was decided about
+    a lesson*, distinct from the candidate row itself, which is the lesson's
+    current state. A review decision that left no trace beyond a mutated row
+    would make "was this ever rejected?" unanswerable.
+    """
+    details: dict[str, Any] = dict(extra or {})
+    if reason:
+        details["reason"] = reason
+    if lesson is not None:
+        details["lesson"] = {
+            "competency_id": lesson.competency_id,
+            "key": lesson.key(),
+            "epistemic_status": lesson.epistemic_status,
+            "classification": lesson.classification,
+            "confidence": lesson.confidence,
+            "review_state": lesson.review_state,
+            "objective_id": lesson.source.objective_id,
+            "supporting_event_ids": list(lesson.source.supporting_event_ids),
+        }
+    reflection = ActionReflection(
+        surface=LEARNING_OBSERVATION_SOURCE,
+        action=candidate_action.kind,
+        outcome=outcome,
+        summary=f"Candidate learning ({candidate_action.kind}): {outcome}",
+        details=details,
+    )
+    return await record_action_reflection(getattr(ctx, "mem", None), reflection)
+
+
+async def _write_candidate_lesson(ctx: Any, lesson: Any) -> Any:
+    """Persist the candidate's current state through `MemoryStore`.
+
+    `upsert_memory()` remains the sole write authority, exactly as it is for
+    competency records. The candidate is stored under
+    `candidate_learning.KIND`, which the retrieval seam's kind filter does not
+    include -- so this write makes the candidate durable and reviewable
+    without making it reasoning material.
+    """
+    import json as _json
+
+    return await ctx.mem.upsert_memory(
+        candidate_learning.KIND,
+        lesson.key(),
+        _json.dumps(lesson.to_dict()),
+        datetime.now(timezone.utc).isoformat(),
+        summary=lesson.to_summary_text(),
+    )
+
+
+async def _load_candidate_lesson(ctx: Any, competency_id: str, slug: str) -> Any:
+    """Read one candidate back, or None.
+
+    `get_memory()` is the by-key read the training seam already uses for
+    supersession. It is deliberately *not* the consent-gated retrieval path,
+    and this is not a surfacing read: it feeds a review decision about a
+    record the reviewer named, never a prompt or a model context.
+    """
+    import json as _json
+
+    key = candidate_learning.key_for(competency_id, slug)
+    try:
+        row = await ctx.mem.get_memory(candidate_learning.KIND, key)
+    except Exception:
+        logger.exception("Failed to read candidate lesson %s", key)
+        return None
+    if not row:
+        return None
+    try:
+        return candidate_learning.CandidateLesson.from_dict(_json.loads(row["value"]))
+    except (TypeError, ValueError, KeyError):
+        logger.warning("Stored candidate lesson %s is not parseable", key)
+        return None
+
+
+async def _consolidate_accepted_lesson(
+    ctx: Any,
+    lesson: Any,
+) -> training.TrainingRuntimeResult:
+    """The only path by which a lesson becomes retrievable knowledge.
+
+    Reuses S5.2's governed write verbatim -- same Observation, same
+    Governance gate, same `MemoryStore.upsert_memory()`, same consent queue,
+    same Reflection -- with the `experience` source type explicitly unlocked
+    for this one call. No second write path, no second governance path, and
+    no way to reach this function except from a candidate that a named
+    reviewer has already accepted.
+    """
+    heuristic = lesson.to_competency_heuristic()
+    submission = training.TrainingSubmission(
+        competency_id=lesson.competency_id,
+        source_type=candidate_learning.EXPERIENCE_SOURCE_TYPE,
+        source_detail=(
+            f"Lesson accepted by {lesson.reviewer} from objective "
+            f"{lesson.source.objective_id}: {lesson.inferred_rule}"
+        ),
+        records=[heuristic],
+    )
+    return await run_training_through_runtime_contract(
+        ctx,
+        submission,
+        recorded_by="reflection",
+        allow_consolidation_source=True,
+    )
+
+
+async def run_candidate_lesson_through_runtime_contract(
+    ctx: Any,
+    action: str,
+    *,
+    objective_id: int | None = None,
+    competency_id: str | None = None,
+    slug: str | None = None,
+    inferred_rule: str | None = None,
+    conditions: str | None = None,
+    classification: str = "personal",
+    reviewer: str | None = None,
+    review_note: str | None = None,
+) -> CandidateLessonResult:
+    """
+    Trace one candidate-learning action through the Runtime Contract seam.
+
+    `action` is one of:
+
+      * ``"learning_propose"`` -- read a *terminal* objective and its evidence
+        events, produce one bounded procedural candidate lesson, and store it
+        as a proposal. Requires `objective_id` and `competency_id`.
+      * ``"learning_accept"`` -- a named reviewer accepts a proposed lesson,
+        which is then consolidated into the competency substrate. Requires
+        `competency_id`, `slug` and `reviewer`.
+      * ``"learning_reject"`` -- a named reviewer rejects it. Nothing is
+        consolidated, then or ever.
+
+    Stages, in order: Observation (source="learning") -> Interpretation ->
+    CandidateAction -> Governance (fail-closed, before any write) -> Memory
+    -> Reflection. Identical in shape to every other surface's seam.
+
+    `ctx` needs `.mem`; `.objective_store`, `.governance_store`,
+    `.blocking_executor` and `.identity_context` are consulted via getattr
+    with the same additive fallbacks the objective seam uses.
+
+    **Proposing a lesson asserts nothing.** A proposed candidate is not
+    knowledge, is not retrievable, and changes no future reasoning. Only the
+    accept branch has any effect on what Bartholomew can later recall, and it
+    cannot run without a reviewer's name attached to the decision.
+    """
+    if action not in _LEARNING_ACTIONS:
+        raise ValueError(f"unknown candidate-learning action {action!r}")
+
+    observation = Observation(
+        source=LEARNING_OBSERVATION_SOURCE,
+        raw_content=(f"{action} objective={objective_id} competency={competency_id} slug={slug}"),
+    )
+    interpretation = _build_interpretation(ctx, observation)
+    candidate_action = CandidateAction(kind=action, interpretation=interpretation)
+
+    def _refuse(outcome: str, reason: str | None, *, errors: list[str] | None = None):
+        return CandidateLessonResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=outcome,
+            reason=reason,
+            errors=errors or [],
+        )
+
+    # --- Governance: fail-closed, before anything is read or written ------
+    admission = await evaluate_learning_admission(ctx, action)
+    if not admission.allowed:
+        result = CandidateLessonResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=False,
+            outcome=admission.outcome or LEARNING_OUTCOME_GOVERNANCE_DENIED,
+            reason=admission.reason,
+        )
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            result.outcome,
+            None,
+            admission.reason,
+        )
+        return result
+
+    if action == LEARNING_ACTION_PROPOSE:
+        return await _propose_candidate_lesson(
+            ctx,
+            observation,
+            candidate_action,
+            objective_id=objective_id,
+            competency_id=competency_id,
+            inferred_rule=inferred_rule,
+            conditions=conditions,
+            classification=classification,
+        )
+
+    # accept / reject -- both need an existing proposal and a named reviewer.
+    if not competency_id or not slug:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "competency_id and slug are required to review a candidate lesson",
+        )
+    if not reviewer:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "a review decision requires a reviewer -- review is never anonymous",
+        )
+
+    lesson = await _load_candidate_lesson(ctx, competency_id, slug)
+    if lesson is None:
+        return _refuse(
+            LEARNING_OUTCOME_NOT_FOUND,
+            f"no candidate lesson {candidate_learning.key_for(competency_id, slug)!r}",
+        )
+
+    try:
+        if action == LEARNING_ACTION_ACCEPT:
+            lesson.accept(reviewer=reviewer, note=review_note)
+        else:
+            lesson.reject(reviewer=reviewer, note=review_note)
+    except candidate_learning.ReviewStateError as exc:
+        return _refuse(LEARNING_OUTCOME_INVALID, str(exc))
+
+    if action == LEARNING_ACTION_REJECT:
+        # Persist the rejection, and stop. Nothing is consolidated here, and
+        # `accept()` can no longer be reached for this candidate, so nothing
+        # can be consolidated later either.
+        await _write_candidate_lesson(ctx, lesson)
+        outcome = LEARNING_OUTCOME_REJECTED
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            outcome,
+            lesson,
+            None,
+            {"reviewer": reviewer, "review_note": review_note, "consolidated": False},
+        )
+        return CandidateLessonResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=outcome,
+            lesson=lesson,
+        )
+
+    # --- Accept: consolidate first, then record what actually happened ----
+    consolidation = await _consolidate_accepted_lesson(ctx, lesson)
+    if consolidation.stored_count > 0:
+        stored = consolidation.outcomes[0]
+        lesson.consolidated_kind = stored.kind
+        lesson.consolidated_key = stored.key
+        outcome = LEARNING_OUTCOME_ACCEPTED
+        reason = None
+    else:
+        # Governance, policy or the consent queue held the write. The
+        # acceptance is real and recorded, but the lesson is NOT retrievable,
+        # and the result must not claim otherwise.
+        detail = consolidation.outcomes[0].detail if consolidation.outcomes else None
+        outcome = LEARNING_OUTCOME_NOT_STORED
+        reason = (
+            consolidation.governance_reason
+            or detail
+            or "; ".join(consolidation.errors)
+            or "the competency write did not land"
+        )
+
+    await _write_candidate_lesson(ctx, lesson)
+    await _record_learning_reflection(
+        ctx,
+        candidate_action,
+        outcome,
+        lesson,
+        reason,
+        {
+            "reviewer": reviewer,
+            "review_note": review_note,
+            "consolidated": outcome == LEARNING_OUTCOME_ACCEPTED,
+            "consolidation": consolidation.to_dict(),
+        },
+    )
+    return CandidateLessonResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=True,
+        outcome=outcome,
+        reason=reason,
+        lesson=lesson,
+        consolidation=consolidation,
+    )
+
+
+async def _propose_candidate_lesson(
+    ctx: Any,
+    observation: Observation,
+    candidate_action: CandidateAction,
+    *,
+    objective_id: int | None,
+    competency_id: str | None,
+    inferred_rule: str | None,
+    conditions: str | None,
+    classification: str,
+) -> CandidateLessonResult:
+    """The propose branch: recorded outcome -> evidence -> one candidate.
+
+    The evidence comes from `ObjectiveStore.evidence_events()`, which
+    structurally excludes `proposal` rows -- so a lesson can never be inferred
+    from something Bartholomew only considered doing. Both store reads go
+    through `run_off_loop()`, the B2/B8 discipline every other objective read
+    here follows.
+    """
+
+    def _refuse(outcome: str, reason: str, *, errors: list[str] | None = None):
+        return CandidateLessonResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=outcome,
+            reason=reason,
+            errors=errors or [],
+        )
+
+    if not objective_id or not competency_id:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "objective_id and competency_id are required to propose a lesson",
+        )
+
+    store = getattr(ctx, "objective_store", None)
+    if store is None:
+        return _refuse(LEARNING_OUTCOME_INVALID, "no objective store is wired in")
+
+    executor = getattr(ctx, "blocking_executor", None)
+    objective = await run_off_loop(store.get, objective_id, executor=executor)
+    if objective is None:
+        return _refuse(
+            LEARNING_OUTCOME_NOT_FOUND,
+            f"no objective {objective_id}",
+        )
+
+    events = await run_off_loop(store.evidence_events, objective_id, executor=executor)
+
+    try:
+        lesson = candidate_learning.propose_from_objective(
+            objective,
+            list(events),
+            competency_id=competency_id,
+            inferred_rule=inferred_rule,
+            conditions=conditions,
+            classification=classification,
+        )
+    except ValueError as exc:
+        # Not every experience teaches something. Refusing to invent a lesson
+        # is a legitimate outcome, not a failure.
+        result = _refuse(LEARNING_OUTCOME_NO_EXPERIENCE, str(exc))
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            result.outcome,
+            None,
+            result.reason,
+            {"objective_id": objective_id},
+        )
+        return result
+
+    errors = lesson.validate()
+    if errors:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "; ".join(errors),
+            errors=errors,
+        )
+
+    store_result = await _write_candidate_lesson(ctx, lesson)
+    if not getattr(store_result, "stored", False):
+        return _refuse(
+            LEARNING_OUTCOME_NOT_STORED,
+            "the candidate lesson was not stored (policy or consent)",
+        )
+
+    reflection = await _record_learning_reflection(
+        ctx,
+        candidate_action,
+        LEARNING_OUTCOME_PROPOSED,
+        lesson,
+        None,
+        {"objective_id": objective_id, "consolidated": False},
+    )
+    if reflection.row_id is not None:
+        # Provenance back into the Reflection authority, written after the
+        # fact because the Reflection row does not exist until it is written.
+        lesson.reflection_row_id = reflection.row_id
+        await _write_candidate_lesson(ctx, lesson)
+
+    return CandidateLessonResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=True,
+        outcome=LEARNING_OUTCOME_PROPOSED,
+        lesson=lesson,
     )
