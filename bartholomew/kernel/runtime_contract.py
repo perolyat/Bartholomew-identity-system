@@ -1790,6 +1790,45 @@ _VOICE_STREAM_KIND = "voice_stream_start"
 # capture of any kind -- there is no capture code behind it to authorise.
 _VOICE_SPEAK_KIND = "voice_speak"
 
+# Package C (Windows Capability Wave, contract §7): the three multimodal
+# session kinds. Deliberately three separate constants rather than one
+# "multimodal" kind, for exactly the reason `_VOICE_SPEAK_KIND` above is
+# separate from `_VOICE_STREAM_KIND`: an Identity.yaml allowlist entry that
+# authorised "multimodal" would let permission to speak read as permission to
+# listen and permission to listen read as permission to watch the screen.
+# `evaluate_tool_policy()` is keyed on these strings, so three kinds means
+# three independent policy decisions -- which is the structural form of
+# contract §3.6's "microphone input and spoken output are separate
+# permissions".
+_MULTIMODAL_MICROPHONE_KIND = "multimodal_microphone_session"
+_MULTIMODAL_SCREEN_KIND = "multimodal_screen_capture"
+_MULTIMODAL_SPEAK_KIND = "multimodal_spoken_output"
+
+#: Seam kind and brake scope per modality. The brake scopes reuse the two the
+#: repository already registers ("voice"/"sight") rather than adding new ones:
+#: a brake is a stop, never a permission, so sharing a scope can only stop
+#: more than asked and can never let one modality authorise another.
+_MULTIMODAL_GATES: dict[str, tuple[str, str, str]] = {
+    # modality: (policy kind, brake scope, consent prompt subject)
+    "microphone": (
+        _MULTIMODAL_MICROPHONE_KIND,
+        "voice",
+        "LISTEN on the microphone for one bounded session (this does not "
+        "permit screen capture or speaking)",
+    ),
+    "screen": (
+        _MULTIMODAL_SCREEN_KIND,
+        "sight",
+        "OBSERVE one specified screen, window or region for one bounded "
+        "session (this does not permit listening or speaking)",
+    ),
+    "spoken_output": (
+        _MULTIMODAL_SPEAK_KIND,
+        "voice",
+        "SPEAK aloud on this machine (this does not permit listening or screen capture)",
+    ),
+}
+
 
 @dataclass
 class DeviceRuntimeResult:
@@ -2298,6 +2337,145 @@ async def run_spoken_output_through_runtime_contract(
         provenance_degraded=device_reflection.error is not None,
         provenance_error=device_reflection.error,
         result=speech_result,
+    )
+
+
+async def run_multimodal_session_through_runtime_contract(
+    modality: str,
+    *,
+    db_path: str | None = None,
+    identity_context: IdentityContext | None = None,
+    capability_supported: bool = False,
+    capability_reason: str | None = None,
+    consent_prompt: str | None = None,
+    blocking_executor: Any | None = None,
+) -> DeviceRuntimeResult:
+    """
+    Trace one multimodal *session start* through the Runtime Contract seam --
+    the governed production entry point for Package C's three surfaces.
+
+    The same shape as the sight/voice/spoken-output seams above (Observation ->
+    Interpretation -> Executive -> Governance -> Capability -> Reflection ->
+    Memory, one `ActionReflection` per outcome, `DeviceRuntimeResult`
+    returned), reusing their helpers rather than growing a parallel path.
+    There is no second governance authority here, no second brake read and no
+    second reflection sink.
+
+    **This seam decides; it does not capture.** Unlike the seams above it
+    takes no `capture_fn`/`stream_fn`, because a multimodal session's
+    execution is not a single call -- it is a bounded, stoppable, expiring
+    session owned by `bartholomew.multimodal.runtime`. That module calls this
+    one, and starts an adapter only on a `governance_allowed` result. Keeping
+    the decision here and the session there is what stops an API route, an
+    event payload or a model response from reaching an adapter directly
+    (invariant 5): the adapters are not importable from those layers without
+    going past this function.
+
+    Four gates, all strictly before any device is touched:
+
+      1. **Device capability.** Resolved by the caller against Session E's
+         frozen declaration (contract §3.3) and passed in as
+         `capability_supported`. An unenrolled device, an undeclared kind or
+         an unknown version is unsupported, which denies -- never
+         approximated. Passed in rather than resolved here because Package C
+         must not own the device registry; `capability_supported` defaults to
+         `False`, so a caller that forgets it gets a denial.
+      2. **ParkingBrake**, per the modality's scope, read through
+         `GovernanceStore` -- the same authority chat, scheduler drives, skill
+         execution and the device seams above all read. Fails closed on any
+         error: an unreadable safety gate denies a device start.
+      3. **Identity Policy Decision** on the modality's own kind. Three
+         distinct kinds means three independent decisions, so allowlisting
+         speech can never authorise listening.
+      4. **Explicit session consent**, always required, fail-closed, through
+         the one interactive consent channel (`privacy_guard`). The prompt
+         names the single modality and says what it does *not* permit.
+
+    `outcome` is one of: "started" (every gate passed; the caller may now
+    start the session), "capability_denied", "parking_brake_denied",
+    "governance_denied", "consent_denied".
+    """
+    gate = _MULTIMODAL_GATES.get(modality)
+    if gate is None:
+        raise ValueError(f"unknown multimodal modality: {modality!r}")
+    kind, brake_scope, prompt_subject = gate
+
+    observation = Observation(source=f"multimodal.{modality}", raw_content=kind)
+    interpretation = Interpretation(observation=observation, prompt=observation.raw_content)
+    candidate_action = CandidateAction(kind=kind, interpretation=interpretation)
+    resolved_db_path = _resolve_device_db_path(db_path)
+
+    allowed = True
+    outcome = "started"
+    reason: str | None = None
+
+    # Governance gate 1: the device must declare this exact capability.
+    if not capability_supported:
+        allowed = False
+        outcome = "capability_denied"
+        reason = capability_reason or (
+            f"device does not declare the {kind} capability (fail-closed)"
+        )
+
+    # Governance gate 2: ParkingBrake, read through GovernanceStore.
+    if allowed:
+        try:
+            from bartholomew.orchestrator.safety.governance_store import (
+                is_blocked_fail_closed_off_loop,
+            )
+
+            if resolved_db_path is not None and await is_blocked_fail_closed_off_loop(
+                brake_scope,
+                resolved_db_path,
+                executor=blocking_executor,
+            ):
+                allowed = False
+                outcome = "parking_brake_denied"
+                reason = f"Blocked by parking brake (scope={brake_scope})"
+        except Exception:
+            logger.exception(
+                "Brake check failed for scope=%s; failing closed",
+                brake_scope,
+            )
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = "Parking brake check errored"
+
+    # Governance gate 3: Identity Policy Decision (additive; see sight docstring).
+    if allowed and identity_context is not None:
+        decision = policy_engine.evaluate_tool_policy(identity_context, candidate_action.kind)
+        if not decision.allowed:
+            allowed = False
+            outcome = "governance_denied"
+            reason = f"Denied by Identity policy: {decision.reason}"
+
+    # Governance gate 4: explicit session consent -- always required.
+    if allowed:
+        allowed, outcome, reason = await _resolve_device_consent(
+            consent_prompt or prompt_subject,
+        )
+
+    device_reflection = await _record_device_reflection(
+        resolved_db_path,
+        f"multimodal.{modality}",
+        kind,
+        outcome,
+        reason,
+    )
+
+    return DeviceRuntimeResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=allowed,
+        # `started` is deliberately False on every path: this seam authorises a
+        # session, it does not start one. The caller starts the adapter and
+        # owns the session's own state machine.
+        started=False,
+        outcome=outcome,
+        reason=reason,
+        provenance_degraded=device_reflection.error is not None,
+        provenance_error=device_reflection.error,
+        result=None,
     )
 
 

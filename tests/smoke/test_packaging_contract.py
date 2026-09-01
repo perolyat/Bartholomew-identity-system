@@ -67,6 +67,16 @@ GUARDED_OPTIONAL_IMPORTS = {
     # deployment that never enables it never needs the package -- deliberately
     # not a hard runtime dependency. See docs/VISION_AND_PERSONAL_DEPLOYMENT.md §6.
     "anthropic",
+    # Package C's three optional multimodal backends. Each is imported inside a
+    # try/except in a `default_*()` factory that returns a Null adapter with the
+    # reason when the package is absent, so a machine without them reports the
+    # capability as truthfully `unavailable` rather than failing. Deliberately
+    # not hard runtime dependencies: a native audio/UI dependency tree must be
+    # an explicit operator choice, and CI must not need one.
+    # See docs/C_MULTIMODAL_WINDOWS_PRESENCE.md §7.3.
+    "sounddevice",
+    "uiautomation",
+    "mss",
 }
 
 # Modules whose import name differs from the distribution that provides them.

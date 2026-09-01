@@ -62,6 +62,7 @@ from .routes import (
     liveness,
     memory,
     metrics,
+    multimodal,
     notifications,
     onboarding,
     self_state,
@@ -104,6 +105,12 @@ app.include_router(memory.router)
 app.include_router(awaiting_response.router)
 app.include_router(onboarding.router)
 app.include_router(training.router)
+
+# Package C: the visible multimodal status and stop surface. Read-and-stop
+# only -- there is deliberately no start endpoint here, because this API
+# bridge has no authentication and capture initiation must never be reachable
+# from an unauthenticated call (contract §7). See routes/multimodal.py.
+app.include_router(multimodal.router)
 
 # Governed inbound capture (Session D). Deliberately NOT added to
 # `_ADMISSION_EXEMPT_PATHS`: unlike health and static UI, capture writes
@@ -161,7 +168,16 @@ atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
 _ADMISSION_EXEMPT_PATHS = frozenset(
     {"/", "/healthz", "/api/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"},
 )
-_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding", "/ui")
+# "/api/multimodal" (Package C): the capture/output status and stop surface.
+# Exempt for the same reason the UI shell is -- and one stronger one. These
+# routes read a process-local session registry and never touch the kernel, so
+# admission buys nothing; and a person who can see "Bartholomew is listening"
+# must be able to press stop during the startup and shutdown windows too. A
+# stop that 503s exactly when someone urgently wants capture to end would be
+# the wrong failure. Exempting these is safe in the direction that matters:
+# the surface can only report state and end sessions, never begin one -- there
+# is no start endpoint (see routes/multimodal.py).
+_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding", "/ui", "/api/multimodal")
 
 
 # =============================================================================

@@ -498,6 +498,35 @@ tool_use:
     # bartholomew/kernel/task_intents.py), so this entry does not put a
     # destructive operation behind an ordinary sentence.
     - "tasks"
+    # Package C (Windows Capability Wave, contract §7): the three multimodal
+    # session kinds, from
+    # runtime_contract.run_multimodal_session_through_runtime_contract().
+    # Same recorded precedent as "notify", the awaiting_response_* entries and
+    # "inbound_capture" above -- a seam kind is unreachable without its own
+    # allowlist entry, because no multimodal kind is exempted the way
+    # self-maintenance drives are.
+    #
+    # THREE ENTRIES, NOT ONE, AND THAT IS THE POINT. Each authorises exactly
+    # one modality, so removing one leaves the other two working:
+    #
+    #   multimodal_spoken_output      -- may SPEAK aloud. Opens no microphone
+    #                                    and reads no screen.
+    #   multimodal_microphone_session -- may LISTEN for one bounded, explicit,
+    #                                    visible session. Grants no screen access.
+    #   multimodal_screen_capture     -- may OBSERVE one approved screen, window
+    #                                    or region. Grants no audio, and does
+    #                                    not by itself authorise the screenshot
+    #                                    fallback (a separate per-session
+    #                                    decision).
+    #
+    # There is deliberately no "multimodal" entry authorising all three:
+    # allowlisting speech must never read as allowlisting capture. None of
+    # these authorises continuous or ambient capture -- each covers a single
+    # session a human explicitly requested, consented to, can see and can
+    # stop, and which expires on its own.
+    - "multimodal_spoken_output"
+    - "multimodal_microphone_session"
+    - "multimodal_screen_capture"
     # Golden Path first slice: Bartholomew's first *external* capability
     # provider (bartholomew/skills/forecast.py, config/skills/forecast.yaml).
     # Same grain and same reason as every entry above -- execute_action()
