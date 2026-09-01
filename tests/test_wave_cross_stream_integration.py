@@ -59,8 +59,10 @@ from bartholomew.kernel.runtime_contract import (
     LEARNING_ACTION_PROPOSE,
     LEARNING_ACTION_REJECT,
     LEARNING_OUTCOME_ACCEPTED,
+    LEARNING_OUTCOME_APPROVAL_REQUIRED,
     LEARNING_OUTCOME_PROPOSED,
     LEARNING_OUTCOME_REJECTED,
+    grant_learning_acceptance_approval,
     run_candidate_lesson_through_runtime_contract,
     run_inbound_through_runtime_contract,
 )
@@ -78,32 +80,28 @@ REVIEWER = "taylor"
 
 #: What the *shipped* `Identity.yaml` grants, as far as this wave is
 #: concerned: `objective_record` and `inbound_capture` were both already
-#: allowlisted before any of these four streams existed, and `tool_use.
-#: default_allowed` is false. Session C's three learning kinds are
-#: deliberately NOT here -- see `SHIPPED_CONTEXT`'s use below.
+#: allowlisted before any of these four streams existed, `tool_use.
+#: default_allowed` is false, and the learning follow-up added exactly two of
+#: Session C's three learning kinds -- `learning_propose` and
+#: `learning_reject`. `learning_accept` is deliberately absent, and listing it
+#: here would not make acceptance reachable anyway: acceptance requires an
+#: explicit approval bound to one specific candidate. See
+#: `test_shipped_identity_grants_proposal_but_never_acceptance`.
 SHIPPED_CONTEXT = IdentityContext(
-    tool_use_default_allowed=False,
-    tool_use_allowlist=["objective_record", "inbound_capture"],
-)
-
-#: The same identity with learning explicitly granted, which is what an
-#: operator who has chosen to let Bartholomew learn from its own experience
-#: would configure. Session C gates every learning action on
-#: `evaluate_tool_policy()` per action kind, and the shipped identity is
-#: deny-by-default, so the loop is unreachable until someone says otherwise.
-#: That is a governance decision for the operator, not something integration
-#: may quietly grant -- Session E deliberately did not add these kinds to
-#: `Identity.yaml`. See `test_shipped_identity_does_not_grant_learning`.
-LEARNING_CONTEXT = IdentityContext(
     tool_use_default_allowed=False,
     tool_use_allowlist=[
         "objective_record",
         "inbound_capture",
         LEARNING_ACTION_PROPOSE,
-        LEARNING_ACTION_ACCEPT,
         LEARNING_ACTION_REJECT,
     ],
 )
+
+#: The scenario suites run on the shipped grants, not on a wider invented
+#: identity: the integrated wave has to work on the identity this repository
+#: actually ships, and acceptance has to go through the candidate-bound
+#: approval either way.
+LEARNING_CONTEXT = SHIPPED_CONTEXT
 
 
 class _Ctx:
@@ -286,6 +284,15 @@ async def test_compound_wave_scenario(ctx, mem, monkeypatch):
     assert candidate_learning.KIND not in COMPETENCY_KINDS
 
     # --- C: governed human review consolidates it -------------------------
+    # Acceptance has no standing permission on any identity: it needs an
+    # explicit authorization bound to this exact candidate first.
+    approval = await grant_learning_acceptance_approval(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=lesson.slug,
+        approver=REVIEWER,
+    )
+    assert approval.granted is True, approval.reason
     accepted = await run_candidate_lesson_through_runtime_contract(
         ctx,
         LEARNING_ACTION_ACCEPT,
@@ -533,26 +540,20 @@ def test_the_wave_added_no_second_device_actuation_path():
 
 
 @pytest.mark.asyncio
-async def test_shipped_identity_does_not_grant_learning(mem):
-    """Learning is unreachable until an operator grants it. Deliberate.
+async def test_shipped_identity_grants_proposal_but_never_acceptance(mem):
+    """The governance decision, as behaviour rather than prose.
 
-    Session C gates each learning action on `evaluate_tool_policy()` at the
-    action-kind grain, and the shipped `Identity.yaml` is
-    `tool_use.default_allowed: false` without any `learning_*` entry. So on
-    the identity this repository actually ships, the learning loop is denied
-    at its Governance stage.
+    On the identity this repository actually ships, Bartholomew may
+    autonomously conclude *"I may have learned something"*: `learning_propose`
+    is allowlisted, and a proposal creates only a candidate under a kind the
+    retrieval seam cannot see.
 
-    Session E left it that way on purpose. Every comparable seam kind
-    (`notify`, `awaiting_response_*`, `inbound_capture`, `objective_record`)
-    needed an explicit `Identity.yaml` entry before it could run, and adding
-    three more here would grant Bartholomew standing permission to learn from
-    its own experience as a side effect of *integration*. That is an
-    operator's decision to make deliberately, not a merge's to make quietly,
-    and deny-by-default is the safer end state for a capability whose whole
-    risk is self-modification.
-
-    This test exists so the limitation is recorded as behaviour rather than
-    prose, and so that granting it later is a visible, intentional change.
+    It may not autonomously conclude *"this lesson is now trusted
+    knowledge"*. `learning_accept` has no standing permission -- it is absent
+    from `Identity.yaml`'s allowlist, and adding it there would change
+    nothing, because acceptance is gated on an explicit approval bound to one
+    specific candidate rather than on the allowlist at all. There is no
+    "learning enabled" switch to find.
     """
     ctx = _Ctx(
         mem,
@@ -575,14 +576,41 @@ async def test_shipped_identity_does_not_grant_learning(mem):
         outcome_note="Repaired",
     )
 
-    result = await run_candidate_lesson_through_runtime_contract(
+    proposed = await run_candidate_lesson_through_runtime_contract(
         ctx,
         LEARNING_ACTION_PROPOSE,
         objective_id=objective.id,
         competency_id=COMPETENCY_ID,
     )
-    assert result.governance_allowed is False
-    assert result.consolidated is False
+    assert proposed.outcome == LEARNING_OUTCOME_PROPOSED, proposed.reason
+    assert proposed.consolidated is False
+
+    # ...and stops there. Acceptance is refused on the shipped identity.
+    refused = await run_candidate_lesson_through_runtime_contract(
+        ctx,
+        LEARNING_ACTION_ACCEPT,
+        competency_id=COMPETENCY_ID,
+        slug=proposed.lesson.slug,
+        reviewer=REVIEWER,
+    )
+    assert refused.governance_allowed is False
+    assert refused.outcome == LEARNING_OUTCOME_APPROVAL_REQUIRED
+    assert refused.consolidated is False
+
+    # Allowlisting the kind is not the missing piece: the same refusal stands.
+    ctx.identity_context = IdentityContext(
+        tool_use_default_allowed=True,
+        tool_use_allowlist=list(SHIPPED_CONTEXT.tool_use_allowlist) + [LEARNING_ACTION_ACCEPT],
+    )
+    still_refused = await run_candidate_lesson_through_runtime_contract(
+        ctx,
+        LEARNING_ACTION_ACCEPT,
+        competency_id=COMPETENCY_ID,
+        slug=proposed.lesson.slug,
+        reviewer=REVIEWER,
+    )
+    assert still_refused.governance_allowed is False
+    assert still_refused.outcome == LEARNING_OUTCOME_APPROVAL_REQUIRED
 
     # Capture and objective recording, which the shipped identity *does*
     # grant, are unaffected: the denial is scoped to learning, not blanket.

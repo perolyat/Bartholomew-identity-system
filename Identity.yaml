@@ -560,6 +560,36 @@ tool_use:
     # config/kernel.yaml's proactive.objective_continuity is true (default
     # false). Both are required.
     - "objective_continuity_check"
+    # S5.4 learning loop (experience -> candidate lesson -> review ->
+    # consolidation). Two of the three learning kinds, and deliberately not
+    # the third.
+    #
+    # `learning_propose` creates a *candidate* lesson: a low-confidence
+    # inference stored under the `candidate_lesson` kind, which is absent
+    # from competency.COMPETENCY_KINDS and therefore structurally invisible
+    # to the retrieval seam. Proposing asserts nothing, changes no future
+    # reasoning, and consolidates no trusted learning -- so a standing grant
+    # is the right shape, in the same way objective_record above authorises
+    # recording without authorising acting.
+    #
+    # `learning_reject` is the conservative half of review: it creates no
+    # accepted learning and, because consolidation refuses any state but
+    # `accepted`, it forecloses consolidation permanently. Allowing it
+    # standing permission can only ever reduce what Bartholomew retains.
+    - "learning_propose"
+    - "learning_reject"
+    # `learning_accept` is deliberately NOT listed here, and adding it would
+    # not make acceptance reachable.
+    #
+    # Acceptance is the durable mutation that turns "I may have learned
+    # something" into "this is now trusted knowledge a later turn can
+    # retrieve". It requires an explicit authorization bound to one specific
+    # candidate lesson -- see bartholomew/kernel/learning_authorization.py
+    # and DECISIONS.md's "Learning acceptance requires candidate-bound
+    # authorization" entry. runtime_contract.evaluate_learning_admission()
+    # requires that approval for learning_accept regardless of this
+    # allowlist, precisely so no entry here can become a standing
+    # "learning enabled" switch.
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]
