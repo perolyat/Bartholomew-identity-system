@@ -110,6 +110,25 @@ always_keep:
       privacy_class: user.competency
       recall_policy: always
 
+  # Candidate learning (S5.4 slice; written by the learning seam in
+  # runtime_contract). A candidate lesson is what Bartholomew *infers* from
+  # one recorded outcome -- proposed, not accepted, and not knowledge.
+  #
+  # `recall_policy: context_only` rather than `always`, deliberately: it is
+  # the strictest value this engine defines, and it says in the one file a
+  # governance auditor reads that this kind is not ordinary recallable
+  # memory. It is NOT what makes the guarantee, though -- the guarantee is
+  # structural and lives in runtime_contract's retrieval filter, which is
+  # restricted to COMPETENCY_KINDS + PERSONAL_FACT_KINDS and does not include
+  # `candidate_lesson` at all. An accepted lesson becomes retrievable only by
+  # being written as a separate `competency_heuristic` record, which is why
+  # rejecting a candidate leaves nothing behind for reasoning to find.
+  - match:
+      kind: candidate_lesson
+    metadata:
+      privacy_class: user.competency
+      recall_policy: context_only
+
 ask_before_store:
   - match:
       content: "(?i)(password|bank|account number|two-factor|auth code)"

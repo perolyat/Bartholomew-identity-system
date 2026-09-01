@@ -311,6 +311,17 @@ class KernelDaemon:
         self.lifecycle_state = DaemonLifecycleState.NOT_STARTED
         self._runtime_id: str | None = None
 
+    @property
+    def runtime_id(self) -> str | None:
+        """This runtime incarnation's id, or None before start() opened one.
+
+        A read-only view of what `GovernanceStore.open_new_runtime()` already
+        generated and wrote to `brake_runtime` -- exposed so an observer can
+        correlate records against *this* incarnation without either reaching
+        into a private attribute or minting a second, competing identity.
+        """
+        return self._runtime_id
+
     async def start(self) -> None:
         if self.lifecycle_state is not DaemonLifecycleState.NOT_STARTED:
             raise RuntimeError(

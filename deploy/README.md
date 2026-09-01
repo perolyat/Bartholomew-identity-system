@@ -154,3 +154,27 @@ inbound capture fails closed until the authenticated control plane installs a
 principal resolver. Do not add `BARTH_API_ALLOW_NON_LOOPBACK=1` to make the
 service reachable from elsewhere — public exposure is a separate, explicit
 decision that follows authentication and TLS, not a deployment convenience.
+
+## Unattended test runs
+
+For an unattended test period — as opposed to ordinary running — set
+`BARTH_UNATTENDED_RUN_ID` in the unit's environment and keep it constant across
+restarts:
+
+```ini
+Environment=BARTH_UNATTENDED_RUN_ID=soak-2026-09-01
+```
+
+Each process then records its own incarnation of that run, and a process that
+ends without recording a shutdown is written off as `lost` by the next one
+rather than blending into the record. Afterwards:
+
+```bash
+python -m bartholomew unattended-report soak-2026-09-01 \
+    --db /var/lib/bartholomew/barth.db --out evidence/soak.json
+```
+
+Unset in every ordinary deployment, and unset is the default: without it the
+runtime records nothing extra and creates no additional tables. See
+`docs/UNATTENDED_RUN_EVIDENCE.md`. **This is test instrumentation only — it does
+not change, and does not widen, what Bartholomew may do while unattended.**
