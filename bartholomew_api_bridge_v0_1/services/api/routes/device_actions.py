@@ -49,6 +49,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/device-actions", tags=["device-actions"])
 
+#: Cap on one request body, measured on the raw bytes **before** they are
+#: parsed. A Pydantic model in a handler's signature is not a bound -- FastAPI
+#: parses the body to build it -- so `_authenticated_device()` reads and caps
+#: first and the handlers validate afterwards, matching `routes/inbound.py`.
 MAX_BODY_BYTES = 64 * 1024
 
 #: Most actions one lease call will hand over, whatever the device asks for.
@@ -155,26 +159,46 @@ async def _verify_device(request: Request, body: bytes) -> Any:
     return device
 
 
-async def _authenticated_device(request: Request) -> tuple[Any, str]:
-    """The verified device and the tenant it acts in. Order is deliberate.
+async def _authenticated_device(
+    request: Request,
+    model: type[BaseModel],
+) -> tuple[Any, str, Any]:
+    """Cap, authenticate, verify, then validate. In that order, deliberately.
 
-    Identity before provenance: an unauthenticated caller is refused before a
-    resolver ever sees the body, matching the inbound route exactly.
+    Size before anything, so an over-large body is refused having been counted
+    but never parsed. Identity before provenance, so an unauthenticated caller
+    is refused before a resolver ever sees the body. Validation last, because
+    an unverified caller must not reach the validator either -- exactly the
+    order `routes/inbound.py` uses.
     """
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(413, "The request body is too large; nothing was dispatched.")
     _require_principal(request)
     device = await _verify_device(request, body)
+
+    import json
+
+    try:
+        raw = json.loads(body or b"{}")
+    except ValueError as e:
+        raise HTTPException(422, f"Body is not valid JSON: {e}") from e
+    if not isinstance(raw, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    try:
+        payload = model.model_validate(raw)
+    except Exception as e:
+        raise HTTPException(422, f"Invalid request: {e}") from e
+
     # From the platform's authority -- the verified principal and this
     # process's runtime binding -- never from the device. A resolver that
     # claims a tenant is ignored entirely; see
     # `device_action_auth.resolved_tenant_id`.
-    return device, device_action_auth.resolved_tenant_id(request)
+    return device, device_action_auth.resolved_tenant_id(request), payload
 
 
 @router.post("/lease")
-async def lease_actions(payload: LeaseIn, request: Request) -> Any:
+async def lease_actions(request: Request) -> Any:
     """Hand this device the actions it may run now. Possibly none.
 
     Each candidate goes through the whole admission individually, so a refusal
@@ -183,7 +207,7 @@ async def lease_actions(payload: LeaseIn, request: Request) -> Any:
     the device is told what it may do, never why something else was withheld,
     because that reasoning is governance state and not the device's business.
     """
-    device, tenant = await _authenticated_device(request)
+    device, tenant, payload = await _authenticated_device(request, LeaseIn)
 
     if payload.device_id != device.device_id:
         raise HTTPException(
@@ -257,7 +281,7 @@ async def lease_actions(payload: LeaseIn, request: Request) -> Any:
 
 
 @router.post("/{action_id}/result")
-async def report_result(action_id: str, payload: ResultIn, request: Request) -> Any:
+async def report_result(action_id: str, request: Request) -> Any:
     """Record what the device observed. Truthfully, and once.
 
     A result for an action that had already ended -- cancelled underneath the
@@ -267,7 +291,7 @@ async def report_result(action_id: str, payload: ResultIn, request: Request) -> 
     """
     from starlette.responses import JSONResponse
 
-    device, tenant = await _authenticated_device(request)
+    device, tenant, payload = await _authenticated_device(request, ResultIn)
     if payload.device_id != device.device_id:
         raise HTTPException(
             403,

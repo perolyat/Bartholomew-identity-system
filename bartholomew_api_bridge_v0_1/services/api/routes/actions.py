@@ -46,8 +46,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/actions", tags=["actions"])
 
-#: Cap on one request body. An action envelope is small; anything larger is
-#: either a mistake or an attempt to make the door the problem.
+#: Cap on one request body, measured on the raw bytes **before** they are
+#: parsed. Declaring a Pydantic model in a handler's signature is not a bound:
+#: FastAPI parses the body to build it, so a size check inside the handler runs
+#: after the parse it was meant to prevent. `_validated_body()` below reads and
+#: caps first, which is the same order `routes/inbound.py` uses and for the
+#: same reason -- `parameters` is an open object, and an unbounded one is a way
+#: to make the door the problem.
 MAX_BODY_BYTES = 32 * 1024
 
 #: Refusal categories that mean "the caller asked for something impossible"
@@ -115,6 +120,33 @@ class ApprovalIn(BaseModel):
 
 class CancellationIn(BaseModel):
     reason: str | None = Field(default=None, max_length=200)
+
+
+async def _validated_body(request: Request, model: type[BaseModel]) -> Any:
+    """Read the body, cap it, then validate. In that order.
+
+    Read-before-parse, matching the inbound route: an over-large body is
+    refused with 413 having been counted but never parsed, and a malformed one
+    is refused with 422 having reached no governed state.
+    """
+    body = await request.body()
+    if len(body) > MAX_BODY_BYTES:
+        raise HTTPException(
+            413,
+            f"The request body exceeds {MAX_BODY_BYTES} bytes; nothing was recorded.",
+        )
+    import json
+
+    try:
+        raw = json.loads(body or b"{}")
+    except ValueError as e:
+        raise HTTPException(422, f"Body is not valid JSON: {e}") from e
+    if not isinstance(raw, dict):
+        raise HTTPException(422, "Body must be a JSON object.")
+    try:
+        return model.model_validate(raw)
+    except Exception as e:
+        raise HTTPException(422, f"Invalid request: {e}") from e
 
 
 def _kernel_or_503() -> Any:
@@ -200,10 +232,11 @@ def _ctx(kernel: Any) -> Any:
 
 
 @router.post("", status_code=201)
-async def request_action(payload: ActionRequestIn, request: Request) -> Any:
+async def request_action(request: Request) -> Any:
     """Ask for one action on one enrolled device. Records; does not dispatch."""
     from starlette.responses import JSONResponse
 
+    payload: ActionRequestIn = await _validated_body(request, ActionRequestIn)
     kernel = _kernel_or_503()
     try:
         result = await seam.run_action_request_through_runtime_contract(
@@ -283,7 +316,7 @@ async def read_action(action_id: str, request: Request) -> Any:
 
 
 @router.post("/{action_id}/approve")
-async def approve_action(action_id: str, payload: ApprovalIn, request: Request) -> Any:
+async def approve_action(action_id: str, request: Request) -> Any:
     """Approve exactly this action, as it stands, for a bounded window.
 
     The approval binds to the action id, tenant, device, capability, capability
@@ -296,6 +329,7 @@ async def approve_action(action_id: str, payload: ApprovalIn, request: Request) 
     """
     from starlette.responses import JSONResponse
 
+    payload: ApprovalIn = await _validated_body(request, ApprovalIn)
     kernel = _kernel_or_503()
     try:
         result = await seam.grant_action_approval(
@@ -321,7 +355,7 @@ async def approve_action(action_id: str, payload: ApprovalIn, request: Request) 
 
 
 @router.post("/{action_id}/cancel")
-async def cancel_action(action_id: str, payload: CancellationIn, request: Request) -> Any:
+async def cancel_action(action_id: str, request: Request) -> Any:
     """Withdraw an action so it can never run.
 
     Works on a pending, approved *or* leased action. Cancelling a leased action
@@ -331,6 +365,7 @@ async def cancel_action(action_id: str, payload: CancellationIn, request: Reques
     """
     from starlette.responses import JSONResponse
 
+    payload: CancellationIn = await _validated_body(request, CancellationIn)
     kernel = _kernel_or_503()
     try:
         result = await seam.cancel_action_through_runtime_contract(

@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import ast
 import http.server
-import importlib
 import json
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -67,14 +67,38 @@ def test_the_actuation_packages_cannot_reach_the_observation_package():
 
 
 def test_the_observation_module_graph_transitively_excludes_actuation():
-    """Import the observation package alone and see what actually loads."""
-    for name in [m for m in list(sys.modules) if "actuation" in m or "companion" in m]:
-        sys.modules.pop(name, None)
-    importlib.import_module("bartholomew.companion.runner")
-    importlib.import_module("bartholomew.companion.client")
-    importlib.import_module("bartholomew.companion.probes")
-    loaded = {m for m in sys.modules if "actuation" in m}
-    assert not loaded, f"importing the observation companion pulled in {sorted(loaded)}"
+    """Import the observation package alone, in a clean interpreter, and look.
+
+    A **subprocess**, not `sys.modules` surgery in this one. Evicting modules
+    from the running interpreter would leave later tests monkeypatching a
+    module object that the code under test no longer holds a reference to --
+    which is a nasty, order-dependent failure and, worse, a weaker proof: a
+    re-import inside a process that has already imported everything can be
+    served from caches this test is supposed to be looking past. A fresh
+    interpreter that imports only the observation companion is the actual
+    question.
+    """
+    probe = (
+        "import sys, importlib;"
+        "importlib.import_module('bartholomew.companion.runner');"
+        "importlib.import_module('bartholomew.companion.client');"
+        "importlib.import_module('bartholomew.companion.probes');"
+        "importlib.import_module('bartholomew.companion.envelope');"
+        "print(repr(sorted(m for m in sys.modules if 'actuation' in m)))"
+    )
+    result = subprocess.run(  # noqa: S603 - fixed argv, this interpreter
+        [sys.executable, "-c", probe],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert (
+        result.returncode == 0
+    ), f"importing the observation companion alone failed:\n{result.stderr}"
+    loaded = ast.literal_eval(result.stdout.strip())
+    assert loaded == [], f"importing the observation companion pulled in {loaded}"
 
 
 def test_the_server_side_actuation_package_never_imports_the_device_side():
