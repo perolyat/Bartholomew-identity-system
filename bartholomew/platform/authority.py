@@ -47,7 +47,15 @@ from .store import platform_connection, record_platform_audit
 
 # The same subsystem axis the Personal tier uses. The tiers are orthogonal to
 # it: scopes answer *what* is halted, tiers answer *on whose authority*.
-VALID_SCOPES = frozenset({"global", "skills", "sight", "voice", "scheduler", "training"})
+# "actuation" (Session B) is the scope that halts governed Windows actions and
+# nothing else, so an administrator can stop a companion acting on somebody's
+# computer without stopping Bartholomew thinking. It only ever *adds* a halt:
+# the actuation seam also refuses on the brake being engaged at all, so every
+# other scope already stops actuation and this one narrows the blast radius
+# rather than widening what is possible.
+VALID_SCOPES = frozenset(
+    {"global", "skills", "sight", "voice", "scheduler", "training", "actuation"},
+)
 
 
 @dataclass(frozen=True)

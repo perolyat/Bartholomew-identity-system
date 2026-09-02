@@ -48,6 +48,21 @@ class Capability(str, Enum):
     # should not be able to read the capture history back out.
     INBOUND_SUBMIT = "inbound:submit"
     INBOUND_READ = "inbound:read"
+    # Governed Windows actuation (Session B). Four capabilities, not one, and
+    # the split is the point: asking for an action, approving one, reading the
+    # audit, and being the device that carries actions out are four different
+    # powers. In particular ACTION_APPROVE is separate from ACTION_REQUEST so
+    # that a future surface which may request work cannot also authorise it,
+    # and DEVICE_ACTION_CHANNEL is separate from all three so that holding it
+    # lets a device collect work without letting it request or approve any.
+    #
+    # None of these is Governance. Holding ACTION_APPROVE means the request is
+    # allowed to ask; whether the action then runs is still the Parking Brake,
+    # the Identity policy and the action-bound approval's decision.
+    ACTION_REQUEST = "action:request"
+    ACTION_APPROVE = "action:approve"
+    ACTION_READ = "action:read"
+    DEVICE_ACTION_CHANNEL = "device_action:channel"
     NOTIFICATIONS = "notifications"
     AWAITING_RESPONSE = "awaiting_response"
     REFLECTION = "reflection"
@@ -77,6 +92,10 @@ _USER_CAPABILITIES = frozenset(
         Capability.KERNEL_COMMAND,
         Capability.INBOUND_SUBMIT,
         Capability.INBOUND_READ,
+        Capability.ACTION_REQUEST,
+        Capability.ACTION_APPROVE,
+        Capability.ACTION_READ,
+        Capability.DEVICE_ACTION_CHANNEL,
         Capability.NOTIFICATIONS,
         Capability.AWAITING_RESPONSE,
         Capability.REFLECTION,

@@ -578,6 +578,40 @@ tool_use:
     # standing permission can only ever reduce what Bartholomew retains.
     - "learning_propose"
     - "learning_reject"
+    # Session B: governed Windows actuation
+    # (docs/B_GOVERNED_WINDOWS_ACTUATION.md). Two of the three action kinds,
+    # and deliberately not the third -- the same shape as the learning entries
+    # immediately below, for the same reason.
+    #
+    # `windows_action_request` creates a *pending* action: a durable record
+    # that some named capability was asked for on some enrolled device. It
+    # runs nothing, reaches no operating system, and cannot be dispatched
+    # without a separate, explicitly bound approval. A standing grant is the
+    # right shape for it in the same way `objective_record` authorises
+    # recording without authorising acting.
+    #
+    # `windows_action_cancel` withdraws an action so it can never run. It is
+    # conservative by construction: allowing it standing permission can only
+    # ever reduce what Bartholomew is able to do.
+    #
+    # Scope note, and it is the important one: these two entries authorise
+    # *asking* and *withdrawing*. They authorise no keystroke, no click, no
+    # launched program and no opened file. An action existing authorises
+    # nothing, exactly as an objective existing authorises nothing.
+    - "windows_action_request"
+    - "windows_action_cancel"
+    # `windows_action_dispatch` is deliberately NOT listed here, and adding it
+    # would not make dispatch reachable.
+    #
+    # Dispatch is the moment a validated action's parameters leave Bartholomew
+    # for a real computer. It requires an `ActionApproval` bound to that exact
+    # action -- its id, tenant, device, capability, capability version and a
+    # fingerprint of its canonical parameters -- and
+    # bartholomew.actuation.seam.evaluate_dispatch_admission() requires that
+    # approval regardless of this allowlist, precisely so that no entry here
+    # can become a standing "actuation enabled" switch. See
+    # bartholomew/actuation/approval.py and the recorded precedent for
+    # `learning_accept` immediately below.
     # `learning_accept` is deliberately NOT listed here, and adding it would
     # not make acceptance reachable.
     #

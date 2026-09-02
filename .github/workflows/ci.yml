@@ -213,5 +213,29 @@ jobs:
       - name: Scheduler startup readiness
         run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
 
+      # Governed Windows actuation (Session B). The unit and structural suites
+      # run on every platform in the `tests` job; these two steps exist because
+      # the actuation claims are Windows claims:
+      #
+      #   * the real suite uses the actual Win32 API with nothing substituted
+      #     -- real CreateProcessW, real EnumWindows, real clipboard -- and is
+      #     skipped everywhere else, so without this step it would never run;
+      #   * the structural suite is re-run here because the path allowlist and
+      #     the executable-extension refusals behave differently under
+      #     Windows path semantics, and a Linux-only pass would not have
+      #     exercised them.
+      - name: Governed Windows actuation (real Win32, nothing substituted)
+        run: python -m pytest tests/integration/test_windows_action_real.py -p no:cacheprovider -m integration
+
+      - name: Governed Windows actuation (capabilities, governance, prohibitions)
+        run: >-
+          python -m pytest
+          tests/test_windows_action_capabilities.py
+          tests/test_windows_action_governance.py
+          tests/test_windows_action_prohibitions.py
+          tests/test_windows_action_channel_separation.py
+          tests/test_windows_action_dispatch_results.py
+          -p no:cacheprovider
+
       - name: Smoke tests
         run: python -m pytest -m smoke -p no:cacheprovider
