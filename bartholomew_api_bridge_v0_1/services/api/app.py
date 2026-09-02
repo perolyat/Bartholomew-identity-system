@@ -484,6 +484,15 @@ async def startup():
 
     inbound_auth.maybe_install_test_resolver_from_env()
 
+    # Package E: the real resolver the line above has always been a stand-in
+    # for. Off unless BARTH_DEVICE_INBOUND_AUTH is set, and it refuses to
+    # install alongside the test resolver rather than silently replacing it --
+    # a deployment configured with both has said two contradictory things
+    # about how it authenticates, and startup is where that must stop.
+    from bartholomew.platform.device_inbound import maybe_install_device_resolver_from_env
+
+    maybe_install_device_resolver_from_env()
+
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
 

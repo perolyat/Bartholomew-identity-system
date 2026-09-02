@@ -386,3 +386,94 @@ on the user's behalf) would be evaluated for real.
 See `tests/test_runtime_convergence_policy.py`,
 `tests/test_runtime_contract_chat_seam.py::TestChatGovernanceConsultsPolicyDecision`, and
 `tests/test_scheduler_drive_convergence.py`.
+
+---
+
+## Device registry and trusted-group sharing — implemented 2026-09-01 (Package E)
+
+**Purpose:** give a companion device an identity the platform issued and can withdraw, and let
+an opt-in trusted group exchange explicitly selected, sanitized, typed packages without any of
+it becoming a recipient's knowledge automatically.
+
+### Device registry — `bartholomew/platform/devices.py`
+
+**Fields:** control-plane tables `platform_devices` and `platform_device_credentials` in
+`platform.db` (schema in `bartholomew/platform/store.py`; capability vocabulary in
+`bartholomew/platform/device_capabilities.py`).
+
+**Contract — what Sessions B and C call:**
+
+- `verify_device_credential(secret, *, expected_user_id=None, db_path=None, now=None,
+  record_contact=True) -> VerifiedDevice`. The only construction site for a `VerifiedDevice`.
+  Raises `DeviceAuthenticationError` for every failure; there is no degraded return value.
+- `VerifiedDevice` — frozen: `device_id`, `user_id`, `platform`, `companion_version`,
+  `manifest_version`, `manifest`, `credential_id`.
+- `VerifiedDevice.authorizes(kind, version) -> bool` and
+  `VerifiedDevice.require_capability(kind, version)` (raises `DeviceCapabilityError`). True only
+  when the device declared it **and** `device_capabilities.supports()` knows it.
+- Lifecycle, operator-side: `create_pending_enrolment`, `approve_enrolment`,
+  `complete_enrolment`, `rotate_device_credential`, `set_device_disabled`, `revoke_device`,
+  `redeclare_manifest`. Read-side: `get_device`, `list_devices`, `describe_manifest`,
+  `manifest_json`, `device_audit`.
+
+**Error modes:** unknown / wrong-purpose / expired / rotated / revoked credential, non-active
+device, disabled or missing account, and a tenant mismatch when `expected_user_id` is given —
+all one `DeviceAuthenticationError`, so a caller cannot branch on why and become an oracle. A
+capability the device did not declare, or one at a version this deployment does not understand,
+raises `DeviceCapabilityError` — never a nearest-match.
+
+**Wiring (`bartholomew/platform/device_inbound.py`, `services/api/app.py`):** the
+`InboundPrincipalResolver` the existing inbound seam was written for. Verified events carry
+`source_id = "device:<device_id>"` and `verified_by = "device-credential"`. Installed only when
+`BARTH_DEVICE_INBOUND_AUTH` is set, and refuses to install alongside the test-only resolver.
+
+### Trusted groups and sharing — `bartholomew/platform/{trusted_groups,share_exchange}.py`
+
+**Contract — what Session D's management surface calls:**
+
+- Groups: `create_group`, `invite`, `accept_invitation`, `decline_invitation`, `list_groups`,
+  `list_members`, `list_invitations`, `set_role`, `remove_member`, `leave_group`,
+  `archive_group`, `group_audit`, `require_membership`. Every read takes an actor and raises
+  `GroupAccessError` for a non-member — the same error a nonexistent group produces.
+- Sharing: `propose` (sanitizes, writes nothing) → `publish(package, publisher_user_id,
+  confirm_group_id)` → `inbox` / `inspect` / `revisions` / `decline` / `adopt` /
+  `mark_local_fork` / `pending_updates` / `provenance`, plus `publish_revision(...,
+  expected_revision)` and `revoke`.
+- Package shape and sanitizer: `bartholomew/kernel/trusted_share.py` — `SourceRecord`,
+  `TrustedSharePackage`, `Sanitization`, `ShareEligibilityError`, `SanitizationRefusedError`.
+
+**Error modes:** an ineligible source kind or a mislabelled package type raises
+`ShareEligibilityError`; a prohibited field or prohibited content raises
+`SanitizationRefusedError` and never returns a redacted package; a revision published against a
+stale read raises `ConcurrentRevisionError` and writes nothing; a revoked package raises
+`AdoptionRefusedError` on adoption while staying readable for provenance.
+
+### Recipient-side adoption — `bartholomew/kernel/share_adoption.py`
+
+**Contract:** `candidate_from_package(package, *, competency_id, classification)` →
+`AdoptedShareCandidate`, stored under kind `adopted_share_candidate`, which is **absent from
+`competency.COMPETENCY_KINDS`** and therefore structurally invisible to the retrieval seam.
+
+**Governed seam (`bartholomew/kernel/runtime_contract.py`):**
+`run_share_adoption_through_runtime_contract(ctx, action, ...)` for `share_adopt`,
+`share_customise`, `share_reject`, `share_accept`, plus
+`grant_share_acceptance_approval(ctx, *, competency_id, slug, approver, note=None)`.
+Gate 1 is the fail-closed Parking Brake on the existing `training` scope; gate 2 is the Identity
+allowlist for the first three, and — for `share_accept` —
+`evaluate_learning_admission(ctx, "learning_accept", lesson=candidate)`, i.e. PR #83's own
+candidate-bound authorization, which is why `share_accept` is absent from `tool_use.allowlist`
+and adding it there changes nothing. `ctx` needs `.mem`; `.governance_store`,
+`.blocking_executor` and `.identity_context` are read via `getattr` — no new context attribute.
+
+**Not implemented here, and left for Session F to connect:** HTTP routes. Nothing under
+`/api/devices`, `/api/groups` or `/api/share` exists, and `route_policy.ROUTE_CAPABILITIES` is
+deliberately not pre-populated (an entry with no route fails
+`tests/test_s8_route_policy_coverage.py`). A UI stream registering them must add the route
+entries, add the capabilities they require to `Capability` and `_USER_CAPABILITIES`, and pass a
+verified `Principal.user_id` as the `actor_user_id` / `user_id` argument of every function above
+— those arguments are never read from a request body.
+
+See `tests/test_device_registry_trust.py`, `tests/test_device_inbound_identity.py`,
+`tests/test_trusted_groups_isolation.py`, `tests/test_trusted_share_sanitization.py`,
+`tests/test_share_adoption_governance.py`, and
+`docs/E_DEVICE_TRUST_AND_TRUSTED_GROUPS.md`.

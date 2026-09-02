@@ -167,6 +167,30 @@ loopback Bartholomew on the same machine, and only with an operator-installed
 resolver.** A companion topology that spans machines needs real device
 authentication, which is not in this slice.
 
+### What Package E changed, and what it did not
+
+Package E adds a **device registry** (`bartholomew/platform/devices.py`) and a
+resolver backed by it (`bartholomew/platform/device_inbound.py`). A deployment
+that enrols this companion and sets `BARTH_DEVICE_INBOUND_AUTH=1` now admits
+its events on a registry-issued credential, stamped
+`verified_by="device-credential"`, and can rotate or revoke that credential
+immediately. Enrolment, per-device identity, capability declaration and
+revocation are therefore no longer absent. See
+`docs/E_DEVICE_TRUST_AND_TRUSTED_GROUPS.md`.
+
+Two things are unchanged, and it matters that they read as unchanged:
+
+* **`payload["device_id"]` is still claimed provenance**, exactly as Section 3
+  says. The registry's `device_id` is a *different* value in a different
+  namespace -- server-generated, never a label -- and nothing converts one
+  into the other. A companion that puts another machine's label in its payload
+  changes nothing about which device the platform verified.
+* **A device credential is still a bearer credential.** It is not a
+  per-request signature and gives no replay resistance beyond what TLS
+  provides on the wire. The S8 note that "genuine per-request replay
+  resistance arrives with device authentication" is only half-discharged: the
+  identity now exists and can be withdrawn; the signing does not.
+
 ## 6. Running it
 
 ```
@@ -198,11 +222,17 @@ Bartholomew believes it. Downstream meaning is owned elsewhere.
 
 * Only Windows has a real probe. macOS and Linux run with `NullProbe` and
   therefore report presence and system state only.
-* Device authentication and replay resistance are absent (Section 5).
-* `device_id` is unauthenticated (Section 3).
+* Replay resistance is absent: a device credential, like a session token, is a
+  bearer credential (Section 5). Device *identity* is no longer absent -- see
+  "What Package E changed" in Section 5 -- but request signing is.
+* `payload["device_id"]` is unauthenticated (Section 3), and stays that way.
+  The authenticated device identity is the registry's, carried by the
+  credential, not by the payload.
 * The companion is a foreground process with no service/daemon packaging, no
   auto-start and no supervision.
 * The state file is unencrypted; it holds a sequence number and at most one
   in-flight envelope of the metadata above.
-* No pairing, enrolment or revocation flow exists — an operator configures a
-  source id by hand.
+* The companion has no built-in enrolment client: an operator completes
+  enrolment with `bartholomew devices complete` and configures the resulting
+  credential by hand. The enrolment and revocation *flows* themselves exist
+  (Package E); wiring them into this process does not.

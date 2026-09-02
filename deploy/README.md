@@ -155,6 +155,22 @@ principal resolver. Do not add `BARTH_API_ALLOW_NON_LOOPBACK=1` to make the
 service reachable from elsewhere — public exposure is a separate, explicit
 decision that follows authentication and TLS, not a deployment convenience.
 
+## Devices and trusted groups
+
+Enrolling a companion device, rotating or revoking its credential, and running
+trusted-group sharing are local operator procedures against the control-plane
+database -- there is no remote endpoint for any of them, for the same reason
+`bartholomew accounts` has none. The full runbook, including the lost-device
+and compromised-credential procedures and how to roll the feature back, is in
+[`docs/E_TRUST_OPERATOR_RUNBOOK.md`](../docs/E_TRUST_OPERATOR_RUNBOOK.md); the
+mechanism and its threat model are in
+[`docs/E_DEVICE_TRUST_AND_TRUSTED_GROUPS.md`](../docs/E_DEVICE_TRUST_AND_TRUSTED_GROUPS.md).
+
+Inbound capture stays fail-closed unless the unit sets
+`BARTH_DEVICE_INBOUND_AUTH=1`, which installs the device-credential resolver.
+Leave it unset until devices are actually enrolled; it refuses to start
+alongside `BARTH_INBOUND_ALLOW_TEST_RESOLVER`.
+
 ## Unattended test runs
 
 For an unattended test period — as opposed to ordinary running — set

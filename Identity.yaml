@@ -590,6 +590,41 @@ tool_use:
     # requires that approval for learning_accept regardless of this
     # allowlist, precisely so no entry here can become a standing
     # "learning enabled" switch.
+    # Package E: trusted-group sharing, from the *recipient's* side. Three of
+    # the four share-adoption kinds, and deliberately not the fourth.
+    #
+    # `share_adopt` takes a package a trusted group published and turns it
+    # into a candidate stored under the `adopted_share_candidate` kind, which
+    # -- like `candidate_lesson` above -- is absent from
+    # competency.COMPETENCY_KINDS and therefore structurally invisible to the
+    # retrieval seam. Adopting asserts nothing and changes no future
+    # reasoning, so a standing grant is the right shape.
+    #
+    # `share_customise` edits the recipient's own local copy, making it a
+    # fork. It only ever narrows what a later acceptance would mean, and it
+    # invalidates any approval already granted for the old text.
+    #
+    # `share_reject` is the conservative half of review: it creates no
+    # accepted learning and forecloses consolidation permanently.
+    #
+    # None of the three authorises anything crossing a tenant boundary.
+    # Publishing is not a Bartholomew action at all -- it is an explicit act
+    # by a person against the control plane, gated by group membership -- and
+    # a group existing authorises nothing, in the same way an objective
+    # existing authorises nothing.
+    - "share_adopt"
+    - "share_customise"
+    - "share_reject"
+    # `share_accept` is deliberately NOT listed here, and adding it would not
+    # make acceptance reachable either. Accepting a share is governed by the
+    # *same* candidate-bound authorization `learning_accept` requires:
+    # runtime_contract.evaluate_share_admission() delegates the accept branch
+    # to evaluate_learning_admission(ctx, "learning_accept", lesson=...), so a
+    # LearningAcceptanceApproval bound by fingerprint to that exact adopted
+    # candidate is required regardless of this allowlist. Something a
+    # housemate shared becomes trusted knowledge on the same terms as
+    # something Bartholomew inferred for itself: never automatically, and
+    # never by a switch.
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]

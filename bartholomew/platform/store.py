@@ -93,6 +93,149 @@ CREATE TABLE IF NOT EXISTS platform_brake_state (
   actor       TEXT,
   updated_at  INTEGER NOT NULL
 );
+
+-- ===========================================================================
+-- Package E: device registry
+-- ===========================================================================
+--
+-- Devices belong to accounts, so they are control-plane objects and live
+-- here rather than in any user's kernel database. Two properties follow:
+-- revoking a lost machine does not require that user's runtime to be
+-- running, and no kernel is handed a write path to the credential table.
+--
+-- Isolation here is by `user_id` predicate rather than by file boundary --
+-- the control plane is the shared store by design. Stated plainly in
+-- `devices.py` and in docs/E_DEVICE_TRUST_AND_TRUSTED_GROUPS.md rather than
+-- left to be inferred.
+CREATE TABLE IF NOT EXISTS platform_devices (
+  device_id         TEXT PRIMARY KEY,       -- server-generated UUID4, never a label
+  user_id           TEXT NOT NULL,          -- the owning tenant
+  display_name      TEXT NOT NULL,
+  platform          TEXT NOT NULL,          -- 'windows'; provenance, not authority
+  companion_version TEXT,
+  manifest_version  INTEGER NOT NULL DEFAULT 0,
+  capabilities      TEXT NOT NULL DEFAULT '[]',  -- declared [{kind,version}], verbatim
+  status            TEXT NOT NULL,          -- DeviceStatus value; see devices.py
+  created_at        INTEGER NOT NULL,
+  approved_at       INTEGER,
+  enrolled_at       INTEGER,                -- first verified contact
+  disabled_at       INTEGER,
+  revoked_at        INTEGER,
+  -- Written only after a credential verifies. "This device was genuinely
+  -- here", never "someone guessed at this device's id".
+  last_seen_at      INTEGER,
+  FOREIGN KEY(user_id) REFERENCES platform_accounts(user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_platform_devices_user ON platform_devices(user_id);
+
+-- Device credentials. As with sessions, the secret itself is never stored:
+-- only its SHA-256 digest, so read access to this table does not yield a
+-- usable credential. `user_id` is carried here as well as on the device row
+-- so verification can check the tenant binding on the credential it actually
+-- matched, rather than re-deriving it.
+CREATE TABLE IF NOT EXISTS platform_device_credentials (
+  credential_id TEXT PRIMARY KEY,
+  device_id     TEXT NOT NULL,
+  user_id       TEXT NOT NULL,
+  secret_hash   TEXT NOT NULL,
+  purpose       TEXT NOT NULL,             -- 'enrolment' (one-time) | 'device'
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER,                   -- enrolment secrets only
+  first_used_at INTEGER,
+  rotated_at    INTEGER,
+  revoked_at    INTEGER,
+  FOREIGN KEY(device_id) REFERENCES platform_devices(device_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_device_credentials_hash
+  ON platform_device_credentials(secret_hash);
+CREATE INDEX IF NOT EXISTS idx_platform_device_credentials_device
+  ON platform_device_credentials(device_id);
+
+-- ===========================================================================
+-- Package E: trusted groups and explicit sharing
+-- ===========================================================================
+--
+-- A trusted group spans accounts, so it cannot live in any one user's
+-- database. This is the one surface in Bartholomew where content crosses a
+-- tenant boundary, and it does so only as an explicitly published, typed,
+-- sanitized package -- never as raw memory. See
+-- `bartholomew/kernel/trusted_share.py` for what may cross and what may not.
+CREATE TABLE IF NOT EXISTS platform_trusted_groups (
+  group_id    TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  archived_at INTEGER,
+  FOREIGN KEY(owner_user_id) REFERENCES platform_accounts(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS platform_group_members (
+  group_id   TEXT NOT NULL,
+  user_id    TEXT NOT NULL,
+  role       TEXT NOT NULL,               -- owner | admin | member
+  joined_at  INTEGER NOT NULL,
+  removed_at INTEGER,
+  PRIMARY KEY (group_id, user_id),
+  FOREIGN KEY(group_id) REFERENCES platform_trusted_groups(group_id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES platform_accounts(user_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_platform_group_members_user
+  ON platform_group_members(user_id);
+
+-- Invitations are explicit, expiring and single-use. An invitation is not
+-- membership: acceptance is a separate act by the invited account itself.
+CREATE TABLE IF NOT EXISTS platform_group_invitations (
+  invitation_id TEXT PRIMARY KEY,
+  group_id      TEXT NOT NULL,
+  invited_user_id TEXT NOT NULL,
+  invited_by_user_id TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  accepted_at   INTEGER,
+  declined_at   INTEGER,
+  revoked_at    INTEGER,
+  FOREIGN KEY(group_id) REFERENCES platform_trusted_groups(group_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_platform_group_invitations_user
+  ON platform_group_invitations(invited_user_id);
+
+-- Published share packages. One row per (share, revision): a publisher
+-- update is a new revision, never an overwrite, so a recipient's adopted
+-- version and the publisher's current one are separately addressable and no
+-- last-write-wins is possible.
+CREATE TABLE IF NOT EXISTS platform_share_packages (
+  share_id        TEXT NOT NULL,
+  revision        INTEGER NOT NULL,
+  group_id        TEXT NOT NULL,
+  publisher_user_id TEXT NOT NULL,
+  kind            TEXT NOT NULL,          -- competency | correction | household_routine | guidance
+  content         TEXT NOT NULL,          -- sanitized JSON; never raw memory
+  content_hash    TEXT NOT NULL,
+  source_candidate_fingerprint TEXT NOT NULL,
+  sanitization    TEXT NOT NULL,          -- {"policy_revision":N,"removed_fields":[...]}
+  published_at    TEXT NOT NULL,          -- RFC3339 UTC
+  revoked_at      TEXT,
+  PRIMARY KEY (share_id, revision),
+  FOREIGN KEY(group_id) REFERENCES platform_trusted_groups(group_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_platform_share_packages_group
+  ON platform_share_packages(group_id, share_id);
+
+-- What each recipient has done about each share. Separate from the package
+-- itself so a publisher revision cannot rewrite a recipient's decision, and
+-- so a recipient's adopted revision stays visible after a revocation.
+CREATE TABLE IF NOT EXISTS platform_share_receipts (
+  share_id          TEXT NOT NULL,
+  recipient_user_id TEXT NOT NULL,
+  state             TEXT NOT NULL,        -- delivered | declined | adopted
+  adopted_revision  INTEGER,
+  local_fork        INTEGER NOT NULL DEFAULT 0,
+  updated_at        INTEGER NOT NULL,
+  PRIMARY KEY (share_id, recipient_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_platform_share_receipts_recipient
+  ON platform_share_receipts(recipient_user_id);
 """
 
 

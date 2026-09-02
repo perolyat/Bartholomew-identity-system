@@ -86,6 +86,20 @@ S5_4_RESERVED_SOURCE_TYPES: frozenset[str] = frozenset({"experience", "system_ob
 #: reserved, being outside this slice's outcome-based-procedural scope.
 CONSOLIDATION_SOURCE_TYPES: frozenset[str] = frozenset({"experience"})
 
+#: Package E: the source type an *adopted trusted-group share* carries once
+#: the recipient has accepted it. Reserved from this seam for exactly the
+#: reason `experience` is -- a user-facing ingestion surface must not be able
+#: to claim that material the user typed arrived from someone else's
+#: Bartholomew -- and lifted only by `allow_share_adoption_source=True`, which
+#: is passed by one caller: the share-adoption consolidation seam in
+#: `runtime_contract`.
+SHARE_ADOPTION_SOURCE_TYPES: frozenset[str] = frozenset({"trusted_share"})
+
+#: Everything this seam refuses unless a consolidation path explicitly lifts
+#: it. Derived rather than hand-listed so a future reserved type cannot be
+#: added to one place and forgotten in the other.
+RESERVED_SOURCE_TYPES: frozenset[str] = S5_4_RESERVED_SOURCE_TYPES | SHARE_ADOPTION_SOURCE_TYPES
+
 TRAINING_OBSERVATION_SOURCE = "training"
 TRAINING_ACTION_KIND = "training_ingest"
 TRAINING_BRAKE_SCOPE = "training"
@@ -130,7 +144,12 @@ class TrainingSubmission:
     source_detail: str
     records: list[TrainingRecord] = field(default_factory=list)
 
-    def validate(self, *, allow_consolidation_source: bool = False) -> list[str]:
+    def validate(
+        self,
+        *,
+        allow_consolidation_source: bool = False,
+        allow_share_adoption_source: bool = False,
+    ) -> list[str]:
         """Validate this submission.
 
         `allow_consolidation_source` lifts the `experience` reservation for
@@ -145,6 +164,13 @@ class TrainingSubmission:
         consolidation path is designed and approved it may deliberately lift
         this"), narrowed to one source type and one caller rather than
         widening `ALLOWED_TRAINING_SOURCE_TYPES` for everybody.
+
+        `allow_share_adoption_source` is the same lift, for the same reason,
+        for Package E's `trusted_share`: a share a recipient has explicitly
+        adopted and then accepted under their own candidate-bound
+        authorization. A second flag rather than a widened first one, so that
+        an accepted lesson from local experience and an accepted share from a
+        housemate can never be authorised by one another's caller.
         """
         errors: list[str] = []
 
@@ -152,10 +178,13 @@ class TrainingSubmission:
             errors.append("competency_id is required")
 
         allowed = set(ALLOWED_TRAINING_SOURCE_TYPES)
-        reserved = set(S5_4_RESERVED_SOURCE_TYPES)
+        reserved = set(RESERVED_SOURCE_TYPES)
         if allow_consolidation_source:
             allowed |= CONSOLIDATION_SOURCE_TYPES
             reserved -= CONSOLIDATION_SOURCE_TYPES
+        if allow_share_adoption_source:
+            allowed |= SHARE_ADOPTION_SOURCE_TYPES
+            reserved -= SHARE_ADOPTION_SOURCE_TYPES
 
         if self.source_type in reserved:
             errors.append(
