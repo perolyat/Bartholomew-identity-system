@@ -40,6 +40,7 @@ from . import (
     candidate_learning,
     forecast_intents,
     learning_authorization,
+    learning_policy,
     objective_intents,
     objective_store,
     personal_facts,
@@ -4519,4 +4520,1117 @@ async def _propose_candidate_lesson(
         governance_allowed=True,
         outcome=LEARNING_OUTCOME_PROPOSED,
         lesson=lesson,
+    )
+
+
+# =============================================================================
+# Package D: the Learning and Memory Control Centre's governed operations.
+#
+# Five seams, all additive, all reusing the authorities that already exist:
+#
+#   * shadow policy evaluation  -- what a policy *would* have decided
+#   * policy read / update      -- versioned, conflict-guarded configuration
+#   * candidate edit            -- a governed material edit that re-fingerprints
+#   * competency correction     -- through S5.2's training seam, as a correction
+#   * competency revocation     -- through MemoryStore's governed forget
+#
+# What is deliberately absent is an acceptance path. Consolidation still
+# happens in exactly one place -- `_consolidate_accepted_lesson()`, reachable
+# only from `run_candidate_lesson_through_runtime_contract()`'s accept branch,
+# which `evaluate_learning_admission()` gates on a `LearningAcceptanceApproval`
+# bound to the candidate's exact material fingerprint. Nothing below calls it,
+# nothing below constructs an approval, and nothing below is consulted when
+# acceptance is admitted.
+# =============================================================================
+
+#: Preview one candidate against the recorded learning policy. Creates an
+#: inspectable record of a counterfactual and nothing else.
+LEARNING_ACTION_SHADOW_EVALUATE = "learning_shadow_evaluate"
+#: Record a new revision of the learning policy. Cannot enable acceptance:
+#: `LearningPolicy.execution_mode` is a property returning a module constant.
+LEARNING_ACTION_POLICY_UPDATE = "learning_policy_update"
+#: Materially edit a proposed candidate. Conservative by construction: a
+#: material edit changes the fingerprint, which invalidates any approval.
+LEARNING_ACTION_CANDIDATE_EDIT = "learning_candidate_edit"
+#: Withdraw an accepted competency record from future retrieval.
+LEARNING_ACTION_COMPETENCY_REVOKE = "learning_competency_revoke"
+
+LEARNING_OUTCOME_EVALUATED = "shadow_evaluated"
+#: A write reached the consent queue instead of the store. Its own outcome
+#: because "your policy is saved" and "your policy is waiting for you to
+#: confirm it" are different facts, and reporting the second as the first is
+#: the fabricated-success class of defect this codebase already refuses
+#: elsewhere.
+LEARNING_OUTCOME_QUEUED_FOR_CONSENT = "queued_for_consent"
+LEARNING_OUTCOME_POLICY_UPDATED = "policy_updated"
+LEARNING_OUTCOME_EDITED = "edited"
+LEARNING_OUTCOME_UNCHANGED = "unchanged"
+LEARNING_OUTCOME_REVOKED = "revoked"
+#: The record moved underneath the edit. Its own outcome, deliberately not
+#: folded into `invalid`: nothing is wrong with what the user wrote, they
+#: were editing a version that is no longer current, and the two need
+#: different words in front of a person.
+LEARNING_OUTCOME_REVISION_CONFLICT = "revision_conflict"
+
+
+class ShadowWriteViolationError(RuntimeError):
+    """
+    The shadow path attempted a write it must never make.
+
+    Raised rather than logged, and raised *before* the write, so a future
+    change that routed an acceptance through the shadow seam fails loudly in
+    a test rather than quietly consolidating a lesson. Its own type so the
+    prohibition is greppable.
+    """
+
+
+#: The only two kinds the shadow/policy path may write. Everything else --
+#: the candidate, the approval, all five competency kinds -- is refused by
+#: `_assert_shadow_writable()`.
+_SHADOW_WRITABLE_KINDS: frozenset[str] = frozenset(
+    {learning_policy.EVALUATION_KIND, learning_policy.POLICY_KIND},
+)
+
+
+def _assert_shadow_writable(kind: str) -> None:
+    """Refuse any kind the shadow/policy path must not write.
+
+    Checks the forbidden set explicitly *as well as* the allowed set. The
+    allowed set alone would be sufficient, but naming the forbidden kinds in
+    the error message is what makes a future violation self-explaining rather
+    than a bare "unexpected kind".
+    """
+    if kind in learning_policy.FORBIDDEN_SHADOW_WRITE_KINDS:
+        raise ShadowWriteViolationError(
+            f"the shadow learning path may never write kind {kind!r}: it is a "
+            "candidate, an acceptance approval or accepted competency knowledge. "
+            "Shadow evaluation describes what a policy would do; it does not do it.",
+        )
+    if kind not in _SHADOW_WRITABLE_KINDS:
+        raise ShadowWriteViolationError(
+            f"the shadow learning path may only write {sorted(_SHADOW_WRITABLE_KINDS)}, "
+            f"not {kind!r}",
+        )
+
+
+async def _write_shadow_record(
+    ctx: Any,
+    kind: str,
+    key: str,
+    payload: dict[str, Any],
+    summary: str,
+) -> Any:
+    """The single write the shadow/policy path may perform.
+
+    Guarded, then handed straight to `MemoryStore.upsert_memory()` -- the same
+    sole write authority every other surface uses, with the same rules engine,
+    the same consent queue and the same brake. No second persistence path.
+    """
+    _assert_shadow_writable(kind)
+    return await ctx.mem.upsert_memory(
+        kind,
+        key,
+        learning_policy.encode(payload),
+        datetime.now(timezone.utc).isoformat(),
+        summary=summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# The learning policy: read and versioned update
+# ---------------------------------------------------------------------------
+
+
+async def load_learning_policy(ctx: Any) -> Any:
+    """The runtime's current learning policy, or the safe built-in default.
+
+    Reads by key, like every other by-key read on this surface. Fails to the
+    default rather than raising: a control centre that could not render
+    because a policy row was unparseable would be worse than one that shows
+    the conservative default and says so.
+
+    The tenant boundary is the database this `ctx.mem` points at -- see
+    `bartholomew.platform.runtime_registry`, where one personal Bartholomew
+    is one isolated database file. There is no user id in the key, so there
+    is nothing to get wrong.
+    """
+    import json as _json
+
+    try:
+        row = await ctx.mem.get_memory(learning_policy.POLICY_KIND, learning_policy.POLICY_KEY)
+    except Exception:
+        logger.exception("Failed to read the learning policy; using the safe default")
+        return learning_policy.default_policy()
+    if not row:
+        return learning_policy.default_policy()
+    try:
+        payload = _json.loads(row["value"])
+        # A row that parses to a list, a string or a number is not a policy.
+        # Checked rather than caught, because `[].get(...)` raises
+        # AttributeError -- which the except clause below would not catch, and
+        # an unhandled exception here would take the whole control centre down
+        # over one corrupted row.
+        if not isinstance(payload, dict):
+            raise TypeError("a learning policy row must decode to an object")
+        return learning_policy.LearningPolicy.from_dict(payload)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        logger.warning(
+            "The stored learning policy is not parseable; using the safe default. "
+            "The unreadable revision is left in place for inspection.",
+        )
+        return learning_policy.default_policy()
+
+
+@dataclass
+class LearningPolicyResult:
+    """Outcome of one attempt to record a new learning policy revision."""
+
+    outcome: str
+    reason: str | None = None
+    policy: Any = None
+    #: The revision the caller was editing, when it turned out to be stale.
+    stored_policy: Any = None
+    #: The memory rules or the privacy guard held this revision for a consent
+    #: decision. The *previous* policy is still the live one, and the caller
+    #: must say so rather than reporting a save.
+    queued_for_consent: bool = False
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def updated(self) -> bool:
+        return self.outcome == LEARNING_OUTCOME_POLICY_UPDATED
+
+    @property
+    def auto_acceptance_enabled(self) -> bool:
+        """Always False, whatever was configured. Stated on the result so a
+        caller cannot conclude otherwise from a successful update."""
+        return False
+
+
+async def run_learning_policy_update_through_runtime_contract(
+    ctx: Any,
+    policy: Any,
+    *,
+    expected_revision: int,
+    updated_by: str,
+    note: str | None = None,
+) -> LearningPolicyResult:
+    """
+    Record a new revision of the learning policy.
+
+    Stages, in the same order every other seam uses: Observation ->
+    Interpretation -> CandidateAction -> Governance (fail-closed) -> Memory ->
+    Reflection.
+
+    Versioned and conflict-guarded rather than last-write-wins. If
+    `expected_revision` is not the stored revision, nothing is written and
+    both versions come back so the caller can show the user what changed and
+    ask them to reconcile it. Silently overwriting somebody else's policy
+    change is how a safety configuration quietly becomes something nobody
+    chose.
+
+    The superseded revision is archived under its own key before the new one
+    lands, so a shadow decision taken under revision 3 stays explicable after
+    revision 4 exists.
+
+    **This cannot enable automatic acceptance.** `policy.execution_mode` is a
+    property returning `learning_policy.SHIPPED_EXECUTION_MODE`; a policy
+    whose `requested_execution_mode` is `"auto"` records a preference for a
+    future wave and changes nothing about this one.
+    """
+    observation = Observation(
+        source=LEARNING_OBSERVATION_SOURCE,
+        raw_content=(
+            f"{LEARNING_ACTION_POLICY_UPDATE} expected_revision={expected_revision} "
+            f"by={updated_by}"
+        ),
+    )
+    interpretation = _build_interpretation(ctx, observation)
+    candidate_action = CandidateAction(
+        kind=LEARNING_ACTION_POLICY_UPDATE,
+        interpretation=interpretation,
+    )
+
+    async def _refuse(outcome: str, reason: str | None, **extra: Any) -> LearningPolicyResult:
+        result = LearningPolicyResult(outcome=outcome, reason=reason, **extra)
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            outcome,
+            None,
+            reason,
+            {"updated_by": updated_by, "consolidated": False},
+        )
+        return result
+
+    if not updated_by:
+        return await _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "a policy change requires a named person -- configuration is never anonymous",
+        )
+
+    admission = await evaluate_learning_admission(ctx, LEARNING_ACTION_POLICY_UPDATE)
+    if not admission.allowed:
+        return await _refuse(
+            admission.outcome or LEARNING_OUTCOME_GOVERNANCE_DENIED,
+            admission.reason,
+        )
+
+    stored = await load_learning_policy(ctx)
+    if int(expected_revision) != int(stored.revision):
+        return await _refuse(
+            LEARNING_OUTCOME_REVISION_CONFLICT,
+            (
+                f"the learning policy has changed since you opened it: you were "
+                f"editing revision {expected_revision}, and revision "
+                f"{stored.revision} is stored now. Nothing was written."
+            ),
+            stored_policy=stored,
+        )
+
+    proposed = policy.normalised()
+    proposed.revision = int(stored.revision) + 1
+    proposed.updated_by = updated_by
+    proposed.updated_at = datetime.now(timezone.utc).isoformat()
+    proposed.note = note
+
+    errors = proposed.validate()
+    if errors:
+        result = LearningPolicyResult(
+            outcome=LEARNING_OUTCOME_INVALID,
+            reason="; ".join(errors),
+            errors=errors,
+        )
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            LEARNING_OUTCOME_INVALID,
+            None,
+            result.reason,
+            {"updated_by": updated_by, "consolidated": False},
+        )
+        return result
+
+    # Archive the superseded revision first. If this write lands and the next
+    # one does not, the archive is a harmless duplicate of what is still live;
+    # the other order could lose a revision entirely.
+    if stored.revision > 0:
+        await _write_shadow_record(
+            ctx,
+            learning_policy.POLICY_KIND,
+            f"{learning_policy.POLICY_KEY}@r{stored.revision}",
+            stored.to_dict(),
+            f"Superseded learning policy revision {stored.revision} (preview only)",
+        )
+
+    store_result = await _write_shadow_record(
+        ctx,
+        learning_policy.POLICY_KIND,
+        learning_policy.POLICY_KEY,
+        proposed.to_dict(),
+        proposed.to_summary_text(),
+    )
+    if not getattr(store_result, "stored", False):
+        # The policy names privacy classes ("user.health", "thirdparty.private")
+        # by their real names, and `privacy_guard.is_sensitive()` scans stored
+        # *values* in full -- registering the kind's schema excludes its key
+        # names, never its content. A policy that excludes health material from
+        # future automatic acceptance therefore contains the word "health" and
+        # is held for a consent decision like any other write that mentions it.
+        #
+        # That is a false positive in the sense that nobody's health data is in
+        # the row, and it is left in place deliberately: the alternative is
+        # either bypassing the guard for this kind (a governance gate weakened
+        # for the convenience of a settings screen) or encoding the vocabulary
+        # so it no longer reads as itself. Both are worse than telling the user
+        # the truth, which is that the change is waiting in the same
+        # pending-consent inbox everything else waits in.
+        queued = getattr(store_result, "outcome", "") == "queued_for_consent"
+        result = LearningPolicyResult(
+            outcome=(
+                LEARNING_OUTCOME_QUEUED_FOR_CONSENT if queued else LEARNING_OUTCOME_NOT_STORED
+            ),
+            reason=(
+                "This policy change needs your consent before it can be stored -- "
+                "it names privacy classes, and anything mentioning those is held "
+                "for you to confirm. It is waiting in Pending Memory Consent, and "
+                "the previous policy is still in force."
+                if queued
+                else "the learning policy revision was not stored (memory rules refused it)"
+            ),
+            stored_policy=stored,
+            queued_for_consent=queued,
+        )
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            result.outcome,
+            None,
+            result.reason,
+            {"updated_by": updated_by, "consolidated": False},
+        )
+        return result
+
+    await _record_learning_reflection(
+        ctx,
+        candidate_action,
+        LEARNING_OUTCOME_POLICY_UPDATED,
+        None,
+        None,
+        {
+            "updated_by": updated_by,
+            "note": note,
+            "revision": proposed.revision,
+            "superseded_revision": stored.revision,
+            "requested_execution_mode": proposed.requested_execution_mode,
+            # Recorded on every policy change, because this is the field an
+            # auditor will look for: whatever was requested, the mode this
+            # release runs in is shadow, and acceptance stays manual.
+            "execution_mode": proposed.execution_mode,
+            "auto_acceptance_enabled": proposed.auto_acceptance_enabled,
+            "consolidated": False,
+        },
+    )
+    return LearningPolicyResult(outcome=LEARNING_OUTCOME_POLICY_UPDATED, policy=proposed)
+
+
+# ---------------------------------------------------------------------------
+# Shadow evaluation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ShadowEvaluationResult:
+    """
+    Outcome of one shadow evaluation.
+
+    Carries no `consolidation` field, unlike `CandidateLessonResult`. That
+    absence is the result contract's way of saying what this operation is:
+    there is no write into the competency substrate for it to describe, ever.
+    """
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    outcome: str
+    reason: str | None = None
+    decision: Any = None
+    lesson: Any = None
+    policy_revision: int | None = None
+    stored: bool = False
+
+    @property
+    def consolidated(self) -> bool:
+        """Always False. Shadow evaluation writes no competency record."""
+        return False
+
+    @property
+    def authorizes_acceptance(self) -> bool:
+        """Always False. A preview is not a permission."""
+        return False
+
+    @property
+    def execution_mode(self) -> str:
+        return learning_policy.SHIPPED_EXECUTION_MODE
+
+
+async def run_shadow_learning_evaluation_through_runtime_contract(
+    ctx: Any,
+    *,
+    competency_id: str,
+    slug: str,
+    contradicting_evidence_count: int = 0,
+    requested_by: str | None = None,
+) -> ShadowEvaluationResult:
+    """
+    Preview what the recorded learning policy would decide about one candidate.
+
+    Stages, identical in shape to every other seam: Observation ->
+    Interpretation -> CandidateAction -> Governance (fail-closed) -> Memory ->
+    Reflection.
+
+    What it does: reads the candidate, reads the policy, derives the facts,
+    calls the pure evaluator, and stores the result under
+    `learning_policy.EVALUATION_KIND` -- keyed by candidate *and* policy
+    revision, so evaluating under a new revision leaves the old evaluation
+    record intact rather than rewriting the history of what was decided when.
+
+    What it cannot do, structurally:
+
+      * It never calls `lesson.accept()`, `_consolidate_accepted_lesson()` or
+        `run_candidate_lesson_through_runtime_contract()`.
+      * It never writes the candidate row, so the candidate's review state,
+        revision and reviewer are exactly as it found them.
+      * It never constructs a `LearningAcceptanceApproval`; the approval kind
+        is in `learning_policy.FORBIDDEN_SHADOW_WRITE_KINDS` and its single
+        write goes through `_write_shadow_record()`, which refuses it.
+      * A `would_accept` result authorises nothing.
+        `evaluate_learning_admission()` does not read evaluation records and
+        has no parameter one could be passed through.
+
+    A permissive Identity policy does not change any of that: the allowlist
+    governs whether this *preview* may run, and there is no branch behind it
+    that accepts.
+    """
+    observation = Observation(
+        source=LEARNING_OBSERVATION_SOURCE,
+        raw_content=(f"{LEARNING_ACTION_SHADOW_EVALUATE} competency={competency_id} slug={slug}"),
+    )
+    interpretation = _build_interpretation(ctx, observation)
+    candidate_action = CandidateAction(
+        kind=LEARNING_ACTION_SHADOW_EVALUATE,
+        interpretation=interpretation,
+    )
+
+    def _refuse(outcome: str, reason: str) -> ShadowEvaluationResult:
+        return ShadowEvaluationResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=outcome,
+            reason=reason,
+        )
+
+    if not competency_id or not slug:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "competency_id and slug are required to preview a candidate lesson",
+        )
+
+    admission = await evaluate_learning_admission(ctx, LEARNING_ACTION_SHADOW_EVALUATE)
+    if not admission.allowed:
+        result = ShadowEvaluationResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=False,
+            outcome=admission.outcome or LEARNING_OUTCOME_GOVERNANCE_DENIED,
+            reason=admission.reason,
+        )
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            result.outcome,
+            None,
+            admission.reason,
+            {"consolidated": False},
+        )
+        return result
+
+    lesson = await _load_candidate_lesson(ctx, competency_id, slug)
+    if lesson is None:
+        return _refuse(
+            LEARNING_OUTCOME_NOT_FOUND,
+            f"no candidate lesson {candidate_learning.key_for(competency_id, slug)!r}",
+        )
+
+    policy = await load_learning_policy(ctx)
+    facts = learning_policy.facts_from_lesson(
+        lesson,
+        learning_authorization.fingerprint_for(lesson),
+        risk_class=lesson.risk_class,
+        reversible=lesson.reversible,
+        contradicting_evidence_count=contradicting_evidence_count,
+        affected_applications=list(lesson.affected_applications),
+        privacy_class=await _privacy_class_for_candidate(ctx, lesson),
+        sharing_eligible=lesson.effective_sharing_eligible,
+        # The candidate's own provenance timestamp: when the experience was
+        # recorded as a lesson. The objective's completion time is not copied
+        # onto the candidate, and inventing one would feed a policy rule with
+        # a number nobody measured.
+        experience_age_days=_age_in_days(
+            getattr(lesson.provenance, "recorded_at", None),
+        ),
+        days_since_last_review=_age_in_days(lesson.reviewed_at),
+    )
+    decision = learning_policy.evaluate(
+        policy,
+        facts,
+        evaluated_at=datetime.now(timezone.utc).isoformat(),
+        candidate_review_state=lesson.review_state,
+    )
+
+    store_result = await _write_shadow_record(
+        ctx,
+        learning_policy.EVALUATION_KIND,
+        decision.key(),
+        decision.to_dict(),
+        decision.to_summary_text(),
+    )
+    stored = bool(getattr(store_result, "stored", False))
+
+    await _record_learning_reflection(
+        ctx,
+        candidate_action,
+        LEARNING_OUTCOME_EVALUATED,
+        lesson,
+        None,
+        {
+            "requested_by": requested_by,
+            "policy_revision": policy.revision,
+            "shadow_decision": decision.decision,
+            "matched_rules": [rule.rule_id for rule in decision.matched_rules],
+            "execution_mode": decision.execution_mode,
+            "authorizes_acceptance": decision.authorizes_acceptance,
+            "evaluation_stored": stored,
+            # Not a formality. This is the field that makes the audit trail
+            # say, on every single preview, that nothing was consolidated.
+            "consolidated": False,
+        },
+    )
+    return ShadowEvaluationResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=True,
+        outcome=LEARNING_OUTCOME_EVALUATED,
+        decision=decision,
+        lesson=lesson,
+        policy_revision=policy.revision,
+        stored=stored,
+    )
+
+
+def _age_in_days(iso_timestamp: str | None) -> float | None:
+    """Whole-ish days between an ISO timestamp and now, or None.
+
+    Returns None for anything unparseable rather than guessing: an invented
+    age would feed a policy rule, and a policy rule that fired on a made-up
+    number would be worse than one that did not fire at all.
+    """
+    if not iso_timestamp:
+        return None
+    try:
+        when = datetime.fromisoformat(str(iso_timestamp))
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - when).total_seconds() / 86400.0)
+
+
+async def _privacy_class_for_candidate(ctx: Any, lesson: Any) -> str | None:
+    """The privacy class the memory rules engine assigns this candidate's row.
+
+    Read from the stored entry rather than recomputed here, so the control
+    centre and the policy engine see exactly the classification the single
+    memory authority applied -- not a second opinion from a second evaluation
+    of the same rules.
+    """
+    try:
+        row = await ctx.mem.get_memory(candidate_learning.KIND, lesson.key())
+    except Exception:
+        logger.exception("Failed to read the candidate's stored privacy class")
+        return None
+    if not row:
+        return None
+    return row.get("privacy_class")
+
+
+# ---------------------------------------------------------------------------
+# Governed candidate edit
+# ---------------------------------------------------------------------------
+
+#: The candidate fields a reviewer may change through the control centre, and
+#: whether changing one alters what the lesson *means*.
+#:
+#: Material fields are exactly those `learning_authorization.fingerprint_for()`
+#: covers, so editing any of them re-fingerprints the candidate and a prior
+#: approval stops authorising it. Administrative fields are not, so triaging a
+#: review queue does not invalidate approvals someone already granted -- a
+#: fingerprint that moved for a reason the user would not call a change would
+#: be a misleading one.
+MATERIAL_CANDIDATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "inferred_rule",
+        "conditions",
+        "classification",
+        "confidence",
+        "lesson_kind",
+        "epistemic_status",
+        "objective_id",
+        "supporting_event_ids",
+        "competency_id",
+        "risk_class",
+        "reversible",
+        "affected_applications",
+        "sharing_eligible",
+    },
+)
+
+ADMINISTRATIVE_CANDIDATE_FIELDS: frozenset[str] = frozenset({"display_state"})
+
+
+@dataclass
+class CandidateEditResult:
+    """Outcome of one governed edit to a proposed candidate lesson."""
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    outcome: str
+    reason: str | None = None
+    lesson: Any = None
+    #: The candidate as stored when the conflict was detected, so a caller can
+    #: show both versions rather than silently discarding one.
+    stored_lesson: Any = None
+    fingerprint_before: str | None = None
+    fingerprint_after: str | None = None
+    material_change: bool = False
+    #: True when a live approval existed and the edit stopped it authorising
+    #: this candidate. The approval row is left in place: it is the audit
+    #: record of who approved what, and deleting it would erase that.
+    approval_invalidated: bool = False
+    archived_revision_key: str | None = None
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def consolidated(self) -> bool:
+        """Always False. Editing a candidate never consolidates it."""
+        return False
+
+
+async def run_candidate_edit_through_runtime_contract(
+    ctx: Any,
+    *,
+    competency_id: str,
+    slug: str,
+    editor: str,
+    expected_revision: int,
+    inferred_rule: str | None = None,
+    conditions: str | None = None,
+    classification: str | None = None,
+    confidence: float | None = None,
+    risk_class: str | None = None,
+    reversible: bool | None = None,
+    affected_applications: list[str] | None = None,
+    sharing_eligible: bool | None = None,
+    display_state: str | None = None,
+) -> CandidateEditResult:
+    """
+    Edit a proposed candidate lesson, through governance and with an audit trail.
+
+    The five rules a material edit must obey, and where each is enforced:
+
+    1. **A new material fingerprint.** Not computed here -- recomputed by
+       `learning_authorization.fingerprint_for()` from the edited candidate,
+       which is the same function acceptance checks against.
+    2. **A new revision.** `lesson.revision` is incremented, so a second
+       editor holding the old number is refused by the check below rather
+       than overwriting.
+    3. **Any previous approval invalidated.** Structurally, by (1): the stored
+       approval's `candidate_fingerprint` no longer matches, so
+       `LearningAcceptanceApproval.authorizes()` refuses and
+       `evaluate_learning_admission()` refuses acceptance. The approval row is
+       deliberately *not* deleted -- it is the record of who approved what,
+       and the refusal reason names it.
+    4. **The user must review the changed candidate again.** Follows from (3):
+       there is no path to acceptance that does not pass through a fresh
+       `grant_learning_acceptance_approval()` on the new content.
+    5. **The prior revision preserved.** Archived under
+       `learning_policy.CANDIDATE_REVISION_KIND` before the new one is
+       written, plus a Reflection recording the edit.
+
+    An **administrative** change (`display_state` alone) takes none of that
+    path: the fingerprint is unchanged, the revision is not bumped, and an
+    existing approval stays valid. Pinning a candidate to look at later is not
+    a change to what it claims.
+
+    Only a `proposed` candidate may be edited. Editing an accepted one would
+    silently diverge it from the competency record it consolidated into;
+    editing a rejected one would reopen a terminal decision. Both are refused.
+    """
+    observation = Observation(
+        source=LEARNING_OBSERVATION_SOURCE,
+        raw_content=(
+            f"{LEARNING_ACTION_CANDIDATE_EDIT} competency={competency_id} slug={slug} "
+            f"by={editor}"
+        ),
+    )
+    interpretation = _build_interpretation(ctx, observation)
+    candidate_action = CandidateAction(
+        kind=LEARNING_ACTION_CANDIDATE_EDIT,
+        interpretation=interpretation,
+    )
+
+    def _refuse(outcome: str, reason: str, **extra: Any) -> CandidateEditResult:
+        return CandidateEditResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=outcome,
+            reason=reason,
+            **extra,
+        )
+
+    if not competency_id or not slug:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "competency_id and slug are required to edit a candidate lesson",
+        )
+    if not editor:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "an edit requires a named editor -- changing a lesson is never anonymous",
+        )
+
+    admission = await evaluate_learning_admission(ctx, LEARNING_ACTION_CANDIDATE_EDIT)
+    if not admission.allowed:
+        result = CandidateEditResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=False,
+            outcome=admission.outcome or LEARNING_OUTCOME_GOVERNANCE_DENIED,
+            reason=admission.reason,
+        )
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            result.outcome,
+            None,
+            admission.reason,
+            {"editor": editor, "consolidated": False},
+        )
+        return result
+
+    lesson = await _load_candidate_lesson(ctx, competency_id, slug)
+    if lesson is None:
+        return _refuse(
+            LEARNING_OUTCOME_NOT_FOUND,
+            f"no candidate lesson {candidate_learning.key_for(competency_id, slug)!r}",
+        )
+    if lesson.review_state != candidate_learning.REVIEW_PROPOSED:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            f"cannot edit a candidate in state {lesson.review_state!r}; "
+            "review decisions are terminal",
+        )
+    if int(expected_revision) != int(lesson.revision):
+        return _refuse(
+            LEARNING_OUTCOME_REVISION_CONFLICT,
+            (
+                f"this candidate changed since you opened it: you were editing "
+                f"revision {expected_revision}, and revision {lesson.revision} is "
+                "stored now. Nothing was written -- read the current version and "
+                "decide again."
+            ),
+            stored_lesson=lesson,
+        )
+
+    fingerprint_before = learning_authorization.fingerprint_for(lesson)
+    prior_snapshot = lesson.to_dict()
+
+    if inferred_rule is not None:
+        lesson.inferred_rule = inferred_rule
+    if conditions is not None:
+        lesson.conditions = conditions
+    if classification is not None:
+        lesson.classification = classification
+    if confidence is not None:
+        lesson.confidence = float(confidence)
+    if risk_class is not None:
+        lesson.risk_class = risk_class
+    if reversible is not None:
+        lesson.reversible = bool(reversible)
+    if affected_applications is not None:
+        lesson.affected_applications = [
+            str(name).strip() for name in affected_applications if str(name).strip()
+        ]
+    if sharing_eligible is not None:
+        lesson.sharing_eligible = bool(sharing_eligible)
+    if display_state is not None:
+        lesson.display_state = display_state
+
+    errors = lesson.validate()
+    if errors:
+        return _refuse(LEARNING_OUTCOME_INVALID, "; ".join(errors), errors=errors)
+
+    fingerprint_after = learning_authorization.fingerprint_for(lesson)
+    material_change = fingerprint_after != fingerprint_before
+
+    approval = await _load_learning_approval(ctx, lesson)
+    approval_invalidated = bool(
+        material_change
+        and approval is not None
+        and approval.candidate_fingerprint == fingerprint_before,
+    )
+
+    archived_key: str | None = None
+    if material_change:
+        # Preserve what the previous revision said before overwriting it, so
+        # "what exactly did I approve?" stays answerable after an edit.
+        archived_key = f"{lesson.key()}@r{lesson.revision}"
+        await ctx.mem.upsert_memory(
+            learning_policy.CANDIDATE_REVISION_KIND,
+            archived_key,
+            _json_dumps(prior_snapshot),
+            datetime.now(timezone.utc).isoformat(),
+            summary=(f"Superseded candidate lesson revision {lesson.revision} for {lesson.key()}"),
+        )
+        lesson.revision += 1
+        lesson.updated_at = datetime.now(timezone.utc).isoformat()
+
+    store_result = await _write_candidate_lesson(ctx, lesson)
+    if not getattr(store_result, "stored", False):
+        return _refuse(
+            LEARNING_OUTCOME_NOT_STORED,
+            "the edited candidate was not stored (policy or consent); "
+            "the previous version is unchanged",
+        )
+
+    outcome = LEARNING_OUTCOME_EDITED if material_change else LEARNING_OUTCOME_UNCHANGED
+    await _record_learning_reflection(
+        ctx,
+        candidate_action,
+        outcome,
+        lesson,
+        None,
+        {
+            "editor": editor,
+            "material_change": material_change,
+            "fingerprint_before": fingerprint_before,
+            "fingerprint_after": fingerprint_after,
+            "approval_invalidated": approval_invalidated,
+            "archived_revision_key": archived_key,
+            "revision": lesson.revision,
+            "consolidated": False,
+        },
+    )
+    return CandidateEditResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=True,
+        outcome=outcome,
+        lesson=lesson,
+        fingerprint_before=fingerprint_before,
+        fingerprint_after=fingerprint_after,
+        material_change=material_change,
+        approval_invalidated=approval_invalidated,
+        archived_revision_key=archived_key,
+    )
+
+
+def _json_dumps(payload: dict[str, Any]) -> str:
+    import json as _json
+
+    return _json.dumps(payload)
+
+
+# ---------------------------------------------------------------------------
+# Correcting and revoking accepted knowledge
+# ---------------------------------------------------------------------------
+
+
+async def run_competency_correction_through_runtime_contract(
+    ctx: Any,
+    *,
+    kind: str,
+    key: str,
+    corrected_by: str,
+    expected_revision: int,
+    updates: dict[str, Any],
+) -> training.TrainingRuntimeResult:
+    """
+    Correct one stored competency record, through S5.2's existing governed write.
+
+    Not a new write path: the corrected record is resubmitted through
+    `run_training_through_runtime_contract()` with `source_type="correction"`
+    -- an existing member of `ALLOWED_TRAINING_SOURCE_TYPES` -- so it passes
+    the same Parking Brake, the same rules engine, the same consent queue and
+    the same supersession bookkeeping any other training write does. The
+    superseded revision is recorded by that seam, not by this one.
+
+    Revision-guarded: correcting a record that changed underneath the editor
+    is refused rather than merged, and the refusal is returned as an ordinary
+    `TrainingRuntimeResult` error so the caller reports it the way it reports
+    every other non-success.
+    """
+    import json as _json
+
+    result = training.TrainingRuntimeResult(competency_id="", governance_allowed=False)
+
+    if kind not in training.RECORD_CLASSES:
+        result.errors.append(
+            f"{kind!r} is not a competency record kind; expected one of "
+            f"{sorted(training.RECORD_CLASSES)}",
+        )
+        return result
+
+    try:
+        row = await ctx.mem.get_memory(kind, key)
+    except Exception:
+        logger.exception("Failed to read competency record %s/%s for correction", kind, key)
+        row = None
+    if row is None:
+        result.errors.append(f"no competency record {kind}/{key}")
+        return result
+
+    try:
+        stored = _json.loads(row["value"])
+    except (TypeError, ValueError):
+        result.errors.append(
+            f"the stored value at {kind}/{key} is not parseable competency JSON; "
+            "it cannot be corrected without overwriting something nobody has read",
+        )
+        return result
+
+    stored_revision = int(stored.get("revision", 1))
+    if int(expected_revision) != stored_revision:
+        result.errors.append(
+            f"this record changed since you opened it: you were correcting revision "
+            f"{expected_revision}, and revision {stored_revision} is stored now. "
+            "Nothing was written.",
+        )
+        return result
+
+    competency_id = stored.get("competency_id", "")
+    result.competency_id = competency_id
+
+    # `slug` is carried by the key, not the payload: `key_for()` is
+    # "<competency_id>.<slug>", so the slug is everything after the first dot.
+    slug = key[len(competency_id) + 1 :] if key.startswith(f"{competency_id}.") else None
+
+    merged = {**stored, **{k: v for k, v in updates.items() if v is not None}}
+    # Provenance and revision are the seam's to set, never the caller's --
+    # the same rule S5.2's route follows for `recorded_by`.
+    merged.pop("provenance", None)
+    merged.pop("revision", None)
+    merged.pop("updated_at", None)
+
+    try:
+        record = training.record_from_payload(kind, merged, slug=slug)
+    except (ValueError, KeyError, TypeError) as exc:
+        result.errors.append(f"the corrected record could not be built: {exc}")
+        return result
+
+    submission = training.TrainingSubmission(
+        competency_id=competency_id,
+        source_type="correction",
+        source_detail=f"Corrected by {corrected_by} through the learning control centre",
+        records=[record],
+    )
+    return await run_training_through_runtime_contract(ctx, submission, recorded_by="user")
+
+
+@dataclass
+class CompetencyRevocationResult:
+    """Outcome of one attempt to withdraw accepted knowledge from retrieval."""
+
+    observation: Observation
+    candidate_action: CandidateAction
+    governance_allowed: bool
+    outcome: str
+    reason: str | None = None
+    kind: str | None = None
+    key: str | None = None
+    removed: bool = False
+
+
+async def run_competency_revocation_through_runtime_contract(
+    ctx: Any,
+    *,
+    kind: str,
+    key: str,
+    revoked_by: str,
+    reason: str | None = None,
+) -> CompetencyRevocationResult:
+    """
+    Withdraw one accepted competency record from future retrieval.
+
+    Removal goes through `MemoryStore.forget_memory()` -- the governed,
+    brake-refused, FTS-cleaning delete the memory surface already uses -- so
+    this seam decides nothing about persistence. What it adds is the audit:
+    one `ActionReflection` naming who revoked what and why.
+
+    What survives deliberately: the candidate lesson row, its archived
+    revisions, the acceptance approval, and every Reflection along the way.
+    Revoking removes the *knowledge*, not the record that it was once
+    accepted -- "was this ever accepted?" must stay answerable afterwards,
+    which is the whole reason the audit trail is a separate authority from
+    the retrievable substrate.
+
+    Restricted to competency kinds. A candidate lesson is not revoked, it is
+    rejected, and a rejection is already terminal; routing one through here
+    would delete the audit row that makes the rejection legible.
+    """
+    from .competency import COMPETENCY_KINDS
+
+    observation = Observation(
+        source=LEARNING_OBSERVATION_SOURCE,
+        raw_content=f"{LEARNING_ACTION_COMPETENCY_REVOKE} {kind}/{key} by={revoked_by}",
+    )
+    interpretation = _build_interpretation(ctx, observation)
+    candidate_action = CandidateAction(
+        kind=LEARNING_ACTION_COMPETENCY_REVOKE,
+        interpretation=interpretation,
+    )
+
+    def _refuse(outcome: str, detail: str) -> CompetencyRevocationResult:
+        return CompetencyRevocationResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=outcome,
+            reason=detail,
+            kind=kind,
+            key=key,
+        )
+
+    if kind not in COMPETENCY_KINDS:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            f"{kind!r} is not accepted competency knowledge; only "
+            f"{sorted(COMPETENCY_KINDS)} can be revoked",
+        )
+    if not revoked_by:
+        return _refuse(
+            LEARNING_OUTCOME_INVALID,
+            "revoking knowledge requires a named person -- it is never anonymous",
+        )
+
+    admission = await evaluate_learning_admission(ctx, LEARNING_ACTION_COMPETENCY_REVOKE)
+    if not admission.allowed:
+        result = CompetencyRevocationResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=False,
+            outcome=admission.outcome or LEARNING_OUTCOME_GOVERNANCE_DENIED,
+            reason=admission.reason,
+            kind=kind,
+            key=key,
+        )
+        await _record_learning_reflection(
+            ctx,
+            candidate_action,
+            result.outcome,
+            None,
+            admission.reason,
+            {"revoked_by": revoked_by, "kind": kind, "key": key, "consolidated": False},
+        )
+        return result
+
+    removed = await ctx.mem.forget_memory(kind, key)
+    if not removed:
+        return _refuse(LEARNING_OUTCOME_NOT_FOUND, f"no competency record {kind}/{key}")
+
+    await _record_learning_reflection(
+        ctx,
+        candidate_action,
+        LEARNING_OUTCOME_REVOKED,
+        None,
+        reason,
+        {
+            "revoked_by": revoked_by,
+            "kind": kind,
+            "key": key,
+            "revocation_reason": reason,
+            "consolidated": False,
+        },
+    )
+    return CompetencyRevocationResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=True,
+        outcome=LEARNING_OUTCOME_REVOKED,
+        kind=kind,
+        key=key,
+        removed=True,
     )

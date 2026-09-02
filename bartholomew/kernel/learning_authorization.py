@@ -67,6 +67,43 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: Material dimensions the Learning and Memory Control Centre added, each
+#: paired with the value that means "not assessed".
+#:
+#: Only an *assigned* value enters the digest (see `_material_extensions`).
+#: That is what makes the extension backwards compatible: a candidate written
+#: before these fields existed has none of them assigned, contributes no
+#: extension block, and therefore digests exactly as it did under PR #83 --
+#: so an approval granted before this upgrade is still valid after it. An
+#: approval that survived an upgrade is the correct outcome here: nothing
+#: about the lesson changed, only the vocabulary available to describe one.
+_MATERIAL_EXTENSION_DEFAULTS: dict[str, Any] = {
+    "risk_class": None,
+    "reversible": None,
+    "affected_applications": [],
+    "sharing_eligible": None,
+}
+
+
+def _material_extensions(lesson: Any) -> dict[str, Any]:
+    """The assigned control-centre material fields, normalised.
+
+    Absent attributes are treated as unassigned, so this stays safe against
+    any duck-typed lesson-shaped object (the tests use several).
+    """
+    assigned: dict[str, Any] = {}
+    for name, unassigned in _MATERIAL_EXTENSION_DEFAULTS.items():
+        value = getattr(lesson, name, unassigned)
+        if isinstance(unassigned, list):
+            value = sorted(str(item) for item in (value or []))
+            if not value:
+                continue
+        elif value is None:
+            continue
+        assigned[name] = value
+    return assigned
+
+
 def fingerprint_for(lesson: Any) -> str:
     """A stable digest of everything a reviewer was actually approving.
 
@@ -76,6 +113,20 @@ def fingerprint_for(lesson: Any) -> str:
     itself mutates (`review_state`, `reviewer`, `reviewed_at`, `revision`,
     `updated_at`) are excluded, because including them would make every
     approval invalid at the moment it is used.
+
+    Two fields the Learning and Memory Control Centre displays are covered
+    without appearing here by name, because they are *derived* from fields
+    that are:
+
+    * **Sharing eligibility** falls out of `classification` unless a reviewer
+      assigned it explicitly, in which case it is in the extension block.
+    * **Privacy classification** is derived by the memory rules engine from
+      the stored value, which is a serialisation of these fields -- so no
+      material edit can change the privacy class without changing the digest.
+
+    `display_state` is deliberately *not* here: pinning a candidate for later
+    is not a change to what it claims, and invalidating an approval over it
+    would be a misleading fingerprint change.
     """
     material = {
         "competency_id": lesson.competency_id,
@@ -89,6 +140,9 @@ def fingerprint_for(lesson: Any) -> str:
         "objective_id": int(lesson.source.objective_id),
         "supporting_event_ids": sorted(int(i) for i in lesson.source.supporting_event_ids),
     }
+    extensions = _material_extensions(lesson)
+    if extensions:
+        material["control_centre_material"] = extensions
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

@@ -108,6 +108,35 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # exfiltrating an entire personal memory are different powers, and a
     # future read-only role should be able to hold one without the other.
     ("GET", "/api/memory/export"): Capability.MEMORY_EXPORT,
+    # --- learning and memory control centre (Package D) -------------------
+    # Read, review, approve, configure, export: five capabilities, mapped so
+    # that the two rows which can change what Bartholomew *knows* --
+    # granting an acceptance approval, and accepting -- are the only two
+    # behind LEARNING_APPROVE.
+    ("GET", "/api/learning/overview"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/candidates"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/candidates/{competency_id}/{slug}"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/competencies"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/approvals"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/evaluations"): Capability.LEARNING_READ,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/edit"): Capability.LEARNING_REVIEW,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/reject"): Capability.LEARNING_REVIEW,
+    (
+        "POST",
+        "/api/learning/candidates/{competency_id}/{slug}/shadow-evaluate",
+    ): Capability.LEARNING_REVIEW,
+    ("POST", "/api/learning/competencies/{kind}/{key}/correct"): Capability.LEARNING_REVIEW,
+    ("POST", "/api/learning/competencies/{kind}/{key}/revoke"): Capability.LEARNING_REVIEW,
+    # The two that make a lesson trusted.
+    (
+        "POST",
+        "/api/learning/candidates/{competency_id}/{slug}/approve",
+    ): Capability.LEARNING_APPROVE,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/accept"): Capability.LEARNING_APPROVE,
+    ("GET", "/api/learning/policy"): Capability.LEARNING_POLICY,
+    ("PUT", "/api/learning/policy"): Capability.LEARNING_POLICY,
+    ("GET", "/api/learning/policy/history"): Capability.LEARNING_POLICY,
+    ("POST", "/api/learning/export"): Capability.LEARNING_EXPORT,
     # --- consent ---------------------------------------------------------
     ("GET", "/api/consent/pending-writes"): Capability.CONSENT_DECIDE,
     ("POST", "/api/consent/pending-writes/{pending_id}/approve"): Capability.CONSENT_DECIDE,

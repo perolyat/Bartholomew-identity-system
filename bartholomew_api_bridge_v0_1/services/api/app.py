@@ -59,6 +59,7 @@ from .routes import (
     consent,
     governance,
     inbound,
+    learning,
     liveness,
     memory,
     metrics,
@@ -104,6 +105,12 @@ app.include_router(memory.router)
 app.include_router(awaiting_response.router)
 app.include_router(onboarding.router)
 app.include_router(training.router)
+
+# Learning and Memory Control Centre (Package D). Deliberately NOT added to
+# `_ADMISSION_EXEMPT_PATHS`: every route here reads or mutates governed
+# learning state and needs a live kernel, so it must be refused during the
+# startup and shutdown windows like every other real ingress point.
+app.include_router(learning.router)
 
 # Governed inbound capture (Session D). Deliberately NOT added to
 # `_ADMISSION_EXEMPT_PATHS`: unlike health and static UI, capture writes
