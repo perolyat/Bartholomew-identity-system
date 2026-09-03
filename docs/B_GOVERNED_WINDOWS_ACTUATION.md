@@ -44,17 +44,17 @@ subtracted nothing from that test.
 Nine kinds, a closed `Enum`, version 1. A capability Bartholomew does not have
 is not unimplemented — it is inexpressible.
 
-| Capability | Risk | Approval | Autonomy-eligible |
-|---|---|---|---|
-| `windows.open_url` | moderate | required | no |
-| `windows.open_path` | moderate | required | no |
-| `windows.launch_app` | moderate | required | **yes** |
-| `windows.focus_window` | low | required | **yes** |
-| `windows.manage_window` | low | required | **yes** |
-| `windows.clipboard_read` | high | **always** | never |
-| `windows.clipboard_write` | high | required | no |
-| `windows.type_text` | sensitive | **always** | never |
-| `windows.accessibility_action` | sensitive | **always** | never |
+| Capability | Risk | Approval | Autonomy-eligible | May be idempotent |
+|---|---|---|---|---|
+| `windows.open_url` | moderate | required | no | no |
+| `windows.open_path` | moderate | required | no | no |
+| `windows.launch_app` | moderate | required | **yes** | no |
+| `windows.focus_window` | low | required | **yes** | **yes** |
+| `windows.manage_window` | low | required | **yes** | **yes** |
+| `windows.clipboard_read` | high | **always** | never | no |
+| `windows.clipboard_write` | high | required | no | no |
+| `windows.type_text` | sensitive | **always** | never | no |
+| `windows.accessibility_action` | sensitive | **always** | never | no |
 
 *Required* means an approval is needed today. *Always* means no configuration
 can remove it: `devices.EnrolledDevice` refuses at construction to carry one of
@@ -66,6 +66,16 @@ default.
 autonomy-eligible in this build. Each was described as lowering its risk only
 once a further control exists; encoding eligibility before the control would be
 encoding an intention as a permission.
+
+**Idempotence is a property of the capability, not a field on the wire.** Only
+the two pure state-setting capabilities qualify: focusing an already-focused
+window changes nothing the second time, and neither does maximising an
+already-maximised one. Everything else runs at most once, whatever a request
+asks for, and a request that asks for idempotence on an ineligible capability
+is refused rather than quietly downgraded. The reason is that `idempotent`
+relaxes the server's one-lease guard *and* is what the device's durable ledger
+checks before refusing a repeat -- a caller who could set it on
+`windows.type_text` could have one human approval type the text twice.
 
 **Unknown kinds and versions are refused, never approximated.** A device
 declaring `windows.focus_window` v2 against an action naming v1 is refused with
@@ -252,6 +262,22 @@ A device may report `started`, `succeeded`, `failed`, `cancelled` or `unknown`.
 It may **not** report `accepted` or `refused` — those are Governance's words
 about its own decision.
 
+### Expiry, and what an abandoned lease becomes
+
+Two sweeps, because the two situations are genuinely different. An action past
+its expiry that was never dispatched becomes `cancelled` -- nothing ran, and
+the dispatch path would have refused it anyway. An action that a device
+*leased* gets a grace period to report in, and what it becomes afterwards is
+`unknown`, not `cancelled`, because that is what is true: the device took it
+and we never heard back. Sweeping a live lease the instant its window closed
+cancelled actions underneath the devices running them, and then declined the
+honest results those devices reported as late.
+
+Both sweeps purge `parameters_json`, and the sweep runs on the request and
+inspection paths as well as the lease path -- it used to run only on the lease
+path, which a deployment with no device resolver installed (the shipped
+default) never reaches.
+
 ### Evidence
 
 Bounded and non-sensitive, through the existing authorities:
@@ -259,7 +285,16 @@ Bounded and non-sensitive, through the existing authorities:
 * one `ActionReflection` per governed decision, through
   `record_action_reflection` — the same sink every other seam uses;
 * a typed row in `windows_action_results` carrying an error **category** (not
-  prose) and at most twelve bounded evidence values.
+  prose) and at most twelve bounded evidence values, filtered through a **key
+  allowlist**. The allowlist runs on the server over whatever a device sent, so
+  it is a boundary and not a convenience: a compromised device cannot put screen
+  contents into a permanent row by inventing a key for them. `text` is the
+  single content-bearing name on it.
+
+The Reflection carries the evidence *keys*, never the values:
+`ActionReflection` redacts top-level strings in its details and a nested dict
+passes through untouched, so putting the evidence map there would have written
+whatever a device sent straight into Memory unredacted.
 
 Sensitive parameters never reach either. `ValidatedParameters` carries a
 `canonical` view and a `redacted` view; text somebody asked to have typed is a
@@ -272,6 +307,13 @@ Clipboard *content* does not leave the machine at all by default: the result
 carries a digest, a length and whether the secret detector fired. Returning the
 content is an explicit per-device opt-in, and a detected secret is refused
 either way.
+
+**The one exception, and it is deliberate: `GET /api/actions/{id}` returns the
+canonical parameters.** That is the approval surface, and a person cannot
+approve text they have not read -- an approval bound to a digest the approver
+never saw expanded is an approval in name only. The disclosure is transient, to
+one authenticated request holding `action:read`; every durable record still
+keeps only the digest, and the list endpoint returns the redacted view.
 
 ## 6. Sensitive content and sensitive fields
 
@@ -411,6 +453,12 @@ tested; its accepted path against a live provider is manual.
   `BARTH_RUNTIME_USER_ID`.
 * **No transport pinning.** The companion trusts the platform's TLS
   configuration; it does not pin a certificate.
+* **Typed and copied text is Basic-Multilingual-Plane only.** Windows carries a
+  typed character in a 16-bit field, and some characters above U+FFFF truncate
+  into control codes -- U+1000D into Enter, U+10009 into Tab. Rather than emit
+  surrogate pairs, this build refuses the plane: a capability whose whole point
+  is that it cannot reach a control must not also be where the subtlest
+  encoding bug in the codebase lives. Emoji in typed or copied text is refused.
 
 ## 11. The Session E interface
 
