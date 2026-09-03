@@ -584,6 +584,38 @@ def mark_approved(
     )
 
 
+def mark_pending_again(
+    db_path: str,
+    *,
+    tenant_id: str,
+    action_id: str,
+) -> StoredAction | None:
+    """`approved -> pending_approval`, to undo an approval that did not record.
+
+    The **only** backwards transition in this machine, and it exists for one
+    situation: `grant_action_approval` wins the conditional move to `approved`
+    and then fails to write the approval row. Without this the action is stuck
+    -- `mark_approved` moves only from `pending_approval`, so it can never be
+    approved again, and dispatch refuses for the missing approval until expiry.
+
+    Safe because an action at `approved` with no approval on file cannot be
+    leased: `evaluate_dispatch_admission` reads the approval and refuses with
+    `APPROVAL_MISSING` before `try_lease` is reached. It moves only from
+    `approved`, so a cancel or a lease that got there first wins and this
+    returns None.
+    """
+    return _transition(
+        db_path,
+        tenant_id=tenant_id,
+        action_id=action_id,
+        from_states=(ActionState.APPROVED,),
+        to_state=ActionState.PENDING_APPROVAL,
+        reason="the approval could not be recorded; returned to pending",
+        extra_set=", approved_by = NULL, approved_at = NULL",
+        label="windows_action_unapprove",
+    )
+
+
 def mark_refused(
     db_path: str,
     *,

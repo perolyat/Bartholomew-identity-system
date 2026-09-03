@@ -663,7 +663,23 @@ async def run_action_request_through_runtime_contract(
     # id. So the audit reports what is *stored*, and records the mismatch as
     # its own fact -- because a caller re-submitting an id with different
     # parameters is worth being able to see.
-    superseded = stored.parameter_fingerprint != request.parameter_fingerprint
+    # The **whole** binding, not just the parameters. Keying on the fingerprint
+    # alone left every other axis open: re-POSTing a known id with identical
+    # parameters but a different capability, version or device produced an
+    # identical digest, so the request was not treated as superseding -- and
+    # `_record_reflection` then took `capability`, `capability_version`,
+    # `device_id` and `risk_class` from the *request* beside the stored row's
+    # state. "windows.focus_window on desk-pc -> approved" entered the audit
+    # for a row that was `windows.launch_app`.
+    superseded = stored.parameter_fingerprint != request.parameter_fingerprint or (
+        stored.capability,
+        stored.capability_version,
+        stored.device_id,
+    ) != (
+        request.capability.value,
+        request.capability_version,
+        request.device_id,
+    )
     persisted, error = await _record_reflection(
         ctx,
         kind=kind,
@@ -755,15 +771,19 @@ async def _record_refusal(
     request: ActionRequest,
     admission: ActionAdmission,
 ) -> ActionSeamResult:
-    """A refusal that is durably recorded as a refused action.
+    """A refusal, durably recorded as a refused action -- when there is one to record.
 
     A policy denial is not a brake halt: mutation is not forbidden, this
     particular action is -- so recording the refusal is both permitted and
     useful. It stays a refusal, and the row's parameters are never stored,
     because a refused action never needs handing to anything.
+
+    When the id already exists, nothing is recorded and nothing may be
+    *described* from the request either: see the comment at the call to
+    `_record_reflection` below.
     """
     await run_off_loop(store.ensure_schema, db_path)
-    stored, _created = await run_off_loop(
+    stored, created = await run_off_loop(
         store.create_action,
         db_path,
         record=request.to_dict(redacted=True),
@@ -771,11 +791,18 @@ async def _record_refusal(
         state=ActionState.REFUSED,
         state_reason=admission.reason,
     )
+    # A refusal can land on a row that already exists -- re-POSTing a known
+    # action id with a capability the device does not declare gets here, and
+    # `create_action` returns the existing row rather than writing a refusal.
+    # When that happens neither the Reflection nor the response may describe
+    # the *request*: doing so wrote the caller's capability and device beside
+    # somebody else's approved action, and returned that action's full record
+    # from a verb that only requires `action:request`.
     persisted, error = await _record_reflection(
         ctx,
         kind=kind,
-        outcome="refused",
-        request=request,
+        outcome="refused" if created else "refusal_on_existing_action",
+        request=request if created else None,
         action=stored,
         reason=admission.reason,
         category=admission.category,
@@ -788,7 +815,8 @@ async def _record_refusal(
         category=admission.category,
         reason=admission.reason,
         action=stored,
-        request=request,
+        request=request if created else None,
+        existing=not created,
         provenance_degraded=not persisted,
         provenance_error=error,
     )
@@ -951,24 +979,49 @@ async def grant_action_approval(
 
     written = await _write_approval(ctx, approval)
     if written is not None:
-        # The action is `approved` with no approval on file. That is a
-        # fail-closed state, not a hole: `evaluate_dispatch_admission` looks
-        # for the approval itself and refuses with `APPROVAL_MISSING` when it
-        # is absent, whatever the row's state says. The caller is told the
-        # approval did not land so they can grant it again.
-        logger.error(
-            "Action %s was moved to approved but its approval could not be recorded; "
-            "it cannot be dispatched until an approval is granted successfully",
-            action_id,
+        # **Compensate, or the action is stuck forever.**
+        #
+        # `mark_approved` only moves `pending_approval -> approved`, so an
+        # action left at `approved` with no approval on file can never be
+        # approved again: the retry is refused for not awaiting approval, and
+        # dispatch refuses for the missing approval, until expiry sweeps it.
+        # Claiming a failed write was "safe to retry" while leaving the action
+        # in the one state that guarantees the retry fails is worse than the
+        # original bug this ordering fixed.
+        #
+        # Moving it back is safe: nothing can have leased it in between, because
+        # `evaluate_dispatch_admission` reads the approval itself and refuses
+        # with `APPROVAL_MISSING` before `try_lease` is ever reached.
+        restored = await run_off_loop(
+            store.mark_pending_again,
+            db_path,
+            tenant_id=tenant_id,
+            action_id=action_id,
         )
+        if restored is None:
+            logger.error(
+                "Action %s could not be returned to pending after its approval failed "
+                "to record; it is approved with no approval on file and can neither "
+                "be dispatched nor re-approved",
+                action_id,
+            )
+        current = restored or moved
         return ActionSeamResult(
             observation=observation,
             candidate_action=candidate_action,
             governance_allowed=False,
-            status=ActionResultStatus.REFUSED,
+            status=current.status,
             category=ErrorCategory.INTERNAL_ERROR,
-            reason=written,
-            action=moved,
+            reason=(
+                f"{written}. The action was returned to pending approval and can be "
+                "approved again."
+                if restored is not None
+                else (
+                    f"{written}. It could not be returned to pending approval either, "
+                    "so it can no longer be approved or dispatched and will expire."
+                )
+            ),
+            action=current,
             request=request,
         )
 
@@ -1322,6 +1375,12 @@ async def run_action_dispatch_through_runtime_contract(
             tenant_id=tenant_id,
             action_id=action_id,
         )
+        # `try_lease` now refuses for expiry as well as for replay -- the
+        # expiry guard was added to its `WHERE` to close a time-of-check gap
+        # that spans two brake reads and a memory read. Hard-coding "already
+        # leased" here wrote a clock event into the audit as a replay attempt,
+        # in a sentence that was false on both clauses. Re-read and say which.
+        expired = current is not None and request.has_expired()
         return await _dispatch_refusal(
             ctx,
             observation=observation,
@@ -1329,9 +1388,17 @@ async def run_action_dispatch_through_runtime_contract(
             stored=current,
             request=request,
             admission=ActionAdmission.deny(
-                ErrorCategory.REPLAY_REFUSED,
-                f"action {action_id} has already been leased and is non-repeatable; "
-                "a duplicate delivery does not run it a second time",
+                ErrorCategory.EXPIRED if expired else ErrorCategory.REPLAY_REFUSED,
+                (
+                    f"action {action_id} expired at {request.expires_at} between its "
+                    "admission and the lease"
+                    if expired
+                    else (
+                        f"action {action_id} has already been leased and is "
+                        "non-repeatable; a duplicate delivery does not run it a "
+                        "second time"
+                    )
+                ),
             ),
         )
 
@@ -1483,6 +1550,17 @@ async def record_action_result_through_runtime_contract(
     updated, recorded = await run_off_loop(store.record_result, db_path, result=result)
 
     if not recorded:
+        # Two different situations, and calling both "this action had already
+        # ended" was false for one of them: a repeated `started` note on an
+        # action that is still `leased` is a duplicate *observation*, not a
+        # late result, and the action is very much live. Saying it ended --
+        # in a body whose own `state` field reads `leased` -- told a conforming
+        # client to stop reporting on an action still in flight.
+        still_live = (
+            updated is not None
+            and updated.state is ActionState.LEASED
+            and reported is ActionResultStatus.STARTED
+        )
         return ActionSeamResult(
             observation=observation,
             candidate_action=candidate_action,
@@ -1490,9 +1568,14 @@ async def record_action_result_through_runtime_contract(
             status=(updated.status if updated else ActionResultStatus.REFUSED),
             category=ErrorCategory.REPLAY_REFUSED,
             reason=(
-                f"action {action_id} is {updated.state.value if updated else 'unknown'}; "
-                "a late or duplicate result does not change an outcome that already "
-                "happened"
+                f"this progress note for action {action_id} was already recorded; the "
+                "action is still running and its outcome is still awaited"
+                if still_live
+                else (
+                    f"action {action_id} is "
+                    f"{updated.state.value if updated else 'unknown'}; a late or "
+                    "duplicate result does not change an outcome that already happened"
+                )
             ),
             action=updated,
         )

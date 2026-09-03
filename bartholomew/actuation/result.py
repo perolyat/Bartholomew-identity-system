@@ -229,6 +229,12 @@ def bounded_evidence(raw: Any) -> dict[str, Any]:
         # The names only -- never the values, which are the thing being
         # refused. Truncated so a device cannot make this the smuggling
         # channel by putting content in the key.
+        #
+        # It costs a slot rather than being added on top: appending it after
+        # the cap let a full evidence map come out at MAX_EVIDENCE_KEYS + 1,
+        # which is a bound that does not bound.
+        while len(out) >= MAX_EVIDENCE_KEYS:
+            out.pop(next(reversed(out)))
         out["dropped_keys"] = ",".join(sorted(dropped))[:MAX_EVIDENCE_VALUE_CHARS]
     return out
 

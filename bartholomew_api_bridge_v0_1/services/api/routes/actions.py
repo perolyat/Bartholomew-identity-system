@@ -304,9 +304,11 @@ def _body(result: seam.ActionSeamResult) -> dict[str, Any]:
     if result.category is not None:
         payload["error_category"] = result.category.value
     if result.reason:
-        # An internal error's reason is the driver's own message, which for
-        # sqlite3 routinely embeds the database file path. Logged, never
-        # returned: a caller needs to know it can retry, not where the file is.
+        # An internal error's reason carries the driver's own exception text.
+        # It is logged and replaced rather than returned -- not because sqlite3
+        # leaks the file path (its messages here do not), but because the
+        # driver's wording is an implementation detail that tells a caller
+        # nothing it can act on, and the actionable fact is whether to retry.
         if result.category is ErrorCategory.INTERNAL_ERROR:
             logger.error("A governed action failed internally: %s", result.reason)
             payload["reason"] = (
@@ -368,10 +370,15 @@ async def request_action(request: Request) -> Any:
 async def list_actions(request: Request, limit: int = 50, offset: int = 0) -> Any:
     """Recent actions and what happened to each -- the inspection surface.
 
-    Read-only, and parameters are the **redacted** form: text somebody asked to
-    have typed appears as a digest and a length, never as itself. Readable
-    while the Parking Brake is engaged, because inspection is exactly what a
-    halt must not hide.
+    Parameters are the **redacted** form: text somebody asked to have typed
+    appears as a digest and a length, never as itself. Readable while the
+    Parking Brake is engaged, because inspection is exactly what a halt must
+    not hide.
+
+    Not quite read-only: it also sweeps this tenant's overdue actions, which is
+    what purges their cleartext parameters. That sweep is best-effort and off
+    the event loop -- it must never turn a readable database into a 503, and it
+    must never stall the API on a write lock. See the comment below.
     """
     if limit < 1 or limit > 100:
         raise HTTPException(400, "limit must be between 1 and 100")
@@ -383,12 +390,32 @@ async def list_actions(request: Request, limit: int = 50, offset: int = 0) -> An
     kernel = _kernel_or_503()
     db_path = getattr(getattr(kernel, "mem", None), "db_path", None) or resolve_db_path()
     tenant = _tenant(request)
+    # Housekeeping on the path a person actually visits, as well as on the
+    # request path -- the sweep is what purges the cleartext parameters of an
+    # action that expired unapproved, and a deployment whose device channel is
+    # closed (the shipped default) reaches it nowhere else.
+    #
+    # **Off the event loop, and best-effort.** It is a synchronous write with a
+    # five-second busy timeout: run inline it stalled the whole API for five
+    # seconds whenever another writer held the lock, and run inside the
+    # response's `try` it then answered 503 -- on the one endpoint whose
+    # contract is that inspection is what a halt must not hide, for a database
+    # whose read would have succeeded instantly. The sibling call in the seam
+    # was already wrapped for exactly this reason; the reasoning belongs here
+    # too.
     try:
-        # Housekeeping on the path a person actually visits, as well as on the
-        # request path. The sweep is what purges the cleartext parameters of an
-        # action that expired unapproved, and a deployment whose device channel
-        # is closed -- the shipped default -- reaches it nowhere else.
-        store.expire_overdue(db_path, tenant_id=tenant)
+        from bartholomew.kernel.blocking_executor import run_off_loop
+
+        await run_off_loop(store.expire_overdue, db_path, tenant_id=tenant)
+    except Exception:
+        logger.warning(
+            "Could not sweep overdue actions for tenant %s while listing; cleartext "
+            "parameters may be retained past their expiry until the next sweep",
+            tenant,
+            exc_info=True,
+        )
+
+    try:
         return {
             "tenant_id": tenant,
             "actions": store.recent_actions(

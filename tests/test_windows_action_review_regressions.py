@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import sqlite3
 from pathlib import Path
 
@@ -204,6 +205,16 @@ class _Ctx:
 
 
 def _device(**overrides):
+    """An enrolled device. `capabilities=` accepts bare kinds or declarations."""
+    if "capabilities" in overrides:
+        overrides["capabilities"] = tuple(
+            (
+                c
+                if isinstance(c, devices.DeclaredCapability)
+                else devices.DeclaredCapability(kind=c, version=1)
+            )
+            for c in overrides["capabilities"]
+        )
     fields = {
         "device_id": DEVICE,
         "tenant_id": TENANT,
@@ -1567,3 +1578,399 @@ def test_no_here_string_contains_an_accidental_escape():
             f"line {number} of the installer has a live escape inside a here-string: "
             f"{line.strip()!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 24. Defects introduced by the fixes above, found by reviewing the fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_on_an_existing_action_discloses_nothing_about_it(db_path):
+    """The write verb was still a read oracle, on the path nobody re-checked.
+
+    `_record_refusal` threw away `create_action`'s `created` flag, so a refusal
+    that landed on a pre-existing row reported `existing=False` and the route
+    returned the victim's whole record -- `approved_by`, `approved_at`,
+    `lease_count`, everything -- from a verb requiring only `action:request`.
+    Re-POST a known id with a capability the device does not declare and the
+    refusal carried the answer.
+    """
+    ctx = _Ctx(db_path)
+    registry = _Registry(_device(capabilities=[CapabilityKind.FOCUS_WINDOW]))
+
+    victim = await seam.run_action_request_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        requested_by="taylor.the.boss",
+        capability="windows.focus_window",
+        capability_version=1,
+        parameters={"app_id": "notepad"},
+        action_id="victim-1",
+        registry=registry,
+    )
+    assert victim.governance_allowed
+    await seam.grant_action_approval(
+        ctx,
+        tenant_id=TENANT,
+        action_id="victim-1",
+        approver="taylor.the.boss",
+        registry=registry,
+    )
+
+    probe = await seam.run_action_request_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        requested_by="nosy",
+        capability="windows.launch_app",
+        capability_version=1,
+        parameters={"app_id": "notepad"},
+        action_id="victim-1",
+        registry=registry,
+    )
+    assert not probe.governance_allowed
+    assert probe.existing is True, "the refusal must know it landed on an existing row"
+    assert probe.request is None, "and must not describe the probe's own request"
+
+    # The route then answers with the minimal summary, not the record.
+    from bartholomew_api_bridge_v0_1.services.api.routes.actions import _body
+
+    rendered = json.dumps(_body(probe))
+    assert "taylor.the.boss" not in rendered
+    assert "approved_by" not in rendered
+    assert "lease_count" not in rendered
+
+    # And the durable audit does not gain the probe's capability either.
+    with sqlite3.connect(db_path) as conn:
+        metas = [
+            r[0]
+            for r in conn.execute(
+                "SELECT meta FROM reflections WHERE kind = 'action_reflection'",
+            ).fetchall()
+        ]
+    for meta in metas:
+        if "victim-1" in meta and "approved" in meta:
+            assert "windows.launch_app" not in meta
+
+
+@pytest.mark.asyncio
+async def test_a_resubmission_with_the_same_parameters_but_another_capability(db_path):
+    """Keying `superseded` on the fingerprint alone left every other axis open.
+
+    `{"app_id": "notepad"}` digests identically for `launch_app` and
+    `focus_window`, so a re-POST that changed only the capability was not
+    treated as superseding -- and the Reflection then took `capability`,
+    `capability_version`, `device_id` and `risk_class` from the request beside
+    the stored row's state.
+    """
+    ctx = _Ctx(db_path)
+    registry = _Registry(_device(), _device(device_id="laptop"))
+
+    await seam.run_action_request_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        requested_by="taylor",
+        capability="windows.launch_app",
+        capability_version=1,
+        parameters={"app_id": "notepad"},
+        action_id="act-C",
+        registry=registry,
+    )
+    await seam.grant_action_approval(
+        ctx,
+        tenant_id=TENANT,
+        action_id="act-C",
+        approver="taylor",
+        registry=registry,
+    )
+
+    for label, overrides in (
+        ("capability", {"capability": "windows.focus_window"}),
+        ("device", {"device_id": "laptop"}),
+    ):
+        probe = await seam.run_action_request_through_runtime_contract(
+            ctx,
+            tenant_id=TENANT,
+            device_id=overrides.get("device_id", DEVICE),
+            requested_by="taylor",
+            capability=overrides.get("capability", "windows.launch_app"),
+            capability_version=1,
+            parameters={"app_id": "notepad"},
+            action_id="act-C",
+            registry=registry,
+        )
+        assert probe.existing is True, f"{label}: the row already exists"
+        assert probe.request is None, f"{label}: the probe's request describes nothing"
+        assert probe.action.capability == "windows.launch_app"
+        assert probe.action.device_id == DEVICE
+
+    with sqlite3.connect(db_path) as conn:
+        metas = [
+            r[0]
+            for r in conn.execute(
+                "SELECT meta FROM reflections WHERE kind = 'action_reflection'",
+            ).fetchall()
+        ]
+    for meta in metas:
+        if '"outcome": "approved"' in meta:
+            assert "windows.focus_window" not in meta
+            assert '"device_id": "laptop"' not in meta
+
+
+@pytest.mark.asyncio
+async def test_an_approval_whose_write_fails_can_be_approved_again(db_path, monkeypatch):
+    """Inverting the order fixed a race and created a permanent dead end.
+
+    `mark_approved` moves only from `pending_approval`, so an action left at
+    `approved` with no approval on file could never be approved again -- the
+    retry was refused for not awaiting approval and dispatch for the missing
+    approval, while the response said "safe to retry" and the row showed an
+    approver who had been told they failed.
+    """
+    ctx = _Ctx(db_path)
+    registry = _Registry(_device())
+    requested = await seam.run_action_request_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        requested_by="taylor",
+        capability="windows.focus_window",
+        capability_version=1,
+        parameters={"app_id": "notepad"},
+        registry=registry,
+    )
+    action_id = requested.action.action_id
+
+    async def _fail(*_a, **_k):
+        return "the approval could not be recorded: OperationalError: disk I/O error"
+
+    monkeypatch.setattr(seam, "_write_approval", _fail)
+    failed = await seam.grant_action_approval(
+        ctx,
+        tenant_id=TENANT,
+        action_id=action_id,
+        approver="taylor",
+        registry=registry,
+    )
+    assert not failed.governance_allowed
+    assert "returned to pending approval" in failed.reason
+    assert failed.action.state is ActionState.PENDING_APPROVAL
+    assert failed.action.approved_by is None, "no approver is recorded for a failed grant"
+
+    # And the retry, once the store works again, really does succeed.
+    monkeypatch.undo()
+    retried = await seam.grant_action_approval(
+        ctx,
+        tenant_id=TENANT,
+        action_id=action_id,
+        approver="taylor",
+        registry=registry,
+    )
+    assert retried.governance_allowed, retried.reason
+    assert retried.action.state is ActionState.APPROVED
+    leased = await seam.run_action_dispatch_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        action_id=action_id,
+        registry=registry,
+    )
+    assert leased.governance_allowed
+
+
+def test_a_terminal_result_really_is_atomic_with_its_evidence_row(db_path):
+    """The test named for this fix used to pass against the pre-fix code.
+
+    It drove the happy path, which the old two-transaction version also
+    satisfied. The failure mode -- the evidence insert failing after the
+    transition committed -- was never exercised. Here it is: drop the results
+    table mid-flight and assert the action did NOT move to a terminal state.
+    """
+    from bartholomew.actuation.request import to_iso, utc_now
+    from bartholomew.actuation.result import ActionResult
+
+    store.create_action(
+        db_path,
+        record={
+            "tenant_id": TENANT,
+            "action_id": "act-atomic",
+            "device_id": DEVICE,
+            "capability": "windows.focus_window",
+            "capability_version": 1,
+            "parameters": {"app_id": "notepad"},
+            "parameter_fingerprint": "f" * 64,
+            "correlation_id": "cor-1",
+            "requested_by": "taylor",
+            "risk_class": "low",
+            "approval_requirement": "required_autonomy_eligible",
+            "repeatability": "non_repeatable",
+            "issued_at": to_iso(utc_now()),
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
+        canonical_parameters={"app_id": "notepad"},
+        state=ActionState.APPROVED,
+    )
+    assert store.try_lease(db_path, tenant_id=TENANT, action_id="act-atomic", repeatable=False)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE windows_action_results")
+        conn.commit()
+
+    result = ActionResult(
+        action_id="act-atomic",
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        status=ActionResultStatus.SUCCEEDED,
+        detail="it worked",
+    )
+    with pytest.raises(ActionPersistenceError):
+        store.record_result(db_path, result=result)
+
+    still = store.get_action(db_path, tenant_id=TENANT, action_id="act-atomic")
+    assert still.state is ActionState.LEASED, (
+        "the transition must roll back with the evidence insert, or the action ends "
+        "with nothing in the history explaining how"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_progress_note_does_not_claim_the_action_ended(db_path):
+    """It is still `leased`, and the body's own `state` field says so."""
+    from bartholomew.actuation.request import to_iso, utc_now
+
+    ctx = _Ctx(db_path)
+    registry = _Registry(_device(trusted_autonomy=[CapabilityKind.FOCUS_WINDOW]))
+    requested = await seam.run_action_request_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        requested_by="taylor",
+        capability="windows.focus_window",
+        capability_version=1,
+        parameters={"app_id": "notepad"},
+        repeatability="idempotent",
+        registry=registry,
+    )
+    action_id = requested.action.action_id
+    await seam.run_action_dispatch_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        action_id=action_id,
+        registry=registry,
+    )
+
+    async def _note():
+        return await seam.record_action_result_through_runtime_contract(
+            ctx,
+            tenant_id=TENANT,
+            device_id=DEVICE,
+            action_id=action_id,
+            status="started",
+            error_category=None,
+            detail="running",
+            evidence={},
+            observed_at=to_iso(utc_now()),
+        )
+
+    first = await _note()
+    assert first.governance_allowed
+    second = await _note()
+    assert not second.governance_allowed
+    assert "still running" in second.reason
+    assert "already happened" not in second.reason
+    assert second.action.state is ActionState.LEASED
+
+
+def test_the_device_channel_names_the_actual_cause_of_a_refusal():
+    """One sentence per cause, and a status a device can act on.
+
+    Everything used to be 403 "this action had already ended" -- about actions
+    that were live -- and the companion maps 403 to "not authenticated", so a
+    malformed payload sent an operator to check credentials.
+    """
+    from bartholomew_api_bridge_v0_1.services.api.routes.device_actions import (
+        _refusal_response,
+    )
+
+    class _R:
+        def __init__(self, category):
+            self.category = category
+
+    assert _refusal_response(_R(ErrorCategory.REPLAY_REFUSED))[0] == 409
+    assert _refusal_response(_R(ErrorCategory.PARAMETERS_INVALID))[0] == 422
+    assert _refusal_response(_R(ErrorCategory.GOVERNANCE_DENIED))[0] == 403
+    assert _refusal_response(_R(ErrorCategory.DEVICE_NOT_ENROLLED))[0] == 404
+    for category in (
+        ErrorCategory.PARAMETERS_INVALID,
+        ErrorCategory.GOVERNANCE_DENIED,
+        ErrorCategory.DEVICE_NOT_ENROLLED,
+    ):
+        assert "already ended" not in _refusal_response(_R(category))[1]
+
+
+def test_the_evidence_key_cap_actually_caps():
+    """`dropped_keys` was appended after the cap, so the bound was cap + 1."""
+    from bartholomew.actuation.result import (
+        MAX_EVIDENCE_KEYS,
+        PERMITTED_EVIDENCE_KEYS,
+        bounded_evidence,
+    )
+
+    permitted = sorted(PERMITTED_EVIDENCE_KEYS - {"dropped_keys"})
+    assert len(permitted) > MAX_EVIDENCE_KEYS, "the premise needs a full map"
+    raw = dict.fromkeys(permitted, 1)
+    raw["not_a_permitted_key"] = "screen contents"
+    kept = bounded_evidence(raw)
+    assert len(kept) <= MAX_EVIDENCE_KEYS
+    assert "dropped_keys" in kept
+    assert "screen contents" not in repr(kept)
+
+
+@pytest.mark.asyncio
+async def test_a_lease_that_expires_in_the_gap_is_reported_as_expired(db_path):
+    """`try_lease` now refuses for expiry too, so `None` no longer means replay.
+
+    Hard-coding "already leased and non-repeatable" wrote a clock event into
+    the audit as a replay attempt, in a sentence false on both clauses.
+    """
+    from datetime import timedelta
+
+    from bartholomew.actuation.request import to_iso, utc_now
+
+    ctx = _Ctx(db_path)
+    registry = _Registry(_device())
+    requested = await seam.run_action_request_through_runtime_contract(
+        ctx,
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        requested_by="taylor",
+        capability="windows.focus_window",
+        capability_version=1,
+        parameters={"app_id": "notepad"},
+        registry=registry,
+    )
+    action_id = requested.action.action_id
+    await seam.grant_action_approval(
+        ctx,
+        tenant_id=TENANT,
+        action_id=action_id,
+        approver="taylor",
+        registry=registry,
+    )
+
+    # Expire it after admission would have passed but before the lease lands:
+    # the row is still `approved` with `lease_count = 0`, so the old code
+    # called it a replay.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE windows_action_requests SET expires_at = ? WHERE action_id = ?",
+            (to_iso(utc_now() - timedelta(seconds=1)), action_id),
+        )
+        conn.commit()
+    assert store.try_lease(db_path, tenant_id=TENANT, action_id=action_id, repeatable=False) is None
+    fresh = store.get_action(db_path, tenant_id=TENANT, action_id=action_id)
+    assert fresh.state is ActionState.APPROVED and fresh.lease_count == 0

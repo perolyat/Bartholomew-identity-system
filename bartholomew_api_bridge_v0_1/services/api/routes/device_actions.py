@@ -89,6 +89,38 @@ class ResultIn(BaseModel):
     observed_at: str = Field(default="", max_length=64)
 
 
+#: How each refusal from the result seam is answered. A device reads the code
+#: to decide whether to retry, so the code has to mean what happened.
+_RESULT_REFUSALS: dict[ErrorCategory, tuple[int, str]] = {
+    ErrorCategory.REPLAY_REFUSED: (
+        409,
+        "The result was not applied: this action had already ended, or this exact "
+        "observation was already recorded. Its recorded outcome is unchanged.",
+    ),
+    ErrorCategory.PARAMETERS_INVALID: (
+        422,
+        "The result was not applied because the report itself was malformed. The "
+        "action is unaffected and a corrected report will be accepted.",
+    ),
+    ErrorCategory.GOVERNANCE_DENIED: (
+        403,
+        "A device may not report that outcome. The action is unaffected.",
+    ),
+    ErrorCategory.DEVICE_NOT_ENROLLED: (
+        404,
+        "No such action for this device. Nothing was recorded.",
+    ),
+}
+
+
+def _refusal_response(result: Any) -> tuple[int, str]:
+    """The status and sentence for one refused result report."""
+    return _RESULT_REFUSALS.get(
+        result.category,
+        (403, "The result was not applied. The action's recorded outcome is unchanged."),
+    )
+
+
 def _kernel_or_503() -> Any:
     from ..app import _kernel
 
@@ -329,11 +361,14 @@ async def report_result(action_id: str, request: Request) -> Any:
         body["provenance_error"] = result.provenance_error
 
     if not result.governance_allowed:
-        status_code = 409 if result.category is ErrorCategory.REPLAY_REFUSED else 403
-        body["detail"] = (
-            "The result was not applied: this action had already ended. Its recorded "
-            "outcome is unchanged."
-        )
+        # One sentence per cause, because these are different things and a
+        # device operator acts on them differently. The blanket "this action
+        # had already ended" was emitted for a malformed status and for a
+        # foreign action id too -- about actions that were live and leased --
+        # and the companion maps 403 to "not authenticated", so a payload bug
+        # sent an operator to check credentials.
+        status_code, detail = _refusal_response(result)
+        body["detail"] = detail
         return JSONResponse(status_code=status_code, content=body)
 
     body["detail"] = "Recorded."
