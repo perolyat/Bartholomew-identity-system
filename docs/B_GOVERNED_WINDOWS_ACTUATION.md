@@ -389,7 +389,10 @@ Stated separately, because the difference matters.
 `tests/integration/test_windows_action_real.py` runs on the `windows-latest` CI
 job (added to `.github/workflows/ci.yml`) and monkeypatches nothing. Real
 `CreateProcessW`, real `EnumWindows`, real `SetForegroundWindow`, real
-clipboard, real filesystem:
+clipboard, real filesystem. **It has run and passed: 21/21 on a Windows Server
+runner**, with the job's cleanup terminating the real Notepad and Edge
+processes the tests started -- which is the most direct evidence available that
+these are not simulations.
 
 * launching Notepad, and confirming a real pid whose image is the allowlisted
   executable, with a real window;
@@ -431,6 +434,26 @@ real desktop before enabling the capability.
 provider. Its parameter validation, governance and refusal paths are fully
 tested; its accepted path against a live provider is manual.
 
+**One documented Win32 caveat that the real run contradicts.**
+`OpenClipboard(NULL)` followed by `EmptyClipboard()` is documented to leave the
+clipboard owner NULL, "which causes `SetClipboardData` to fail" -- which is why
+some clipboard libraries create a throwaway window first. The real-Windows run
+round-trips the clipboard successfully, so this build does not add the window.
+Documentation and observed behaviour disagree, the test is the stronger
+evidence for the platform we run on, and it is also the guard: if a future
+Windows build behaves as documented, that test goes red rather than the
+capability quietly failing for a person. Recorded here because a reader who
+knows the documentation deserves to know the tension was noticed.
+
+**The Windows installer is parsed, never run, in CI.** There is no PowerShell
+on the Ubuntu jobs, so a parse error in an install script otherwise surfaces
+only when somebody runs it -- and one shipped:
+`if (Test-Installed -and (...))` parses as a command invocation, so `status`
+died on any machine where the companion was installed but not configured. The
+Windows job now parses the script with PowerShell's own parser and checks the
+two properties it promises: that invoking it with no verb changes nothing, and
+that `status` reports rather than throwing. It installs nothing.
+
 ## 10. Security limitations this build does not close
 
 * **The device credential is a bearer token.** No device key material, no
@@ -458,7 +481,14 @@ tested; its accepted path against a live provider is manual.
   into control codes -- U+1000D into Enter, U+10009 into Tab. Rather than emit
   surrogate pairs, this build refuses the plane: a capability whose whole point
   is that it cannot reach a control must not also be where the subtlest
-  encoding bug in the codebase lives. Emoji in typed or copied text is refused.
+  encoding bug in the codebase lives. Emoji in typed or copied text is refused,
+  as is an unpaired surrogate, which is not a character at all.
+* **Length limits apply to the normalised string.** Unicode normalisation can
+  *lengthen* text -- U+FB2C becomes three characters -- so a bound on the input
+  is not a bound on what gets sent, and padding that expanded past the secret
+  detector's scan window was a way past the detector. Both are now measured
+  after normalisation, and the detector refuses over-long input rather than
+  scanning a prefix of it.
 
 ## 11. The Session E interface
 
