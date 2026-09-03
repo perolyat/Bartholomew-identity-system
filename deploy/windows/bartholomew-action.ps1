@@ -183,7 +183,7 @@ function Invoke-Install {
     $summary = @"
   * create $Root (if absent)
   * create an isolated Python virtual environment at $VenvPath
-    (backing up any existing one to $VenvBackup first, so `rollback` works)
+    (backing up any existing one to $VenvBackup first, so ``rollback`` works)
   * install Bartholomew and its dependencies INTO THAT ENVIRONMENT ONLY,
     from $RepoRoot -- your system Python is not modified
   * copy companion.env.example to $EnvFile if none exists, readable only by you
@@ -293,7 +293,15 @@ function Invoke-Status {
     Write-Host ("Log:            {0}" -f $(if (Test-Path $LogFile) { $LogFile } else { '(none yet)' }))
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Write-Host ("Starts at logon: {0}" -f $(if ($task) { 'yes' } else { 'no' }))
-    if (Test-Installed -and (Test-Path $EnvFile)) {
+    # Parenthesised, and that is not style. `Test-Installed` has no `param()`
+    # block, so PowerShell parses `Test-Installed -and (...)` as a *command
+    # invocation* -- `-and` and the second test are swallowed into `$args` and
+    # discarded, leaving the condition as `Test-Installed` alone. On a machine
+    # where `install` ran but the configuration was never written, that entered
+    # the branch, `Import-CompanionEnv` threw, and with
+    # `$ErrorActionPreference = 'Stop'` the `status` verb died with a red error
+    # immediately after printing "Config: (none)".
+    if ((Test-Installed) -and (Test-Path $EnvFile)) {
         Write-Host ''
         Write-Host 'Configured capabilities:'
         Import-CompanionEnv

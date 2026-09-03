@@ -122,6 +122,18 @@ class Win32CallError(RuntimeError):
         self.code = code
 
 
+def _last_error() -> int:
+    """The OS error from the most recent foreign call on this thread.
+
+    `ctypes.get_last_error()` rather than `kernel32.GetLastError()`: the latter
+    is itself a call, so anything between the failure and it -- a `sleep`, a
+    `CloseHandle`, another binding -- overwrites the value first. With
+    `use_last_error=True` on the library handles, ctypes captures the error the
+    instant each call returns, and this reads that capture.
+    """
+    return int(ctypes.get_last_error())
+
+
 def is_windows() -> bool:
     return sys.platform == "win32"
 
@@ -168,9 +180,19 @@ class _Libs:
         _require_windows()
         # `windll` exists only on Windows, which `_require_windows` has just
         # established. Three handles, and no mechanism for looking up a fourth.
-        self.user32: Any = ctypes.windll.user32  # type: ignore[attr-defined]
-        self.kernel32: Any = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        self.shell32: Any = ctypes.windll.shell32  # type: ignore[attr-defined]
+        # `use_last_error=True` is what makes the error codes in the audit
+        # trail mean anything. Without it, `GetLastError()` reads the thread's
+        # last error *now* -- and any intervening call overwrites it, so the
+        # retry loop in `_Clipboard.__enter__` reported whatever `Sleep` left
+        # behind rather than why `OpenClipboard` failed. With it, ctypes saves
+        # the error immediately after each foreign call and
+        # `ctypes.get_last_error()` returns that one.
+        #
+        # It matters behaviourally as well as for the audit: `launch_app`
+        # chooses `PERMISSION_DENIED` over `OS_CALL_FAILED` from the code.
+        self.user32: Any = ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+        self.kernel32: Any = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        self.shell32: Any = ctypes.WinDLL("shell32", use_last_error=True)  # type: ignore[attr-defined]
         self._declare()
 
     def _declare(self) -> None:  # pragma: no cover - Windows only
@@ -182,8 +204,6 @@ class _Libs:
         k.CloseHandle.restype = wintypes.BOOL
         k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         k.WaitForSingleObject.restype = wintypes.DWORD
-        k.GetLastError.argtypes = []
-        k.GetLastError.restype = wintypes.DWORD
         k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         k.OpenProcess.restype = wintypes.HANDLE
         k.QueryFullProcessImageNameW.argtypes = [
@@ -201,6 +221,8 @@ class _Libs:
         k.GlobalUnlock.restype = wintypes.BOOL
         k.GlobalSize.argtypes = [wintypes.HGLOBAL]
         k.GlobalSize.restype = ctypes.c_size_t
+        k.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        k.GlobalFree.restype = wintypes.HGLOBAL
         # CreateProcessW's argtypes are declared at its call site, where the
         # two structures it needs are defined.
 
@@ -379,7 +401,7 @@ def start_process(executable_path: str) -> StartedProcess:
         ctypes.byref(info),
     )
     if not created:
-        raise Win32CallError("CreateProcessW", lib.kernel32.GetLastError())
+        raise Win32CallError("CreateProcessW", _last_error())
 
     try:
         # The observation: is it still alive a beat later? A process that
@@ -499,7 +521,7 @@ def visible_windows() -> list[WindowInfo]:
     # somewhere unrelated and at random.
     callback = enum_proc(_callback)
     if not lib.user32.EnumWindows(callback, 0):
-        raise Win32CallError("EnumWindows", lib.kernel32.GetLastError())
+        raise Win32CallError("EnumWindows", _last_error())
     return found
 
 
@@ -550,7 +572,7 @@ def window_rect(hwnd: int) -> tuple[int, int, int, int]:
     _require_windows()
     rect = wintypes.RECT()
     if not _lib().user32.GetWindowRect(int(hwnd), ctypes.byref(rect)):
-        raise Win32CallError("GetWindowRect", _lib().kernel32.GetLastError())
+        raise Win32CallError("GetWindowRect", _last_error())
     return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
 
 
@@ -613,6 +635,19 @@ class _Clipboard:
     A clipboard left open by a crashed handler blocks every other application
     on the machine from using it, which is a far worse failure than the action
     not happening.
+
+    **A documented caveat, and the evidence against it.** `OpenClipboard(NULL)`
+    associates the clipboard with this thread rather than a window, and
+    `EmptyClipboard`'s documentation says that leaves the owner NULL, "which
+    causes `SetClipboardData` to fail". Some clipboard libraries create a
+    throwaway window to avoid it. This build does not, because
+    `tests/integration/test_windows_action_real.py::test_the_real_clipboard_round_trips`
+    performs exactly this sequence against a real Windows runner and the text
+    round-trips -- documentation and observed behaviour disagree here, and the
+    test is the stronger evidence for the platform we actually run on. It is
+    also the guard: if a future Windows build behaves as the documentation
+    describes, that test goes red rather than the capability silently failing
+    for a person.
     """
 
     def __init__(self, retries: int = 5):
@@ -625,7 +660,7 @@ class _Clipboard:
             if lib.user32.OpenClipboard(None):
                 return lib
             time.sleep(0.05 * (attempt + 1))
-        raise Win32CallError("OpenClipboard", lib.kernel32.GetLastError())
+        raise Win32CallError("OpenClipboard", _last_error())
 
     def __exit__(self, *_exc: object) -> None:
         _lib().user32.CloseClipboard()
@@ -686,20 +721,31 @@ def write_clipboard_text(text: str) -> bool:
     size = ctypes.sizeof(buffer)
     with _Clipboard() as lib:
         if not lib.user32.EmptyClipboard():
-            raise Win32CallError("EmptyClipboard", lib.kernel32.GetLastError())
+            raise Win32CallError("EmptyClipboard", _last_error())
         handle = lib.kernel32.GlobalAlloc(GMEM_MOVEABLE, size)
         if not handle:
-            raise Win32CallError("GlobalAlloc", lib.kernel32.GetLastError())
-        pointer = lib.kernel32.GlobalLock(handle)
-        if not pointer:
-            raise Win32CallError("GlobalLock", lib.kernel32.GetLastError())
+            raise Win32CallError("GlobalAlloc", _last_error())
+        # Freed on every path that does not hand it to the clipboard.
+        # Ownership transfers to the system only when `SetClipboardData`
+        # succeeds, so without this a failed write leaked its buffer -- and a
+        # companion that polls forever leaks it on every attempt.
+        owned = True
         try:
-            ctypes.memmove(pointer, buffer, size)
+            pointer = lib.kernel32.GlobalLock(handle)
+            if not pointer:
+                raise Win32CallError("GlobalLock", _last_error())
+            try:
+                ctypes.memmove(pointer, buffer, size)
+            finally:
+                lib.kernel32.GlobalUnlock(handle)
+            if not lib.user32.SetClipboardData(CF_UNICODETEXT, handle):
+                raise Win32CallError("SetClipboardData", _last_error())
+            # The clipboard owns the memory now; freeing it would be a
+            # double free.
+            owned = False
         finally:
-            lib.kernel32.GlobalUnlock(handle)
-        if not lib.user32.SetClipboardData(CF_UNICODETEXT, handle):
-            raise Win32CallError("SetClipboardData", lib.kernel32.GetLastError())
-        # Ownership of the memory passed to the clipboard; it must not be freed.
+            if owned:
+                lib.kernel32.GlobalFree(handle)
         return True
 
 
@@ -815,5 +861,5 @@ def send_unicode_text(text: str) -> int:
     array = (_Input * len(events))(*events)
     sent = lib.user32.SendInput(len(events), array, ctypes.sizeof(_Input))
     if int(sent) != len(events):
-        raise Win32CallError("SendInput", lib.kernel32.GetLastError())
+        raise Win32CallError("SendInput", _last_error())
     return int(sent)

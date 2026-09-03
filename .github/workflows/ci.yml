@@ -237,5 +237,48 @@ jobs:
           tests/test_windows_action_dispatch_results.py
           -p no:cacheprovider
 
+      # The Windows alpha installer. Parsed, never installed -- and the two
+      # things checked here are the two the script promises: that it is inert
+      # until given a verb, and that `status` reports rather than throwing.
+      #
+      # This runs on Windows because there is no PowerShell on the Ubuntu jobs,
+      # and a parse error in an install script otherwise surfaces only when a
+      # person runs it. A real one shipped: `if (Test-Installed -and (...))`
+      # parses as a command invocation, so `status` died on any machine where
+      # the companion was installed but not yet configured.
+      - name: Windows companion script parses and stays inert
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'deploy/windows/bartholomew-action.ps1'),
+            [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) {
+            $errors | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
+          Write-Host 'bartholomew-action.ps1 parses cleanly.'
+
+          # No verb: prints help, changes nothing, exits 0.
+          & ./deploy/windows/bartholomew-action.ps1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::invoking the script with no verb did not exit 0'
+            exit 1
+          }
+
+          # `status` on a machine with nothing installed must report, not throw.
+          & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::`status` failed on a machine with nothing installed'
+            exit 1
+          }
+
+          # Nothing was created. The script is opt-in, and this proves it.
+          if (Test-Path (Join-Path $env:LOCALAPPDATA 'Bartholomew')) {
+            Write-Host '::error::the script created %LOCALAPPDATA%\Bartholomew without a verb'
+            exit 1
+          }
+          Write-Host 'Inert: no verb, no changes.'
+
       - name: Smoke tests
         run: python -m pytest -m smoke -p no:cacheprovider

@@ -30,8 +30,10 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-#: Longest text any capability will consider. Longer input is refused before
-#: it is scanned, so the detector is never a denial-of-service surface.
+#: Longest text this detector will scan. Longer input is **refused** -- it
+#: comes back as an `unscannable_length` finding rather than a clean scan of a
+#: prefix, because a detector that silently ignores everything past a bound is
+#: a detector you get past by padding.
 MAX_SCANNED_CHARS = 4096
 
 
@@ -159,7 +161,15 @@ def detect_secrets(text: str) -> tuple[SecretFinding, ...]:
     """
     if not isinstance(text, str) or not text:
         return ()
-    scanned = text[:MAX_SCANNED_CHARS]
+    if len(text) > MAX_SCANNED_CHARS:
+        # **Refused, not truncated.** Scanning a prefix and returning "nothing
+        # found" for the rest is a detector that can be walked past by padding:
+        # put 4,096 harmless characters in front of a credential and the
+        # credential is never looked at. Every caller bounds its input well
+        # below this, so reaching here means something bypassed a bound -- and
+        # the safe answer to that is a finding, not a clean scan.
+        return (SecretFinding(category="unscannable_length", offset=MAX_SCANNED_CHARS),)
+    scanned = text
     findings: list[SecretFinding] = []
     seen: set[str] = set()
 

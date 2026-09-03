@@ -334,7 +334,7 @@ def _text(raw: dict[str, Any], name: str, *, maximum: int, required: bool = True
     return value
 
 
-def _ordinary_text(value: str, name: str) -> str:
+def _ordinary_text(value: str, name: str, *, maximum: int) -> str:
     """Normalise and refuse anything that is not ordinary printable text.
 
     NFC first, so two spellings of the same accented character are one string
@@ -342,8 +342,34 @@ def _ordinary_text(value: str, name: str) -> str:
     character is refused -- including Enter, Tab and the Unicode line and
     paragraph separators -- because a capability that can type Enter can press
     the button the field is attached to.
+
+    **The length bound is applied to the normalised string, not the input.**
+    NFC can *expand*: U+FB2C becomes three characters, so 1,400 of them are
+    4,200 afterwards. Bounding only the input let a caller past the limit
+    threefold -- and past the secret detector too, which scans a bounded prefix
+    and so never reached a credential that padding had pushed beyond it. The
+    input is bounded as well, by `_text`, so an over-long request is still
+    refused before any normalisation work is done.
     """
     normalised = unicodedata.normalize("NFC", value)
+    if len(normalised) > maximum:
+        raise ParameterError(
+            f"{name!r} is {len(normalised)} characters once normalised (the limit is "
+            f"{maximum}). Unicode normalisation can lengthen a string, and the limit "
+            "applies to what would actually be sent.",
+        )
+    surrogate = next((c for c in normalised if 0xD800 <= ord(c) <= 0xDFFF), None)
+    if surrogate is not None:
+        # A lone surrogate is not a character. It passes the control-character
+        # and astral checks, and then `str.encode("utf-8")` raises -- which,
+        # because `UnicodeEncodeError` is not a `ParameterError`, escaped every
+        # refusal path in the seam and surfaced as a 500 with no audit row.
+        # `json.loads('"\\ud800"')` produces one, so it is reachable from the
+        # wire.
+        raise ParameterError(
+            f"{name!r} contains an unpaired surrogate (U+{ord(surrogate):04X}), which "
+            "is not a character and cannot be encoded.",
+        )
     if not normalised.strip():
         raise ParameterError(f"{name!r} must not be blank")
     if _NEWLINE_OR_TAB.search(normalised):
@@ -657,7 +683,11 @@ def _validate_clipboard_read(raw: dict[str, Any], ctx: ValidationContext) -> Val
 
 def _validate_clipboard_write(raw: dict[str, Any], ctx: ValidationContext) -> ValidatedParameters:
     _closed(raw, ("text",), CapabilityKind.CLIPBOARD_WRITE)
-    text = _ordinary_text(_text(raw, "text", maximum=MAX_CLIPBOARD_CHARS), "text")
+    text = _ordinary_text(
+        _text(raw, "text", maximum=MAX_CLIPBOARD_CHARS),
+        "text",
+        maximum=MAX_CLIPBOARD_CHARS,
+    )
     _refuse_secrets(text, "text")
     canonical = {"text": text}
     return ValidatedParameters(
@@ -670,7 +700,11 @@ def _validate_clipboard_write(raw: dict[str, Any], ctx: ValidationContext) -> Va
 
 def _validate_type_text(raw: dict[str, Any], ctx: ValidationContext) -> ValidatedParameters:
     _closed(raw, ("text",), CapabilityKind.TYPE_TEXT)
-    text = _ordinary_text(_text(raw, "text", maximum=MAX_TYPED_CHARS), "text")
+    text = _ordinary_text(
+        _text(raw, "text", maximum=MAX_TYPED_CHARS),
+        "text",
+        maximum=MAX_TYPED_CHARS,
+    )
     _refuse_secrets(text, "text")
     canonical = {"text": text}
     return ValidatedParameters(
@@ -706,6 +740,7 @@ def _validate_accessibility_action(
     element = _ordinary_text(
         _text(raw, "element_name", maximum=MAX_ELEMENT_NAME_CHARS),
         "element_name",
+        maximum=MAX_ELEMENT_NAME_CHARS,
     )
     final = final_action_reason(element)
     if final is not None:

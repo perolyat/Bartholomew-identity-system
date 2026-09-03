@@ -71,9 +71,19 @@ ACTUATION_PATTERNS: dict[str, int | None] = {
 #: the call, so what is being instantiated is legible.
 CLSID_CUI_AUTOMATION = "{FF48DBA4-60EF-4201-AA87-54103EEF594E}"
 
-_SCROLL_AMOUNT_SMALL_DECREMENT = 0
-_SCROLL_AMOUNT_SMALL_INCREMENT = 2
-_SCROLL_AMOUNT_NO_AMOUNT = 3
+#: UIA's `ScrollAmount` enum, verbatim:
+#: `LargeDecrement=0, SmallDecrement=1, NoAmount=2, LargeIncrement=3,
+#: SmallIncrement=4`.
+#:
+#: These were wrong, and wrongly in a way that looked right: `NoAmount` was 3,
+#: which is `LargeIncrement`, so every call asked for a large *horizontal*
+#: scroll. On a vertically-scrollable-only pane -- the common case --
+#: `IScrollProvider::Scroll` rejects a non-`NoAmount` horizontal request
+#: outright, and the blanket `except` in `perform()` reported that as the
+#: accessibility adapter being unavailable rather than as a bad argument.
+_SCROLL_AMOUNT_SMALL_DECREMENT = 1
+_SCROLL_AMOUNT_SMALL_INCREMENT = 4
+_SCROLL_AMOUNT_NO_AMOUNT = 2
 
 
 class AccessibilityUnavailableError(RuntimeError):

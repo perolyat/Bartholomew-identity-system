@@ -1318,3 +1318,202 @@ def test_the_kept_view_of_a_url_drops_its_query():
     assert "something+personal" not in repr(validated.redacted)
     assert validated.redacted["has_query"] is True
     assert len(validated.redacted["url_sha256"]) == 64
+
+
+# ---------------------------------------------------------------------------
+# 19. Unicode normalisation walked past the length bound and the detector
+# ---------------------------------------------------------------------------
+
+
+def test_normalisation_cannot_expand_text_past_its_limit():
+    """NFC *lengthens* some strings: U+FB2C becomes three characters.
+
+    The bound was applied to the input and the canonical value was the
+    normalised one, so 1,400 of those characters passed a 4,096 limit and came
+    out at 4,200 -- which also pushed anything after them past the secret
+    detector's scan window.
+    """
+    import unicodedata
+
+    expanding = chr(0xFB2C)
+    assert len(unicodedata.normalize("NFC", expanding)) == 3, "the premise"
+
+    padded = expanding * 1400 + " " + "sk" + "_live_" + "ABCDEFGHIJKLMNOPQRSTUV"
+    with pytest.raises(ParameterError) as excinfo:
+        validate(CapabilityKind.CLIPBOARD_WRITE, {"text": padded})
+    assert "once normalised" in str(excinfo.value)
+
+
+def test_the_secret_detector_refuses_over_long_input_rather_than_scanning_a_prefix():
+    """Padding a credential past the scan window is not a way past the detector."""
+    from bartholomew.actuation.sensitive import MAX_SCANNED_CHARS, detect_secrets
+
+    padded = "a" * (MAX_SCANNED_CHARS + 10) + "AKIA" + "IOSFODNN" + "7EXAMPLE"
+    findings = detect_secrets(padded)
+    assert findings, "over-long input is a finding, not a clean scan"
+    assert findings[0].category == "unscannable_length"
+
+
+def test_an_expanding_character_cannot_multiply_the_keystroke_count():
+    """`type_text`'s bound is on what would actually be sent."""
+    with pytest.raises(ParameterError):
+        validate(CapabilityKind.TYPE_TEXT, {"text": chr(0xFB2C) * 1024})
+
+
+# ---------------------------------------------------------------------------
+# 20. An unpaired surrogate crashed the seam with no audit row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", [CapabilityKind.TYPE_TEXT, CapabilityKind.CLIPBOARD_WRITE])
+def test_an_unpaired_surrogate_is_refused_not_raised(kind):
+    """`json.loads('"\\\\ud800"')` produces one, so it is reachable from the wire.
+
+    It passed the control-character and astral checks, and then
+    `text.encode("utf-8")` raised `UnicodeEncodeError` -- which is a
+    `ValueError` but not a `ParameterError`, so it escaped every refusal path
+    and surfaced as a 500 with no Reflection: the same audit-evasion shape as
+    the URL-port escape above.
+    """
+    import json
+
+    lone = json.loads('"ok\\ud800rest"')
+    try:
+        validate(kind, {"text": lone})
+    except ParameterError as e:
+        assert "surrogate" in str(e)
+        return
+    except Exception as e:  # noqa: BLE001 - the point of the test
+        pytest.fail(f"raised {type(e).__name__} instead of ParameterError: {e}")
+    pytest.fail("an unpaired surrogate was accepted")
+
+
+@pytest.mark.asyncio
+async def test_a_surrogate_leaves_a_durable_refusal(db_path):
+    import json
+
+    result = await seam.run_action_request_through_runtime_contract(
+        _Ctx(db_path),
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        requested_by="taylor",
+        capability="windows.type_text",
+        capability_version=1,
+        parameters={"text": json.loads('"ok\\ud800"')},
+        registry=_Registry(_device()),
+    )
+    assert not result.governance_allowed
+    assert result.category is ErrorCategory.PARAMETERS_INVALID
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM reflections WHERE kind = 'action_reflection'",
+        ).fetchone()[0]
+    assert count >= 1
+
+
+# ---------------------------------------------------------------------------
+# 21. The UIA scroll constants named the wrong enum members
+# ---------------------------------------------------------------------------
+
+
+def test_the_scroll_amounts_are_uias_actual_enum_values():
+    """`ScrollAmount` is LargeDecrement=0, SmallDecrement=1, NoAmount=2, ...
+
+    `NoAmount` was 3 -- which is `LargeIncrement` -- so every scroll asked for a
+    large *horizontal* movement. On a vertically-scrollable-only pane, the one
+    that matters, UIA rejects that outright and the blanket handler reported it
+    as the accessibility adapter being unavailable rather than a bad argument.
+    """
+    from bartholomew.windows_actuation import uia
+
+    assert uia._SCROLL_AMOUNT_SMALL_DECREMENT == 1
+    assert uia._SCROLL_AMOUNT_NO_AMOUNT == 2
+    assert uia._SCROLL_AMOUNT_SMALL_INCREMENT == 4
+    # And a scroll asks for no horizontal movement at all.
+    assert uia._SCROLL_AMOUNT_NO_AMOUNT != uia._SCROLL_AMOUNT_SMALL_INCREMENT
+
+
+# ---------------------------------------------------------------------------
+# 22. OS error codes, and the clipboard buffer
+# ---------------------------------------------------------------------------
+
+
+def test_os_error_codes_are_captured_by_ctypes_not_read_back_later():
+    """`GetLastError()` is itself a call, so anything in between overwrites it.
+
+    The clipboard retry loop slept between the failing `OpenClipboard` and the
+    read, so the code in the audit row was whatever `Sleep` left behind -- and
+    `launch_app` chooses `PERMISSION_DENIED` over `OS_CALL_FAILED` from that
+    code.
+    """
+    source = Path("bartholomew/windows_actuation/win32.py").read_text(encoding="utf-8")
+    assert 'ctypes.WinDLL("user32", use_last_error=True)' in source
+    assert 'ctypes.WinDLL("kernel32", use_last_error=True)' in source
+    assert 'ctypes.WinDLL("shell32", use_last_error=True)' in source
+    assert "ctypes.get_last_error()" in source
+    # No live call to the API version remains.
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            assert node.func.attr != "GetLastError", "read the captured error, not a fresh call"
+
+
+def test_a_failed_clipboard_write_frees_its_buffer():
+    """Ownership transfers to the system only when `SetClipboardData` succeeds.
+
+    Without a `GlobalFree` on the failure paths, a companion that polls forever
+    leaked the buffer on every failed write.
+    """
+    source = Path("bartholomew/windows_actuation/win32.py").read_text(encoding="utf-8")
+    assert "GlobalFree" in source
+    assert "lib.kernel32.GlobalFree(handle)" in source
+    # And it is not called on the success path, which would be a double free.
+    assert "owned = False" in source
+
+
+# ---------------------------------------------------------------------------
+# 23. The Windows installer's two PowerShell bugs
+# ---------------------------------------------------------------------------
+
+
+def test_the_installer_parenthesises_its_command_call_in_a_boolean():
+    """`if (Test-Installed -and (...))` parses as a *command invocation*.
+
+    `-and` and the second test are swallowed into `$args` and discarded, so the
+    condition reduced to `Test-Installed` alone -- and `status` then threw on
+    any machine where the companion was installed but never configured.
+    """
+    script = Path("deploy/windows/bartholomew-action.ps1").read_text(encoding="utf-8")
+    assert "if ((Test-Installed) -and (Test-Path $EnvFile))" in script
+    assert "if (Test-Installed -and" not in script
+
+
+def test_no_here_string_contains_an_accidental_escape():
+    """A backtick in a double-quoted here-string is an escape, not a quote.
+
+    `` `rollback` `` rendered as a carriage return followed by `ollback``,
+    corrupting the consent text a person is shown before approving an install.
+    """
+    import re
+
+    script = Path("deploy/windows/bartholomew-action.ps1").read_text(encoding="utf-8")
+    inside_here_string = False
+    for number, line in enumerate(script.splitlines(), start=1):
+        if line.strip().endswith('@"'):
+            inside_here_string = True
+            continue
+        if line.strip() == '"@':
+            inside_here_string = False
+            continue
+        if not inside_here_string:
+            continue
+        # `` is an escaped backtick and is fine; a lone one before a letter
+        # PowerShell recognises is not.
+        stripped = line.replace("``", "")
+        risky = re.search(r"`[rnt0abfve]", stripped)
+        assert risky is None, (
+            f"line {number} of the installer has a live escape inside a here-string: "
+            f"{line.strip()!r}"
+        )
