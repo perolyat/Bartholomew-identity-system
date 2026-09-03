@@ -19,10 +19,15 @@ Evidence
 --------
 `ActionResult.evidence` is a small, bounded, non-sensitive dictionary -- the
 window handle that was focused, the process id that appeared, the digest of the
-text that was written. It is what an audit reads. It never contains clipboard
-content, typed text, a document's contents or anything read off the screen:
-`bounded_evidence()` enforces the bound and the key allowlist rather than
-trusting each handler to remember.
+text that was written. It is what an audit reads.
+
+`bounded_evidence()` enforces a **key allowlist** as well as a size bound, and
+it runs on the server over whatever a device sent, so it is a boundary rather
+than a convenience: a device cannot put typed text, a document's contents or
+anything read off the screen into a durable row by inventing a key for it. The
+single content-bearing name on the allowlist is `text`, which
+`windows.clipboard_read` fills only when a device operator has explicitly opted
+in to the clipboard's contents leaving the machine at all.
 """
 
 from __future__ import annotations
@@ -38,6 +43,60 @@ MAX_EVIDENCE_VALUE_CHARS = 200
 
 #: Most evidence keys one result may carry.
 MAX_EVIDENCE_KEYS = 12
+
+#: The complete set of evidence keys any handler may emit.
+#:
+#: A **key allowlist**, not just a size bound, and the difference matters: a
+#: compromised or impersonating device -- which is the threat the device-side
+#: checks exist for -- would otherwise be able to POST twelve keys of screen or
+#: clipboard content to the result endpoint and have every character written
+#: into `windows_action_results`, a table nothing ever deletes from. Bounding
+#: the *size* of arbitrary content is not the same as refusing content.
+#:
+#: Every name here is a fact about what happened, never a piece of what was
+#: read or typed. `text` is deliberately present and deliberately the only
+#: content-bearing one: `windows.clipboard_read` may return the clipboard, and
+#: only when a device operator has explicitly turned that on. Everything else
+#: is a handle, a count, a code, a boolean or a digest.
+PERMITTED_EVIDENCE_KEYS: frozenset[str] = frozenset(
+    {
+        # what was targeted
+        "app_id",
+        "hwnd",
+        "process_id",
+        "operation",
+        "url_host",
+        "suffix",
+        "is_directory",
+        # what was observed
+        "window_observed",
+        "window_count",
+        "foreground_hwnd",
+        "minimized",
+        "maximized",
+        "left",
+        "top",
+        "width",
+        "height",
+        "clamped",
+        "has_text",
+        "text_length",
+        "text_sha256",
+        "events_sent",
+        "field_readable",
+        "control_type",
+        "sensitive",
+        "sensitive_categories",
+        "content_returned",
+        # what the OS said
+        "shell_execute_code",
+        "create_process_error",
+        # the one content-bearing key, off by default; see above
+        "text",
+        # set by `bounded_evidence` itself when it drops something
+        "dropped_keys",
+    },
+)
 
 
 class ActionResultStatus(str, Enum):
@@ -123,25 +182,37 @@ class ErrorCategory(str, Enum):
 def bounded_evidence(raw: Any) -> dict[str, Any]:
     """Coerce a handler's evidence into something safe to store.
 
-    Three rules, applied here rather than trusted to each handler:
+    Four rules, applied here rather than trusted to each handler -- and to
+    every *device*, which is the point: this function runs on the server, over
+    whatever a device POSTed, so it is the enforcement boundary and not a
+    convenience for well-behaved callers.
 
-    1. Only `str`, `int`, `float`, `bool` and `None` values survive. A nested
-       structure is rendered to a bounded string, so a handler cannot smuggle
-       a document out inside a list.
-    2. Every rendered value is truncated to `MAX_EVIDENCE_VALUE_CHARS`.
-    3. At most `MAX_EVIDENCE_KEYS` keys, sorted, so the row size is bounded no
-       matter what a handler does.
+    1. **A key allowlist.** Anything not in `PERMITTED_EVIDENCE_KEYS` is
+       dropped, and `dropped_keys` records that it was, so a device stuffing
+       screen content into a made-up key gets nothing stored and leaves a trace
+       of having tried.
+    2. Only `str`, `int`, `float`, `bool` and `None` values survive. A nested
+       structure is rendered to a bounded string, so nothing can be smuggled
+       out inside a list.
+    3. Every rendered value is truncated to `MAX_EVIDENCE_VALUE_CHARS`.
+    4. At most `MAX_EVIDENCE_KEYS` keys, so the row size is bounded whatever
+       arrives.
 
-    Nothing here redacts *meaning*: a handler must not put content in evidence
-    in the first place, and `tests/test_windows_action_dispatch_results.py`
-    asserts the specific keys each handler emits.
+    Nothing here redacts *meaning* within a permitted key -- that is the
+    allowlist's job, and it is why `text` is the only content-bearing name on
+    it.
     """
     if not isinstance(raw, dict):
         return {}
     out: dict[str, Any] = {}
+    dropped: list[str] = []
     for key in sorted(str(k) for k in raw):
+        if key not in PERMITTED_EVIDENCE_KEYS or key == "dropped_keys":
+            dropped.append(key[:64])
+            continue
         if len(out) >= MAX_EVIDENCE_KEYS:
-            break
+            dropped.append(key[:64])
+            continue
         value = raw[key] if key in raw else raw.get(key)
         if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
             out[key[:64]] = value
@@ -154,6 +225,11 @@ def bounded_evidence(raw: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             rendered = repr(value)
         out[key[:64]] = rendered[:MAX_EVIDENCE_VALUE_CHARS]
+    if dropped:
+        # The names only -- never the values, which are the thing being
+        # refused. Truncated so a device cannot make this the smuggling
+        # channel by putting content in the key.
+        out["dropped_keys"] = ",".join(sorted(dropped))[:MAX_EVIDENCE_VALUE_CHARS]
     return out
 
 

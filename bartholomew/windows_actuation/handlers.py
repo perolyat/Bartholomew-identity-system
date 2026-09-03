@@ -34,6 +34,7 @@ from typing import Any
 from bartholomew.actuation.allowlists import AllowlistError
 from bartholomew.actuation.capabilities import CapabilityKind
 from bartholomew.actuation.parameters import (
+    EXECUTABLE_EXTENSIONS,
     ParameterError,
     SensitiveContentError,
     ValidationContext,
@@ -223,6 +224,15 @@ def open_path(params: Any, ctx: HandlerContext) -> HandlerOutcome:
 
     # Re-checked immediately before the call rather than only in the validator:
     # the file may have been deleted, or replaced by a link, in between.
+    #
+    # **Every check the validator made on the resolved path is made again**,
+    # not just containment. `require_within` re-resolves symlinks and junctions
+    # from scratch, so the second resolution can land somewhere the first did
+    # not -- and an attacker who can write into an allowlisted root and win the
+    # window between the two would otherwise have turned "open a document" into
+    # `ShellExecuteW("open", "...\\payload.exe")`. That swap is exactly the
+    # "replaced by a link" case this re-check exists for, so it has to test
+    # what the link now points at and not only where it lives.
     try:
         resolved = ctx.config.filesystem_roots.require_within(path)
     except AllowlistError as e:
@@ -231,6 +241,14 @@ def open_path(params: Any, ctx: HandlerContext) -> HandlerOutcome:
         return HandlerOutcome.failed(
             ErrorCategory.TARGET_NOT_FOUND,
             "the path no longer exists",
+        )
+    suffix = Path(resolved).suffix.lower()
+    if suffix in EXECUTABLE_EXTENSIONS:
+        return HandlerOutcome.refused(
+            ErrorCategory.PARAMETERS_INVALID,
+            f"the path now resolves to {suffix!r}, an executable or script extension. "
+            "Opening one runs it, and this capability opens documents and folders "
+            "only.",
         )
 
     try:

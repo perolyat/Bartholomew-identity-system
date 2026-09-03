@@ -41,6 +41,7 @@ from enum import Enum
 from typing import Any
 
 from .capabilities import (
+    IDEMPOTENT_ELIGIBLE,
     ApprovalRequirement,
     CapabilityKind,
     RiskClass,
@@ -282,6 +283,20 @@ def build_request(
             f"{repeatability!r} is not a repeatability mode; the permitted modes are "
             f"{[m.value for m in Repeatability]}",
         ) from e
+    if mode is Repeatability.IDEMPOTENT and descriptor.kind not in IDEMPOTENT_ELIGIBLE:
+        # Refused, not quietly downgraded. `idempotent` relaxes the server's
+        # one-lease guard *and* is what the device's durable ledger checks
+        # before refusing a repeat, so a caller who could set it on
+        # `windows.type_text` could have one human approval spend itself twice.
+        # A caller that asked for it on an ineligible capability has
+        # misunderstood something, and should be told so rather than served a
+        # different action than the one it asked for.
+        raise RequestError(
+            f"{descriptor.kind.value} may not be declared idempotent: performing it "
+            "twice is not the same as performing it once. Only "
+            f"{sorted(k.value for k in IDEMPOTENT_ELIGIBLE)} may be, and everything "
+            "else runs at most once.",
+        )
 
     ttl = DEFAULT_TTL_SECONDS if ttl_seconds is None else int(ttl_seconds)
     if not (1 <= ttl <= MAX_TTL_SECONDS):
@@ -340,6 +355,15 @@ def rebuild_request(
         raise RequestError(
             f"stored repeatability {stored.get('repeatability')!r} is not a mode",
         ) from e
+    if mode is Repeatability.IDEMPOTENT and descriptor.kind not in IDEMPOTENT_ELIGIBLE:
+        # A stored row claiming idempotence for a capability that is not
+        # eligible predates the rule, or was written by something that should
+        # not have. Either way it does not get the relaxed lease guard: the
+        # row is read back as what it actually is.
+        raise RequestError(
+            f"the stored action declares {descriptor.kind.value} idempotent, which is "
+            "not permitted; it will not be dispatched under a relaxed replay guard",
+        )
     return ActionRequest(
         action_id=_identifier(stored.get("action_id"), "action_id"),
         tenant_id=_identifier(stored.get("tenant_id"), "tenant_id"),

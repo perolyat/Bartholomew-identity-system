@@ -149,6 +149,58 @@ async def _validated_body(request: Request, model: type[BaseModel]) -> Any:
         raise HTTPException(422, f"Invalid request: {e}") from e
 
 
+def _existing_summary(action: Any) -> dict[str, Any]:
+    """The minimum that identifies an action that already exists.
+
+    Enough for a caller to recognise its own re-submission and go and read the
+    record properly; not enough to be a read surface in its own right.
+    """
+    return {
+        "action_id": action.action_id,
+        "tenant_id": action.tenant_id,
+        "state": action.state.value,
+        "status": action.status.value,
+    }
+
+
+def _approval_summary(action: Any) -> dict[str, Any]:
+    """What an approver needs beside the parameters: the power, and its risk.
+
+    The capability descriptor's `summary` describes what the *capability* can
+    do, not what this request asks for, so it stays true whatever the
+    parameters say -- and it sits next to the canonical parameters, which say
+    exactly what this request asks for. Between them an approver can answer
+    both questions a decision needs: what am I allowing, and what will it do.
+    """
+    from bartholomew.actuation.capabilities import (
+        UnsupportedCapabilityError,
+        describe,
+        parse_kind,
+    )
+
+    try:
+        descriptor = describe(parse_kind(action.capability))
+    except UnsupportedCapabilityError:
+        # A stored row naming a capability this build no longer implements. It
+        # can never be dispatched, and the summary says so rather than leaving
+        # a reader to infer it from an absence.
+        return {
+            "capability": action.capability,
+            "summary": (
+                "This build does not implement this capability, so this action can never run."
+            ),
+            "risk_class": action.risk_class,
+            "approval_requirement": action.approval_requirement,
+        }
+    return {
+        "capability": descriptor.kind.value,
+        "summary": descriptor.summary,
+        "risk_class": descriptor.risk.value,
+        "approval_requirement": descriptor.approval.value,
+        "trusted_autonomy_eligible": descriptor.trusted_autonomy_eligible,
+    }
+
+
 def _kernel_or_503() -> Any:
     """The running kernel, or an honest refusal.
 
@@ -184,34 +236,84 @@ def _tenant(request: Request) -> str:
 
 def _status_code(result: seam.ActionSeamResult, *, created: bool) -> int:
     if result.governance_allowed:
-        return 201 if created else 200
+        if not created:
+            return 200
+        if result.existing:
+            # A re-submission of an id that already exists. 201 would tell a
+            # client keying on the status code -- which is the documented
+            # contract -- that it has a fresh pending action to wait on. If the
+            # existing one has already finished, that client waits forever for
+            # an approval prompt that will never come; and on a `succeeded`
+            # row, "nothing has run" is simply false.
+            return 409 if result.action is not None and result.action.terminal else 200
+        return 201
     if result.category in _UNPROCESSABLE:
         return 422
     if result.category in _CONFLICT:
         return 409
-    if result.category is ErrorCategory.PARKING_BRAKE:
+    if result.category in (ErrorCategory.PARKING_BRAKE, ErrorCategory.INTERNAL_ERROR):
+        # Both are "come back later", and both are 503. An internal error here
+        # is a persistence failure -- the same underlying condition that
+        # reaches `ActionPersistenceError` elsewhere in this file and is
+        # answered 503 there. Answering it 500 instead was inconsistent, and
+        # 500 is not in this module's own status table.
         return 503
-    if result.category is ErrorCategory.INTERNAL_ERROR:
-        return 500
     return 403
 
 
+#: What each outcome actually is, said in the response rather than only in the
+#: docs. The default used to be "Recorded." for everything, so a 403 for an
+#: unenrolled device -- which deliberately writes no action row at all -- came
+#: back saying it had been recorded. That is precisely the "acknowledgement
+#: never outruns what actually happened" invariant this module opens with.
+_ACCEPTED_DETAIL = (
+    "Recorded. Nothing has been dispatched to any device: the target device must "
+    "separately request it over its own authenticated channel, at which point every "
+    "governance check runs again."
+)
+_EXISTING_DETAIL = (
+    "An action with this id already exists. Nothing was created, and the recorded "
+    "action is returned unchanged."
+)
+_REFUSED_DETAIL = "Refused by Governance. Nothing was dispatched, and no new action was created."
+
+
 def _body(result: seam.ActionSeamResult) -> dict[str, Any]:
+    if not result.governance_allowed:
+        detail = _REFUSED_DETAIL
+    elif result.existing:
+        detail = _EXISTING_DETAIL
+    else:
+        detail = _ACCEPTED_DETAIL
     payload: dict[str, Any] = {
         "status": result.status.value,
         "governance_allowed": result.governance_allowed,
-        "action": result.action.as_dict() if result.action is not None else None,
-        # Said plainly in the response itself, not only in the docs.
-        "detail": (
-            "Recorded. Nothing has been dispatched to any device: the target device "
-            "must separately request it over its own authenticated channel, at which "
-            "point every governance check runs again."
+        # A re-submission is answered with the minimum that identifies what
+        # already exists. The full record is `GET /api/actions/{id}`, which
+        # requires `action:read` -- a capability deliberately split from
+        # `action:request`, and returning the whole row from the write verb
+        # would have let a holder of the latter alone poll it to watch who
+        # approved what and when.
+        "action": (
+            _existing_summary(result.action)
+            if (result.existing and result.action is not None)
+            else (result.action.as_dict() if result.action is not None else None)
         ),
+        "detail": detail,
     }
     if result.category is not None:
         payload["error_category"] = result.category.value
     if result.reason:
-        payload["reason"] = result.reason
+        # An internal error's reason is the driver's own message, which for
+        # sqlite3 routinely embeds the database file path. Logged, never
+        # returned: a caller needs to know it can retry, not where the file is.
+        if result.category is ErrorCategory.INTERNAL_ERROR:
+            logger.error("A governed action failed internally: %s", result.reason)
+            payload["reason"] = (
+                "the action could not be recorded; nothing changed and it is safe to retry"
+            )
+        else:
+            payload["reason"] = result.reason
     if result.provenance_degraded:
         # The row exists, so this is not a failed decision -- but it is not a
         # fully recorded one either, and the caller is told so.
@@ -282,6 +384,11 @@ async def list_actions(request: Request, limit: int = 50, offset: int = 0) -> An
     db_path = getattr(getattr(kernel, "mem", None), "db_path", None) or resolve_db_path()
     tenant = _tenant(request)
     try:
+        # Housekeeping on the path a person actually visits, as well as on the
+        # request path. The sweep is what purges the cleartext parameters of an
+        # action that expired unapproved, and a deployment whose device channel
+        # is closed -- the shipped default -- reaches it nowhere else.
+        store.expire_overdue(db_path, tenant_id=tenant)
         return {
             "tenant_id": tenant,
             "actions": store.recent_actions(
@@ -297,7 +404,21 @@ async def list_actions(request: Request, limit: int = 50, offset: int = 0) -> An
 
 @router.get("/{action_id}")
 async def read_action(action_id: str, request: Request) -> Any:
-    """One action, its state, and every result recorded against it."""
+    """One action, its state, its results -- and what it would actually do.
+
+    **This is the approval surface, and it returns the canonical parameters.**
+    The list endpoint returns the redacted view, and every durable record --
+    the stored row's audit column, the Reflection, the evidence row -- keeps
+    only a digest and a length. But a person cannot approve text they have not
+    read, and an approval bound to a digest the approver never saw expanded is
+    an approval in name only. For `windows.type_text` that is the whole
+    decision.
+
+    So the text is disclosed here, transiently, to one authenticated request
+    holding `action:read`, and nowhere else. That is the trade this design
+    makes deliberately: an authorised reader sees it, and no second durable
+    copy of it is written down.
+    """
     from bartholomew.actuation import store
 
     kernel = _kernel_or_503()
@@ -308,8 +429,9 @@ async def read_action(action_id: str, request: Request) -> Any:
         if action is None:
             raise HTTPException(404, "No such action in this tenant.")
         return {
-            "action": action.as_dict(),
+            "action": action.as_dict(include_parameters=True),
             "results": store.results_for(db_path, tenant_id=tenant, action_id=action_id),
+            "approval_summary": _approval_summary(action),
         }
     except ActionPersistenceError as e:
         raise HTTPException(503, str(e)) from e

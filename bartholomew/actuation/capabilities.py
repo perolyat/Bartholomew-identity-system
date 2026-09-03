@@ -130,6 +130,19 @@ class CapabilityDescriptor:
     #: One sentence an approver can read. Shown on the approval surface; it is
     #: the description of the *power*, never of a particular request.
     summary: str
+    #: Whether performing this action twice has the same effect as performing
+    #: it once. **Almost nothing is.** Launching an application twice is two
+    #: applications; typing text twice is the text twice; opening a URL twice
+    #: is two tabs. Only the two pure state-setting capabilities qualify:
+    #: focusing an already-focused window, or maximising an already-maximised
+    #: one, changes nothing the second time.
+    #:
+    #: This is what decides an action's `Repeatability`, and it is decided
+    #: here rather than by the caller. A caller-chosen value would be a field
+    #: on the wire that switches off *both* replay defences at once -- the
+    #: server's one-lease guard and the device's durable executed-ledger --
+    #: which would let one human approval be spent twice.
+    idempotent_eligible: bool = False
 
     @property
     def trusted_autonomy_eligible(self) -> bool:
@@ -174,6 +187,7 @@ _DESCRIPTORS: dict[CapabilityKind, CapabilityDescriptor] = {
     CapabilityKind.FOCUS_WINDOW: CapabilityDescriptor(
         kind=CapabilityKind.FOCUS_WINDOW,
         version=CURRENT_CAPABILITY_VERSION,
+        idempotent_eligible=True,
         risk=RiskClass.LOW,
         approval=ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE,
         summary=(
@@ -185,6 +199,7 @@ _DESCRIPTORS: dict[CapabilityKind, CapabilityDescriptor] = {
     CapabilityKind.MANAGE_WINDOW: CapabilityDescriptor(
         kind=CapabilityKind.MANAGE_WINDOW,
         version=CURRENT_CAPABILITY_VERSION,
+        idempotent_eligible=True,
         risk=RiskClass.LOW,
         approval=ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE,
         summary=(
@@ -251,6 +266,12 @@ TRUSTED_AUTONOMY_ELIGIBLE: frozenset[CapabilityKind] = frozenset(
 #: The kinds that require a per-action approval no configuration can remove.
 ALWAYS_APPROVAL: frozenset[CapabilityKind] = frozenset(
     kind for kind, d in _DESCRIPTORS.items() if d.approval is ApprovalRequirement.ALWAYS
+)
+
+#: The kinds a caller may declare idempotent. Everything else runs at most
+#: once, whatever a request asks for -- see `CapabilityDescriptor`.
+IDEMPOTENT_ELIGIBLE: frozenset[CapabilityKind] = frozenset(
+    kind for kind, d in _DESCRIPTORS.items() if d.idempotent_eligible
 )
 
 

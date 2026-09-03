@@ -18,6 +18,7 @@ substitutes nothing.
 
 from __future__ import annotations
 
+import sys
 from datetime import timedelta
 
 import pytest
@@ -336,12 +337,28 @@ def test_a_process_that_exited_immediately_is_a_failure_not_a_launch(
     assert "already exited" in outcome.detail
 
 
-def test_a_missing_executable_is_a_failure_before_any_call(ctx, monkeypatch):
+def test_a_missing_executable_is_a_failure_before_any_call(config, monkeypatch, tmp_path):
+    """An allowlisted path that is not on the disk. Refused before any call.
+
+    The allowlist points somewhere that cannot exist on *either* platform.
+    Pointing it at `C:\\Windows\\System32\\notepad.exe` -- as this did -- made
+    the test pass on Linux for the wrong reason and then really launch Notepad
+    on the Windows runner, where the file is exactly where the allowlist said.
+    """
+    from dataclasses import replace
+
+    absent = tmp_path / "not-installed" / "ghost.exe"
+    ctx = HandlerContext(
+        config=replace(
+            config,
+            applications=ApplicationAllowlist.from_pairs({"notepad": str(absent)}),
+        ),
+    )
     called = []
     monkeypatch.setattr(win32, "start_process", lambda p: called.append(p))
     outcome = handlers_module.launch_app({"app_id": "notepad"}, ctx)
     assert outcome.error_category is ErrorCategory.TARGET_NOT_FOUND
-    assert called == []
+    assert called == [], "the process starter was never reached"
 
 
 def test_focus_reports_success_only_when_the_foreground_reads_back(ctx, monkeypatch):
@@ -678,8 +695,22 @@ def test_accessibility_reports_the_adapters_own_refusal_truthfully(ctx, monkeypa
     assert "guessed" in outcome.detail
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "this asserts the platform guard, which by definition does not fire on "
+        "Windows -- where the handlers genuinely work and are covered instead by "
+        "tests/integration/test_windows_action_real.py"
+    ),
+)
 def test_every_handler_refuses_cleanly_off_windows(ctx, state):
-    """No handler crashes, and none claims success, on a machine it cannot act on."""
+    """No handler crashes, and none claims success, on a machine it cannot act on.
+
+    Skipped on Windows, where the premise is false: `launch_app` really does
+    launch, which is the point of the capability. Running it there asserted
+    that a working handler had failed -- and started a real Notepad on the CI
+    runner to do it.
+    """
     parameters = {
         CapabilityKind.OPEN_URL: {"url": "https://example.com/x"},
         CapabilityKind.OPEN_PATH: {"path": str(ctx.config.filesystem_roots.roots[0])},

@@ -354,6 +354,33 @@ def _ordinary_text(value: str, name: str) -> str:
         )
     if _CONTROL_CHARACTERS.search(normalised):
         raise ParameterError(f"{name!r} may not contain control characters")
+    astral = next((c for c in normalised if ord(c) > 0xFFFF), None)
+    if astral is not None:
+        # Refusing the whole plane, and this is not fussiness about emoji.
+        #
+        # Win32's `KEYBDINPUT.wScan` is a 16-bit field and `ctypes` *truncates*
+        # rather than raising, so a character above U+FFFF arrives at the
+        # operating system as its low sixteen bits. U+1000D becomes 0x000D --
+        # Enter. U+10009 becomes Tab. Every refusal above this line, and the
+        # whole "cannot press Send" property, is defeated by one character that
+        # looks like an ancient syllabary and types a carriage return.
+        #
+        # The correct way to type an astral character is a surrogate pair, and
+        # this build deliberately does not: a capability whose entire point is
+        # that it cannot reach a control cannot also be the place where the
+        # subtlest encoding bug in the codebase lives. The digest an approver
+        # binds to must be the text the OS receives, and only the Basic
+        # Multilingual Plane guarantees that here.
+        #
+        # `windows_actuation/win32.py:send_unicode_text` refuses the same thing
+        # again immediately before the call, so this is not the only fence.
+        raise ParameterError(
+            f"{name!r} contains {astral!r} (U+{ord(astral):04X}), which is outside the "
+            "Basic Multilingual Plane. Windows carries a typed character in a 16-bit "
+            "field, so such a character would arrive truncated -- and some of them "
+            "truncate to Enter or Tab. It is refused rather than sent as something "
+            "other than what was approved.",
+        )
     return normalised
 
 
@@ -400,7 +427,16 @@ def _validate_open_url(raw: dict[str, Any], ctx: ValidationContext) -> Validated
         )
     if not parts.hostname:
         raise ParameterError("the URL has no host")
-    if parts.port is not None and not (1 <= parts.port <= 65535):
+    try:
+        # `urlsplit(...).port` is a property that raises a *bare* `ValueError`
+        # for a non-numeric or out-of-range port. `ParameterError` subclasses
+        # `ValueError`, so an uncaught one here escaped every refusal path in
+        # the seam and surfaced as a 500 with no Reflection written -- which
+        # let an allowlist-probing caller avoid the audit trail entirely.
+        port = parts.port
+    except ValueError as e:
+        raise ParameterError(f"the URL's port could not be read: {e}") from e
+    if port is not None and not (1 <= port <= 65535):
         raise ParameterError("the URL port is out of range")
 
     try:
@@ -411,7 +447,7 @@ def _validate_open_url(raw: dict[str, Any], ctx: ValidationContext) -> Validated
     # Rebuilt from the parsed parts rather than passed through, so what is
     # approved and what is opened are the same string and no encoding trick
     # survives the round trip.
-    authority = host if parts.port is None else f"{host}:{parts.port}"
+    authority = host if port is None else f"{host}:{port}"
     canonical_url = f"{scheme}://{authority}{parts.path or '/'}"
     if parts.query:
         canonical_url += f"?{parts.query}"
@@ -420,11 +456,32 @@ def _validate_open_url(raw: dict[str, Any], ctx: ValidationContext) -> Validated
     if len(canonical_url) > MAX_URL_CHARS:
         raise ParameterError("the canonical URL exceeds the length limit")
 
+    # The same detector `type_text` and `clipboard_write` use. A URL is not
+    # obviously "text somebody typed", which is why this was missed -- but
+    # `https://host/callback?access_token=...` is a credential travelling
+    # through a field this capability opens in a browser and writes into an
+    # audit row, and refusing embedded userinfo while waving through a token in
+    # the query was a distinction without a difference.
+    _refuse_secrets(canonical_url, "url")
+
     canonical = {"url": canonical_url}
+    # **The redacted view drops the query and the fragment.** That view is the
+    # one kept for the life of the database -- no code path ever nulls
+    # `parameters_redacted_json` -- so it must be the form that is safe to keep
+    # forever, and a query string is where a URL carries its content. The
+    # digest still ties the audit row to the exact URL that was approved.
+    redacted: dict[str, Any] = {
+        "url": f"{scheme}://{authority}{parts.path or '/'}",
+        "host": host,
+        "url_sha256": hashlib.sha256(canonical_url.encode("utf-8")).hexdigest(),
+    }
+    if parts.query or parts.fragment:
+        redacted["has_query"] = True
     return ValidatedParameters(
         kind=CapabilityKind.OPEN_URL,
         canonical=canonical,
-        redacted={"url": canonical_url, "host": host},
+        redacted=redacted,
+        sensitive_keys=frozenset({"url"}) if (parts.query or parts.fragment) else frozenset(),
     )
 
 

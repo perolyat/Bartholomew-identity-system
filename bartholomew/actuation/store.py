@@ -43,12 +43,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
 from bartholomew.kernel.db_ctx import wal_db
 
+from .request import parse_iso, to_iso
 from .result import ActionResult, ActionResultStatus, ErrorCategory
 
 ACTION_SCHEMA = """
@@ -105,6 +106,12 @@ CREATE INDEX IF NOT EXISTS idx_windows_action_results_recorded
 #: Most times an idempotent action may be leased. Bounded so an idempotent
 #: action cannot become an unbounded retry loop against the same machine.
 MAX_IDEMPOTENT_LEASES = 3
+
+#: How long past its expiry a *leased* action is left alone before it is
+#: recorded as `unknown`. A device that took an action needs room to finish it
+#: and report; sweeping it the instant its window closed cancelled actions
+#: underneath the devices that were running them.
+LEASE_GRACE_SECONDS = 300
 
 
 class ActionPersistenceError(RuntimeError):
@@ -277,6 +284,20 @@ def _row(row: tuple[Any, ...]) -> StoredAction:
     )
 
 
+def _is_missing_table(error: sqlite3.OperationalError) -> bool:
+    """Whether this is "the table does not exist yet" and nothing worse.
+
+    `sqlite3.OperationalError` covers a missing table *and* `unable to open
+    database file`, `disk I/O error` and `attempt to write a readonly
+    database`. Treating them alike made the inspection surface answer
+    `200 {"actions": []}` -- indistinguishable from "this tenant has never
+    requested anything" -- for a database the process could not read at all.
+    A halt must not hide what Bartholomew was about to do, and neither must a
+    broken disk.
+    """
+    return "no such table" in str(error).lower()
+
+
 def ensure_schema(db_path: str) -> None:
     """Create the action tables if they do not exist. Idempotent."""
     try:
@@ -332,7 +353,11 @@ def recent_actions(
                 "WHERE tenant_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
                 (tenant_id, int(limit), int(offset)),
             ).fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as e:
+        if not _is_missing_table(e):
+            raise ActionPersistenceError(
+                f"the action list could not be read: {type(e).__name__}: {e}",
+            ) from e
         # The table does not exist yet: nothing has ever been requested.
         return []
     except sqlite3.Error as e:
@@ -353,7 +378,11 @@ def results_for(db_path: str, *, tenant_id: str, action_id: str) -> list[dict[st
                 "WHERE tenant_id = ? AND action_id = ? ORDER BY id ASC",
                 (tenant_id, action_id),
             ).fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as e:
+        if not _is_missing_table(e):
+            raise ActionPersistenceError(
+                f"results for {action_id} could not be read: {type(e).__name__}: {e}",
+            ) from e
         return []
     except sqlite3.Error as e:
         raise ActionPersistenceError(
@@ -384,8 +413,14 @@ def create_action(
     canonical_parameters: dict[str, Any],
     state: ActionState,
     state_reason: str | None = None,
-) -> StoredAction:
+) -> tuple[StoredAction, bool]:
     """Insert one action, or report the existing one for that (tenant, action_id).
+
+    Returns `(action, created)`. `created=False` means the row already existed
+    and this call changed nothing -- which the caller needs to know, because a
+    re-submission that lands on a finished action is a very different answer
+    from a fresh one, and reporting both as "created" told clients to wait for
+    an approval prompt that was never coming.
 
     An existing row is **not** overwritten. Re-submitting the same `action_id`
     is a retry of a request, and a retry must land on what already exists --
@@ -445,7 +480,7 @@ def create_action(
                 ).fetchone()
                 if row is None:  # pragma: no cover - the constraint just fired
                     raise
-                return _row(row)
+                return _row(row), False
             row = conn.execute(
                 f"SELECT {_COLUMNS} FROM windows_action_requests WHERE id = ?",  # noqa: S608
                 (cur.lastrowid,),
@@ -456,7 +491,7 @@ def create_action(
         ) from e
     if row is None:  # pragma: no cover - written in this transaction
         raise ActionPersistenceError("the action was written but could not be read back")
-    return _row(row)
+    return _row(row), True
 
 
 def _transition(
@@ -505,14 +540,21 @@ def _transition(
                 ),
             )
             moved = cur.rowcount
-            conn.commit()
             if not moved:
+                conn.rollback()
                 return None
+            # Read back **inside** the transaction, before the commit. After
+            # it, another writer can move the row between the commit and the
+            # SELECT, and the caller -- which treats "not None" as "I performed
+            # this transition" -- would then be handed a row in somebody else's
+            # state. That produced a 200 "Approved. The action is now eligible
+            # to be leased" describing a row that read `cancelled`.
             row = conn.execute(
                 f"SELECT {_COLUMNS} FROM windows_action_requests "  # noqa: S608
                 "WHERE tenant_id = ? AND action_id = ?",
                 (tenant_id, action_id),
             ).fetchone()
+            conn.commit()
     except sqlite3.Error as e:
         raise ActionPersistenceError(
             f"action {action_id} could not be moved to {to_state.value}: "
@@ -619,7 +661,14 @@ def try_lease(
             cur = conn.execute(
                 "UPDATE windows_action_requests SET "  # noqa: S608 - fixed fragments
                 "state = ?, lease_count = lease_count + 1, leased_at = ?, updated_at = ? "
-                f"WHERE tenant_id = ? AND action_id = ? AND state IN ({placeholders})" + guard,
+                f"WHERE tenant_id = ? AND action_id = ? AND state IN ({placeholders})"
+                # Expiry in the `WHERE`, not only in the admission that runs
+                # before it. The admission's expiry check sits several awaits
+                # earlier -- two brake reads and a memory read -- so on its own
+                # it is a time-of-check/time-of-use gap. Costing one comparison
+                # to close it inside the same statement that wins the lease is
+                # a better trade than reasoning about how wide the window is.
+                " AND expires_at > ?" + guard,
                 (
                     ActionState.LEASED.value,
                     now,
@@ -627,18 +676,21 @@ def try_lease(
                     tenant_id,
                     action_id,
                     *[s.value for s in from_states],
+                    now,
                     *guard_params,
                 ),
             )
             moved = cur.rowcount
-            conn.commit()
             if not moved:
+                conn.rollback()
                 return None
+            # Inside the transaction; see `_transition` for why.
             row = conn.execute(
                 f"SELECT {_COLUMNS} FROM windows_action_requests "  # noqa: S608
                 "WHERE tenant_id = ? AND action_id = ?",
                 (tenant_id, action_id),
             ).fetchone()
+            conn.commit()
     except sqlite3.Error as e:
         raise ActionPersistenceError(
             f"action {action_id} could not be leased: {type(e).__name__}: {e}",
@@ -674,7 +726,11 @@ def dispatchable_action_ids(
                     max(1, min(int(limit), 50)),
                 ),
             ).fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as e:
+        if not _is_missing_table(e):
+            raise ActionPersistenceError(
+                f"dispatchable actions could not be read: {type(e).__name__}: {e}",
+            ) from e
         return []
     except sqlite3.Error as e:
         raise ActionPersistenceError(
@@ -701,42 +757,61 @@ def record_result(
     the history and leaves the state alone.
     """
     now = _now()
-    if result.status is ActionResultStatus.STARTED:
-        action = get_action(db_path, tenant_id=result.tenant_id, action_id=result.action_id)
-        if action is None or action.state is not ActionState.LEASED:
-            return action, False
-        _append_result(db_path, result=result, recorded_at=now)
-        return action, True
-
-    to_state = _RESULT_TO_STATE.get(result.status)
-    if to_state is None:
+    is_progress = result.status is ActionResultStatus.STARTED
+    to_state = None if is_progress else _RESULT_TO_STATE.get(result.status)
+    if not is_progress and to_state is None:
         raise ActionPersistenceError(
             f"a device may not report {result.status.value!r} as an outcome",
         )
-    action = _transition(
-        db_path,
-        tenant_id=result.tenant_id,
-        action_id=result.action_id,
-        from_states=(ActionState.LEASED,),
-        to_state=to_state,
-        reason=(result.error_category.value if result.error_category else None),
-        label="windows_action_result",
-    )
-    if action is None:
-        return (
-            get_action(db_path, tenant_id=result.tenant_id, action_id=result.action_id),
-            False,
-        )
-    _append_result(db_path, result=result, recorded_at=now)
-    return action, True
 
-
-def _append_result(db_path: str, *, result: ActionResult, recorded_at: str) -> None:
-    """Append to the result history. A duplicate status is collapsed, not doubled."""
+    # **One transaction for the state change and the evidence row.** Splitting
+    # them lost outcomes irrecoverably: the terminal transition committed, the
+    # evidence insert then failed on a lock, the caller saw a 503 and retried
+    # -- and the retry found the action already terminal, so the history ended
+    # up with no row at all for an outcome the action was recorded as having
+    # reached. `BEGIN IMMEDIATE` takes the write lock up front, so the two
+    # either both land or neither does.
     try:
-        with wal_db(db_path, timeout=30.0, label="windows_action_result_append") as conn:
+        with wal_db(db_path, timeout=30.0, label="windows_action_result") as conn:
             conn.execute("PRAGMA busy_timeout = 5000")
-            conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+
+            if is_progress:
+                # A progress note leaves the state alone, but it still has to
+                # see the state to know it belongs to a live lease.
+                current = conn.execute(
+                    f"SELECT {_COLUMNS} FROM windows_action_requests "  # noqa: S608
+                    "WHERE tenant_id = ? AND action_id = ?",
+                    (result.tenant_id, result.action_id),
+                ).fetchone()
+                if current is None or ActionState(current[17]) is not ActionState.LEASED:
+                    conn.rollback()
+                    return (_row(current) if current else None), False
+            else:
+                moved = conn.execute(
+                    "UPDATE windows_action_requests SET state = ?, state_reason = ?, "
+                    "terminal_at = ?, updated_at = ?, parameters_json = NULL "
+                    "WHERE tenant_id = ? AND action_id = ? AND state = ?",
+                    (
+                        to_state.value,
+                        (result.error_category.value if result.error_category else None),
+                        now,
+                        now,
+                        result.tenant_id,
+                        result.action_id,
+                        ActionState.LEASED.value,
+                    ),
+                ).rowcount
+                if not moved:
+                    current = conn.execute(
+                        f"SELECT {_COLUMNS} FROM windows_action_requests "  # noqa: S608
+                        "WHERE tenant_id = ? AND action_id = ?",
+                        (result.tenant_id, result.action_id),
+                    ).fetchone()
+                    conn.rollback()
+                    return (_row(current) if current else None), False
+
+            inserted = conn.execute(
                 """INSERT OR IGNORE INTO windows_action_results
                    (tenant_id, action_id, device_id, status, error_category, detail,
                     evidence_json, observed_at, recorded_at)
@@ -749,33 +824,72 @@ def _append_result(db_path: str, *, result: ActionResult, recorded_at: str) -> N
                     result.error_category.value if result.error_category else None,
                     result.detail,
                     json.dumps(result.evidence, sort_keys=True),
-                    result.observed_at or recorded_at,
-                    recorded_at,
+                    result.observed_at or now,
+                    now,
                 ),
-            )
+            ).rowcount
+
+            if is_progress and not inserted:
+                # `UNIQUE (tenant_id, action_id, status)` collapsed a repeated
+                # `started` note. Nothing was recorded, and the device is told
+                # that -- rather than told its observation landed when it was
+                # silently dropped.
+                current = conn.execute(
+                    f"SELECT {_COLUMNS} FROM windows_action_requests "  # noqa: S608
+                    "WHERE tenant_id = ? AND action_id = ?",
+                    (result.tenant_id, result.action_id),
+                ).fetchone()
+                conn.rollback()
+                return (_row(current) if current else None), False
+
+            row = conn.execute(
+                f"SELECT {_COLUMNS} FROM windows_action_requests "  # noqa: S608
+                "WHERE tenant_id = ? AND action_id = ?",
+                (result.tenant_id, result.action_id),
+            ).fetchone()
             conn.commit()
     except sqlite3.Error as e:
         raise ActionPersistenceError(
             f"the result for {result.action_id} could not be recorded: {type(e).__name__}: {e}",
         ) from e
+    return (_row(row) if row else None), True
 
 
 def expire_overdue(db_path: str, *, tenant_id: str) -> int:
-    """Move every non-terminal action past its expiry to `cancelled`.
+    """Bring overdue actions to a terminal state, and purge their parameters.
 
-    Housekeeping, and also a correctness property: an action whose window
-    closed must not be dispatchable, and the dispatch path checks expiry
-    independently -- this only makes the stored state agree with what the
-    dispatch path would have decided anyway.
+    Two sweeps, because two situations are genuinely different and running one
+    sweep over both recorded actions that happened as actions that never did.
+
+    **Not yet dispatched** (`pending_approval`, `approved`) past its expiry ->
+    `cancelled`. Nothing ran, the dispatch path would have refused it anyway,
+    and this only makes the stored state agree with that.
+
+    **Leased** -- a device took it and is running it *now*. Sweeping those to
+    `cancelled` the moment the expiry passed was wrong twice over: the lease
+    poll runs this on every call, so an action whose window closed while its
+    handler was mid-flight was cancelled underneath the device, and the honest
+    result the device then reported was declined as a late one. An action that
+    really launched a program was durably recorded as never having run.
+
+    So a lease is given `LEASE_GRACE_SECONDS` past the expiry to report, and
+    what it becomes afterwards is `unknown`, not `cancelled` -- because that is
+    what is true. The device took the action and we never heard back; whether
+    it happened is exactly the thing nobody knows.
+
+    Parameters are purged on both paths: they exist only to be handed to a
+    device, and neither of these can be dispatched again.
     """
     now = _now()
+    grace = to_iso(parse_iso(now) - timedelta(seconds=LEASE_GRACE_SECONDS))
+    swept = 0
     try:
         with wal_db(db_path, timeout=30.0, label="windows_action_expire") as conn:
             conn.execute("PRAGMA busy_timeout = 5000")
-            cur = conn.execute(
+            swept += conn.execute(
                 "UPDATE windows_action_requests SET state = ?, state_reason = ?, "
                 "terminal_at = ?, updated_at = ?, parameters_json = NULL "
-                "WHERE tenant_id = ? AND expires_at <= ? AND state IN (?, ?, ?)",
+                "WHERE tenant_id = ? AND expires_at <= ? AND state IN (?, ?)",
                 (
                     ActionState.CANCELLED.value,
                     ErrorCategory.EXPIRED.value,
@@ -785,15 +899,31 @@ def expire_overdue(db_path: str, *, tenant_id: str) -> int:
                     now,
                     ActionState.PENDING_APPROVAL.value,
                     ActionState.APPROVED.value,
+                ),
+            ).rowcount
+            swept += conn.execute(
+                "UPDATE windows_action_requests SET state = ?, state_reason = ?, "
+                "terminal_at = ?, updated_at = ?, parameters_json = NULL "
+                "WHERE tenant_id = ? AND expires_at <= ? AND state = ?",
+                (
+                    ActionState.UNKNOWN.value,
+                    ErrorCategory.EFFECT_UNVERIFIABLE.value,
+                    now,
+                    now,
+                    tenant_id,
+                    grace,
                     ActionState.LEASED.value,
                 ),
-            )
-            count = cur.rowcount
+            ).rowcount
             conn.commit()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as e:
+        if not _is_missing_table(e):
+            raise ActionPersistenceError(
+                f"overdue actions could not be expired: {type(e).__name__}: {e}",
+            ) from e
         return 0
     except sqlite3.Error as e:
         raise ActionPersistenceError(
             f"overdue actions could not be expired: {type(e).__name__}: {e}",
         ) from e
-    return int(count or 0)
+    return int(swept or 0)

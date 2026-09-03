@@ -17,7 +17,9 @@ authority already in use elsewhere or a check this package owns:
  6   risk classification          `capabilities.describe()`
  7   expiry                       `ActionRequest.has_expired()`
  8   Parking Brake                `governance_store`, both tiers, fail-closed
- 9   Identity policy              `policy_engine.evaluate_tool_policy`
+ 9   Identity policy              `policy_engine.evaluate_tool_policy`, on the
+                                  request and cancel kinds. Deliberately not on
+                                  a human approval -- see `grant_action_approval`
 10   exact action approval        `approval.ActionApproval.authorizes()`
 11   replay / idempotency         `store.try_lease()`, a conditional UPDATE
 ===  ==========================  ==========================================
@@ -173,6 +175,10 @@ class ActionSeamResult:
     reason: str | None = None
     action: StoredAction | None = None
     request: ActionRequest | None = None
+    #: True when this call landed on an action that already existed rather than
+    #: creating one. The HTTP boundary needs it: a re-submission is not a
+    #: creation, and one that lands on a finished action is a conflict.
+    existing: bool = False
     provenance_degraded: bool = False
     provenance_error: str | None = None
 
@@ -613,7 +619,31 @@ async def run_action_request_through_runtime_contract(
     initial_state = ActionState.APPROVED if autonomous else ActionState.PENDING_APPROVAL
 
     await run_off_loop(store.ensure_schema, db_path)
-    stored = await run_off_loop(
+
+    # Sweep this tenant's overdue actions before adding another.
+    #
+    # The sweep is what purges `parameters_json` -- the one place a piece of
+    # text somebody asked to have typed is stored in cleartext -- and it used
+    # to run *only* inside the device lease endpoint. With no device resolver
+    # installed, which is the shipped default, that endpoint refuses at 401
+    # before its body runs, so the purge never happened at all: a `type_text`
+    # that was requested, never approved and forgotten kept its cleartext
+    # indefinitely, which is the single most likely lifecycle for one.
+    #
+    # Running it here makes it reachable in every configuration, on the one
+    # path that is always exercised. Best effort: a sweep that fails must not
+    # stop the request it was housekeeping for.
+    try:
+        await run_off_loop(store.expire_overdue, db_path, tenant_id=tenant_id)
+    except ActionPersistenceError:
+        logger.warning(
+            "Could not sweep overdue actions for tenant %s; cleartext parameters may "
+            "be retained past their expiry until the next successful sweep",
+            tenant_id,
+            exc_info=True,
+        )
+
+    stored, created = await run_off_loop(
         store.create_action,
         db_path,
         record=request.to_dict(redacted=True),
@@ -622,24 +652,59 @@ async def run_action_request_through_runtime_contract(
         state_reason=("trusted_autonomy" if autonomous else None),
     )
 
+    # A re-submission of an existing action id landed on the row that already
+    # exists -- `create_action` never overwrites one, which is what stops a
+    # caller changing an approved action's parameters by asking again. What it
+    # must not also do is *describe* the attempt as though the new parameters
+    # were the ones on file: reporting `request`'s fingerprint next to the
+    # stored row's state would put "fingerprint X is approved on device Y" into
+    # the durable Reflection trail for a fingerprint nothing ever approved, and
+    # anyone able to POST an action could plant that record against any pending
+    # id. So the audit reports what is *stored*, and records the mismatch as
+    # its own fact -- because a caller re-submitting an id with different
+    # parameters is worth being able to see.
+    superseded = stored.parameter_fingerprint != request.parameter_fingerprint
     persisted, error = await _record_reflection(
         ctx,
         kind=kind,
-        outcome=stored.state.value,
-        request=request,
+        # Both drawn from the stored row when they disagree, so no field of
+        # this record describes an action that does not exist.
+        outcome=("resubmission_ignored" if superseded else stored.state.value),
+        request=(None if superseded else request),
         action=stored,
-        reason=None,
+        reason=(
+            "an action with this id already exists; its recorded parameters are "
+            "unchanged and the re-submitted ones were not used"
+            if superseded
+            else None
+        ),
         category=None,
-        extra={"trusted_autonomy": autonomous},
+        extra={
+            "trusted_autonomy": autonomous,
+            **(
+                {"rejected_resubmission_fingerprint": request.parameter_fingerprint}
+                if superseded
+                else {}
+            ),
+        },
     )
     return ActionSeamResult(
         observation=observation,
         candidate_action=candidate_action,
         governance_allowed=True,
         status=stored.status,
-        reason=("granted trusted autonomy by this device's enrolment" if autonomous else None),
+        reason=(
+            "an action with this id already exists; its recorded parameters are "
+            "unchanged and the parameters in this request were not used"
+            if superseded
+            else ("granted trusted autonomy by this device's enrolment" if autonomous else None)
+        ),
         action=stored,
-        request=request,
+        # The stored action is what exists, so that is what the caller is
+        # handed. Returning the un-stored request here would let a caller read
+        # back its own rejected parameters as though they were on file.
+        request=(None if superseded else request),
+        existing=not created,
         provenance_degraded=not persisted,
         provenance_error=error,
     )
@@ -698,7 +763,7 @@ async def _record_refusal(
     because a refused action never needs handing to anything.
     """
     await run_off_loop(store.ensure_schema, db_path)
-    stored = await run_off_loop(
+    stored, _created = await run_off_loop(
         store.create_action,
         db_path,
         record=request.to_dict(redacted=True),
@@ -756,6 +821,23 @@ async def grant_action_approval(
     Approving does not run anything. It moves the action from
     `pending_approval` to `approved`, which makes it *eligible* to be leased by
     its device, at which point the whole admission runs again.
+
+    **Gate 9 -- the Identity policy -- deliberately does not apply here, and
+    that is not an omission.** `tool_use.allowlist` governs what *Bartholomew*
+    may do. A person authorising one specific action is not Bartholomew using a
+    tool, and gating it on that allowlist would mean an Identity that forbids
+    autonomous actuation also forbids a human from approving anything -- the
+    exact inversion of what the allowlist is for. `windows_action_approve` is
+    therefore absent from it, and adding it would change nothing here.
+    `tests/test_windows_action_governance.py` pins that reasoning, so a later
+    reading of the gate table cannot "fix" it into a deadlock.
+
+    What does gate an approval: the platform capability `action:approve` at the
+    HTTP boundary, the Parking Brake above, the action being in
+    `pending_approval`, and the action still passing validation against the
+    device's *current* allowlists. And an approval authorises nothing on its
+    own -- every gate, gate 9 on the dispatch kind included, runs again at
+    lease.
     """
     kind = ACTION_KIND_APPROVE
     observation, candidate_action = _observation(kind, None)
@@ -825,19 +907,20 @@ async def grant_action_approval(
             request=request,
         )
 
-    written = await _write_approval(ctx, approval)
-    if written is not None:
-        return ActionSeamResult(
-            observation=observation,
-            candidate_action=candidate_action,
-            governance_allowed=False,
-            status=ActionResultStatus.REFUSED,
-            category=ErrorCategory.INTERNAL_ERROR,
-            reason=written,
-            action=stored,
-            request=request,
-        )
-
+    # **Claim the transition first, then write the approval.** The order is the
+    # whole of the concurrency correctness here.
+    #
+    # Writing the approval first looked harmless: it is keyed on the action, so
+    # a second approver simply overwrote the first. But only one of them then
+    # won `mark_approved`, and it was not necessarily the one whose approval
+    # was left on disk -- so the durable row and the Reflection named one
+    # approver while the object `evaluate_dispatch_admission` actually calls
+    # `authorizes()` on, expiry window and all, belonged to somebody who had
+    # been told they were refused.
+    #
+    # `mark_approved` is a conditional UPDATE from `pending_approval`, so
+    # exactly one caller wins it. The winner is then the only one that writes
+    # an approval, and the two can no longer disagree.
     moved = await run_off_loop(
         store.mark_approved,
         db_path,
@@ -846,9 +929,6 @@ async def grant_action_approval(
         approver=approval.approver,
     )
     if moved is None:
-        # Somebody moved it between the read and the write. The approval row
-        # exists but authorises nothing, because the dispatch path checks the
-        # action's state as well as the approval.
         current = await run_off_loop(
             store.get_action,
             db_path,
@@ -861,8 +941,34 @@ async def grant_action_approval(
             governance_allowed=False,
             status=(current.status if current else ActionResultStatus.REFUSED),
             category=ErrorCategory.APPROVAL_INVALID,
-            reason="the action changed state while it was being approved",
+            reason=(
+                "the action was approved or withdrawn by somebody else while this "
+                "approval was being granted"
+            ),
             action=current,
+            request=request,
+        )
+
+    written = await _write_approval(ctx, approval)
+    if written is not None:
+        # The action is `approved` with no approval on file. That is a
+        # fail-closed state, not a hole: `evaluate_dispatch_admission` looks
+        # for the approval itself and refuses with `APPROVAL_MISSING` when it
+        # is absent, whatever the row's state says. The caller is told the
+        # approval did not land so they can grant it again.
+        logger.error(
+            "Action %s was moved to approved but its approval could not be recorded; "
+            "it cannot be dispatched until an approval is granted successfully",
+            action_id,
+        )
+        return ActionSeamResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=False,
+            status=ActionResultStatus.REFUSED,
+            category=ErrorCategory.INTERNAL_ERROR,
+            reason=written,
+            action=moved,
             request=request,
         )
 
@@ -1004,7 +1110,13 @@ async def _load_and_revalidate(
 
     payload = stored.as_dict()
     payload["parameters"] = dict(stored.parameters or {})
-    if not stored.parameters and not stored.terminal:
+    # `is None`, not falsiness. Purging sets `parameters_json` to NULL, which
+    # reads back as `None`; `windows.clipboard_read` legitimately has *no*
+    # parameters and stores `{}`, which is falsy but is not purged. Testing
+    # truthiness conflated the two and made one of the nine capabilities
+    # permanently un-approvable and un-dispatchable. It failed closed, so
+    # nothing unsafe happened -- the capability was simply dead.
+    if stored.parameters is None and not stored.terminal:
         return (
             stored,
             None,
@@ -1393,7 +1505,15 @@ async def record_action_result_through_runtime_contract(
         action=updated,
         reason=detail or None,
         category=category,
-        extra={"evidence": result.evidence},
+        # The evidence **keys**, not the evidence. `ActionReflection` redacts
+        # top-level string values in `details`; a nested dict passes through
+        # its redaction untouched, so putting the evidence map in here would
+        # have written whatever a device sent -- including `clipboard_read`'s
+        # returned text under the opt-in -- straight into Memory unredacted.
+        # The typed row in `windows_action_results` is where evidence lives;
+        # duplicating it into the Reflection bought nothing and cost the one
+        # guarantee that sink makes.
+        extra={"evidence_keys": ",".join(sorted(result.evidence))},
     )
     return ActionSeamResult(
         observation=observation,

@@ -104,11 +104,21 @@ class ActionCompanionRunner:
     def report(self, action_id: str, outcome: HandlerOutcome, observed_at: str) -> bool:
         """Send one outcome, retrying only what is worth retrying.
 
-        A 401/403 is terminal: this companion is not authenticated for the
-        action channel, and hammering the door turns a configuration problem
-        into a configuration problem repeated forever. A 409 -- the action
-        already ended server-side -- is also terminal and is not an error: the
-        server declining a late result is the replay protection working.
+        Two terminal answers, and they are **not** the same:
+
+        * **409 REJECTED** -- the server already ended this action and declined
+          the result. That is the replay protection working, the server has an
+          opinion and it will not change, so the outcome is marked reported and
+          the loop stops.
+        * **401/403 REFUSED** -- this companion is not authenticated for the
+          action channel. Retrying now is pointless, so the loop stops -- but
+          the outcome is deliberately **left unreported**, because the server
+          never heard it and a rotated credential will be fixed. Marking it
+          reported here would have discarded, permanently and invisibly, the
+          record of an action that really ran: the device's ledger would say
+          "reported", `resend_unreported()` would find nothing, and the server's
+          row would sit at `leased` until it was swept to `cancelled/expired` --
+          an action that happened, recorded as one that never did.
         """
         for attempt in range(self.config.max_attempts):
             result = self.client.report(
@@ -119,19 +129,27 @@ class ActionCompanionRunner:
             if result.ok:
                 self._mark_reported(action_id)
                 return True
-            if result.status in (ChannelStatus.REFUSED, ChannelStatus.REJECTED):
-                if result.status is ChannelStatus.REFUSED:
-                    self.summary.channel_refusals += 1
+            if result.status is ChannelStatus.REJECTED:
                 logger.error(
-                    "The action channel would not accept the result for %s (%s): %s",
+                    "The action channel declined the result for %s (%s): %s",
                     action_id,
                     result.http_status,
                     result.detail,
                 )
-                # A rejected result is still an answered one: the server has an
-                # opinion about this action and it is not going to change.
                 self._mark_reported(action_id)
-                return result.status is ChannelStatus.REJECTED
+                return True
+            if result.status is ChannelStatus.REFUSED:
+                self.summary.channel_refusals += 1
+                self.summary.unreported += 1
+                logger.error(
+                    "The action channel refused this companion while reporting %s "
+                    "(%s): %s. The outcome is kept for re-delivery once the "
+                    "credential works; it is NOT discarded.",
+                    action_id,
+                    result.http_status,
+                    result.detail,
+                )
+                return False
             if attempt + 1 < self.config.max_attempts:
                 self._sleep(
                     RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)],

@@ -47,7 +47,12 @@ MAX_HOSTNAME = 253
 #: a Linux service validating a path that will be opened on a Windows desk PC.
 #: `os.path` would answer that question about the machine it is running on,
 #: which is the wrong machine.
-_WINDOWS_PATH = re.compile(r"\A[A-Za-z]:[\\/]")
+#: A drive letter, with or without a separator after it. The separator is
+#: optional on purpose: `normalise_path` reduces a drive root to `c:` (there is
+#: no path component to keep), and a detector that then failed to recognise
+#: `c:` as Windows syntax would compare it with the wrong separator and make a
+#: drive-root allowlist entry match nothing beneath it.
+_WINDOWS_PATH = re.compile(r"\A[A-Za-z]:")
 
 
 def looks_like_windows_path(path: str) -> bool:

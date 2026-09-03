@@ -671,7 +671,19 @@ def write_clipboard_text(text: str) -> bool:
     """
     _require_windows()
     encoded = str(text)
-    size = (len(encoded) + 1) * ctypes.sizeof(ctypes.c_wchar)
+    # Sized from the buffer itself, never from `len(text)`. `len()` counts code
+    # points; `c_wchar` is 2 bytes on Windows and an astral character needs two
+    # of them, so `(len + 1) * 2` under-allocates for any such character and
+    # `memmove` would then copy the surrogate pair while dropping the NUL
+    # terminator -- publishing an unterminated block that every application on
+    # the machine reads past, into whatever heap memory follows.
+    #
+    # `_ordinary_text` refuses astral characters upstream, so this is currently
+    # unreachable. It is written correctly anyway: "unreachable" is a property
+    # of today's validator, and a buffer overrun is not the thing to leave
+    # depending on one.
+    buffer = ctypes.create_unicode_buffer(encoded)
+    size = ctypes.sizeof(buffer)
     with _Clipboard() as lib:
         if not lib.user32.EmptyClipboard():
             raise Win32CallError("EmptyClipboard", lib.kernel32.GetLastError())
@@ -682,7 +694,7 @@ def write_clipboard_text(text: str) -> bool:
         if not pointer:
             raise Win32CallError("GlobalLock", lib.kernel32.GetLastError())
         try:
-            ctypes.memmove(pointer, ctypes.create_unicode_buffer(encoded), size)
+            ctypes.memmove(pointer, buffer, size)
         finally:
             lib.kernel32.GlobalUnlock(handle)
         if not lib.user32.SetClipboardData(CF_UNICODETEXT, handle):
@@ -761,6 +773,20 @@ def send_unicode_text(text: str) -> int:
         ctypes.c_int,
     ]
     lib.user32.SendInput.restype = wintypes.UINT
+
+    # The second fence, and the one nearest the danger. `wScan` is a 16-bit
+    # field and `ctypes` truncates into it silently, so a character above
+    # U+FFFF would arrive as its low sixteen bits -- and U+1000D truncates to
+    # Enter, U+10009 to Tab. The validator refuses these already; refusing them
+    # again here means a future caller that reaches this function by another
+    # route cannot reintroduce the injection.
+    astral = next((c for c in str(text) if ord(c) > 0xFFFF), None)
+    if astral is not None:
+        raise Win32CallError(
+            f"refusing to type U+{ord(astral):04X}: a character outside the Basic "
+            "Multilingual Plane does not fit the 16-bit field Windows carries it in, "
+            "and some of them truncate to Enter or Tab",
+        )
 
     events: list[Any] = []
     for char in str(text):

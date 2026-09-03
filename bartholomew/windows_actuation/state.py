@@ -67,8 +67,27 @@ class ActionCompanionState:
     executed: dict[str, ExecutedEntry] = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
-    def order(self) -> list[str]:
-        return list(self.executed)
+    def eviction_order(self) -> list[str]:
+        """Which entries to drop first when the ledger is full.
+
+        **Oldest first, and unreported entries last of all** -- not insertion
+        order, which is what this used to be and which stopped meaning
+        anything the moment the file round-tripped: `save()` writes with
+        `sort_keys=True`, so `load()` rebuilds the dict in *lexicographic* id
+        order. Ids are `act-<uuid4>`, so eviction after any restart was
+        effectively random, and a just-executed action could leave the replay
+        ledger while it was still inside its own TTL.
+
+        An unreported entry is the last thing to drop: it is the only record
+        that an action ran at all until the server acknowledges it.
+        """
+        return [
+            action_id
+            for action_id, entry in sorted(
+                self.executed.items(),
+                key=lambda item: (item[1].reported is False, item[1].observed_at),
+            )
+        ]
 
 
 class ActionStateFile:
@@ -117,7 +136,8 @@ class ActionStateFile:
         """Write via a temp file and rename, so a crash never leaves a half file."""
         state.updated_at = time.time()
         if len(state.executed) > MAX_LEDGER_ENTRIES:
-            for action_id in state.order()[: len(state.executed) - MAX_LEDGER_ENTRIES]:
+            surplus = len(state.executed) - MAX_LEDGER_ENTRIES
+            for action_id in state.eviction_order()[:surplus]:
                 state.executed.pop(action_id, None)
         payload: dict[str, Any] = {
             "executed": {
