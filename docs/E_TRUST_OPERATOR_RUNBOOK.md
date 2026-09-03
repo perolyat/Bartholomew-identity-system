@@ -44,18 +44,21 @@ export BARTH_DATA_ROOT=/var/lib/bartholomew
 
 ### 1.1 Initialise the schema
 
-Every command below calls `init_platform_schema()` first, and it is idempotent
-and additive — `CREATE TABLE IF NOT EXISTS` only, no destructive DDL and no
-backfill. So there is no separate migration step; the first command creates
-what it needs.
+Every command that touches the control plane calls `init_platform_schema()`
+first, and it is idempotent: `CREATE TABLE IF NOT EXISTS` for tables, plus
+`ALTER TABLE ... ADD COLUMN` for the additive columns listed in
+`store._ADDITIVE_COLUMNS`. No destructive DDL, no backfill and no rewrite of
+an existing row. So there is no separate migration step; the first command
+creates what it needs.
 
 ```bash
-bartholomew accounts list      # confirms the control plane is readable
+bartholomew accounts list      # creates/upgrades the schema, and confirms it is readable
 bartholomew devices capabilities
 ```
 
-`devices capabilities` prints the frozen vocabulary. Anything absent from it
-is **unsupported**, not approximated.
+`devices capabilities` reads no database at all — it prints the frozen
+vocabulary this deployment compiles in. Anything absent from it is
+**unsupported**, not approximated.
 
 ### 1.2 Create a pending enrolment
 
@@ -70,8 +73,16 @@ as the label the companion puts in `payload["device_id"]`.
 ### 1.3 Approve it, and transfer the one-time secret safely
 
 ```bash
-bartholomew devices approve <device_id> --approver "$(whoami)" --ttl-hours 4
+bartholomew devices approve <device_id> --approver "$(whoami)" --ttl-hours 4 \
+    --permit windows.open_url@1 --permit windows.launch_app@1
 ```
+
+`--permit` is the ceiling on what this machine may ever be authorised for.
+Omit it and the ceiling is whatever this deployment understands — which means
+the companion's own declaration decides, so name the capabilities you actually
+intend to grant unless you are standing in front of the machine. Run
+`bartholomew devices capabilities` for the vocabulary; `devices show` reports
+`approved_capabilities` alongside what the device declared.
 
 The enrolment secret is printed once and stored nowhere. Move it to the
 machine **out of band**: a password manager's secure note, or typed at that
@@ -80,7 +91,8 @@ Choose the shortest `--ttl-hours` that fits the trip; every hour past that is
 a window in which a leaked note is still a working credential.
 
 If it is lost before use, approve again — the previous secret is revoked in
-the same transaction, so there is never a second live one.
+the same transaction, so there is never a second live one. Re-approval works
+only before the device has enrolled; after that, use `devices rotate`.
 
 ### 1.4 Complete enrolment (the companion's first authenticated contact)
 
@@ -129,8 +141,10 @@ Environment=BARTH_DEVICE_INBOUND_AUTH=1
 ```
 
 Leave it unset and inbound capture stays fail-closed, which is the correct
-state for a deployment that has not decided. It refuses to start alongside
-`BARTH_INBOUND_ALLOW_TEST_RESOLVER`.
+state for a deployment that has not decided. Startup refuses if the test-only
+resolver is actually installed — which happens when both
+`BARTH_INBOUND_ALLOW_TEST_RESOLVER` and `BARTH_INBOUND_TEST_TOKEN` are set.
+Neither belongs in a deployment that has real devices.
 
 ### 1.6 Inspect status and manifest
 
@@ -162,23 +176,61 @@ bartholomew devices enable  <device_id> --actor "$(whoami)"
 ```
 
 Reversible and credential-preserving. The right answer to "the laptop is at
-the office", and the wrong answer to "the laptop is gone" — see §4.
+the office", and the wrong answer to "the laptop is gone" — see §4. Re-enabling
+restores the status the device actually reached, so a device disabled before it
+was ever approved comes back `pending` and can still be enrolled normally.
 
 ### 1.9 Confirm an old credential no longer works
 
+**The authoritative check is the registry, not a request:**
+
 ```bash
-printf '%s' "<old credential>" | curl -sS -o /dev/null -w '%{http_code}\n' \
-  --cacert /etc/bartholomew/tls/cert.pem \
-  -H "X-Bartholomew-Device-Credential: $(cat -)" \
-  -H 'Content-Type: application/json' \
-  --data '{"source_id":"device:<device_id>","event_id":"probe-1",
-           "event_type":"probe","payload":{}}' \
-  https://127.0.0.1:8765/api/inbound/events
+bartholomew devices show <device_id>          # status: revoked / disabled
+bartholomew devices audit --user-id <user_id> # device.revoked / device.credential_rotated
 ```
 
-**401 is the pass.** Anything else means the credential still authenticates
-and the rotation or revocation did not take; stop and investigate before
-continuing. Never add `-k` / `--insecure` to make this command succeed.
+A `revoked` status means every credential the device held was revoked in the
+same transaction, and `verify_device_credential` refuses on status before it
+looks at anything else. That is the fact; a request is a second opinion.
+
+If you want the second opinion as well, note what the default posture actually
+is before reading its result. A loopback deployment serves **plain HTTP** on
+`BARTH_API_PORT` (default `5173`) — `exposure.uvicorn_tls_kwargs()` returns
+nothing until a non-loopback bind is deliberately enabled, which §0 tells you
+not to do — so aim the probe at the scheme, host and port this deployment is
+actually serving. A header on the command line is visible in `ps`, so put it
+in a curl config file and delete it afterwards:
+
+```bash
+umask 077
+printf 'header = "X-Bartholomew-Device-Credential: %s"\n' "$OLD_CREDENTIAL" > probe.conf
+curl -sS -o /dev/null -w '%{http_code}\n' -K probe.conf \
+  -H 'Content-Type: application/json' \
+  --data '{"source_id":"device:<device_id>","event_id":"probe-1","event_type":"probe","payload":{}}' \
+  http://127.0.0.1:5173/api/inbound/events
+rm -f probe.conf; unset OLD_CREDENTIAL
+```
+
+On an exposed deployment the URL is `https://` and needs `--cacert <the
+deployment's certificate>`. **Never** add `-k` / `--insecure` to make it
+succeed: a probe that skips verification proves nothing about the deployment
+you have.
+
+**Read the result carefully — 401 is necessary but not sufficient.** The route
+answers 401 for three different reasons, and only one of them is the one you
+are testing:
+
+* the device resolver refused the credential — what you want;
+* no resolver is installed at all (`BARTH_DEVICE_INBOUND_AUTH` unset), so
+  every caller gets 401 whatever they present;
+* authentication is enforced (`BARTH_AUTH_MODE=enforced`) and the probe
+  carries no session, which `_require_principal` refuses *before* the resolver
+  is consulted.
+
+So a 401 confirms nothing on its own. Confirm the credential is dead against
+`devices show`, and use the probe only to check that a *working* credential
+stops working across a rotation on a deployment where you have already seen it
+return 202.
 
 ### 1.10 Remove local device configuration
 
@@ -195,24 +247,38 @@ you revoke it. Revoke first, delete second.
 
 ### 1.11 Roll back the schema or the feature
 
-There is nothing to un-migrate: the schema change is four new tables added
-with `CREATE TABLE IF NOT EXISTS`, and no existing table, column or row is
-touched. Rolling back is therefore a matter of turning the feature off, in
-increasing order of severity:
+There is nothing to un-migrate: the schema change is **seven new tables**
+(`platform_devices`, `platform_device_credentials`, `platform_trusted_groups`,
+`platform_group_members`, `platform_group_invitations`,
+`platform_share_packages`, `platform_share_receipts`) added with
+`CREATE TABLE IF NOT EXISTS`, plus one additive column on
+`platform_devices`. No existing table, column or row is rewritten. Rolling
+back is therefore a matter of turning the feature off, in increasing order of
+severity:
 
 1. **Stop admitting devices.** Unset `BARTH_DEVICE_INBOUND_AUTH` and restart.
    Inbound capture returns to fail-closed; nothing is deleted.
 2. **Stop the devices themselves.** `bartholomew devices revoke` each one.
-3. **Revert the code.** The old code ignores the four new tables entirely, so
-   a checkout of an earlier revision runs against the same database file
+3. **Revert the code.** The old code ignores all seven tables entirely, so a
+   checkout of an earlier revision runs against the same database file
    unchanged.
-4. **Remove the rows**, only if you genuinely want the enrolment history gone,
-   and after taking a copy of `platform.db`:
+4. **Remove the rows**, only if you genuinely want the history gone, and after
+   taking a copy of `platform.db`. In this order, because of the foreign keys:
 
    ```sql
+   DELETE FROM platform_share_receipts;
+   DELETE FROM platform_share_packages;
+   DELETE FROM platform_group_invitations;
+   DELETE FROM platform_group_members;
+   DELETE FROM platform_trusted_groups;
    DELETE FROM platform_device_credentials;
    DELETE FROM platform_devices;
    ```
+
+   Note what this destroys: every record of who shared what with whom. A
+   recipient's *adopted* records live in their own kernel database and are
+   untouched by any of this, so they will survive with provenance pointing at
+   a group that no longer exists.
 
    The audit rows in `platform_audit` are append-only by convention and should
    be left alone; deleting them removes the record of what was enrolled and
@@ -286,10 +352,29 @@ bartholomew share provenance <share_id> --actor <your_user_id>
 ```
 
 **Adoption is not acceptance.** It records your decision on the exchange and
-hands you the package. Turning it into a local candidate happens in your own
-runtime, and making that candidate retrievable knowledge needs a separate,
-candidate-bound approval on top — the same approval an entirely local lesson
-needs. There is no switch that skips it.
+hands you the package. Turning it into a local candidate, and then into
+knowledge, happens in your own runtime and takes three more explicit steps:
+
+```bash
+bartholomew share adopt-local   --package-file adopted.json --competency-id <yours> --db <your kernel db>
+bartholomew share approve-local --competency-id <yours> --slug <slug> --approver "$(whoami)" --db <your kernel db>
+bartholomew share review-local  accept --competency-id <yours> --slug <slug> --reviewer "$(whoami)" --db <your kernel db>
+```
+
+`adopt-local` writes a candidate under a kind retrieval structurally cannot
+see. `approve-local` is the same candidate-bound approval an entirely local
+lesson needs, fingerprinted to this candidate's exact content. `review-local
+accept` is the only one of the three that makes anything retrievable, and it
+refuses without the approval — there is no switch that skips it.
+`review-local reject` and `review-local customise --rule ... --conditions ...
+--step ...` are the other two decisions; customising makes it a local fork and
+invalidates any approval already granted, deliberately, because the approval
+was for the old text.
+
+If a command reports `not_stored`, the write is waiting in the consent inbox
+(`pending_sensitive_writes`) — an adopted share is somebody else's words, so
+the privacy gate scans it in full. Approve it there and run the command
+again; nothing was silently discarded.
 
 ### 3.4 Publish a revision
 
@@ -316,8 +401,18 @@ decide for themselves.
 
 ### 3.6 Handling a revoked or conflicting local adoption
 
-* **Revoked upstream.** `share provenance` shows `revoked: true`, and the
-  local candidate's summary reads `[withdrawn upstream]`. A withdrawn share
+* **Revoked upstream.** `share provenance` shows `revoked: true`. Carry that
+  into your own runtime so your local candidate says so too:
+
+  ```bash
+  bartholomew share mark-revoked --competency-id <id> --slug <slug> \
+      --revoked-at "<the revoked_at from share provenance>" --db <your kernel db>
+  ```
+
+  The candidate's summary then reads `[withdrawn upstream]`, and it can no
+  longer be approved or accepted. Anything you already accepted is untouched
+  and stays yours — review it and reject or supersede it on its merits, not
+  automatically. A withdrawn share
   cannot be approved or accepted. Anything already accepted stays — review it
   and reject or supersede it on its merits, not automatically.
 * **A conflicting update.** `share inbox` shows `update: yes` when a newer

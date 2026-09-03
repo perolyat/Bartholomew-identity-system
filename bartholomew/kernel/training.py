@@ -187,11 +187,21 @@ class TrainingSubmission:
             reserved -= SHARE_ADOPTION_SOURCE_TYPES
 
         if self.source_type in reserved:
-            errors.append(
-                f"source_type {self.source_type!r} is reserved for S5.4 "
-                "(Bartholomew-originated learning) and cannot be submitted as training; "
-                f"allowed: {sorted(allowed)}",
-            )
+            # Two reserved families, two truthful messages. Telling a caller
+            # that `trusted_share` is "reserved for S5.4" would name a slice
+            # that has nothing to do with trusted-group sharing.
+            if self.source_type in SHARE_ADOPTION_SOURCE_TYPES:
+                errors.append(
+                    f"source_type {self.source_type!r} is reserved for adopted "
+                    "trusted-group shares (Package E) and cannot be submitted as "
+                    f"training; allowed: {sorted(allowed)}",
+                )
+            else:
+                errors.append(
+                    f"source_type {self.source_type!r} is reserved for S5.4 "
+                    "(Bartholomew-originated learning) and cannot be submitted as training; "
+                    f"allowed: {sorted(allowed)}",
+                )
         elif self.source_type not in allowed:
             errors.append(
                 f"source_type must be one of {sorted(allowed)}, got {self.source_type!r}",

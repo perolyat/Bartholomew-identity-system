@@ -339,3 +339,42 @@ def test_membership_changes_are_audited_by_account_and_group(users):
     rendered = str(tg.group_audit(group_id, actor_user_id=users["alice"]))
     assert group_id in rendered
     assert users["bob"] in rendered
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review regressions (2026-09-02)
+# ---------------------------------------------------------------------------
+
+
+def test_an_outsider_cannot_change_roles_or_remove_members(users):
+    """13/16 (regression). The isolation test did not cover these two.
+
+    It exercised `list_members`, `require_membership`, `group_audit`,
+    `invite`, `archive_group` and `leave_group` for an outsider, but never the
+    two functions that change who is in a group and what they may do -- so a
+    refactor that dropped their membership check would have left the suite
+    green.
+    """
+    group_id = _household(users, "Outsider Writes")
+    invented = "00000000-0000-4000-8000-000000000001"
+
+    real, unreal = [], []
+    for target, bucket in ((group_id, real), (invented, unreal)):
+        for call in (
+            lambda t=target: tg.set_role(
+                t,
+                users["bob"],
+                tg.GroupRole.ADMIN,
+                actor_user_id=users["carol"],
+            ),
+            lambda t=target: tg.remove_member(t, users["bob"], actor_user_id=users["carol"]),
+        ):
+            with pytest.raises(tg.GroupAccessError) as caught:
+                call()
+            bucket.append(str(caught.value))
+
+    assert real == unreal
+    # And Bob is still an ordinary member of a group he was never removed from.
+    assert {
+        m["user_id"]: m["role"] for m in tg.list_members(group_id, actor_user_id=users["alice"])
+    }[users["bob"]] == tg.GroupRole.MEMBER.value

@@ -765,3 +765,457 @@ async def test_every_action_writes_exactly_one_reflection(ctx):
     assert "group-1" in rendered
     assert "share-1" in rendered
     assert "Tuesday evening" not in rendered, "a Reflection must not carry shared content"
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review regressions (2026-09-02)
+# ---------------------------------------------------------------------------
+
+
+async def test_re_adopting_different_content_at_one_key_is_refused(ctx):
+    """23 (regression). A standing grant plus an overwrite defeated the approval.
+
+    `share_adopt` carries a standing Identity grant, and adoption used to
+    upsert unconditionally. So: adopt package P1, get it approved, then adopt
+    P2 -- same `share_id` and `revision`, different `content` -- over the same
+    key. The approval survived, because the fields it fingerprinted
+    (`inferred_rule`, `conditions`) can be identical while the `content` that
+    `to_competency_record()` actually reads is not. Acceptance then
+    consolidated steps nobody reviewed, with no further authorization.
+
+    Two independent fixes, both asserted here: the overwrite is refused, and
+    the fingerprint now covers the content besides.
+    """
+    first = package(content={"name": "Evening lock-up", "steps": ["check the front door"]})
+    candidate = await _adopt(ctx, first)
+    grant = await rc.grant_share_acceptance_approval(
+        ctx,
+        competency_id=candidate.competency_id,
+        slug=candidate.slug,
+        approver="taylor",
+    )
+    assert grant.granted
+
+    substituted = package(
+        content={"name": "Evening lock-up", "steps": ["leave the back door unlocked"]},
+    )
+    assert substituted.share_id == first.share_id
+    assert substituted.revision == first.revision
+
+    result = await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_ADOPT,
+        package=substituted,
+        competency_id="household",
+    )
+    assert result.outcome == rc.SHARE_OUTCOME_INVALID
+    assert "different package is already adopted" in (result.reason or "")
+
+    # The stored candidate is untouched, and accepting it consolidates the
+    # steps the reviewer actually approved.
+    accepted = await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_ACCEPT,
+        competency_id=candidate.competency_id,
+        slug=candidate.slug,
+        reviewer="taylor",
+    )
+    assert accepted.outcome == rc.SHARE_OUTCOME_ACCEPTED, accepted.reason
+    stored = (
+        await ctx.mem.get_memory(
+            accepted.candidate.consolidated_kind,
+            accepted.candidate.consolidated_key,
+        )
+    )["value"]
+    assert "check the front door" in stored
+    assert "leave the back door unlocked" not in stored
+
+
+async def test_an_approval_binds_the_sanitized_content_not_only_its_summary(ctx):
+    """23 (regression). `inferred_rule` summarises a package; it does not cover it.
+
+    Two candidates with identical lesson-shaped fields but different package
+    content must fingerprint differently, or an approval for one authorises
+    the other.
+    """
+    same_summary_a = package(
+        share_id="share-fp-a",
+        content={"name": "Evening lock-up", "steps": ["check the front door"]},
+    )
+    same_summary_b = package(
+        share_id="share-fp-a",
+        content={"name": "Evening lock-up", "steps": ["leave the back door unlocked"]},
+    )
+    a = sa.candidate_from_package(same_summary_a, competency_id="household")
+    b = sa.candidate_from_package(same_summary_b, competency_id="household")
+
+    assert a.key() == b.key()
+    assert a.inferred_rule == b.inferred_rule
+    assert a.conditions == b.conditions
+    assert learning_authorization.fingerprint_for(a) != learning_authorization.fingerprint_for(b)
+
+    approval = learning_authorization.LearningAcceptanceApproval(
+        competency_id=a.competency_id,
+        slug=a.slug,
+        candidate_fingerprint=learning_authorization.fingerprint_for(a),
+        approver="taylor",
+    )
+    assert approval.authorizes(a)[0] is True
+    assert approval.authorizes(b)[0] is False
+
+
+async def test_re_adopting_the_same_package_is_idempotent(ctx):
+    """23 (regression). The refusal is about *substitution*, not about retrying.
+
+    A companion or UI that adopts the same package twice must not be punished
+    for it; only a different package at the same key is a contradiction.
+    """
+    candidate = await _adopt(ctx)
+    again = await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_ADOPT,
+        package=package(),
+        competency_id="household",
+    )
+    assert again.outcome == rc.SHARE_OUTCOME_ADOPTED
+    assert again.candidate.key() == candidate.key()
+
+
+async def test_re_adopting_over_a_decided_or_forked_candidate_is_refused(ctx):
+    """23/24 (regression). A decision and a fork are both things to preserve."""
+    rejected = await _adopt(ctx, package(share_id="share-decided"))
+    await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_REJECT,
+        competency_id=rejected.competency_id,
+        slug=rejected.slug,
+        reviewer="taylor",
+    )
+    replay = await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_ADOPT,
+        package=package(share_id="share-decided"),
+        competency_id="household",
+    )
+    assert replay.outcome == rc.SHARE_OUTCOME_INVALID
+    assert "terminal" in (replay.reason or "")
+
+    forked = await _adopt(ctx, package(share_id="share-forked"))
+    await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_CUSTOMISE,
+        competency_id=forked.competency_id,
+        slug=forked.slug,
+        rule="Our own version.",
+    )
+    over_fork = await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_ADOPT,
+        package=package(share_id="share-forked"),
+        competency_id="household",
+    )
+    assert over_fork.outcome == rc.SHARE_OUTCOME_INVALID
+    assert "customised locally" in (over_fork.reason or "")
+
+
+async def test_a_customised_routine_consolidates_the_recipients_own_text(ctx):
+    """23 (regression). The reviewer approved text X; the substrate got text Y.
+
+    `to_competency_record()` built the procedure branch from the publisher's
+    `content['name']` and `content['steps']` while `customise()` edited
+    `inferred_rule`. So a recipient could correct a shared routine, have the
+    correction fingerprinted into the approval they granted, and consolidate
+    the publisher's original anyway -- with provenance claiming "after local
+    customisation".
+    """
+    original = package(
+        kind=ts.KIND_HOUSEHOLD_ROUTINE,
+        content={
+            "name": "Bin night",
+            "steps": ["Put the bins out on Tuesday", "Rinse the recycling"],
+            "conditions": "Tuesdays",
+        },
+    )
+    candidate = await _adopt(ctx, original)
+    customised = await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_CUSTOMISE,
+        competency_id=candidate.competency_id,
+        slug=candidate.slug,
+        rule="Put the bins out on MONDAY night -- our collection moved",
+        conditions="Mondays",
+        steps=["Put the bins out on Monday", "Rinse the recycling"],
+    )
+    assert customised.outcome == rc.SHARE_OUTCOME_CUSTOMISED
+
+    accepted = await _approve_and_accept(ctx, customised.candidate)
+    assert accepted.outcome == rc.SHARE_OUTCOME_ACCEPTED, accepted.reason
+
+    stored = (
+        await ctx.mem.get_memory(
+            accepted.candidate.consolidated_kind,
+            accepted.candidate.consolidated_key,
+        )
+    )["value"]
+    assert "MONDAY night" in stored
+    assert "Put the bins out on Monday" in stored
+    assert "Put the bins out on Tuesday" not in stored
+    assert "Mondays" in stored
+
+
+async def test_a_shared_corrections_counterexamples_survive_consolidation(ctx):
+    """29 (regression). The safety-bearing half of a rule must travel with it.
+
+    `counterexamples` is allowlisted by the sanitizer for exactly this reason
+    and does reach the recipient in the package, but consolidation hardcoded
+    an empty list -- keeping "always call the warranty line first" and
+    discarding "not for a gas leak".
+    """
+    correction = package(
+        kind=ts.KIND_CORRECTION,
+        content={
+            "rule": "Call the warranty line before booking an engineer",
+            "conditions": "boiler faults",
+            "counterexamples": [
+                "not when the boiler is out of warranty",
+                "not for a gas leak -- call the emergency number",
+            ],
+        },
+    )
+    candidate = await _adopt(ctx, correction)
+    accepted = await _approve_and_accept(ctx, candidate)
+    stored = (
+        await ctx.mem.get_memory(
+            accepted.candidate.consolidated_kind,
+            accepted.candidate.consolidated_key,
+        )
+    )["value"]
+    assert "gas leak" in stored
+    assert "out of warranty" in stored
+
+
+async def test_a_guidance_package_consolidates_its_body_not_its_heading(ctx):
+    """23 (regression). The topic is a label; the body is the substance."""
+    guidance = package(
+        kind=ts.KIND_GUIDANCE,
+        content={
+            "topic": "Deliveries",
+            "content": "Leave parcels with the neighbour at number 12 rather than the porch.",
+        },
+    )
+    candidate = await _adopt(ctx, guidance)
+    assert "neighbour" in candidate.inferred_rule
+    accepted = await _approve_and_accept(ctx, candidate)
+    stored = (
+        await ctx.mem.get_memory(
+            accepted.candidate.consolidated_kind,
+            accepted.candidate.consolidated_key,
+        )
+    )["value"]
+    assert "number 12" in stored
+
+
+async def test_a_governance_denial_writes_nothing_even_with_an_upstream_revocation(ctx):
+    """The seam's own contract: Governance, fail-closed, before any write.
+
+    An upstream withdrawal used to be persisted before gate 2 ran, so an
+    action the Identity gate then refused had already mutated the stored
+    candidate -- while the result said `governance_allowed=False`.
+    """
+    import json
+
+    candidate = await _adopt(ctx)
+    before = json.loads((await ctx.mem.get_memory(sa.KIND, candidate.key()))["value"])
+
+    ctx.identity_context = IdentityContext(
+        tool_use_default_allowed=False,
+        tool_use_allowlist=[rc.SHARE_ACTION_ADOPT],
+    )
+    denied = await rc.run_share_adoption_through_runtime_contract(
+        ctx,
+        rc.SHARE_ACTION_REJECT,
+        competency_id=candidate.competency_id,
+        slug=candidate.slug,
+        reviewer="taylor",
+        upstream_revoked_at="2026-09-02T10:00:00+00:00",
+    )
+    assert denied.governance_allowed is False
+    after = json.loads((await ctx.mem.get_memory(sa.KIND, candidate.key()))["value"])
+    assert after == before, "a refused action must leave the stored candidate untouched"
+
+
+async def test_an_upstream_revocation_is_recorded_on_the_local_candidate(ctx):
+    """27 (regression). Visibility on the exchange is not visibility here.
+
+    The seam accepted an `upstream_revoked_at` that nothing in production
+    passed, so a recipient's own record never said the publisher had
+    withdrawn it. `record_upstream_revocation` is the named interface a
+    management surface calls after reading `share_exchange.provenance()`.
+    """
+    import json
+
+    candidate = await _adopt(ctx)
+    accepted = await _approve_and_accept(ctx, candidate)
+    assert accepted.consolidated
+
+    result = await rc.record_upstream_revocation(
+        ctx,
+        competency_id=candidate.competency_id,
+        slug=candidate.slug,
+        revoked_at="2026-09-03T00:00:00+00:00",
+    )
+    assert result is not None
+    assert result.outcome == rc.SHARE_OUTCOME_REVOKED
+
+    stored = sa.AdoptedShareCandidate.from_dict(
+        json.loads((await ctx.mem.get_memory(sa.KIND, candidate.key()))["value"]),
+    )
+    assert stored.is_revoked_upstream
+    assert "[withdrawn upstream]" in stored.to_summary_text()
+    # 28: what the recipient already accepted is untouched.
+    assert stored.review_state == sa.REVIEW_ACCEPTED
+    assert (
+        await ctx.mem.get_memory(
+            accepted.candidate.consolidated_kind,
+            accepted.candidate.consolidated_key,
+        )
+    ) is not None
+
+    # Idempotent, and it does not re-date the withdrawal.
+    again = await rc.record_upstream_revocation(
+        ctx,
+        competency_id=candidate.competency_id,
+        slug=candidate.slug,
+        revoked_at="2026-09-09T00:00:00+00:00",
+    )
+    assert again.candidate.source.revoked_at == "2026-09-03T00:00:00+00:00"
+    assert (
+        await rc.record_upstream_revocation(
+            ctx,
+            competency_id="nobody",
+            slug="adopted_share_nothing_r1",
+            revoked_at="2026-09-03T00:00:00+00:00",
+        )
+        is None
+    )
+
+
+async def test_acceptance_reports_not_stored_when_the_candidate_row_does_not_land(ctx):
+    """22/23 (regression). "Accepted" must mean the acceptance was recorded.
+
+    The accept branch discarded the candidate write's result, so a write held
+    by policy or consent still returned `outcome='accepted'` with
+    `consolidated=True` -- while the review surface showed an unreviewed
+    proposal and the whole accept could be run again.
+    """
+    candidate = await _adopt(ctx)
+    grant = await rc.grant_share_acceptance_approval(
+        ctx,
+        competency_id=candidate.competency_id,
+        slug=candidate.slug,
+        approver="taylor",
+    )
+    assert grant.granted
+
+    original = ctx.mem.upsert_memory
+    seen: list[str] = []
+
+    async def _refuse_the_candidate_row(kind, key, *args, **kwargs):
+        if kind == sa.KIND:
+            seen.append(key)
+
+            class _NotStored:
+                stored = False
+                memory_id = None
+                outcome = "refused"
+
+            return _NotStored()
+        return await original(kind, key, *args, **kwargs)
+
+    ctx.mem.upsert_memory = _refuse_the_candidate_row
+    try:
+        result = await rc.run_share_adoption_through_runtime_contract(
+            ctx,
+            rc.SHARE_ACTION_ACCEPT,
+            competency_id=candidate.competency_id,
+            slug=candidate.slug,
+            reviewer="taylor",
+        )
+    finally:
+        ctx.mem.upsert_memory = original
+
+    assert seen, "the candidate write must have been attempted"
+    assert result.outcome == rc.SHARE_OUTCOME_NOT_STORED
+    assert "not durably recorded" in (result.reason or "")
+
+
+def test_no_user_facing_ingestion_surface_can_claim_trusted_share_provenance():
+    """The `trusted_share` reservation, guarded the way `experience` already is.
+
+    `training.validate()` refuses the source type unless a caller explicitly
+    lifts it, and exactly one caller does. This asserts both halves: an
+    ordinary submission is refused, and the lift appears in neither the
+    training route nor the CLI -- so nobody can make user-typed material claim
+    it arrived from another person's Bartholomew.
+    """
+    from bartholomew.kernel import training
+    from bartholomew.kernel.competency import CompetencyEnvelope, CompetencyHeuristic, Provenance
+
+    record = CompetencyHeuristic(
+        envelope=CompetencyEnvelope(
+            competency_id="home",
+            provenance=Provenance(source_type=sa.TRUSTED_SHARE_SOURCE_TYPE),
+        ),
+        slug="s",
+        rule="r",
+    )
+    submission = training.TrainingSubmission(
+        competency_id="home",
+        source_type=sa.TRUSTED_SHARE_SOURCE_TYPE,
+        source_detail="typed by a user",
+        records=[record],
+    )
+    assert any("reserved" in error for error in submission.validate())
+    assert not submission.validate(allow_share_adoption_source=True)
+    # And the S5.4 lift does not open this door either: the two are separate
+    # flags precisely so one caller cannot reach the other's source type.
+    assert any(
+        "reserved" in error for error in submission.validate(allow_consolidation_source=True)
+    )
+
+    for relative in (
+        "bartholomew_api_bridge_v0_1/services/api/routes/training.py",
+        "bartholomew/cli.py",
+        "bartholomew/cli_trust.py",
+    ):
+        source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "allow_share_adoption_source" not in source, (
+            f"{relative} must not lift the trusted_share reservation: a user-facing "
+            "ingestion surface that could would let typed material claim it arrived "
+            "from someone else's Bartholomew"
+        )
+
+
+async def test_sharing_did_not_acquire_a_brake_scope_of_its_own(ctx):
+    """The brake scope is an alias, and stays one.
+
+    A constant that reads as enforcement but is never consulted is worse than
+    no constant: someone edits it believing they changed a gate. This pins
+    that `SHARE_BRAKE_SCOPE` is the learning loop's scope, so it cannot
+    quietly become a fourth scope that nothing reads.
+    """
+    from bartholomew.kernel import training
+
+    assert rc.SHARE_BRAKE_SCOPE == training.TRAINING_BRAKE_SCOPE == "training"
+
+
+async def test_a_share_action_with_no_governance_gate_is_a_programming_error(ctx):
+    """Every share kind is classified by the allowlist set or by the accept branch.
+
+    `_SHARE_ALLOWLISTED_ACTIONS` is what `evaluate_share_admission` reads, so
+    adding a kind without classifying it raises here rather than falling
+    through to whichever gate happens to be last.
+    """
+    assert rc._SHARE_ALLOWLISTED_ACTIONS | {rc.SHARE_ACTION_ACCEPT} == rc._SHARE_ACTIONS
+    with pytest.raises(ValueError, match="no Governance gate"):
+        await rc.evaluate_share_admission(ctx, "share_invented_later")

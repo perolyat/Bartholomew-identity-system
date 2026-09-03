@@ -57,7 +57,7 @@ from bartholomew.kernel.trusted_share import (
 )
 
 from .store import platform_connection, record_platform_audit
-from .trusted_groups import GroupAccessError, require_membership
+from .trusted_groups import GroupAccessError, assert_membership_on, require_membership
 
 #: Receipt states. `delivered` is the resting state of anything in an inbox:
 #: a package that has been made visible and about which the recipient has
@@ -197,15 +197,37 @@ def publish(
     ts = _now(now)
 
     with platform_connection(db_path) as conn:
+        # Re-checked inside the write transaction, not only on the read
+        # connection above. The two are separate SQLite connections, so a
+        # concurrent `remove_member` committing in between would otherwise let
+        # a just-removed member's publication land anyway.
+        assert_membership_on(conn, package.group_id, publisher_user_id)
+
         existing = conn.execute(
-            "SELECT MAX(revision) AS latest FROM platform_share_packages WHERE share_id = ?",
+            "SELECT publisher_user_id, group_id, MAX(revision) AS latest "
+            "FROM platform_share_packages WHERE share_id = ?",
             (package.share_id,),
         ).fetchone()
         latest = existing["latest"] if existing else None
         if latest is not None:
+            # Two refusals, and which one you get depends only on what the
+            # caller can already see. A share id is caller-chosen on this
+            # path, so a message that reported what was found would make
+            # `publish()` an oracle for the existence -- and revision count --
+            # of shares in groups the caller is not in. The helpful branch
+            # fires only for a share this very publisher published into this
+            # very group.
+            if (
+                existing["publisher_user_id"] == publisher_user_id
+                and existing["group_id"] == package.group_id
+            ):
+                raise PublicationError(
+                    f"share {package.share_id} already exists at revision {latest}; "
+                    "use publish_revision() so the update is offered rather than "
+                    "substituted",
+                )
             raise PublicationError(
-                f"share {package.share_id} already exists at revision {latest}; "
-                "use publish_revision() so the update is offered rather than substituted",
+                "this share_id is not available; run propose() again to obtain a fresh one",
             )
         _insert_revision(conn, package, ts)
         record_platform_audit(
@@ -258,13 +280,19 @@ def publish_revision(
             raise ShareNotFoundError(f"no share {share_id!r}")
         current = _package_from_row(rows)
 
-    if current.publisher_user_id != publisher_user_id:
-        # Not `ShareNotFoundError`: a group member can legitimately see this
-        # share, so hiding its existence here would be theatre. What they may
-        # not do is revise somebody else's publication.
+    try:
         require_membership(current.group_id, publisher_user_id, db_path=db_path)
+    except GroupAccessError as exc:
+        # Collapsed into the same refusal an unknown share id gets. Letting
+        # `GroupAccessError` escape here made the exception *type* the oracle
+        # `ShareNotFoundError` exists to remove: a caller could tell "a real
+        # share in a group you cannot see" from "no such share".
+        raise ShareNotFoundError(f"no share {share_id!r}") from exc
+    if current.publisher_user_id != publisher_user_id:
+        # A member of the group can legitimately see this share, so hiding its
+        # existence from them would be theatre. What they may not do is revise
+        # somebody else's publication.
         raise PublicationError("only the original publisher may revise a share")
-    require_membership(current.group_id, publisher_user_id, db_path=db_path)
 
     if current.is_revoked:
         raise PublicationError(
@@ -289,6 +317,7 @@ def publish_revision(
         # Re-check inside the write transaction. The read above was a
         # separate connection, so a revision could have landed in between;
         # this is the check that actually holds.
+        assert_membership_on(conn, current.group_id, publisher_user_id)
         guard = conn.execute(
             "SELECT MAX(revision) AS latest FROM platform_share_packages WHERE share_id = ?",
             (share_id,),
@@ -298,7 +327,18 @@ def publish_revision(
                 f"share {share_id} moved to revision {guard['latest']} while this "
                 "revision was being prepared; nothing was written",
             )
-        _insert_revision(conn, package, ts)
+        try:
+            _insert_revision(conn, package, ts)
+        except sqlite3.IntegrityError as exc:
+            # The guard above is a read on a deferred transaction, so two
+            # genuinely simultaneous revisions can both pass it. What actually
+            # prevents an overwrite is the `(share_id, revision)` primary key
+            # -- and the loser must see the documented refusal rather than a
+            # raw IntegrityError a caller has no reason to be catching.
+            raise ConcurrentRevisionError(
+                f"share {share_id} moved to revision {package.revision} while this "
+                "revision was being written; nothing was written",
+            ) from exc
         record_platform_audit(
             conn,
             "share.revised",
@@ -480,7 +520,16 @@ def inbox(
     if group_id is not None:
         require_membership(group_id, user_id, db_path=db_path, allow_archived=True)
 
-    clauses = ["m.user_id = ?", "m.removed_at IS NULL", "p.publisher_user_id != ?"]
+    # `a.disabled_at IS NULL` for the same reason `trusted_groups._membership`
+    # carries it: this query builds its own join rather than going through
+    # that function, so without it a disabled account still reads every
+    # household inbox it was ever in.
+    clauses = [
+        "m.user_id = ?",
+        "m.removed_at IS NULL",
+        "a.disabled_at IS NULL",
+        "p.publisher_user_id != ?",
+    ]
     params: list[object] = [user_id, user_id]
     if group_id is not None:
         clauses.append("p.group_id = ?")
@@ -493,6 +542,7 @@ def inbox(
             "        WHERE q.share_id = p.share_id) AS latest_revision "
             "FROM platform_share_packages p "
             "JOIN platform_group_members m ON m.group_id = p.group_id "
+            "JOIN platform_accounts a ON a.user_id = m.user_id "
             "LEFT JOIN platform_share_receipts r "
             "       ON r.share_id = p.share_id AND r.recipient_user_id = m.user_id "
             f"WHERE {' AND '.join(clauses)} "
@@ -641,6 +691,8 @@ def adopt(
 
     ts = _now(now)
     with platform_connection(db_path) as conn:
+        # Same transaction as the write, for the reason `publish` gives.
+        assert_membership_on(conn, package.group_id, actor_user_id)
         conn.execute(
             "INSERT INTO platform_share_receipts"
             "(share_id, recipient_user_id, state, adopted_revision, updated_at) "
@@ -677,6 +729,7 @@ def mark_local_fork(
     Marking it is what makes that visible on the exchange side; the local
     record itself is the recipient's, in their own runtime.
     """
+    package = inspect(share_id, actor_user_id=actor_user_id, db_path=db_path)
     ts = _now(now)
     with platform_connection(db_path) as conn:
         row = conn.execute(
@@ -697,7 +750,9 @@ def mark_local_fork(
             conn,
             "share.local_fork",
             user_id=actor_user_id,
-            detail=f"share={share_id}",
+            # Leads with the group, like every other group/share audit row, so
+            # `trusted_groups.group_audit`'s anchored filter sees it.
+            detail=f"group={package.group_id} share={share_id}",
             ts=ts,
         )
 

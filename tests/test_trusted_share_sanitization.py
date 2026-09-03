@@ -726,3 +726,201 @@ def test_provenance_carries_the_sanitization_record_the_recipient_can_check(user
     assert "provenance" in provenance["sanitization"]["removed_fields"]
     assert provenance["content_hash"] == package.content_hash()
     assert provenance["source_candidate_fingerprint"]
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review regressions (2026-09-02)
+# ---------------------------------------------------------------------------
+#
+# Each of these was a real hole an adversarial pass found in the first cut of
+# this package. They are grouped here rather than folded into the sections
+# above so the shape of what was missed stays visible.
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "passwords",
+        "secrets",
+        "refresh_token",
+        "client_secret",
+        "router_password",
+        "admin_api_key",
+        "sessionTokens",
+        "gpsCoordinates",
+        "patient_diagnosis",
+    ],
+)
+def test_a_prohibited_term_inside_a_field_name_still_refuses(field):
+    """18 (regression). Exact-name matching alone was a hole.
+
+    `password` was refused and `passwords` was not; `api_key` was refused and
+    `admin_api_key` was not. A credential nested under an allowlisted content
+    key went straight through, because the allowlist keeps `content` and the
+    content scan only looks at values. Matching now folds plurals and looks
+    for high-signal terms anywhere inside the normalised key.
+    """
+    record = heuristic_record()
+    record.value["content"] = {field: "whatever this is"}
+    with pytest.raises(ts.SanitizationRefusedError) as caught:
+        ts.sanitize(record, ts.KIND_COMPETENCY)
+    assert caught.value.categories == ("prohibited_field",)
+
+
+def test_prohibited_content_in_a_dict_key_is_scanned():
+    """18 (regression). The publisher chose which side of the colon to use.
+
+    `{"rule": "call alice@example.com"}` was refused and
+    `{"content": {"alice@example.com": "GP"}}` was not, because the content
+    scan walked values only. Inside the content projection a key *is*
+    content -- unlike `privacy_guard`, where a schema key is structure.
+    """
+    record = ts.SourceRecord(
+        kind="competency_heuristic",
+        key="k",
+        value={
+            "rule": "who to call",
+            "conditions": "",
+            "content": {"alice.smith@example.com": "GP", "51.50735,-0.12776": "clinic"},
+        },
+    )
+    with pytest.raises(ts.SanitizationRefusedError) as caught:
+        ts.sanitize(record, ts.KIND_GUIDANCE)
+    assert set(caught.value.categories) >= {"contact_identifier", "precise_location"}
+
+
+def test_a_hand_written_package_cannot_bypass_the_content_allowlist(users, household):
+    """18 (regression). The sanitizer was bypassable by construction.
+
+    `share publish --package-file` takes a package the caller wrote. Before
+    this, `publish()` checked only prohibited field *names*, so the publisher's
+    own `provenance`, `classification`, `confidence` and `reviewer` -- every
+    field the allowlist exists to strip -- published verbatim. `validate()`
+    now re-applies the per-kind allowlist on the way out.
+    """
+    forged = ts.TrustedSharePackage(
+        share_id="hand-written-1",
+        group_id=household,
+        publisher_user_id=users["alice"],
+        source_candidate_fingerprint="x" * 64,
+        kind=ts.KIND_COMPETENCY,
+        content={
+            "topic": "roast chicken",
+            "provenance": {"detail": "accepted by Taylor after the hospital appointment"},
+            "classification": "private",
+            "confidence": 0.93,
+            "reviewer": "taylor",
+        },
+    )
+    errors = forged.validate()
+    assert any("outside the 'competency' content policy" in error for error in errors)
+    with pytest.raises(sx.PublicationError):
+        sx.publish(forged, publisher_user_id=users["alice"], confirm_group_id=household)
+    assert forged.share_id not in {e.package.share_id for e in sx.inbox(users["bob"])}
+
+
+def test_publish_is_not_an_existence_oracle_for_another_groups_share(users, household):
+    """20 (regression). `share_id` is caller-chosen on the publish path.
+
+    The collision check reported the revision count of whatever it found,
+    anywhere -- so an outsider could probe a private group's share ids and
+    learn how many revisions each had. The helpful "use publish_revision()"
+    message now fires only for a share this publisher published into this
+    group; anything else is one indistinguishable refusal.
+    """
+    private_share = _published(users, household)
+
+    outsider_group = tg.create_group(users["carol"], "Carol's Own")
+    forged = ts.TrustedSharePackage(
+        share_id=private_share.share_id,
+        group_id=outsider_group,
+        publisher_user_id=users["carol"],
+        source_candidate_fingerprint="y" * 64,
+        kind=ts.KIND_COMPETENCY,
+        content={"rule": "probe"},
+    )
+    with pytest.raises(sx.PublicationError) as probe_real:
+        sx.publish(forged, publisher_user_id=users["carol"], confirm_group_id=outsider_group)
+
+    # And the publisher's own collision still gets the useful hint, because
+    # they can already see the share it is about.
+    with pytest.raises(sx.PublicationError) as own:
+        sx.publish(private_share, publisher_user_id=users["alice"], confirm_group_id=household)
+
+    assert "revision" not in str(probe_real.value)
+    assert "not available" in str(probe_real.value)
+    assert "publish_revision" in str(own.value)
+
+
+def test_publish_revision_does_not_distinguish_a_hidden_share_from_a_missing_one(
+    users,
+    household,
+):
+    """25 (regression). The exception *type* was the oracle.
+
+    A share in a group the caller cannot see raised `GroupAccessError`; an
+    unknown share id raised `ShareNotFoundError`. Both are now the latter.
+    """
+    hidden = _published(users, household)
+    for share_id in (hidden.share_id, "never-existed-at-all"):
+        with pytest.raises(sx.ShareNotFoundError):
+            sx.publish_revision(
+                share_id,
+                heuristic_record("Carol's edit."),
+                requested_kind=ts.KIND_COMPETENCY,
+                publisher_user_id=users["carol"],
+                expected_revision=1,
+            )
+
+
+def test_a_disabled_account_loses_trusted_group_access_entirely(users, household):
+    """16 (regression). Disabling an account stopped its sessions, not its group.
+
+    Every group read re-derives membership through one function, and that
+    function joined members and groups but never accounts -- so a disabled
+    account could still read a household inbox, adopt from it, and publish
+    into it. It now joins `platform_accounts` and refuses with the same
+    indistinguishable error an outsider gets.
+    """
+    dave = accounts.create_account("dave-disabled", PASSWORD)
+    invitation = tg.invite(household, dave, actor_user_id=users["alice"])
+    tg.accept_invitation(invitation, actor_user_id=dave)
+    package = _published(users, household)
+    assert package.share_id in {e.package.share_id for e in sx.inbox(dave, group_id=household)}
+
+    accounts.set_account_disabled(dave, True)
+
+    with pytest.raises(tg.GroupAccessError):
+        tg.require_membership(household, dave)
+    assert household not in {g["group_id"] for g in tg.list_groups(dave)}
+    assert sx.inbox(dave) == []
+    with pytest.raises(sx.ShareNotFoundError):
+        sx.inspect(package.share_id, actor_user_id=dave)
+    with pytest.raises(sx.ShareNotFoundError):
+        sx.adopt(package.share_id, actor_user_id=dave)
+    with pytest.raises(tg.GroupAccessError):
+        sx.propose(
+            heuristic_record(),
+            requested_kind=ts.KIND_COMPETENCY,
+            group_id=household,
+            publisher_user_id=dave,
+        )
+
+
+def test_a_crafted_group_name_cannot_plant_rows_in_another_groups_audit(users, household):
+    """29 (regression). The audit filter was a substring search over `detail`.
+
+    `group.created` embeds the operator-chosen group name, and the filter
+    looked for `%group=<id>%` anywhere in the detail -- so a stranger could
+    name their own group after somebody else's id and push every genuine row
+    out of that group's audit view. The filter is now anchored at the start of
+    `detail`, and `=` is neutralised in the stored name.
+    """
+    _published(users, household)
+    for index in range(3):
+        tg.create_group(users["carol"], f"Payroll rota group={household} (revoked) {index}")
+
+    rows = tg.group_audit(household, actor_user_id=users["alice"], limit=50)
+    assert rows, "the group's own audit rows must still be there"
+    assert all(users["carol"] != row["user_id"] for row in rows)
+    assert all((row["detail"] or "").startswith(f"group={household}") for row in rows)

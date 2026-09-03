@@ -121,6 +121,12 @@ def devices_approve(
     device_id: str = typer.Argument(..., help="device_id from `devices list`"),
     approver: str = typer.Option(..., help="Who is approving this enrolment"),
     ttl_hours: int = typer.Option(24, help="How long the one-time secret stays usable"),
+    permit: list[str] = typer.Option(
+        None,
+        "--permit",
+        help="Ceiling on what this device may ever do, as 'kind@version'. Repeatable. "
+        "Omit to leave it unrestricted -- see `devices capabilities`.",
+    ),
 ) -> None:
     """Approve a pending device and print its one-time enrolment secret.
 
@@ -128,17 +134,32 @@ def devices_approve(
     out of band -- a password manager's secure note, or typed at the console
     -- and never by email or chat. If it is lost, approve again: the previous
     secret is revoked in the same transaction.
+
+    `--permit` is the operator's ceiling. Approving a machine and believing
+    the capability list it later declares are two different acts, and only the
+    first is one you performed; without a ceiling a companion authorises
+    itself for everything it names.
     """
     from bartholomew.platform import devices
+    from bartholomew.platform.device_capabilities import ManifestError
 
     _init()
+    permitted = None
+    if permit:
+        permitted = []
+        for spec in permit:
+            kind, _, version = str(spec).partition("@")
+            if not version.isdigit():
+                _fail(f"--permit expects 'kind@version', got {spec!r}")
+            permitted.append({"kind": kind.strip(), "version": int(version)})
     try:
         issued = devices.approve_enrolment(
             device_id,
             approver=approver,
+            permitted_capabilities=permitted,
             ttl_s=max(1, ttl_hours) * 3600,
         )
-    except (devices.DeviceError, devices.DeviceAuthenticationError) as exc:
+    except (devices.DeviceError, devices.DeviceAuthenticationError, ManifestError) as exc:
         _fail(str(exc))
     console.print(f"\n[green]+ Enrolment approved[/green] {device_id}")
     console.print(f"  credential_id: {issued.credential_id}")
@@ -842,6 +863,286 @@ def share_provenance(
         console.print(json.dumps(sx.provenance(share_id, actor_user_id=actor), indent=2))
     except sx.ShareNotFoundError as exc:
         _fail(str(exc))
+
+
+# ---------------------------------------------------------------------------
+# The recipient's local half
+# ---------------------------------------------------------------------------
+#
+# Everything above this line talks to the control plane. Everything below it
+# talks to *one person's own kernel database* -- because that is where an
+# adopted candidate lives, and because the whole point of the split is that
+# taking a package from a group and believing it are separate acts in separate
+# stores.
+
+
+class _NoExperience:
+    """The CLI has no running Experience Kernel.
+
+    Returns empties rather than being absent so `_build_interpretation()`
+    takes its normal "nothing to add" path instead of logging a traceback per
+    field. Copied deliberately from `bartholomew/cli.py`'s `train` command:
+    the enrichment is genuinely unavailable here, and Governance and consent
+    are unaffected either way.
+    """
+
+    def get_active_goals(self):
+        return []
+
+    def get_active_pack_id(self):
+        return None
+
+    def get_context_string(self):
+        return ""
+
+
+class _CliContext:
+    """The minimal duck-typed context the share-adoption seam reads.
+
+    Deliberately the same seven attributes every other stream's seam uses --
+    Package E requires no eighth. `identity_context` is loaded from the
+    deployment's own `Identity.yaml`, so the CLI is governed by the same
+    allowlist a running Bartholomew is rather than by a permissive stand-in.
+    """
+
+    def __init__(self, mem, identity_context, governance_store=None):
+        self.mem = mem
+        self.objective_store = None
+        self.experience = _NoExperience()
+        self.persona_manager = _NoExperience()
+        self.working_memory = _NoExperience()
+        self.identity_context = identity_context
+        self.governance_store = governance_store
+        self.blocking_executor = None
+
+
+def _identity_context(identity_path: str):
+    import yaml
+
+    from identity_interpreter.identity_context import IdentityContext
+
+    try:
+        data = yaml.safe_load(Path(identity_path).read_text(encoding="utf-8")) or {}
+    except OSError as exc:
+        _fail(f"could not read {identity_path!r}: {exc}")
+    tool_use = data.get("tool_use") or {}
+    return IdentityContext(
+        tool_use_default_allowed=bool(tool_use.get("default_allowed", False)),
+        tool_use_allowlist=list(tool_use.get("allowlist", [])),
+    )
+
+
+def _run_local(db: str, identity_path: str, coro_factory):
+    """Open the recipient's kernel, run one seam call, close it."""
+    import asyncio
+
+    from bartholomew.kernel.memory_store import MemoryStore
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    identity = _identity_context(identity_path)
+
+    async def _run():
+        mem = MemoryStore(db)
+        await mem.init()
+        try:
+            ctx = _CliContext(mem, identity, GovernanceStore(db))
+            return await coro_factory(ctx)
+        finally:
+            await mem.close()
+
+    return asyncio.run(_run())
+
+
+def _report_local(result) -> None:
+    if result is None:
+        _fail("no such adopted share in this runtime")
+    if not result.governance_allowed:
+        _fail(f"refused by Governance ({result.outcome}): {result.reason}")
+    if result.outcome == "not_stored":
+        # Not a failure of the seam: `privacy_guard` scans an adopted share's
+        # content in full -- it is somebody else's words -- and with no consent
+        # handler registered (which is every CLI invocation) a match is queued
+        # rather than stored. Say where it went, because the alternative is an
+        # operator who thinks nothing happened, and auto-approving consent from
+        # a CLI would be weakening the gate rather than reporting it.
+        _fail(
+            f"{result.outcome}: {result.reason}\n"
+            "  If this was the privacy gate, the write is waiting in the consent\n"
+            "  inbox (`pending_sensitive_writes`). Approve it there and run this\n"
+            "  command again; nothing was silently discarded.",
+        )
+    if result.outcome in ("invalid", "not_found", "revoked_upstream"):
+        _fail(f"{result.outcome}: {result.reason}")
+
+
+@share_app.command("adopt-local")
+def share_adopt_local(
+    package_file: str = typer.Option(..., help="The package `share adopt` wrote out"),
+    competency_id: str = typer.Option(
+        ...,
+        help="Where this belongs in YOUR competency map. Your decision, not the publisher's.",
+    ),
+    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
+) -> None:
+    """Turn an adopted package into a local candidate in your own runtime.
+
+    **This is still not acceptance.** The candidate is stored under a kind
+    retrieval structurally cannot see, so nothing you have adopted can change
+    an answer Bartholomew gives until you approve and accept it below.
+    """
+    from bartholomew.kernel import runtime_contract as rc
+    from bartholomew.kernel.trusted_share import TrustedSharePackage
+
+    data = _read_json_file(package_file, "share package")
+    try:
+        package = TrustedSharePackage.from_dict(data)
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail(f"package file is not a share package: {exc}")
+
+    result = _run_local(
+        db,
+        identity,
+        lambda ctx: rc.run_share_adoption_through_runtime_contract(
+            ctx,
+            rc.SHARE_ACTION_ADOPT,
+            package=package,
+            competency_id=competency_id,
+        ),
+    )
+    _report_local(result)
+    console.print(f"\n[green]+ Adopted locally as a candidate[/green] {result.candidate.key()}")
+    console.print("  review_state: proposed -- nothing can reason from it yet.")
+    console.print(f"  slug: {result.candidate.slug}\n")
+
+
+@share_app.command("approve-local")
+def share_approve_local(
+    competency_id: str = typer.Option(..., help="The candidate's competency_id"),
+    slug: str = typer.Option(..., help="The candidate's slug, from `share adopt-local`"),
+    approver: str = typer.Option(..., help="Who is authorising this. Never anonymous."),
+    note: str = typer.Option(None, help="Why, for the audit trail"),
+    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
+) -> None:
+    """Authorise accepting one adopted share. Consolidates nothing on its own.
+
+    The same candidate-bound approval a lesson from your own experience needs,
+    bound by fingerprint to this candidate's exact content -- so editing it
+    afterwards invalidates this, deliberately.
+    """
+    from bartholomew.kernel import runtime_contract as rc
+
+    result = _run_local(
+        db,
+        identity,
+        lambda ctx: rc.grant_share_acceptance_approval(
+            ctx,
+            competency_id=competency_id,
+            slug=slug,
+            approver=approver,
+            note=note,
+        ),
+    )
+    if not result.granted:
+        _fail(f"{result.outcome}: {result.reason}")
+    console.print(f"\n[green]+ Acceptance authorised[/green] for {competency_id}.{slug}")
+    console.print("  Inert on its own: every other gate still runs when you accept.\n")
+
+
+@share_app.command("review-local")
+def share_review_local(
+    decision: str = typer.Argument(..., help="accept | reject | customise"),
+    competency_id: str = typer.Option(..., help="The candidate's competency_id"),
+    slug: str = typer.Option(..., help="The candidate's slug"),
+    reviewer: str = typer.Option(None, help="Who decided. Required to accept or reject."),
+    note: str = typer.Option(None, help="Why, for the audit trail"),
+    rule: str = typer.Option(None, help="customise: replacement rule/statement"),
+    conditions: str = typer.Option(None, help="customise: replacement conditions"),
+    step: list[str] = typer.Option(None, "--step", help="customise: replacement step. Repeatable."),
+    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
+) -> None:
+    """Accept, reject, or customise an adopted share in your own runtime.
+
+    `accept` requires an approval from `share approve-local` first, and is the
+    only one of the three that makes anything retrievable.
+    """
+    from bartholomew.kernel import runtime_contract as rc
+
+    actions = {
+        "accept": rc.SHARE_ACTION_ACCEPT,
+        "reject": rc.SHARE_ACTION_REJECT,
+        "customise": rc.SHARE_ACTION_CUSTOMISE,
+    }
+    if decision not in actions:
+        _fail(f"decision must be one of {sorted(actions)}, got {decision!r}")
+
+    result = _run_local(
+        db,
+        identity,
+        lambda ctx: rc.run_share_adoption_through_runtime_contract(
+            ctx,
+            actions[decision],
+            competency_id=competency_id,
+            slug=slug,
+            reviewer=reviewer,
+            review_note=note,
+            rule=rule,
+            conditions=conditions,
+            steps=list(step) if step else None,
+        ),
+    )
+    _report_local(result)
+    console.print(f"\n[green]+ {result.outcome}[/green] {competency_id}.{slug}")
+    if result.consolidated:
+        console.print(
+            f"  Consolidated as {result.candidate.consolidated_kind} "
+            f"{result.candidate.consolidated_key} -- retrievable from now on.",
+        )
+    else:
+        console.print("  Nothing was consolidated.")
+    console.print()
+
+
+@share_app.command("mark-revoked")
+def share_mark_revoked(
+    competency_id: str = typer.Option(..., help="The candidate's competency_id"),
+    slug: str = typer.Option(..., help="The candidate's slug"),
+    revoked_at: str = typer.Option(
+        ...,
+        help="The `revoked_at` from `share provenance`, RFC3339 UTC",
+    ),
+    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
+) -> None:
+    """Record on your own candidate that the publisher has withdrawn the share.
+
+    Visible, and nothing more. It does not delete the candidate, does not
+    un-consolidate anything you already accepted, and does not decide for you
+    -- a publisher who could reach further than this would hold a remote
+    delete on your memory.
+    """
+    from bartholomew.kernel import runtime_contract as rc
+
+    result = _run_local(
+        db,
+        identity,
+        lambda ctx: rc.record_upstream_revocation(
+            ctx,
+            competency_id=competency_id,
+            slug=slug,
+            revoked_at=revoked_at,
+        ),
+    )
+    # Not `_report_local`: `revoked_upstream` is this command's *success*
+    # outcome, and the shared reporter reads it as a refusal.
+    if result is None:
+        _fail("no such adopted share in this runtime")
+    if result.outcome != rc.SHARE_OUTCOME_REVOKED:
+        _fail(f"{result.outcome}: {result.reason}")
+    console.print(f"\n[yellow]! Marked as withdrawn upstream:[/yellow] {competency_id}.{slug}")
+    console.print("  What you already accepted is untouched and is yours.\n")
 
 
 __all__ = ["devices_app", "groups_app", "share_app"]

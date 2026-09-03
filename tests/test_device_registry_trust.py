@@ -543,3 +543,189 @@ def test_a_platform_administrator_has_no_devices(users):
     ops = accounts.create_account("ops-devices", PASSWORD, kind=PrincipalKind.PLATFORM_ADMIN)
     with pytest.raises(devices.DeviceError):
         devices.create_pending_enrolment(ops, "admin-pc", platform="windows")
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review regressions (2026-09-02)
+# ---------------------------------------------------------------------------
+
+
+def test_an_operator_ceiling_narrows_what_a_device_may_ever_do(users):
+    """9 (regression). Approving a machine is not believing its capability list.
+
+    Without a ceiling the manifest is the device's own claim, and
+    `authorizes()` returned True for anything in it that this deployment
+    understood -- so a companion asked to declare `windows.open_url` could
+    declare `multimodal.screen_capture` as well and be authorised for it from
+    the moment it enrolled, with no human having approved that list.
+    """
+    device_id = devices.create_pending_enrolment(users["alice"], "ceiling-pc", platform="windows")
+    issued = devices.approve_enrolment(
+        device_id,
+        approver="ops",
+        permitted_capabilities=[{"kind": "windows.open_url", "version": 1}],
+    )
+    verified, credential = devices.complete_enrolment(
+        issued.secret,
+        {
+            "platform": "windows",
+            "companion_version": "0.1.0",
+            "capabilities": [
+                {"kind": "windows.open_url", "version": 1},
+                {"kind": "multimodal.screen_capture", "version": 1},
+                {"kind": "windows.type_text", "version": 1},
+            ],
+        },
+    )
+
+    # Declared, and this deployment understands all three -- but only one was
+    # approved.
+    assert len(verified.manifest.known) == 3
+    assert verified.authorizes("windows.open_url", 1)
+    for kind in ("multimodal.screen_capture", "windows.type_text"):
+        assert not verified.authorizes(kind, 1)
+        with pytest.raises(devices.DeviceCapabilityError):
+            verified.require_capability(kind, 1)
+
+    # And the ceiling survives a fresh verification, not just the enrolment.
+    reverified = devices.verify_device_credential(credential.secret)
+    assert not reverified.authorizes("multimodal.screen_capture", 1)
+
+    row = devices.get_device(device_id)
+    assert row["approved_capabilities"] == [{"kind": "windows.open_url", "version": 1}]
+    assert row["authorised_capabilities"] == [{"kind": "windows.open_url", "version": 1}]
+
+
+def test_an_unreadable_ceiling_authorises_nothing(users):
+    """9 (regression). "We cannot tell what was approved" is not "everything"."""
+    device_id, secret = _enrolled(users["alice"], "corrupt-ceiling-pc")
+    with platform_connection() as conn:
+        conn.execute(
+            "UPDATE platform_devices SET approved_capabilities = ? WHERE device_id = ?",
+            ("{not json at all", device_id),
+        )
+    verified = devices.verify_device_credential(secret)
+    assert verified.manifest.authorizes("windows.open_url", 1)
+    assert not verified.authorizes("windows.open_url", 1)
+
+
+def test_a_lost_enrolment_secret_can_be_re_approved(users):
+    """The recovery path the CLI help promises, which used to be unreachable.
+
+    `approve_enrolment` refused any status but `PENDING`, so a device that had
+    been approved once -- and whose secret the operator then mislaid -- could
+    never be issued another. The revoke-the-previous-one line inside it could
+    never match a row either.
+    """
+    device_id = devices.create_pending_enrolment(users["alice"], "lost-note-pc", platform="windows")
+    lost = devices.approve_enrolment(device_id, approver="ops")
+
+    reissued = devices.approve_enrolment(device_id, approver="ops")
+    assert reissued.secret != lost.secret
+
+    with pytest.raises(devices.DeviceAuthenticationError):
+        devices.complete_enrolment(lost.secret, dict(WINDOWS_MANIFEST))
+    verified, _credential = devices.complete_enrolment(reissued.secret, dict(WINDOWS_MANIFEST))
+    assert verified.device_id == device_id
+
+    # An enrolled device is past this: re-approval is for the pre-enrolment
+    # window only.
+    with pytest.raises(devices.DeviceError):
+        devices.approve_enrolment(device_id, approver="ops")
+
+
+def test_disabling_a_pending_device_does_not_promote_it_on_re_enable(users):
+    """A device must come back to where it actually got to, not further.
+
+    Re-enabling restored `APPROVED` whenever the device had never enrolled --
+    including for one that had never been approved. It then held a status
+    `approve_enrolment` refused, with no credential, and could never enrol:
+    bricked by a disable/enable round trip.
+    """
+    device_id = devices.create_pending_enrolment(users["alice"], "brick-pc", platform="windows")
+    devices.set_device_disabled(device_id, True, actor="ops")
+    devices.set_device_disabled(device_id, False, actor="ops")
+
+    assert devices.get_device(device_id)["status"] == devices.DeviceStatus.PENDING.value
+    issued = devices.approve_enrolment(device_id, approver="ops")
+    verified, _credential = devices.complete_enrolment(issued.secret, dict(WINDOWS_MANIFEST))
+    assert verified.device_id == device_id
+
+    # An approved-but-not-enrolled device comes back approved, not pending.
+    second = devices.create_pending_enrolment(users["alice"], "approved-brick", platform="windows")
+    devices.approve_enrolment(second, approver="ops")
+    devices.set_device_disabled(second, True, actor="ops")
+    devices.set_device_disabled(second, False, actor="ops")
+    assert devices.get_device(second)["status"] == devices.DeviceStatus.APPROVED.value
+
+
+def test_redeclaring_a_manifest_requires_a_named_actor(users):
+    """A manifest change rewrites what a device is authorised for.
+
+    It took no actor at all, while asserting in its own docstring that it was
+    "reachable only with a verified device credential" -- an assertion nothing
+    in the signature enforced. That is exactly the shape a future route wires
+    straight to a request body.
+    """
+    device_id, secret = _enrolled(users["alice"], "redeclare-pc")
+    with pytest.raises(devices.DeviceError, match="never anonymous"):
+        devices.redeclare_manifest(device_id, dict(WINDOWS_MANIFEST), actor="")
+
+    updated = devices.redeclare_manifest(
+        device_id,
+        {
+            "platform": "windows",
+            "companion_version": "0.2.0",
+            "capabilities": [{"kind": "windows.open_url", "version": 1}],
+        },
+        actor="ops",
+    )
+    assert updated.companion_version == "0.2.0"
+    assert devices.verify_device_credential(secret).manifest_version == 2
+    assert any(
+        "actor=ops" in (row["detail"] or "")
+        for row in devices.device_audit(user_id=users["alice"], limit=200)
+        if row["event"] == "device.manifest_updated"
+    )
+
+
+def test_the_registry_modules_log_nothing_at_all(users, caplog):
+    """8. The logging half of "no plaintext credential survives", stated exactly.
+
+    Asserting on captured logs alone was vacuous: these modules make no
+    logging call, so any assertion about their output passes whatever the code
+    does. The honest property is the silence itself, pinned here so that
+    adding a `logger.debug("verifying %s", secret)` fails this test rather
+    than passing it on a branch the assertions happen not to reach.
+    """
+    import pathlib
+    import re
+
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    for relative in (
+        "bartholomew/platform/devices.py",
+        "bartholomew/platform/trusted_groups.py",
+        "bartholomew/platform/share_exchange.py",
+    ):
+        source = (repo_root / relative).read_text(encoding="utf-8")
+        calls = re.findall(r"^\s*logger\.\w+\(", source, flags=re.MULTILINE)
+        assert not calls, (
+            f"{relative} now logs. Credential and share material passes through it, so "
+            "a new logging call needs its own redaction argument here before this "
+            "assertion is relaxed."
+        )
+
+    # And the paths that handle secrets still emit nothing when exercised.
+    device_id = devices.create_pending_enrolment(users["bob"], "silent-pc", platform="windows")
+    with caplog.at_level(logging.DEBUG):
+        issued = devices.approve_enrolment(device_id, approver="ops")
+        _v, credential = devices.complete_enrolment(issued.secret, dict(WINDOWS_MANIFEST))
+        rotated = devices.rotate_device_credential(device_id, actor="ops")
+        for refused in (issued.secret, credential.secret, "a-guess"):
+            with pytest.raises(devices.DeviceAuthenticationError):
+                devices.verify_device_credential(refused)
+        devices.revoke_device(device_id, actor="ops")
+        with pytest.raises(devices.DeviceAuthenticationError):
+            devices.verify_device_credential(rotated.secret)
+    for secret in (issued.secret, credential.secret, rotated.secret, "a-guess"):
+        assert secret not in caplog.text

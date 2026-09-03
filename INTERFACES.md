@@ -407,14 +407,18 @@ it becoming a recipient's knowledge automatically.
   record_contact=True) -> VerifiedDevice`. The only construction site for a `VerifiedDevice`.
   Raises `DeviceAuthenticationError` for every failure; there is no degraded return value.
 - `VerifiedDevice` — frozen: `device_id`, `user_id`, `platform`, `companion_version`,
-  `manifest_version`, `manifest`, `credential_id`.
+  `manifest_version`, `manifest`, `credential_id`, `approved_capabilities`.
 - `VerifiedDevice.authorizes(kind, version) -> bool` and
   `VerifiedDevice.require_capability(kind, version)` (raises `DeviceCapabilityError`). True only
-  when the device declared it **and** `device_capabilities.supports()` knows it.
-- Lifecycle, operator-side: `create_pending_enrolment`, `approve_enrolment`,
-  `complete_enrolment`, `rotate_device_credential`, `set_device_disabled`, `revoke_device`,
-  `redeclare_manifest`. Read-side: `get_device`, `list_devices`, `describe_manifest`,
-  `manifest_json`, `device_audit`.
+  when `device_capabilities.supports()` knows it, **and** the device declared it, **and** the
+  operator's ceiling admits it.
+- Lifecycle, operator-side: `create_pending_enrolment`, `approve_enrolment(...,
+  permitted_capabilities=None)`, `complete_enrolment`, `rotate_device_credential`,
+  `set_device_disabled`, `revoke_device`, `redeclare_manifest(..., actor=...)`. Read-side:
+  `get_device`, `list_devices`, `describe_manifest`, `manifest_json`, `device_audit`.
+- `permitted_capabilities` is the operator's ceiling, and `VerifiedDevice.approved_capabilities`
+  carries it. `authorizes()` requires all three of: this deployment understands the capability,
+  the device declared it, and the ceiling admits it.
 
 **Error modes:** unknown / wrong-purpose / expired / rotated / revoked credential, non-active
 device, disabled or missing account, and a tenant mismatch when `expected_user_id` is given —
@@ -433,8 +437,13 @@ raises `DeviceCapabilityError` — never a nearest-match.
 
 - Groups: `create_group`, `invite`, `accept_invitation`, `decline_invitation`, `list_groups`,
   `list_members`, `list_invitations`, `set_role`, `remove_member`, `leave_group`,
-  `archive_group`, `group_audit`, `require_membership`. Every read takes an actor and raises
-  `GroupAccessError` for a non-member — the same error a nonexistent group produces.
+  `archive_group`, `group_audit`, `require_membership`, `assert_membership_on(conn, ...)`.
+  Every read takes an actor and raises `GroupAccessError` for a non-member — the same error a
+  nonexistent group produces, and a disabled account is a non-member. A caller that writes uses
+  `assert_membership_on` on its own connection, so the check and the write are one transaction.
+- Recipient-side CLI, for the local half the exchange does not touch:
+  `share adopt-local`, `share approve-local`, `share review-local {accept,reject,customise}`,
+  `share mark-revoked`.
 - Sharing: `propose` (sanitizes, writes nothing) → `publish(package, publisher_user_id,
   confirm_group_id)` → `inbox` / `inspect` / `revisions` / `decline` / `adopt` /
   `mark_local_fork` / `pending_updates` / `provenance`, plus `publish_revision(...,
@@ -456,8 +465,11 @@ stale read raises `ConcurrentRevisionError` and writes nothing; a revoked packag
 
 **Governed seam (`bartholomew/kernel/runtime_contract.py`):**
 `run_share_adoption_through_runtime_contract(ctx, action, ...)` for `share_adopt`,
-`share_customise`, `share_reject`, `share_accept`, plus
-`grant_share_acceptance_approval(ctx, *, competency_id, slug, approver, note=None)`.
+`share_customise` (`rule` / `conditions` / `steps`), `share_reject`, `share_accept`, plus
+`grant_share_acceptance_approval(ctx, *, competency_id, slug, approver, note=None)` and
+`record_upstream_revocation(ctx, *, competency_id, slug, revoked_at)` — the last is what a
+management surface calls after reading `share_exchange.provenance()`, so a publisher's
+withdrawal becomes visible on the recipient's own record rather than only on the exchange.
 Gate 1 is the fail-closed Parking Brake on the existing `training` scope; gate 2 is the Identity
 allowlist for the first three, and — for `share_accept` —
 `evaluate_learning_admission(ctx, "learning_accept", lesson=candidate)`, i.e. PR #83's own

@@ -65,8 +65,10 @@ from enum import Enum
 
 from .device_capabilities import (
     MANIFEST_VERSION_NONE,
+    Capability,
     DeviceCapabilityManifest,
     ManifestError,
+    parse_capability,
 )
 from .store import platform_connection, record_platform_audit
 
@@ -194,25 +196,41 @@ class VerifiedDevice:
     manifest_version: int
     manifest: DeviceCapabilityManifest
     credential_id: str
+    #: The operator's ceiling, recorded at approval. `None` means the operator
+    #: set none, and the ceiling is whatever this deployment understands.
+    approved_capabilities: tuple[Capability, ...] | None = None
 
     def authorizes(self, kind: str, version: int) -> bool:
-        """Whether this device may be asked to perform `(kind, version)`."""
-        return self.manifest.authorizes(kind, version)
+        """Whether this device may be asked to perform `(kind, version)`.
+
+        Three things must hold, not two: this deployment understands the
+        capability, the device declared it, **and** the operator's ceiling
+        admits it. The third exists because a manifest is the device's own
+        claim -- approving a machine and believing everything it later says it
+        can do are different acts, and only the first is something an operator
+        did.
+        """
+        if not self.manifest.authorizes(kind, version):
+            return False
+        if self.approved_capabilities is None:
+            return True
+        return any(c.kind == kind and c.version == version for c in self.approved_capabilities)
 
     def require_capability(self, kind: str, version: int) -> None:
         """Raise `DeviceCapabilityError` unless this device holds the capability.
 
         The check Sessions B and C call before writing anything that would
-        act. It refuses two different mistakes with one branch: a capability
-        the device never declared, and a capability at a version this
-        deployment does not understand (see `device_capabilities.supports`,
-        which never approximates).
+        act. It refuses three different mistakes with one branch: a capability
+        the device never declared, a capability at a version this deployment
+        does not understand (see `device_capabilities.supports`, which never
+        approximates), and one outside the operator's approval ceiling.
         """
-        if not self.manifest.authorizes(kind, version):
+        if not self.authorizes(kind, version):
             raise DeviceCapabilityError(
                 f"device {self.device_id} is not authorised for {kind!r} v{version}: "
-                "it is absent from the device's registered manifest, or this "
-                "deployment does not understand that capability version",
+                "it is absent from the device's registered manifest or from the "
+                "operator's approved capability set, or this deployment does not "
+                "understand that capability version",
             )
 
 
@@ -260,6 +278,35 @@ def _clean_label(value: str | None, field: str) -> str:
     if len(text) > _MAX_LABEL_LENGTH:
         raise DeviceError(f"{field} exceeds {_MAX_LABEL_LENGTH} characters")
     return text
+
+
+def _approved_capabilities(row: sqlite3.Row) -> tuple[Capability, ...] | None:
+    """The operator's approved capability ceiling, or None when unrestricted.
+
+    An unparseable ceiling yields an **empty** tuple rather than None: "we
+    cannot tell what the operator approved" must authorise nothing, not
+    everything. The same fail-closed reading `DeviceCapabilityManifest.from_row`
+    applies to a corrupt manifest.
+    """
+    try:
+        raw = row["approved_capabilities"]
+    except (IndexError, KeyError):
+        return None
+    if raw is None:
+        return None
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(decoded, list):
+        return ()
+    parsed: list[Capability] = []
+    for entry in decoded:
+        try:
+            parsed.append(parse_capability(entry))
+        except ManifestError:
+            continue
+    return tuple(parsed)
 
 
 def _status(row: sqlite3.Row) -> DeviceStatus:
@@ -348,6 +395,7 @@ def approve_enrolment(
     device_id: str,
     *,
     approver: str,
+    permitted_capabilities: list[dict] | None = None,
     db_path: str | None = None,
     ttl_s: int = DEFAULT_ENROLMENT_TTL_S,
     now: int | None = None,
@@ -363,9 +411,30 @@ def approve_enrolment(
     approved device still cannot authenticate ordinary traffic. Only
     `complete_enrolment` -- which consumes this secret exactly once -- makes
     it `ACTIVE`.
+
+    `permitted_capabilities` is the operator's **ceiling** on what this
+    machine may ever be authorised for, as `[{"kind": ..., "version": ...}]`.
+    It exists because approving a *device* and believing its *capability
+    declaration* are two different acts: without a ceiling, a companion that
+    declared `windows.type_text` and `multimodal.screen_capture` would be
+    authorised for both the moment it enrolled, on nothing but its own say-so.
+    `None` keeps the previous behaviour -- the ceiling is whatever this
+    deployment understands -- which is the right default for a machine the
+    operator is standing in front of, and the wrong one for a machine they are
+    not.
+
+    Re-approving an already-approved device is permitted and is the documented
+    recovery path for a lost secret: the previous one is revoked in the same
+    transaction, so there is never a second live enrolment secret.
     """
     if not (approver or "").strip():
         raise DeviceError("an approver is required -- enrolment is never anonymous")
+    ceiling: str | None = None
+    if permitted_capabilities is not None:
+        ceiling = json.dumps(
+            [parse_capability(entry).as_dict() for entry in permitted_capabilities],
+            separators=(",", ":"),
+        )
     ts = _now(now)
     secret = _mint_secret()
     credential_id = str(uuid.uuid4())
@@ -374,10 +443,14 @@ def approve_enrolment(
     with platform_connection(db_path) as conn:
         row = _load_device_row(conn, device_id)
         status = DeviceStatus(row["status"])
-        if status is not DeviceStatus.PENDING:
+        if status not in (DeviceStatus.PENDING, DeviceStatus.APPROVED):
+            # `APPROVED` is included so the documented recovery path -- "if the
+            # secret is lost before use, approve again" -- actually exists.
+            # Refusing it left a device that had been approved once, whose
+            # secret had gone astray, permanently unenrollable.
             raise DeviceError(
-                f"device {device_id} is {status.value}, not pending; only a pending "
-                "device may be approved for enrolment",
+                f"device {device_id} is {status.value}; only a pending or "
+                "already-approved device may be issued an enrolment secret",
             )
         # Any earlier enrolment secret for this device stops working now, so
         # re-approving after a lost note does not leave two live secrets.
@@ -402,8 +475,9 @@ def approve_enrolment(
             ),
         )
         conn.execute(
-            "UPDATE platform_devices SET status = ?, approved_at = ? WHERE device_id = ?",
-            (DeviceStatus.APPROVED.value, ts, device_id),
+            "UPDATE platform_devices SET status = ?, approved_at = ?, "
+            "approved_capabilities = ? WHERE device_id = ?",
+            (DeviceStatus.APPROVED.value, ts, ceiling, device_id),
         )
         record_platform_audit(
             conn,
@@ -411,7 +485,8 @@ def approve_enrolment(
             user_id=row["user_id"],
             detail=(
                 f"device={device_id} credential={credential_id} "
-                f"approver={approver} expires_at={expires_at}"
+                f"approver={approver} expires_at={expires_at} "
+                f"ceiling={'unrestricted' if ceiling is None else ceiling}"
             ),
             ts=ts,
         )
@@ -499,6 +574,12 @@ def complete_enrolment(
                 ts,
             ),
         )
+        ceiling = _approved_capabilities(row)
+        verified_capabilities = tuple(
+            c
+            for c in manifest.known
+            if ceiling is None or any(p.kind == c.kind and p.version == c.version for p in ceiling)
+        )
         manifest_version = int(row["manifest_version"] or 0) + 1
         conn.execute(
             "UPDATE platform_devices SET status = ?, enrolled_at = ?, last_seen_at = ?, "
@@ -524,7 +605,8 @@ def complete_enrolment(
                 f"manifest_version={manifest_version} "
                 f"declared={len(manifest.capabilities)} "
                 f"supported={len(manifest.known)} "
-                f"unsupported={sorted(str(c) for c in manifest.unknown)}"
+                f"unsupported={sorted(str(c) for c in manifest.unknown)} "
+                f"authorised={sorted(str(c) for c in verified_capabilities)}"
             ),
             ts=ts,
         )
@@ -537,6 +619,7 @@ def complete_enrolment(
         manifest_version=manifest_version,
         manifest=manifest,
         credential_id=device_credential_id,
+        approved_capabilities=_approved_capabilities(row),
     )
     issued = IssuedCredential(
         credential_id=device_credential_id,
@@ -680,6 +763,7 @@ def verify_device_credential(
             manifest_version=int(row["manifest_version"] or 0),
             manifest=manifest,
             credential_id=credential["credential_id"],
+            approved_capabilities=_approved_capabilities(row),
         )
 
 
@@ -783,9 +867,16 @@ def set_device_disabled(
         else:
             if status is not DeviceStatus.DISABLED:
                 raise DeviceError(f"device {device_id} is {status.value}, not disabled")
-            restored = (
-                DeviceStatus.ACTIVE if row["enrolled_at"] is not None else DeviceStatus.APPROVED
-            )
+            # Restore to where the device actually got to, not to a status it
+            # never reached. Re-enabling a never-approved device as APPROVED
+            # bricked it: `approve_enrolment` would then refuse it, so it could
+            # never be issued the enrolment secret it had never had.
+            if row["enrolled_at"] is not None:
+                restored = DeviceStatus.ACTIVE
+            elif row["approved_at"] is not None:
+                restored = DeviceStatus.APPROVED
+            else:
+                restored = DeviceStatus.PENDING
             conn.execute(
                 "UPDATE platform_devices SET status = ?, disabled_at = NULL WHERE device_id = ?",
                 (restored.value, device_id),
@@ -839,6 +930,7 @@ def redeclare_manifest(
     device_id: str,
     declaration: dict,
     *,
+    actor: str,
     db_path: str | None = None,
     now: int | None = None,
 ) -> DeviceCapabilityManifest:
@@ -848,10 +940,21 @@ def redeclare_manifest(
     accepted declaration, so "which manifest was live when that happened?" is
     answerable from the audit trail rather than inferred from a timestamp.
 
-    Reachable only with a verified device credential or by the operator --
-    never from an unauthenticated payload -- and `device_id` again comes from
-    the caller's verified state, not from the declaration.
+    `actor` is required, and required for the same reason every other
+    lifecycle function here requires one: this rewrites what a device is
+    authorised for, so it is never anonymous and never unattributed. An
+    earlier cut took no actor at all and asserted in its docstring that it was
+    "reachable only with a verified device credential" -- an assertion nothing
+    in the signature or the body enforced, which is exactly the shape of claim
+    a future route wires straight to a request body.
+
+    Callers must have established the device's identity first: either the
+    operator, or a caller holding a `VerifiedDevice` from
+    `verify_device_credential`. `device_id` comes from that verified state,
+    never from the declaration -- see `DeviceCapabilityManifest.from_declaration`.
     """
+    if not (actor or "").strip():
+        raise DeviceError("an actor is required -- a manifest change is never anonymous")
     ts = _now(now)
     with platform_connection(db_path) as conn:
         row = _load_device_row(conn, device_id)
@@ -877,7 +980,8 @@ def redeclare_manifest(
             user_id=row["user_id"],
             detail=(
                 f"device={device_id} manifest_version={manifest_version} "
-                f"declared={len(manifest.capabilities)} supported={len(manifest.known)}"
+                f"declared={len(manifest.capabilities)} supported={len(manifest.known)} "
+                f"actor={actor}"
             ),
             ts=ts,
         )
@@ -939,6 +1043,12 @@ def _public_device(row: sqlite3.Row) -> dict:
         companion_version=row["companion_version"],
         capabilities_json=row["capabilities"],
     )
+    ceiling = _approved_capabilities(row)
+    authorised = [
+        c.as_dict()
+        for c in manifest.known
+        if ceiling is None or any(p.kind == c.kind and p.version == c.version for p in ceiling)
+    ]
     return {
         "device_id": row["device_id"],
         "user_id": row["user_id"],
@@ -956,6 +1066,8 @@ def _public_device(row: sqlite3.Row) -> dict:
         "capabilities": [c.as_dict() for c in manifest.capabilities],
         "supported_capabilities": [c.as_dict() for c in manifest.known],
         "unsupported_capabilities": [c.as_dict() for c in manifest.unknown],
+        "approved_capabilities": (None if ceiling is None else [c.as_dict() for c in ceiling]),
+        "authorised_capabilities": authorised,
     }
 
 

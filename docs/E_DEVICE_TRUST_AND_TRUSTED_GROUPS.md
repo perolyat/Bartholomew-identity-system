@@ -55,6 +55,13 @@ no new memory write path.
   while it holds.
 * **revoked** — terminal, immediate, and every credential goes with it.
 
+Re-approving a device that is still `approved` is permitted, and is the
+recovery path for an enrolment secret that went astray: the previous one is
+revoked in the same transaction, so there is never a second live secret.
+Disable and re-enable restore the status a device actually reached — a device
+that was only ever `pending` comes back `pending`, not `approved` with no
+credential and no way to be issued one.
+
 ### Credentials
 
 256 bits of `secrets` randomness. **Only the SHA-256 digest is stored**, as
@@ -82,12 +89,20 @@ The frozen logical shape:
 }
 ```
 
-Three rules, each enforced rather than advised:
+Four rules, each enforced rather than advised:
 
 * **`device_id` comes from the registry, never from the declaration.** A
   companion describing itself does not get to choose which self.
 * **Declaring is not authorising.** `authorizes(kind, version)` is true only
   when the device declared it *and* this deployment understands it.
+* **Nor is being approved.** `approve_enrolment(permitted_capabilities=...)`
+  records an operator ceiling, and a capability outside it is refused however
+  loudly the device declares it. Approving a *machine* and believing its
+  *capability list* are two different acts, and only the first is one an
+  operator performed; an unreadable ceiling authorises nothing rather than
+  everything. `None` leaves the ceiling at whatever this deployment
+  understands, which is right for a machine the operator is standing in front
+  of and wrong for one they are not.
 * **Unknown is unsupported, never approximated.** `windows.open_url` at
   version 2 is not version 1 with extras; it is an unknown contract. Unknown
   entries are recorded verbatim so an operator can see what a newer companion
@@ -127,9 +142,20 @@ social graph, not discovery, and not a place things travel automatically.
 * **Invitations** are explicit, name one account, expire, and are single-use.
   There is no link and no code that "anyone with this may join".
 * **Enumeration is the boundary.** Every read takes an actor and refuses a
-  non-member with the *same* error a nonexistent group produces. The symmetry
-  is the property: otherwise an outsider could confirm a group exists, and
-  that a particular account has somewhere to share to, without being in it.
+  non-member with the *same* error a nonexistent group produces — the same
+  error *type*, not merely the same words, since an exception class is an
+  oracle too. The symmetry is the property: otherwise an outsider could
+  confirm a group exists, and that a particular account has somewhere to share
+  to, without being in it. A caller-chosen `share_id` gets the same treatment
+  at publication: the "use `publish_revision()`" hint fires only for a share
+  this publisher published into this group.
+* **A membership is only as live as its account.** The one function every
+  group read re-derives membership through joins `platform_accounts` and
+  refuses a disabled account, so `accounts disable` stops group access in the
+  same breath it stops sessions and devices.
+* **Membership is re-checked inside the transaction that writes.** A check on
+  one connection and a write on another are two transactions, and a
+  `remove_member` committing between them would not stop the write.
 * **Archiving is not deleting.** It stops new activity; the record of what was
   shared, and the provenance attached to anything already adopted, survives.
 
@@ -152,14 +178,31 @@ Three layers, in order, each failing closed:
    package outright rather than being stripped. If a record contains a
    credential, the answer is "not shareable", not "shareable minus the
    credential".
+
+   Matching folds plurals and looks for the high-signal terms in
+   `PROHIBITED_FIELD_SUBSTRINGS` *anywhere inside* the normalised key, because
+   exact-name matching alone let `passwords`, `refresh_token` and
+   `client_secret` through. Over-refusing is the safe direction here: a
+   refusal costs a publisher one decision, and the alternative costs them a
+   credential.
 3. **Everything not explicitly allowed is removed and named.** The content
    projection is a per-kind allowlist; the publisher's envelope
    (`provenance`, `classification`, `confidence`, `supervision`, keys,
    timestamps) is removed and recorded by name in
    `sanitization.removed_fields`. That is what keeps the publisher out of the
    package — `provenance.detail` is exactly the free text that would
-   re-identify them. Surviving values are then scanned for prohibited content;
-   a hit refuses, and never redacts.
+   re-identify them.
+
+   The allowlist is re-applied by `TrustedSharePackage.validate()` on the way
+   out, so a package assembled by any route other than `propose()` — a
+   hand-written file handed to `share publish`, or a future code path — is
+   held to it too. Without that, the sanitizer was bypassable by
+   construction.
+
+   Surviving values are then scanned for prohibited content, **keys
+   included**: inside the content projection a key is content, so an email
+   address or a pair of coordinates cannot be published by putting it on the
+   left of the colon. A hit refuses, and never redacts.
 
 The frozen package shape:
 
@@ -202,10 +245,25 @@ An adopted candidate carries `confidence = 0.35` — lower than a lesson from
 the recipient's own experience (0.4), because a rule they watched play out
 once is better evidence than a rule someone else wrote down.
 
+Every field `customise()` can edit is one `to_competency_record()` reads, and
+vice versa. That correspondence is load-bearing: an earlier cut let a
+recipient correct a shared routine, fingerprint the correction into the
+approval they granted, and consolidate the publisher's original anyway. A
+shared rule's `counterexamples` travel with it for the same reason — the
+safety-bearing half of "always call the warranty line first" is "not for a gas
+leak".
+
 ## 6. Revisions, forks and revocation
 
 * A publisher update inserts a new `(share_id, revision)` row. It never
   rewrites an earlier one.
+* Adoption is idempotent for the same package and **refused for a different
+  one at the same key**. The exchange is append-only per `(share_id,
+  revision)`, so two packages at one key with different content are a
+  contradiction — and allowing the second to overwrite the first would let a
+  standing `share_adopt` grant replace content an acceptance approval had
+  already been granted for. The approval's fingerprint covers the sanitized
+  content and its origin as well, so the two guards are independent.
 * The recipient's candidate slug carries the share revision, so adopting
   revision 2 writes a **different memory key** from revision 1. A publisher
   update is structurally incapable of overwriting what a recipient adopted,
@@ -218,7 +276,10 @@ once is better evidence than a rule someone else wrote down.
   refused as a concurrent edit. There is no force flag and no
   last-write-wins branch.
 * Revocation stops new adoption and further revisions, and stays visible in
-  the recipient's provenance. It does **not** delete or disable what a
+  the recipient's provenance — on the exchange through
+  `share_exchange.provenance()`, and in the recipient's own runtime through
+  `runtime_contract.record_upstream_revocation()`, which a management surface
+  calls after reading it. It does **not** delete or disable what a
   recipient already adopted — a publisher who could reach into another
   person's runtime would have a remote delete, which is a larger power than
   "un-share" and is not one this design grants.
@@ -228,7 +289,7 @@ once is better evidence than a rule someone else wrote down.
 ## 7. Threat model: what this closes, and what it does not
 
 **Closed.** Unenrolled, pending, disabled and revoked devices authenticate
-nothing. A credential does not cross devices or tenants. Rotation invalidates
+nothing. A disabled account's group access stops with its sessions. A credential does not cross devices or tenants. Rotation invalidates
 the previous credential in one transaction. No plaintext credential survives
 issuance, in any control-plane row, any read surface, or any log. A device
 cannot act outside its registered manifest, and an unknown capability version
@@ -276,6 +337,9 @@ group-wide automatic acceptance, automatic propagation, confidence-based
 adoption, system-level promotion, training on other users' raw memories,
 centralised cloud learning, cross-group search, customer-scale multi-tenancy,
 billing. Also: no Windows actuation, no multimodal capture, no HTTP routes for
-devices, groups or sharing — the operator surface is the CLI, and the web
-surface is Session F's to connect (Section 10 of `INTERFACES.md`'s Package E
-entry names exactly what).
+devices, groups or sharing — the operator surface is `bartholomew devices` /
+`groups` / `share`, including the recipient-side `share adopt-local`,
+`approve-local`, `review-local` and `mark-revoked`. A web surface is a UI
+stream's to connect; `INTERFACES.md`'s "Device registry and trusted-group
+sharing" entry names exactly what, under **"Not implemented here, and left for
+Session F to connect"**.

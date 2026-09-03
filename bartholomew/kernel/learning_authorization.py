@@ -105,6 +105,19 @@ def fingerprint_for(lesson: Any) -> str:
         "objective_id": int(objective_id) if objective_id is not None else None,
         "supporting_event_ids": sorted(int(i) for i in supporting),
     }
+    # A candidate whose meaning depends on more than the fields above may
+    # contribute the rest through `extra_fingerprint_material`. Added only
+    # when present and truthy, so a `CandidateLesson` -- which has no such
+    # attribute -- produces byte-identical material to before this existed.
+    # A trusted-group share uses it to bind the approval to the sanitized
+    # content the reviewer actually read, which `inferred_rule` alone
+    # summarises rather than covers.
+    extra = getattr(lesson, "extra_fingerprint_material", None)
+    if callable(extra):
+        extra = extra()
+    if extra:
+        material["extra"] = extra
+
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

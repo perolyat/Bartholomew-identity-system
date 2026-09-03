@@ -317,6 +317,25 @@ class AdoptedShareCandidate:
     def content_fingerprint(self) -> str:
         return _content_fingerprint(self.content)
 
+    def extra_fingerprint_material(self) -> dict[str, Any]:
+        """What an acceptance approval must bind beyond the lesson-shaped fields.
+
+        Read by `learning_authorization.fingerprint_for()`. `inferred_rule`
+        summarises the shared package; `to_competency_record()` reads the
+        package's `content` -- its `steps`, `name` and `topic` -- so an
+        approval that covered only the summary would authorise consolidating
+        material the reviewer never saw. The origin is included for the same
+        reason: the same rule text arriving from a different share, group or
+        revision is a different thing to approve.
+        """
+        return {
+            "content": self.content_fingerprint(),
+            "share_id": self.source.share_id,
+            "group_id": self.source.group_id,
+            "share_revision": self.source.share_revision,
+            "publisher_user_id": self.source.publisher_user_id,
+        }
+
     # -- serialisation ---------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
@@ -480,20 +499,37 @@ class AdoptedShareCandidate:
         self.updated_at = self.reviewed_at
         self.revision += 1
 
-    def customise(self, *, rule: str | None = None, conditions: str | None = None) -> None:
+    def customise(
+        self,
+        *,
+        rule: str | None = None,
+        conditions: str | None = None,
+        steps: list[str] | None = None,
+    ) -> None:
         """Edit the local copy, making it a fork.
+
+        Every field editable here is a field `to_competency_record()` reads,
+        and vice versa. That correspondence is the point: an earlier cut let a
+        recipient edit `inferred_rule` while consolidation still built the
+        record from the publisher's `content`, so a reviewer approved one text
+        and the substrate received another.
 
         Editing changes the candidate's material content, which changes the
         fingerprint an acceptance approval binds to -- so a customised
         candidate needs approving again for what it now says. That is the
-        intended consequence, not a side effect: the reviewer approved the
-        old text.
+        intended consequence, not a side effect: the reviewer approved the old
+        text.
         """
         self._require_proposed("customise")
         if rule is not None:
             self.inferred_rule = rule
         if conditions is not None:
             self.conditions = conditions
+        if steps is not None:
+            # Written into `content`, because that is where the record's steps
+            # come from; the fingerprint covers `content`, so this invalidates
+            # a prior approval like every other edit here.
+            self.content = {**self.content, "steps": [str(step) for step in steps]}
         self.local_fork = True
         self.updated_at = _utcnow_iso()
         self.revision += 1
@@ -564,12 +600,28 @@ class AdoptedShareCandidate:
         )
 
         content = self.content
+        # `inferred_rule` and `conditions` are the recipient's own text --
+        # what a reviewer read, what an approval fingerprinted, and what
+        # `customise()` edits -- so every branch below builds from them.
+        # `content` supplies only the structural parts a summary line cannot
+        # carry: the steps of a routine and the counterexamples of a rule.
+        #
+        # `counterexamples` in particular must travel. It is allowlisted by
+        # `trusted_share.CONTENT_FIELDS` for the competency and correction
+        # kinds precisely because it is the safety-bearing half of a shared
+        # rule; dropping it kept "always call the warranty line first" and
+        # discarded "not for a gas leak".
+        counterexamples = [
+            str(item) for item in (content.get("counterexamples") or []) if str(item).strip()
+        ]
         if self.source.share_kind == KIND_HOUSEHOLD_ROUTINE or "steps" in content:
+            steps = [str(step) for step in (content.get("steps") or []) if str(step).strip()]
             return CompetencyProcedure(
                 envelope=envelope,
                 slug=self.slug,
-                name=str(content.get("name") or self.inferred_rule)[:200],
-                steps=[str(step) for step in (content.get("steps") or [])] or [self.inferred_rule],
+                name=self.inferred_rule[:200],
+                steps=steps or [self.inferred_rule],
+                when_to_use=self.conditions,
             )
         if self.source.share_kind in (KIND_CORRECTION, KIND_GUIDANCE) or "rule" in content:
             return CompetencyHeuristic(
@@ -577,13 +629,13 @@ class AdoptedShareCandidate:
                 slug=self.slug,
                 rule=self.inferred_rule,
                 conditions=self.conditions,
-                counterexamples=[],
+                counterexamples=counterexamples,
             )
         return CompetencyKnowledge(
             envelope=envelope,
             slug=self.slug,
             topic=str(content.get("topic") or self.competency_id),
-            content=str(content.get("content") or self.inferred_rule),
+            content=self.inferred_rule,
         )
 
 
@@ -600,13 +652,14 @@ def _rule_text(package: TrustedSharePackage) -> str:
     which is the order of specificity in the four package types.
     """
     content = package.content
-    for key in ("rule", "name", "topic"):
+    # Order is by specificity, and `content` comes before `topic` on purpose:
+    # for a knowledge or guidance package the body is the substance and the
+    # topic is a label. `to_competency_record()` consolidates this text, so
+    # picking the label would consolidate a heading.
+    for key in ("rule", "name", "content", "topic"):
         value = content.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    value = content.get("content")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
     return package.summary()
 
 

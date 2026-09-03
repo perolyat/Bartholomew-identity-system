@@ -134,8 +134,11 @@ CONTENT_FIELDS: dict[str, frozenset[str]] = {
 }
 
 #: Field names whose presence anywhere in a source record refuses publication
-#: outright. Matched case-insensitively against the key, and against the key
-#: with separators removed, so `api_key`, `apiKey` and `api key` are one rule.
+#: outright. Matched case-insensitively against the key with separators
+#: removed, so `api_key`, `apiKey` and `api key` are one rule -- and with a
+#: plural fold, so `passwords` and `secrets` are the same rule as `password`
+#: and `secret`. An exact-only match was a real hole: a credential nested
+#: under an allowlisted content key as `"passwords"` passed straight through.
 #:
 #: These are the categories the sharing contract names as never implicitly
 #: shareable. They are enforced here, below any presentation layer, so a UI
@@ -220,6 +223,42 @@ PROHIBITED_FIELD_NAMES: frozenset[str] = frozenset(
     },
 )
 
+#: Terms that refuse a field whenever they appear **anywhere inside** the
+#: normalised key, not merely as the whole of it. Exact matching alone left
+#: `refresh_token`, `client_secret`, `router_password` and `admin_api_key`
+#: publishable, which is the whole category this list exists to stop.
+#:
+#: Deliberately only the high-signal terms. Over-refusing is the safe
+#: direction here -- "this record is not shareable" costs a publisher one
+#: decision, and the alternative costs them a credential -- but a term short
+#: enough to appear inside ordinary English would refuse everything, which is
+#: its own failure. None of the per-kind content allowlist keys contains any
+#: of these.
+PROHIBITED_FIELD_SUBSTRINGS: frozenset[str] = frozenset(
+    {
+        "password",
+        "passphrase",
+        "secret",
+        "token",
+        "apikey",
+        "accesskey",
+        "privatekey",
+        "credential",
+        "screenshot",
+        "medication",
+        "diagnosis",
+        "coordinates",
+        "latitude",
+        "longitude",
+        "locationhistory",
+        "accountnumber",
+        "cardnumber",
+        "creditcard",
+        "memoryexport",
+        "memorydump",
+    },
+)
+
 #: Content patterns that refuse publication when they appear in a *surviving*
 #: value. Complementary to the field-name rule: a rule of thumb whose text
 #: happens to contain an API key is not made safe by the key being in a field
@@ -281,6 +320,26 @@ def _utcnow_iso() -> str:
 
 def _normalise_key(key: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+def _is_prohibited_key(key: str) -> bool:
+    """Whether a field name is one that refuses the whole publication.
+
+    Three ways to match, in increasing breadth: the normalised key exactly;
+    the normalised key with a plural suffix folded off (`passwords` ->
+    `password`); and any high-signal term appearing anywhere inside it
+    (`client_secret`, `refresh_token`). The last two exist because exact
+    matching alone was a hole a publisher could walk a credential through.
+    """
+    normalised = _normalise_key(key)
+    if not normalised:
+        return False
+    if normalised in PROHIBITED_FIELD_NAMES:
+        return True
+    for suffix in ("es", "s"):
+        if normalised.endswith(suffix) and normalised[: -len(suffix)] in PROHIBITED_FIELD_NAMES:
+            return True
+    return any(term in normalised for term in PROHIBITED_FIELD_SUBSTRINGS)
 
 
 def canonical_json(value: Any) -> str:
@@ -416,7 +475,7 @@ def _walk_prohibited_fields(node: Any, path: str, depth: int, found: list[str]) 
     if isinstance(node, dict):
         for key, value in node.items():
             here = f"{path}.{key}" if path else str(key)
-            if _normalise_key(key) in PROHIBITED_FIELD_NAMES:
+            if _is_prohibited_key(key):
                 found.append(here)
             _walk_prohibited_fields(value, here, depth + 1, found)
     elif isinstance(node, (list, tuple)):
@@ -437,8 +496,17 @@ def prohibited_fields(record_value: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _collect_text(node: Any, parts: list[str]) -> None:
+    """Every scannable string in a decoded structure -- keys included.
+
+    Keys matter here in a way they do not in `privacy_guard`: the object being
+    scanned is the *content projection*, which is entirely the publisher's own
+    material, so a key inside it is content. Scanning values only left an
+    email address or a pair of coordinates publishable by putting it on the
+    left of the colon instead of the right.
+    """
     if isinstance(node, dict):
-        for value in node.values():
+        for key, value in node.items():
+            parts.append(str(key))
             _collect_text(value, parts)
     elif isinstance(node, (list, tuple)):
         for item in node:
@@ -619,6 +687,21 @@ class TrustedSharePackage:
             errors.append("a package with no content is not a package")
         if self.sanitization.policy_revision < 1:
             errors.append("sanitization.policy_revision is required")
+        # The per-kind allowlist, re-applied on the way out. `sanitize()`
+        # already produced a conforming projection, so this is redundant for
+        # anything that came through `propose()` -- and that is the point: a
+        # package assembled by any other route (a hand-written file handed to
+        # `share publish`, a future code path) is held to the same allowlist
+        # rather than only to the prohibited-field check. Without it the
+        # sanitizer was bypassable by construction.
+        allowed = CONTENT_FIELDS.get(self.kind)
+        if allowed is not None:
+            extra = sorted(set(self.content) - allowed)
+            if extra:
+                errors.append(
+                    f"content carries fields outside the {self.kind!r} content policy: "
+                    f"{', '.join(extra)}",
+                )
         # Defence in depth: the package is re-checked against the field and
         # content rules on the way out, so a package assembled by some future
         # path that bypassed `propose()` still cannot carry a prohibited field.
@@ -683,6 +766,7 @@ __all__ = [
     "POLICY_REVISION",
     "PROHIBITED_CONTENT_PATTERNS",
     "PROHIBITED_FIELD_NAMES",
+    "PROHIBITED_FIELD_SUBSTRINGS",
     "SHAREABLE_KINDS",
     "Sanitization",
     "SanitizationRefusedError",

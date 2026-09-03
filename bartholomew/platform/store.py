@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS platform_devices (
   companion_version TEXT,
   manifest_version  INTEGER NOT NULL DEFAULT 0,
   capabilities      TEXT NOT NULL DEFAULT '[]',  -- declared [{kind,version}], verbatim
+  -- The operator's ceiling, set at approval. NULL means "whatever this
+  -- deployment understands"; a JSON list narrows the device to that set, so
+  -- approving a machine is not the same act as believing everything it later
+  -- says it can do.
+  approved_capabilities TEXT,
   status            TEXT NOT NULL,          -- DeviceStatus value; see devices.py
   created_at        INTEGER NOT NULL,
   approved_at       INTEGER,
@@ -285,6 +290,11 @@ def platform_connection(db_path: str | None = None) -> sqlite3.Connection:
 _ADDITIVE_COLUMNS = (
     ("platform_accounts", "failed_attempts", "INTEGER NOT NULL DEFAULT 0"),
     ("platform_accounts", "locked_until", "INTEGER"),
+    # Package E: added after the device tables first shipped, so it is listed
+    # in both places -- `_SCHEMA` for a fresh database, here for one that
+    # already exists. A column added only to `_SCHEMA` silently never reaches
+    # a live control plane.
+    ("platform_devices", "approved_capabilities", "TEXT"),
 )
 
 

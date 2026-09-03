@@ -2643,8 +2643,9 @@
   authenticates as exactly one device, for exactly one tenant, and only while that device is
   `active`.
 - **Alternatives:** A `device` `PrincipalKind` (rejected: `PrincipalKind` is pinned to
-  `{user, platform_admin}` by `tests/test_s8_auth_boundary.py` precisely so a third authority
-  kind is a decision rather than a drift, and a device is not an identity that may *act* -- it is
+  `{user, platform_admin}` by
+  `tests/test_s8_governance_authority.py::test_there_is_no_anonymous_principal_kind` precisely
+  so a third authority kind is a decision rather than a drift, and a device is not an identity that may *act* -- it is
   a machine that may *speak for* one); promoting the existing payload label to an authenticated
   id (rejected: two different values would share one key name, and every doc and test that says
   the label is unauthenticated would become half-true, which is worse than either state);
@@ -2655,10 +2656,12 @@
   `docs/S8_ALPHA_OPERATOR_GUIDE.md` promises that "genuine per-request replay resistance arrives
   with device authentication". The first two are now discharged; the third is explicitly only
   half-discharged, and says so.
-- **Consequences:** Four additive tables in `platform.db` (`platform_devices`,
-  `platform_device_credentials`, and the group tables below), created with
-  `CREATE TABLE IF NOT EXISTS` so `test_the_schema_upgrade_is_additive_and_idempotent` stays
-  green and there is no data-loss path. Only the SHA-256 digest of a credential is stored, as
+- **Consequences:** Seven additive tables in `platform.db` -- `platform_devices` and
+  `platform_device_credentials` here, and `platform_trusted_groups`, `platform_group_members`,
+  `platform_group_invitations`, `platform_share_packages` and `platform_share_receipts` for the
+  entry below -- created with `CREATE TABLE IF NOT EXISTS`, plus one additive column, so
+  `test_the_schema_upgrade_is_additive_and_idempotent` stays green and there is no data-loss
+  path. Only the SHA-256 digest of a credential is stored, as
   `sessions.py` does for session tokens; the plaintext is returned once and appears in no row, no
   read surface and no log. The capability vocabulary is **frozen** at twelve kinds, all version 1,
   and an unknown kind or version is *unsupported*, never approximated. Isolation in the control
@@ -2682,6 +2685,16 @@
   capabilities are refused, last-seen updates only after verified contact) and
   `tests/test_device_inbound_identity.py` (the claimed payload `device_id` cannot override the
   verified identity, through the real ingress).
+- **Amended 2026-09-02 (operator capability ceiling):** an adversarial pass observed that
+  approving a *device* and believing its *capability declaration* were the same act -- a
+  companion asked to declare one capability could declare three and be authorised for all of
+  them on its own say-so. `approve_enrolment(permitted_capabilities=...)` now records an
+  operator ceiling on `platform_devices.approved_capabilities` (an additive column, in both
+  `_SCHEMA` and `_ADDITIVE_COLUMNS`), and `VerifiedDevice.authorizes()` requires all three of:
+  this deployment understands the capability, the device declared it, and the ceiling admits it.
+  An unreadable ceiling authorises nothing. `None` -- the default -- leaves it at whatever this
+  deployment understands, which preserves the original behaviour for an operator standing in
+  front of the machine.
 - **Date:** 2026-09-01
 
 ## Decision: Trusted-group sharing crosses tenants only as a sanitized typed package, and lands as a candidate
@@ -2740,4 +2753,24 @@
   content-free audit) and `tests/test_share_adoption_governance.py` (adoption is not acceptance,
   acceptance requires the PR #83 approval even under a default-allow Identity with
   `share_accept` allowlisted, forks survive upstream revisions, and the brake halts both).
+- **Amended 2026-09-02 (what an approval binds, and what consolidation reads):** an adversarial
+  pass found three ways the "the reviewer approved what was consolidated" claim did not hold, and
+  all three are closed. (a) The acceptance fingerprint covered the candidate's summary line but
+  not the sanitized `content` that `to_competency_record()` actually reads;
+  `learning_authorization.fingerprint_for()` now folds in an optional
+  `extra_fingerprint_material`, which an adopted share uses to bind the content digest and the
+  origin, and which is absent -- and therefore byte-identical -- for every `CandidateLesson`.
+  (b) Adoption upserted unconditionally, so a standing `share_adopt` grant could replace an
+  already-approved candidate's content; a different package at the same key is now refused, and
+  a decided or forked candidate is never overwritten. (c) `customise()` edited the summary while
+  consolidation built the record from the publisher's content, so a correction was silently
+  discarded; every field `customise()` edits is now one consolidation reads, and a shared rule's
+  `counterexamples` travel with it rather than being dropped.
+  Also closed in the same pass: the sanitizer's per-kind content allowlist is re-applied by
+  `TrustedSharePackage.validate()`, so a hand-written package file cannot bypass it; prohibited
+  field matching folds plurals and looks for high-signal terms anywhere inside a key; the content
+  scan reads dict keys as well as values; a disabled account is no longer a live group member;
+  `publish()` and `publish_revision()` no longer distinguish "a share you cannot see" from "no
+  such share"; every mutating path re-derives membership inside its own write transaction; and
+  the group audit filter is anchored rather than a substring search over operator-supplied names.
 - **Date:** 2026-09-01

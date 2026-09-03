@@ -112,6 +112,17 @@ def _now(now: int | None) -> int:
     return int(now if now is not None else time.time())
 
 
+def _audit_safe(text: str) -> str:
+    """Operator-supplied text, made safe to embed in an audit detail.
+
+    `detail` is a flat string that `group_audit` filters on, so a value
+    carrying the `key=value` shape the filter looks for is a way to forge
+    rows into somebody else's view. Neutralising `=` is enough and keeps the
+    name readable.
+    """
+    return text.replace("=", "-")
+
+
 def _clean_name(name: str | None) -> str:
     text = (name or "").strip()
     if not text:
@@ -140,15 +151,25 @@ def _require_live_account(conn: sqlite3.Connection, user_id: str, *, label: str)
 def _membership(conn: sqlite3.Connection, group_id: str, user_id: str) -> Membership:
     """The actor's live membership, or `GroupAccessError`.
 
-    One query, one refusal. It deliberately checks the group's existence and
-    the actor's membership together so that neither can be probed on its own:
-    a missing group and an outsider produce the identical exception with the
-    identical message.
+    One query, one refusal. It deliberately checks the group's existence, the
+    actor's membership **and the actor's account** together so that none of
+    the three can be probed on its own: a missing group, an outsider and a
+    disabled account produce the identical exception with the identical
+    message.
+
+    The account join is load-bearing rather than tidy. Disabling an account
+    revokes its sessions (`accounts.set_account_disabled`) and stops its
+    devices (`devices._require_live_account`); without it here, a disabled
+    account could still read a household inbox, adopt from it, and publish
+    into it -- because every group read re-derives membership through this one
+    function and nothing else consulted `platform_accounts`.
     """
     row = conn.execute(
         "SELECT m.role, g.archived_at FROM platform_group_members m "
         "JOIN platform_trusted_groups g ON g.group_id = m.group_id "
-        "WHERE m.group_id = ? AND m.user_id = ? AND m.removed_at IS NULL",
+        "JOIN platform_accounts a ON a.user_id = m.user_id "
+        "WHERE m.group_id = ? AND m.user_id = ? AND m.removed_at IS NULL "
+        "  AND a.disabled_at IS NULL",
         (group_id, user_id),
     ).fetchone()
     if row is None:
@@ -160,6 +181,24 @@ def _membership(conn: sqlite3.Connection, group_id: str, user_id: str) -> Member
         # membership is not a membership.
         raise GroupAccessError("no such trusted group, or you are not a member of it") from exc
     return Membership(group_id=group_id, user_id=user_id, role=role)
+
+
+def assert_membership_on(
+    conn: sqlite3.Connection,
+    group_id: str,
+    actor_user_id: str,
+) -> Membership:
+    """`require_membership`, on a caller-supplied connection.
+
+    Exists so a write can re-derive membership **inside its own
+    transaction**. `require_membership` opens, commits and abandons its own
+    connection, so a check made through it and a write made afterwards are
+    two unrelated transactions -- and a `remove_member` committing between
+    them would not stop the write. Every mutating path in
+    `share_exchange` calls this again on the connection it is about to write
+    through.
+    """
+    return _membership(conn, group_id, actor_user_id)
 
 
 def require_membership(
@@ -213,6 +252,14 @@ def create_group(
     The creating account becomes the sole owner and its first member in the
     same transaction: a group with an owner who is not a member would be a
     row nobody can act through.
+
+    **`owner_user_id` must come from a verified principal, never from request
+    data.** This is the one function here with no `actor_user_id` to check it
+    against, because there is nothing yet to be a member of -- the same shape
+    `accounts.create_account` and `devices.create_pending_enrolment` have, and
+    the same reason all three are operator-local rather than routed. A future
+    HTTP surface must pass `Principal.user_id`; reading an owner from a body
+    would let any authenticated caller create a group owned by somebody else.
     """
     name = _clean_name(name)
     ts = _now(now)
@@ -233,7 +280,12 @@ def create_group(
             conn,
             "group.created",
             user_id=owner_user_id,
-            detail=f"group={group_id} name={name}",
+            # The group id comes first, and `group_audit` anchors its filter at
+            # the start of `detail` -- so a name containing the literal text
+            # "group=<someone else's id>" cannot plant a row in that group's
+            # audit view. Names are operator-supplied; audit filters must not
+            # be substring searches over them.
+            detail=f"group={group_id} name={_audit_safe(name)}",
             ts=ts,
         )
     return group_id
@@ -492,7 +544,9 @@ def list_groups(user_id: str, *, db_path: str | None = None) -> list[dict]:
             "SELECT g.group_id, g.name, g.owner_user_id, g.created_at, g.archived_at, "
             "m.role, m.joined_at FROM platform_group_members m "
             "JOIN platform_trusted_groups g ON g.group_id = m.group_id "
-            "WHERE m.user_id = ? AND m.removed_at IS NULL ORDER BY g.created_at",
+            "JOIN platform_accounts a ON a.user_id = m.user_id "
+            "WHERE m.user_id = ? AND m.removed_at IS NULL AND a.disabled_at IS NULL "
+            "ORDER BY g.created_at",
             (user_id,),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -625,11 +679,20 @@ def group_audit(
     """
     require_membership(group_id, actor_user_id, db_path=db_path, allow_archived=True)
     with platform_connection(db_path) as conn:
+        # Anchored at the start of `detail`, not a substring search. Every
+        # group and share audit row this module writes begins with
+        # `group=<id> `, so anchoring matches exactly the rows about this
+        # group -- and no operator-supplied text later in some other group's
+        # detail can be made to match.
         rows = conn.execute(
             "SELECT ts, event, user_id, detail FROM platform_audit "
             "WHERE (event LIKE 'group.%' OR event LIKE 'share.%') "
-            "AND detail LIKE ? ORDER BY id DESC LIMIT ?",
-            (f"%group={group_id}%", max(1, min(int(limit), 1000))),
+            "AND (detail = ? OR detail LIKE ?) ORDER BY id DESC LIMIT ?",
+            (
+                f"group={group_id}",
+                f"group={group_id} %",
+                max(1, min(int(limit), 1000)),
+            ),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -642,6 +705,7 @@ __all__ = [
     "GroupRole",
     "Membership",
     "accept_invitation",
+    "assert_membership_on",
     "archive_group",
     "create_group",
     "decline_invitation",

@@ -4564,9 +4564,13 @@ async def _propose_candidate_lesson(
 
 SHARE_OBSERVATION_SOURCE = "trusted_share"
 
-#: The same brake scope the learning loop uses. Deliberately not a new one:
-#: scopes answer *what class of execution is halted*, and adopting someone
-#: else's lesson is the same class as forming one.
+#: The brake scope every share action is halted by -- an alias for the
+#: learning loop's, deliberately not a new one: scopes answer *what class of
+#: execution is halted*, and adopting someone else's lesson is the same class
+#: as forming one. It is an alias rather than a second gate, so the read
+#: itself happens in `_evaluate_learning_brake`; the identity is pinned by
+#: `tests/test_share_adoption_governance.py` so this cannot quietly diverge
+#: into a scope nothing enforces.
 SHARE_BRAKE_SCOPE = training.TRAINING_BRAKE_SCOPE
 
 SHARE_ACTION_ADOPT = "share_adopt"
@@ -4584,7 +4588,10 @@ _SHARE_ACTIONS = frozenset(
 )
 
 #: Actions whose Identity gate is the ordinary allowlist. `share_accept` is
-#: absent on purpose -- see the module note above and Identity.yaml.
+#: absent on purpose -- see the module note above and Identity.yaml. Read by
+#: `evaluate_share_admission`, which refuses any share action that is in
+#: neither this set nor the accept branch: a kind nobody classified must not
+#: fall through to whichever gate happens to be last.
 _SHARE_ALLOWLISTED_ACTIONS = frozenset(
     {SHARE_ACTION_ADOPT, SHARE_ACTION_CUSTOMISE, SHARE_ACTION_REJECT},
 )
@@ -4603,6 +4610,12 @@ SHARE_OUTCOME_REVOKED = "revoked_upstream"
 #: `LEARNING_ACTION_APPROVE_ACCEPTANCE` is not a learning action: granting
 #: authorization is a human act *about* the loop, not a step *of* it.
 SHARE_ACTION_APPROVE_ACCEPTANCE = "share_accept_approval_grant"
+
+#: The Reflection action kind recorded when a publisher's withdrawal is
+#: carried into a recipient's local candidate. Not a member of
+#: `_SHARE_ACTIONS` either: it records something the publisher did, not a
+#: decision the recipient took.
+SHARE_ACTION_UPSTREAM_REVOKED = "share_upstream_revoked"
 
 
 @dataclass
@@ -4734,7 +4747,13 @@ async def evaluate_share_admission(
     Every other action is brake-then-allowlist, exactly like `learning_propose`
     and `learning_reject`.
     """
-    if kind == SHARE_ACTION_ACCEPT:
+    if kind not in _SHARE_ALLOWLISTED_ACTIONS:
+        if kind != SHARE_ACTION_ACCEPT:
+            # Neither gate claims this kind. A share action nobody classified
+            # is a programming error, not an outcome to report -- the same
+            # reading `run_share_adoption_through_runtime_contract` gives an
+            # unknown action.
+            raise ValueError(f"share action {kind!r} has no Governance gate")
         return await evaluate_learning_admission(ctx, LEARNING_ACTION_ACCEPT, lesson=candidate)
 
     brake = await _evaluate_learning_brake(ctx, kind)
@@ -4917,6 +4936,7 @@ async def run_share_adoption_through_runtime_contract(
     review_note: str | None = None,
     rule: str | None = None,
     conditions: str | None = None,
+    steps: list[str] | None = None,
     upstream_revoked_at: str | None = None,
 ) -> ShareAdoptionResult:
     """
@@ -4929,7 +4949,9 @@ async def run_share_adoption_through_runtime_contract(
         `competency_id`.
       * ``"share_customise"`` -- edit the local copy, making it a fork.
         Requires `competency_id`, `slug` and at least one of `rule` /
-        `conditions`.
+        `conditions` / `steps`. Every field editable here is one
+        consolidation reads, so a customisation cannot be silently discarded
+        at acceptance.
       * ``"share_reject"``    -- the recipient declines it locally. Nothing is
         consolidated, then or ever.
       * ``"share_accept"``    -- the recipient accepts it, and it is
@@ -5023,12 +5045,15 @@ async def run_share_adoption_through_runtime_contract(
             f"no adopted share {share_adoption.key_for(competency_id, slug)!r}",
         )
 
-    # A publisher withdrawal is recorded on the candidate before any decision
-    # is taken about it, so a reviewer never accepts something the publisher
-    # has taken back while the local row still says otherwise.
+    # A publisher withdrawal is applied to the candidate **in memory** before
+    # any decision is taken about it, so a reviewer never accepts something
+    # the publisher has taken back while the local row still says otherwise.
+    # It is deliberately not persisted here: gate 2 has not run, and this
+    # seam's contract is Governance before any write. The action's own write,
+    # below, carries it -- and a governance denial therefore leaves the stored
+    # candidate exactly as it found it.
     if upstream_revoked_at and not candidate.is_revoked_upstream:
         candidate.mark_upstream_revoked(upstream_revoked_at)
-        await _write_adopted_share(ctx, candidate)
 
     # Gate 2, on the candidate as it stands -- before any review transition
     # mutates it, so the approval binds to what the reviewer saw.
@@ -5037,13 +5062,13 @@ async def run_share_adoption_through_runtime_contract(
         return await _refuse_by_governance(admission, candidate)
 
     if action == SHARE_ACTION_CUSTOMISE:
-        if rule is None and conditions is None:
+        if rule is None and conditions is None and steps is None:
             return _refuse(
                 SHARE_OUTCOME_INVALID,
-                "customising requires a replacement rule or conditions",
+                "customising requires a replacement rule, conditions or steps",
             )
         try:
-            candidate.customise(rule=rule, conditions=conditions)
+            candidate.customise(rule=rule, conditions=conditions, steps=steps)
         except share_adoption.AdoptionStateError as exc:
             return _refuse(SHARE_OUTCOME_INVALID, str(exc))
         errors = candidate.validate()
@@ -5124,7 +5149,22 @@ async def run_share_adoption_through_runtime_contract(
             or "the accepted share was not consolidated"
         )
 
-    await _write_adopted_share(ctx, candidate)
+    candidate_store = await _write_adopted_share(ctx, candidate)
+    if not getattr(candidate_store, "stored", False):
+        # The consolidation may well have landed; the candidate row did not.
+        # Reporting "accepted" here would be two lies at once: the review
+        # surface still shows an unreviewed proposal, and because the row
+        # never reached a terminal state the whole accept could be run again.
+        # Say what actually happened instead.
+        outcome = SHARE_OUTCOME_NOT_STORED
+        consolidated_note = (
+            "the competency record was written" if consolidation.stored_count > 0 else "nothing"
+        )
+        reason = (
+            "the accepted candidate was not stored (policy or consent), so this "
+            f"acceptance is not durably recorded; {consolidated_note} was consolidated"
+        )
+
     await _record_share_reflection(
         ctx,
         candidate_action,
@@ -5134,7 +5174,8 @@ async def run_share_adoption_through_runtime_contract(
         {
             "reviewer": reviewer,
             "review_note": review_note,
-            "consolidated": outcome == SHARE_OUTCOME_ACCEPTED,
+            "consolidated": consolidation.stored_count > 0,
+            "candidate_stored": bool(getattr(candidate_store, "stored", False)),
             "consolidation": consolidation.to_dict(),
         },
     )
@@ -5146,6 +5187,85 @@ async def run_share_adoption_through_runtime_contract(
         reason=reason,
         candidate=candidate,
         consolidation=consolidation,
+    )
+
+
+async def record_upstream_revocation(
+    ctx: Any,
+    *,
+    competency_id: str,
+    slug: str,
+    revoked_at: str,
+) -> ShareAdoptionResult | None:
+    """Mark a locally adopted candidate as withdrawn by its publisher.
+
+    The wiring behind requirement "revocation remains visibly attached to
+    provenance" on the *recipient's* side. `share_exchange.provenance()`
+    reports a withdrawal on the exchange; this is what carries it into the
+    recipient's own runtime, so the local record's summary line says
+    `[withdrawn upstream]` without anyone having to make a second query to
+    find out.
+
+    Deliberately narrow. It records a fact the publisher established and
+    nothing else: it does not delete the candidate, does not un-consolidate an
+    accepted one, and does not change the review state. A publisher who could
+    reach further than this would hold a remote delete on another person's
+    memory.
+
+    Returns None when there is no such candidate -- a share nobody adopted has
+    nothing to mark. Called by a management surface after reading
+    `share_exchange.provenance()`; never by Bartholomew's own seams.
+    """
+    candidate = await _load_adopted_share(ctx, competency_id, slug)
+    if candidate is None:
+        return None
+
+    observation = Observation(
+        source=SHARE_OBSERVATION_SOURCE,
+        raw_content=f"share_upstream_revoked candidate={share_adoption.key_for(competency_id, slug)}",
+    )
+    interpretation = _build_interpretation(ctx, observation)
+    candidate_action = CandidateAction(
+        kind=SHARE_ACTION_UPSTREAM_REVOKED,
+        interpretation=interpretation,
+    )
+
+    if candidate.is_revoked_upstream:
+        # Already recorded. Idempotent, and it does not re-date the
+        # withdrawal: the first time it was seen is the truthful answer.
+        return ShareAdoptionResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=SHARE_OUTCOME_REVOKED,
+            candidate=candidate,
+        )
+
+    candidate.mark_upstream_revoked(revoked_at)
+    store_result = await _write_adopted_share(ctx, candidate)
+    if not getattr(store_result, "stored", False):
+        return ShareAdoptionResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=True,
+            outcome=SHARE_OUTCOME_NOT_STORED,
+            reason="the withdrawal was not recorded on the local candidate",
+            candidate=candidate,
+        )
+    await _record_share_reflection(
+        ctx,
+        candidate_action,
+        SHARE_OUTCOME_REVOKED,
+        candidate,
+        None,
+        {"consolidated": False, "upstream_revoked_at": revoked_at},
+    )
+    return ShareAdoptionResult(
+        observation=observation,
+        candidate_action=candidate_action,
+        governance_allowed=True,
+        outcome=SHARE_OUTCOME_REVOKED,
+        candidate=candidate,
     )
 
 
@@ -5183,6 +5303,42 @@ async def _adopt_share(
             SHARE_OUTCOME_INVALID,
             "a share package and a competency_id are required to adopt",
         )
+
+    # Adoption is idempotent for the same package and refused for a different
+    # one at the same key. Without this, re-adopting over an already-approved
+    # candidate would replace the content `to_competency_record()` reads while
+    # leaving the approval in place -- consolidating material the reviewer
+    # never saw. `share_adopt` carries a standing Identity grant, so that was
+    # reachable without any further authorization.
+    #
+    # A key is `<competency_id>.adopted_share_<share_id>_r<revision>`, and the
+    # exchange is append-only per `(share_id, revision)`: two packages at one
+    # key with different content are a contradiction, whichever of them is
+    # genuine.
+    existing = await _load_adopted_share(
+        ctx,
+        competency_id,
+        share_adoption.slug_for_share(package.share_id, package.revision),
+    )
+    if existing is not None:
+        if existing.review_state != share_adoption.REVIEW_PROPOSED:
+            return _refuse(
+                SHARE_OUTCOME_INVALID,
+                f"this share has already been {existing.review_state} locally; "
+                "review decisions are terminal",
+            )
+        if existing.source.content_hash != package.content_hash():
+            return _refuse(
+                SHARE_OUTCOME_INVALID,
+                "a different package is already adopted at this key; refusing to "
+                "replace it, because an acceptance approval already granted for it "
+                "would then authorise content nobody reviewed",
+            )
+        if existing.local_fork:
+            return _refuse(
+                SHARE_OUTCOME_INVALID,
+                "this adoption has been customised locally; re-adopting would discard the fork",
+            )
 
     try:
         candidate = share_adoption.candidate_from_package(

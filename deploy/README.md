@@ -168,8 +168,10 @@ mechanism and its threat model are in
 
 Inbound capture stays fail-closed unless the unit sets
 `BARTH_DEVICE_INBOUND_AUTH=1`, which installs the device-credential resolver.
-Leave it unset until devices are actually enrolled; it refuses to start
-alongside `BARTH_INBOUND_ALLOW_TEST_RESOLVER`.
+Leave it unset until devices are actually enrolled. Startup refuses if the
+test-only resolver is actually installed — which takes both
+`BARTH_INBOUND_ALLOW_TEST_RESOLVER` and `BARTH_INBOUND_TEST_TOKEN`, and
+neither belongs in a deployment with real devices.
 
 ## Unattended test runs
 
