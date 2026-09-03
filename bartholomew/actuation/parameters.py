@@ -331,6 +331,25 @@ def _text(raw: dict[str, Any], name: str, *, maximum: int, required: bool = True
             f"{name!r} is {len(value)} characters; the limit is {maximum}. Over-long "
             "input is refused rather than truncated.",
         )
+    # **Every** string parameter, not just the two that get typed.
+    #
+    # A lone surrogate is not a character: `str.encode("utf-8")` raises on one,
+    # and `UnicodeEncodeError` is a `ValueError` but not a `ParameterError`, so
+    # it escapes the seam's refusal handling and surfaces as a 500 with no
+    # audit row. `json.loads('"\\ud800"')` produces one, so it arrives from the
+    # wire.
+    #
+    # Refused here rather than in `_ordinary_text`, which only the text-bearing
+    # capabilities use: a URL or a path carrying a surrogate reaches
+    # `hashlib.sha256(...encode("utf-8"))` through the redacted view and the
+    # parameter fingerprint just as surely, and putting the check per-validator
+    # meant closing it for three capabilities and leaving it open for two.
+    surrogate = next((c for c in value if 0xD800 <= ord(c) <= 0xDFFF), None)
+    if surrogate is not None:
+        raise ParameterError(
+            f"{name!r} contains an unpaired surrogate (U+{ord(surrogate):04X}), which "
+            "is not a character and cannot be encoded.",
+        )
     return value
 
 
@@ -358,18 +377,9 @@ def _ordinary_text(value: str, name: str, *, maximum: int) -> str:
             f"{maximum}). Unicode normalisation can lengthen a string, and the limit "
             "applies to what would actually be sent.",
         )
-    surrogate = next((c for c in normalised if 0xD800 <= ord(c) <= 0xDFFF), None)
-    if surrogate is not None:
-        # A lone surrogate is not a character. It passes the control-character
-        # and astral checks, and then `str.encode("utf-8")` raises -- which,
-        # because `UnicodeEncodeError` is not a `ParameterError`, escaped every
-        # refusal path in the seam and surfaced as a 500 with no audit row.
-        # `json.loads('"\\ud800"')` produces one, so it is reachable from the
-        # wire.
-        raise ParameterError(
-            f"{name!r} contains an unpaired surrogate (U+{ord(surrogate):04X}), which "
-            "is not a character and cannot be encoded.",
-        )
+    # Surrogates are refused in `_text`, which every string parameter passes
+    # through -- not here, which only the text-bearing capabilities reach. NFC
+    # never introduces one, so a string that arrived clean is still clean.
     if not normalised.strip():
         raise ParameterError(f"{name!r} must not be blank")
     if _NEWLINE_OR_TAB.search(normalised):

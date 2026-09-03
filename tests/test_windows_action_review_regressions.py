@@ -1365,6 +1365,56 @@ def test_an_expanding_character_cannot_multiply_the_keystroke_count():
 # ---------------------------------------------------------------------------
 
 
+#: Every capability, with a lone surrogate in each of its string parameters.
+#: The first fix for this covered only the three capabilities that go through
+#: `_ordinary_text`, which left `open_url` escaping as a `UnicodeEncodeError`
+#: and `open_path` accepted-then-exploding at fingerprint time. The refusal now
+#: lives in `_text`, which every string parameter passes through -- so this is
+#: parametrised over all nine rather than over the two that were obvious.
+_SURROGATE = "\ud800"
+_SURROGATE_CASES = [
+    (CapabilityKind.OPEN_URL, {"url": f"https://example.com/{_SURROGATE}"}),
+    (CapabilityKind.OPEN_PATH, {"path": "C:\\Docs\\" + _SURROGATE + ".pdf"}),
+    (CapabilityKind.LAUNCH_APP, {"app_id": "notepad" + _SURROGATE}),
+    (CapabilityKind.FOCUS_WINDOW, {"app_id": _SURROGATE}),
+    (CapabilityKind.MANAGE_WINDOW, {"app_id": _SURROGATE, "operation": "maximize"}),
+    (CapabilityKind.CLIPBOARD_WRITE, {"text": f"ok{_SURROGATE}"}),
+    (CapabilityKind.TYPE_TEXT, {"text": f"ok{_SURROGATE}"}),
+    (
+        CapabilityKind.ACCESSIBILITY_ACTION,
+        {"app_id": "notepad", "operation": "expand", "element_name": _SURROGATE},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "kind,params",
+    _SURROGATE_CASES,
+    ids=lambda v: v.value if isinstance(v, CapabilityKind) else "",
+)
+def test_no_capability_lets_a_surrogate_reach_a_digest(kind, params):
+    """Refused, and refused *before* anything tries to encode it.
+
+    Accepting one and raising at `fingerprint()` is as bad as raising during
+    validation: both escape the seam's `except (ParameterError, RequestError)`
+    and surface as a 500 with no Reflection.
+    """
+    ctx = ValidationContext(
+        applications=ApplicationAllowlist.from_pairs({"notepad": "C:\\Windows\\notepad.exe"}),
+        url_domains=UrlDomainAllowlist.from_iterable(["example.com"]),
+        filesystem_roots=FilesystemRootAllowlist.from_iterable(["C:\\Docs"]),
+    )
+    try:
+        validated = validate(kind, params, ctx)
+        validated.fingerprint()
+    except ParameterError as e:
+        assert "surrogate" in str(e) or "allowlist" in str(e).lower()
+        return
+    except Exception as e:  # noqa: BLE001 - the point of the test
+        pytest.fail(f"{kind.value} raised {type(e).__name__} instead of refusing: {e}")
+    pytest.fail(f"{kind.value} accepted a lone surrogate")
+
+
 @pytest.mark.parametrize("kind", [CapabilityKind.TYPE_TEXT, CapabilityKind.CLIPBOARD_WRITE])
 def test_an_unpaired_surrogate_is_refused_not_raised(kind):
     """`json.loads('"\\\\ud800"')` produces one, so it is reachable from the wire.
