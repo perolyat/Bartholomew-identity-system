@@ -3981,7 +3981,12 @@ async def _record_learning_reflection(
     return await record_action_reflection(getattr(ctx, "mem", None), reflection)
 
 
-async def _write_candidate_lesson(ctx: Any, lesson: Any) -> Any:
+async def _write_candidate_lesson(
+    ctx: Any,
+    lesson: Any,
+    *,
+    expected_memory_id: int | None = None,
+) -> Any:
     """Persist the candidate's current state through `MemoryStore`.
 
     `upsert_memory()` remains the sole write authority, exactly as it is for
@@ -3998,6 +4003,9 @@ async def _write_candidate_lesson(ctx: Any, lesson: Any) -> Any:
         _json.dumps(lesson.to_dict()),
         datetime.now(timezone.utc).isoformat(),
         summary=lesson.to_summary_text(),
+        # Omitted by every caller but the edit seam, which makes its write
+        # conditional on the row still being the one it read.
+        expected_memory_id=expected_memory_id,
     )
 
 
@@ -4493,6 +4501,17 @@ async def _propose_candidate_lesson(
             errors=errors,
         )
 
+    # Carry the revision forward when this supersedes an existing candidate.
+    #
+    # Without this a re-proposal resets the revision to 1, which makes
+    # `expected_revision` useless as a staleness token (a stale editor holding
+    # "1" would match again) and lets an approval recorded at revision 1
+    # re-apply to a differently-sourced candidate that happens to digest the
+    # same. A revision that only ever increases is what both checks rest on.
+    existing = await _load_candidate_lesson(ctx, competency_id, lesson.slug)
+    if existing is not None:
+        lesson.revision = int(existing.revision) + 1
+
     store_result = await _write_candidate_lesson(ctx, lesson)
     if not getattr(store_result, "stored", False):
         return _refuse(
@@ -4681,6 +4700,29 @@ async def load_learning_policy(ctx: Any) -> Any:
         return learning_policy.default_policy()
 
 
+async def _read_raw_policy_row(ctx: Any) -> str | None:
+    """The stored policy's raw value when it cannot be parsed, else None.
+
+    Used only to preserve an unreadable revision before it is overwritten, so
+    "the unreadable revision is left in place for inspection" survives the next
+    update rather than only the next read.
+    """
+    import json as _json
+
+    try:
+        row = await ctx.mem.get_memory(learning_policy.POLICY_KIND, learning_policy.POLICY_KEY)
+    except Exception:
+        logger.exception("Failed to read the stored learning policy row")
+        return None
+    if not row:
+        return None
+    try:
+        payload = _json.loads(row["value"])
+    except (TypeError, ValueError):
+        return row["value"]
+    return None if isinstance(payload, dict) else row["value"]
+
+
 @dataclass
 class LearningPolicyResult:
     """Outcome of one attempt to record a new learning policy revision."""
@@ -4813,15 +4855,53 @@ async def run_learning_policy_update_through_runtime_contract(
 
     # Archive the superseded revision first. If this write lands and the next
     # one does not, the archive is a harmless duplicate of what is still live;
-    # the other order could lose a revision entirely.
+    # the other order could lose a revision entirely. Either way the result is
+    # checked -- an archive that quietly failed would let the next write
+    # destroy a revision a recorded shadow decision names.
     if stored.revision > 0:
-        await _write_shadow_record(
+        archive_result = await _write_shadow_record(
             ctx,
             learning_policy.POLICY_KIND,
             f"{learning_policy.POLICY_KEY}@r{stored.revision}",
             stored.to_dict(),
             f"Superseded learning policy revision {stored.revision} (preview only)",
         )
+        if not getattr(archive_result, "stored", False):
+            return await _refuse(
+                LEARNING_OUTCOME_NOT_STORED,
+                (
+                    f"revision {stored.revision} could not be kept, so nothing was "
+                    "changed. Saving would have discarded the policy that previews "
+                    "already recorded against."
+                ),
+                stored_policy=stored,
+            )
+    else:
+        # `load_learning_policy()` falls back to the built-in default when the
+        # stored row is unreadable, and the default's revision is 0 -- so an
+        # update with `expected_revision=0` passes the conflict check and the
+        # branch above skips the archive, and the corrupted row is destroyed by
+        # the write below. It says "left in place for inspection"; this is what
+        # makes that true across an update.
+        raw = await _read_raw_policy_row(ctx)
+        if raw is not None:
+            preserved = await ctx.mem.upsert_memory(
+                learning_policy.POLICY_KIND,
+                f"{learning_policy.POLICY_KEY}@unreadable",
+                raw,
+                datetime.now(timezone.utc).isoformat(),
+                summary="A learning policy revision that could not be read",
+            )
+            if not getattr(preserved, "stored", False):
+                return await _refuse(
+                    LEARNING_OUTCOME_NOT_STORED,
+                    (
+                        "the stored policy could not be read and could not be kept "
+                        "aside either, so nothing was changed -- saving would have "
+                        "destroyed it unexamined"
+                    ),
+                    stored_policy=stored,
+                )
 
     store_result = await _write_shadow_record(
         ctx,
@@ -5040,7 +5120,15 @@ async def run_shadow_learning_evaluation_through_runtime_contract(
         experience_age_days=_age_in_days(
             getattr(lesson.provenance, "recorded_at", None),
         ),
-        days_since_last_review=_age_in_days(lesson.reviewed_at),
+        # For a candidate nobody has reviewed yet, "days since last review" is
+        # how long it has been sitting there -- which is exactly what a
+        # mandatory review interval is about. Reading `reviewed_at` alone gave
+        # None for every proposed candidate, so the rule could only ever fire
+        # on candidates that had *already* been decided, where it means
+        # nothing.
+        days_since_last_review=_age_in_days(
+            lesson.reviewed_at or getattr(lesson.provenance, "recorded_at", None),
+        ),
     )
     decision = learning_policy.evaluate(
         policy,
@@ -5110,19 +5198,45 @@ def _age_in_days(iso_timestamp: str | None) -> float | None:
 async def _privacy_class_for_candidate(ctx: Any, lesson: Any) -> str | None:
     """The privacy class the memory rules engine assigns this candidate's row.
 
-    Read from the stored entry rather than recomputed here, so the control
-    centre and the policy engine see exactly the classification the single
-    memory authority applied -- not a second opinion from a second evaluation
-    of the same rules.
+    Evaluated over the row's stored value with the same `MemoryRulesEngine`
+    `MemoryStore._decorate_entry()` uses, so the answer is the one authority's,
+    not a second opinion -- the training seam reaches for the engine the same
+    way, for the same reason.
+
+    It has to be evaluated rather than read: `get_memory()` returns the raw
+    row (`id`, `kind`, `key`, `value`, `summary`, `ts`) and attaches no
+    governance metadata -- only `list_memories()` decorates. An earlier version
+    read `row.get("privacy_class")` from it, which is always absent, so the
+    policy's privacy-exclusion rule silently never fired: a user could exclude
+    health material from automatic acceptance and the preview would ignore it.
+
+    Returns None when the row is missing or unreadable, which the evaluator
+    treats as "no privacy class recorded" -- the same as a record the rules do
+    not classify.
     """
+    from . import memory_rules as _memory_rules
+
     try:
         row = await ctx.mem.get_memory(candidate_learning.KIND, lesson.key())
     except Exception:
-        logger.exception("Failed to read the candidate's stored privacy class")
+        logger.exception("Failed to read the candidate for its privacy class")
         return None
     if not row:
         return None
-    return row.get("privacy_class")
+    try:
+        # The module singleton, which is what `_decorate_entry()` uses. A
+        # fresh `MemoryRulesEngine()` would re-read the YAML on every preview
+        # and then delegate straight back to this object anyway (see
+        # `MemoryRulesEngine.evaluate`'s first branch), so constructing one
+        # would be cost without difference. Referenced through the module so a
+        # test that swaps the singleton is honoured.
+        evaluated = _memory_rules._rules_engine.evaluate(
+            {"kind": row["kind"], "key": row["key"], "value": row["value"]},
+        )
+    except Exception:
+        logger.exception("Failed to classify the candidate's privacy class")
+        return None
+    return evaluated.get("privacy_class")
 
 
 # ---------------------------------------------------------------------------
@@ -5138,6 +5252,16 @@ async def _privacy_class_for_candidate(ctx: Any, lesson: Any) -> str | None:
 #: review queue does not invalidate approvals someone already granted -- a
 #: fingerprint that moved for a reason the user would not call a change would
 #: be a misleading one.
+#:
+#: These two sets do not themselves enforce anything -- `fingerprint_for()`
+#: decides, and it is the only thing that does. What makes them true rather
+#: than decorative is
+#: `tests/test_learning_memory_control_centre.py::
+#: test_b6d_the_material_field_vocabulary_is_enforced_not_documented`, which
+#: edits every editable member of the material set and requires the digest to
+#: move, and edits the administrative one and requires it not to. A constant
+#: naming a partition that nothing checks is documentation wearing code's
+#: clothes; that test is what stops these drifting from the function.
 MATERIAL_CANDIDATE_FIELDS: frozenset[str] = frozenset(
     {
         "inferred_rule",
@@ -5291,6 +5415,11 @@ async def run_candidate_edit_through_runtime_contract(
         )
         return result
 
+    existing_row = await ctx.mem.get_memory(
+        candidate_learning.KIND,
+        candidate_learning.key_for(competency_id, slug),
+    )
+    existing_row_id = existing_row["id"] if existing_row else None
     lesson = await _load_candidate_lesson(ctx, competency_id, slug)
     if lesson is None:
         return _refuse(
@@ -5347,33 +5476,105 @@ async def run_candidate_edit_through_runtime_contract(
     material_change = fingerprint_after != fingerprint_before
 
     approval = await _load_learning_approval(ctx, lesson)
-    approval_invalidated = bool(
-        material_change
-        and approval is not None
-        and approval.candidate_fingerprint == fingerprint_before,
-    )
+    # Any material edit invalidates any live approval, full stop.
+    #
+    # An earlier version also required the stored approval to match the *old*
+    # fingerprint, which made this report False in exactly the case that
+    # mattered most: an edit back towards an already-approved wording, where
+    # the honest answer is still "this needs approving again" -- and where
+    # `LearningAcceptanceApproval.authorizes()`'s revision binding now
+    # enforces it.
+    approval_invalidated = bool(material_change and approval is not None)
 
     archived_key: str | None = None
     if material_change:
         # Preserve what the previous revision said before overwriting it, so
         # "what exactly did I approve?" stays answerable after an edit.
+        # Preserve what the previous revision said BEFORE overwriting it, so
+        # "what exactly did I approve?" stays answerable after an edit -- and
+        # refuse the whole edit if that preservation did not land.
+        #
+        # The result was ignored in an earlier version. `upsert_memory()`
+        # returns `stored=False` when the rules engine refuses a value or holds
+        # it for consent, so an archive that quietly failed would have left the
+        # new revision written and the old wording gone, while the result
+        # cheerfully reported an `archived_revision_key` pointing at a row that
+        # does not exist. Losing an edit is recoverable; losing the content
+        # somebody approved is not.
         archived_key = f"{lesson.key()}@r{lesson.revision}"
-        await ctx.mem.upsert_memory(
+        archive_result = await ctx.mem.upsert_memory(
             learning_policy.CANDIDATE_REVISION_KIND,
             archived_key,
             _json_dumps(prior_snapshot),
             datetime.now(timezone.utc).isoformat(),
             summary=(f"Superseded candidate lesson revision {lesson.revision} for {lesson.key()}"),
         )
+        if not getattr(archive_result, "stored", False):
+            return _refuse(
+                LEARNING_OUTCOME_NOT_STORED,
+                (
+                    "the previous version of this lesson could not be kept, so "
+                    "nothing was changed -- saving would have discarded the "
+                    "wording that was approved"
+                ),
+            )
         lesson.revision += 1
         lesson.updated_at = datetime.now(timezone.utc).isoformat()
 
-    store_result = await _write_candidate_lesson(ctx, lesson)
+    # Two guards on the write, because neither is sufficient alone.
+    #
+    # 1. A revision re-check immediately before it. The check at the top of
+    #    this function is separated from the write by the approval read and
+    #    the archive write, and another editor can land in between; re-reading
+    #    here narrows that window to the write itself. It does not close it --
+    #    `MemoryStore` offers no compare-and-swap on a record's *content*, only
+    #    on its row id -- so a genuinely simultaneous pair of edits against the
+    #    same base revision still resolves to the later write. Both editors saw
+    #    the same lesson, so that is a tolerable outcome; a stale tab from ten
+    #    minutes ago, which is the case people actually hit, is refused.
+    # 2. `expected_memory_id`, which `upsert_memory()` evaluates inside the
+    #    write's own transaction under BEGIN IMMEDIATE. This is what catches
+    #    the case a revision check cannot see at all: the record being deleted
+    #    and recreated underneath the edit, where the revision may legitimately
+    #    read the same while the row is somebody else's.
+    latest = await _load_candidate_lesson(ctx, competency_id, slug)
+    if latest is None or int(latest.revision) != int(expected_revision):
+        return _refuse(
+            LEARNING_OUTCOME_REVISION_CONFLICT,
+            (
+                "this candidate changed while your edit was being saved, so "
+                "nothing was written. Read the current version and decide again."
+            ),
+            stored_lesson=latest,
+        )
+
+    store_result = await _write_candidate_lesson(
+        ctx,
+        lesson,
+        expected_memory_id=existing_row_id,
+    )
     if not getattr(store_result, "stored", False):
+        store_outcome = getattr(store_result, "outcome", "")
+        if store_outcome == "precondition_failed":
+            return _refuse(
+                LEARNING_OUTCOME_REVISION_CONFLICT,
+                (
+                    "this candidate changed while your edit was being saved, so "
+                    "nothing was written. Read the current version and decide again."
+                ),
+                stored_lesson=await _load_candidate_lesson(ctx, competency_id, slug),
+            )
         return _refuse(
             LEARNING_OUTCOME_NOT_STORED,
-            "the edited candidate was not stored (policy or consent); "
-            "the previous version is unchanged",
+            (
+                "This change needs your consent before it can be stored. It is "
+                "waiting in Pending Memory Consent, and the previous version is "
+                "still what Bartholomew holds -- so if the lesson changes again "
+                "before you decide, approving it there will apply this older "
+                "wording."
+                if store_outcome == "queued_for_consent"
+                else "the memory rules refused this wording, so nothing was changed"
+            ),
         )
 
     outcome = LEARNING_OUTCOME_EDITED if material_change else LEARNING_OUTCOME_UNCHANGED
@@ -5484,9 +5685,37 @@ async def run_competency_correction_through_runtime_contract(
     competency_id = stored.get("competency_id", "")
     result.competency_id = competency_id
 
-    # `slug` is carried by the key, not the payload: `key_for()` is
-    # "<competency_id>.<slug>", so the slug is everything after the first dot.
+    # `slug` is carried by the key, not the payload. `key_for()` is
+    # "<competency_id>.<slug>", so the slug is everything after the *known*
+    # competency id and its separator -- not "everything after the first dot",
+    # which would truncate a competency id that contains one. `CompetencyRecord`
+    # is the exception: its key is the bare competency id, so no prefix matches
+    # and the slug is correctly None, which `record_from_payload()` requires.
     slug = key[len(competency_id) + 1 :] if key.startswith(f"{competency_id}.") else None
+
+    # Archive what the record said before the correction replaces it.
+    #
+    # The training seam records that a supersession happened -- the revision it
+    # replaced and that claim's provenance -- but a correction is an in-place
+    # upsert, so the superseded *wording* is otherwise gone. "What did he
+    # believe before I corrected this?" has to stay answerable.
+    #
+    # Refused outright if the archive does not land, for the same reason the
+    # candidate edit seam refuses: losing a correction is recoverable, losing
+    # the belief it replaced is not.
+    archive_result = await ctx.mem.upsert_memory(
+        learning_policy.COMPETENCY_REVISION_KIND,
+        f"{key}@r{stored_revision}",
+        _json.dumps(stored),
+        datetime.now(timezone.utc).isoformat(),
+        summary=f"Superseded {kind} revision {stored_revision} for {key}",
+    )
+    if not getattr(archive_result, "stored", False):
+        result.errors.append(
+            "what this record said before could not be kept, so nothing was "
+            "corrected -- the correction would have discarded it",
+        )
+        return result
 
     merged = {**stored, **{k: v for k, v in updates.items() if v is not None}}
     # Provenance and revision are the seam's to set, never the caller's --

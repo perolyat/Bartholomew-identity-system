@@ -2723,8 +2723,28 @@
   memory or approval authority, and Session E's sharing transport (represented here as
   `SharingInterface`, which reports eligibility and states plainly that sharing is not
   connected).
+- **Approval binding, corrected after adversarial review:** an approval binds to the candidate's
+  **revision** as well as its content digest. Content binding alone had a hole -- editing a
+  candidate away from its approved wording and back again restored the digest and silently
+  revived an approval the reviewer had been told, in those words, no longer applied, accepting a
+  candidate two revisions on from the one they read. The revision check runs *after* the content
+  check, so a genuinely changed candidate is still refused in PR #83's own words, and applies
+  only while the candidate is `proposed` -- the window in which an edit can happen, and the one
+  in which acceptance and rejection have not yet incremented the revision themselves. Related:
+  re-proposing now carries the revision forward instead of resetting it to 1, which is what
+  makes `expected_revision` a sound staleness token at all.
+- **What archives, and why refusing beats losing:** a material candidate edit archives the prior
+  revision under `candidate_lesson_revision`, and a competency correction archives the prior
+  record under `competency_revision` -- S5.2's training seam records *that* a supersession
+  happened but not what the superseded record said, so without this "what did he believe before
+  I corrected this?" is unanswerable. Both archive writes are checked, and both operations are
+  **refused outright** when the archive does not land: losing an edit is recoverable, losing the
+  wording somebody approved is not. The same rule applies to a superseded policy revision, and
+  an unreadable policy row is moved to `default@unreadable` before a new one overwrites it.
 - **Proven by:** `tests/test_shadow_learning_policy.py` (purity, determinism, every configurable
   dimension, conservative defaults), `tests/test_learning_memory_control_centre.py` (the
-  governed seams against real stores), `tests/test_learning_control_centre_api.py` (the HTTP
-  boundary, stale state and export), and `tests/test_ui_learning_control_centre.py` (the page).
+  governed seams against real stores, including the revert-revives-approval case, archive
+  refusal, and the material/administrative partition enforced rather than documented),
+  `tests/test_learning_control_centre_api.py` (the HTTP boundary, stale state, export and the
+  privacy-class drift guard), and `tests/test_ui_learning_control_centre.py` (the page).
 - **Date:** 2026-09-01

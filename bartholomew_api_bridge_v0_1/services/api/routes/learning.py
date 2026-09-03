@@ -13,10 +13,16 @@ There is exactly one memory authority and this is not it; there is exactly one
 learning-consolidation path and this is not that either. Every handler below
 is a translation layer:
 
-* reading candidates / competencies / approvals / evaluations
-                        -> `MemoryStore.list_memories_by_kind()` and
-                           `.list_memories()`, the same reads
-                           `routes/memory.py` uses
+* reading candidates / competencies / approvals / evaluations /
+  superseded versions / memories and preferences
+                        -> `MemoryStore.list_memories()` and
+                           `.list_memories_by_kind()`, the same reads
+                           `routes/memory.py` uses. `list_memories()` is
+                           preferred wherever governance metadata is shown,
+                           because only it returns `_decorate_entry()`'s
+                           output -- the privacy class, the recall policy and
+                           the readability flag this module must display and
+                           must never derive itself.
 * previewing a policy   -> `runtime_contract.run_shadow_learning_evaluation_
                            through_runtime_contract()`
 * editing a candidate   -> `runtime_contract.run_candidate_edit_through_
@@ -79,7 +85,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
-from bartholomew.kernel import candidate_learning, learning_authorization, learning_policy
+from bartholomew.kernel import (
+    candidate_learning,
+    learning_authorization,
+    learning_policy,
+    personal_facts,
+    training,
+)
 from bartholomew.kernel.competency import COMPETENCY_KINDS
 from bartholomew.kernel.runtime_contract import (
     LEARNING_ACTION_ACCEPT,
@@ -108,6 +120,11 @@ router = APIRouter(prefix="/api/learning", tags=["learning"])
 #: review queue, not a bulk extraction surface, and the export endpoint below
 #: takes an explicit selection rather than a page size.
 _LIST_CEILING = 500
+
+#: How `personal_facts` keys a stored preference, so the control centre can
+#: name preferences as their own area without inventing a second
+#: classification for them.
+_PREFERENCE_KEY_PREFIX = "preference."
 
 #: Privacy classes whose *content* the control centre will not put into an
 #: export, whatever a caller selects. See `_export_blocked_reason()`.
@@ -211,26 +228,44 @@ class CompetencyRevocation(BaseModel):
     reason: str | None = None
 
 
+#: The engine's own safe default, read once so the request body cannot drift
+#: laxer than it.
+_POLICY_DEFAULTS = learning_policy.default_policy()
+
+
 class PolicyUpdate(BaseModel):
-    """A new learning policy revision, plus the revision it was based on."""
+    """A new learning policy revision, plus the revision it was based on.
+
+    Every default here is taken from `learning_policy.default_policy()` rather
+    than restated. An earlier version restated them and got three wrong --
+    `excluded_privacy_classes` and `excluded_classifications` defaulted to
+    empty lists and both expiry fields to None -- so a client that omitted
+    those fields silently dropped every privacy exclusion the engine ships
+    with. A request body is a place defaults get weakened by accident, and
+    deriving them means it cannot happen again.
+    """
 
     expected_revision: int
     updated_by: str = Field(min_length=1)
     note: str | None = None
     enabled_categories: list[str] = Field(default_factory=list)
     excluded_categories: list[str] = Field(default_factory=list)
-    max_risk: str = "low"
-    require_reversible: bool = True
-    min_supporting_experiences: int = 2
-    min_confidence: float = 0.8
-    contradiction_behaviour: str = learning_policy.CONTRADICTION_REFUSE
-    max_affected_capabilities: int = 1
-    max_affected_applications: int = 0
-    excluded_privacy_classes: list[str] = Field(default_factory=list)
-    excluded_classifications: list[str] = Field(default_factory=list)
-    exclude_sharing_eligible: bool = True
-    expires_after_days: int | None = None
-    review_interval_days: int | None = None
+    max_risk: str = _POLICY_DEFAULTS.max_risk
+    require_reversible: bool = _POLICY_DEFAULTS.require_reversible
+    min_supporting_experiences: int = _POLICY_DEFAULTS.min_supporting_experiences
+    min_confidence: float = _POLICY_DEFAULTS.min_confidence
+    contradiction_behaviour: str = _POLICY_DEFAULTS.contradiction_behaviour
+    max_affected_capabilities: int = _POLICY_DEFAULTS.max_affected_capabilities
+    max_affected_applications: int = _POLICY_DEFAULTS.max_affected_applications
+    excluded_privacy_classes: list[str] = Field(
+        default_factory=lambda: list(_POLICY_DEFAULTS.excluded_privacy_classes),
+    )
+    excluded_classifications: list[str] = Field(
+        default_factory=lambda: list(_POLICY_DEFAULTS.excluded_classifications),
+    )
+    exclude_sharing_eligible: bool = _POLICY_DEFAULTS.exclude_sharing_eligible
+    expires_after_days: int | None = _POLICY_DEFAULTS.expires_after_days
+    review_interval_days: int | None = _POLICY_DEFAULTS.review_interval_days
     #: What the user would like a future wave to do. Recorded; never acted on.
     requested_execution_mode: str = learning_policy.REQUESTED_MODE_SHADOW
 
@@ -250,6 +285,28 @@ class ExportSelection(BaseModel):
 # ---------------------------------------------------------------------------
 # Shared projections
 # ---------------------------------------------------------------------------
+
+
+#: Plain-language readings of the rules engine's `recall_policy` values.
+_RETENTION_WORDS = {
+    "always": "Bartholomew will always bring this up when it is relevant.",
+    "context_only": "Kept, but only used in the conversation it belongs to.",
+}
+
+
+def _retention_description(entry: dict[str, Any]) -> str:
+    """How long this is kept and how freely it is recalled, in a sentence.
+
+    Read from the entry the memory authority decorated, never re-derived, so
+    it says what the rules engine actually decided.
+    """
+    if entry.get("governance_known") is False:
+        return "Bartholomew could not work out how this record is classified."
+    policy = entry.get("recall_policy")
+    words = _RETENTION_WORDS.get(policy or "", "No particular recall policy is recorded.")
+    if entry.get("always_keep"):
+        return f"{words} It is not set to expire."
+    return words
 
 
 def _shadow_banner() -> dict[str, Any]:
@@ -292,10 +349,16 @@ async def _entries_of_kinds(kernel, kinds: list[str], limit: int) -> list[dict[s
     """
     decorated: list[dict[str, Any]] = []
     for kind in kinds:
+        # A budget per kind, not one shared across them. Sharing it meant the
+        # first kind with `limit` rows consumed the whole allowance and every
+        # later kind returned nothing -- so a store with many
+        # `competency_heuristic` records showed no `competency_knowledge` at
+        # all, silently, as if none existed.
+        collected = 0
         offset = 0
-        while len(decorated) < limit:
+        while collected < limit:
             page = await kernel.mem.list_memories(
-                limit=min(limit - len(decorated), _LIST_CEILING),
+                limit=min(limit - collected, _LIST_CEILING),
                 offset=offset,
                 kind=kind,
             )
@@ -303,10 +366,49 @@ async def _entries_of_kinds(kernel, kinds: list[str], limit: int) -> list[dict[s
             if not batch:
                 break
             decorated.extend(batch)
+            collected += len(batch)
             if not page["has_more"]:
                 break
             offset += len(batch)
+
+    # Newest first across all kinds, then the requested window: the caller
+    # asked for the most recent `limit` records, not the most recent `limit`
+    # of whichever kind happened to be listed first.
+    decorated.sort(
+        key=lambda entry: (str(entry.get("ts") or ""), entry.get("id") or 0),
+        reverse=True,
+    )
     return decorated[:limit]
+
+
+async def _entries_with_key_prefix(
+    kernel,
+    kind: str,
+    prefix: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Rows of one kind whose key starts with `prefix`, paging the whole kind.
+
+    Filtering one fetched page would silently miss anything outside it: an
+    evaluation recorded under an early policy revision, or the archived
+    revisions of a candidate edited long ago, both sit behind newer rows of
+    the same kind. Neither is rare, and "no previews recorded" for a candidate
+    that has several is the sort of wrong answer nobody reports as a bug.
+    """
+    found: list[dict[str, Any]] = []
+    offset = 0
+    while len(found) < limit:
+        page = await kernel.mem.list_memories(limit=_LIST_CEILING, offset=offset, kind=kind)
+        batch = page["entries"]
+        for entry in batch:
+            if str(entry["key"]).startswith(prefix):
+                found.append(entry)
+                if len(found) >= limit:
+                    break
+        if not batch or not page["has_more"]:
+            break
+        offset += len(batch)
+    return found
 
 
 async def _decorated_entry(kernel, kind: str, key: str) -> dict[str, Any] | None:
@@ -339,13 +441,20 @@ def _candidate_projection(
     of claim it is, how it is classified for privacy and for sharing, whether
     an approval currently authorises accepting it, and when it last changed.
 
-    `approval_valid` is computed rather than stored: an approval authorises a
-    candidate only while the candidate's material fingerprint still matches,
-    so recomputing it here is the same check acceptance itself makes -- not a
-    second opinion that could drift from it.
+    `approval_valid` is computed rather than stored, and computed by calling
+    `LearningAcceptanceApproval.authorizes()` -- the *same function*
+    `evaluate_learning_admission()` calls -- rather than by comparing
+    fingerprints here. Comparing fingerprints was a second opinion, and it
+    drifted the moment approvals also bound to the candidate revision: after an
+    edit-and-revert the digests matched, so this said "still applies" and
+    enabled the Accept button while acceptance refused. A control that offers
+    an action the system will refuse is worse than no control.
     """
     fingerprint = learning_authorization.fingerprint_for(lesson)
-    approval_valid = bool(approval and approval.candidate_fingerprint == fingerprint)
+    approval_valid = False
+    approval_detail: str | None = None
+    if approval is not None:
+        approval_valid, approval_detail = approval.authorizes(lesson)
     return {
         "kind": candidate_learning.KIND,
         "key": lesson.key(),
@@ -369,9 +478,19 @@ def _candidate_projection(
         "sharing": learning_policy.SharingInterface(
             eligible=lesson.effective_sharing_eligible,
         ).to_dict(),
+        # The raw field, so an edit form can show "work it out from the
+        # classification" as distinct from an explicit yes or no. `sharing`
+        # above is the resolved answer, which is what a reader wants.
+        "sharing_eligible_explicit": lesson.sharing_eligible,
         "privacy_class": entry.get("privacy_class"),
         "category": entry.get("category"),
+        # Retention, as the rules engine records it. `recall_policy` is how
+        # long and how freely a record may be brought back; `always_keep` is
+        # whether it is exempt from expiry. Both are classifications a person
+        # is entitled to see next to the record they describe.
         "recall_policy": entry.get("recall_policy"),
+        "always_keep": entry.get("always_keep"),
+        "retention": _retention_description(entry),
         "governance_known": entry.get("governance_known"),
         "readable": entry.get("readable", True),
         "provenance": {
@@ -404,13 +523,16 @@ def _candidate_projection(
                 "candidate_revision": approval.candidate_revision,
                 "candidate_fingerprint": approval.candidate_fingerprint,
                 "valid_for_current_revision": approval_valid,
+                # The refusal reason comes from the authority itself, so the
+                # screen says exactly why acceptance would refuse rather than
+                # a paraphrase that could describe the wrong reason.
                 "detail": (
                     "This approval still matches what the candidate says."
                     if approval_valid
                     else (
-                        "This candidate changed after it was approved, so the "
-                        "approval no longer authorises accepting it. Read the "
-                        "current version and approve it again if you still want to."
+                        "This approval no longer authorises accepting this "
+                        f"candidate: {approval_detail}. Read the current version "
+                        "and approve it again if you still want to."
                     )
                 ),
             }
@@ -425,7 +547,15 @@ def _candidate_projection(
 
 
 def _competency_projection(entry: dict[str, Any]) -> dict[str, Any]:
-    """One piece of accepted knowledge as the control centre shows it."""
+    """One piece of accepted knowledge as the control centre shows it.
+
+    `readable` gates the summary as well as the value. `_decorate_entry()`
+    blanks an undecryptable *value* but leaves `summary` as whatever
+    `decrypt_if_envelope()` returned -- which, for a key this process does not
+    hold, is the encryption envelope itself. Rendering that would put a
+    ciphertext blob on screen where a sentence belongs.
+    """
+    readable = entry.get("readable", True)
     record = _decode(entry) or {}
     envelope_confidence = record.get("confidence")
     provenance = record.get("provenance") or {}
@@ -441,21 +571,26 @@ def _competency_projection(entry: dict[str, Any]) -> dict[str, Any]:
         "conditions": record.get("conditions"),
         "topic": record.get("topic"),
         "name": record.get("name"),
-        "summary": entry.get("summary"),
+        "summary": entry.get("summary") if readable else None,
         "provenance": provenance,
         "epistemic_status": (
             "inference"
             if provenance.get("source_type") == candidate_learning.EXPERIENCE_SOURCE_TYPE
             else "instructed"
         ),
+        # Same projection as a candidate's, so the two read alike: eligibility
+        # is real, and the state is honestly "not connected in this release".
         "sharing": learning_policy.SharingInterface(
             eligible=record.get("classification") not in (None, "personal"),
         ).to_dict(),
         "privacy_class": entry.get("privacy_class"),
         "category": entry.get("category"),
         "recall_policy": entry.get("recall_policy"),
+        "always_keep": entry.get("always_keep"),
+        "retention": _retention_description(entry),
         "governance_known": entry.get("governance_known"),
-        "readable": entry.get("readable", True),
+        "readable": readable,
+        "unreadable_reason": entry.get("unreadable_reason") if not readable else None,
         "retrievable": True,
         "updated_at": record.get("updated_at"),
         "last_seen_at": entry.get("ts"),
@@ -618,12 +753,12 @@ async def get_candidate(competency_id: str, slug: str) -> dict[str, Any]:
     approval = await _load_approval(kernel, lesson)
 
     revisions = []
-    for archived in await kernel.mem.list_memories_by_kind(
-        [learning_policy.CANDIDATE_REVISION_KIND],
-        limit=_LIST_CEILING,
+    for archived in await _entries_with_key_prefix(
+        kernel,
+        learning_policy.CANDIDATE_REVISION_KIND,
+        f"{lesson.key()}@r",
+        _LIST_CEILING,
     ):
-        if not str(archived["key"]).startswith(f"{lesson.key()}@r"):
-            continue
         data = _decode(archived) or {}
         revisions.append(
             {
@@ -660,12 +795,12 @@ async def _evaluations_for(kernel, candidate_key: str) -> list[dict[str, Any]]:
     readable rather than lost.
     """
     out: list[dict[str, Any]] = []
-    for row in await kernel.mem.list_memories_by_kind(
-        [learning_policy.EVALUATION_KIND],
-        limit=_LIST_CEILING,
+    for row in await _entries_with_key_prefix(
+        kernel,
+        learning_policy.EVALUATION_KIND,
+        f"{candidate_key}@",
+        _LIST_CEILING,
     ):
-        if not str(row["key"]).startswith(f"{candidate_key}@"):
-            continue
         data = _decode(row)
         if data is None:
             continue
@@ -1009,16 +1144,49 @@ async def correct_competency(
             409 if conflict else 400,
             {"detail": "; ".join(result.errors), "outcome": "invalid"},
         )
+
+    # `errors` covers submission-level problems only. A Parking Brake refusal
+    # sets `governance_allowed=False` and a per-record outcome, with no error
+    # at all -- so checking `errors` alone reported a halted system as a 200
+    # whose detail said the correction was "waiting on consent". Different
+    # facts need different answers.
+    if not result.governance_allowed:
+        raise HTTPException(
+            503,
+            {
+                "detail": (
+                    result.governance_reason or "Bartholomew is halted, so nothing was corrected."
+                ),
+                "outcome": "blocked_by_governance",
+            },
+        )
+
     payload = result.to_dict()
     payload["ok"] = result.stored_count > 0
-    payload["detail"] = (
-        "Corrected. Bartholomew will recall the new version from now on."
-        if result.stored_count > 0
-        else (
-            "The correction was not stored -- it is waiting on consent or was "
-            "refused by the memory rules. The previous version still stands."
-        )
-    )
+    if result.stored_count > 0:
+        payload["detail"] = "Corrected. Bartholomew will recall the new version from now on."
+    else:
+        # Say which not-stored this was. "Waiting on consent" and "refused
+        # outright" and "the record was not valid" are three different things
+        # to do next.
+        outcome = result.outcomes[0] if result.outcomes else None
+        reason = getattr(outcome, "outcome", None)
+        detail = getattr(outcome, "detail", None)
+        if reason == training.OUTCOME_QUEUED_FOR_CONSENT:
+            payload["detail"] = (
+                "This correction needs your consent before it can be stored. It "
+                "is waiting in Pending Memory Consent; the previous version "
+                "still stands."
+            )
+        elif reason == training.OUTCOME_INVALID:
+            payload["detail"] = (
+                f"The corrected record was not valid, so nothing was changed: "
+                f"{detail or 'no detail recorded'}"
+            )
+        else:
+            payload["detail"] = (
+                "The memory rules refused this correction, so the previous version still stands."
+            )
     return payload
 
 
@@ -1074,6 +1242,145 @@ async def revoke_competency(
     }
 
 
+@router.get("/superseded")
+async def list_superseded(limit: int = Query(100, ge=1, le=_LIST_CEILING)) -> dict[str, Any]:
+    """
+    What Bartholomew used to think: superseded candidate and competency revisions.
+
+    A required area in its own right, and one that is easy to lose. A candidate
+    edit archives the wording it replaced; a correction archives the belief it
+    replaced. Both are otherwise reachable only by opening the one record they
+    belong to, and neither is retrievable as knowledge -- both kinds are absent
+    from `COMPETENCY_KINDS`, so a superseded belief can never come back as a
+    current one.
+    """
+    kernel = _get_kernel()
+    entries = await _entries_of_kinds(
+        kernel,
+        [learning_policy.CANDIDATE_REVISION_KIND, learning_policy.COMPETENCY_REVISION_KIND],
+        limit,
+    )
+
+    items: list[dict[str, Any]] = []
+    for entry in entries:
+        record = _decode(entry) or {}
+        is_candidate = entry["kind"] == learning_policy.CANDIDATE_REVISION_KIND
+        live_key = str(entry["key"]).rsplit("@r", 1)[0]
+        items.append(
+            {
+                "kind": entry["kind"],
+                "key": entry["key"],
+                "supersedes": live_key,
+                "what_it_is": (
+                    "a lesson he proposed, as it read before it was edited"
+                    if is_candidate
+                    else "something he had been taught, as it read before it was corrected"
+                ),
+                "revision": record.get("revision"),
+                "text": (
+                    record.get("inferred_rule")
+                    if is_candidate
+                    else (record.get("rule") or record.get("content") or record.get("name"))
+                ),
+                "conditions": record.get("conditions"),
+                "classification": record.get("classification"),
+                "confidence": record.get("confidence"),
+                "provenance": record.get("provenance"),
+                "privacy_class": entry.get("privacy_class"),
+                "retention": _retention_description(entry),
+                "readable": entry.get("readable", True),
+                "archived_at": entry.get("ts"),
+                "retrievable": False,
+            },
+        )
+    return {"superseded": items, "total": len(items)}
+
+
+@router.get("/memories")
+async def list_personal_memories(
+    area: str = Query("all", pattern="^(all|preferences|facts)$"),
+    search: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=_LIST_CEILING),
+) -> dict[str, Any]:
+    """
+    Personal memories and preferences, as two named areas rather than one list.
+
+    Both are required areas of the control centre, and they are stored in the
+    same place: `personal_facts` writes a preference as a `user_profile` row
+    keyed `preference.<slug>` (see `personal_facts.py`). Nothing in the store
+    distinguishes them, so this is where the distinction is drawn -- from the
+    key convention the writer already uses, not from a second classification.
+
+    Reading only. Correcting and forgetting a memory stay on `/api/memory`,
+    which is the surface that already owns them; duplicating those verbs here
+    would be a second way to do the same governed thing.
+    """
+    kernel = _get_kernel()
+
+    # Paged until the window is filled or the store is exhausted, because the
+    # area filter is applied *after* the read: one page of the newest rows
+    # would report "no preferences" for a store whose preferences all sit
+    # behind five hundred newer facts.
+    items: list[dict[str, Any]] = []
+    offset = 0
+    store_total = 0
+    filtered = False
+    while len(items) < limit:
+        page = await kernel.mem.list_memories(
+            limit=_LIST_CEILING,
+            offset=offset,
+            search=search or None,
+        )
+        store_total = page["store_total"]
+        filtered = page["filtered"]
+        batch = page["entries"]
+        if not batch:
+            break
+        for entry in batch:
+            is_preference = entry["kind"] in personal_facts.PERSONAL_FACT_KINDS and str(
+                entry["key"],
+            ).startswith(_PREFERENCE_KEY_PREFIX)
+            if area == "preferences" and not is_preference:
+                continue
+            if area == "facts" and is_preference:
+                continue
+            items.append(
+                {
+                    "kind": entry["kind"],
+                    "key": entry["key"],
+                    "area": "preference" if is_preference else "memory",
+                    "value": entry.get("value") if entry.get("readable", True) else None,
+                    "summary": entry.get("summary") if entry.get("readable", True) else None,
+                    "privacy_class": entry.get("privacy_class"),
+                    "category": entry.get("category"),
+                    "recall_policy": entry.get("recall_policy"),
+                    "always_keep": entry.get("always_keep"),
+                    "retention": _retention_description(entry),
+                    "governance_known": entry.get("governance_known"),
+                    "readable": entry.get("readable", True),
+                    "unreadable_reason": entry.get("unreadable_reason"),
+                    "consent_at": entry.get("consent_at"),
+                    "consent_source": entry.get("consent_source"),
+                    "last_updated": entry.get("ts"),
+                    "exportable": _export_blocked_reason(entry) is None,
+                    "export_blocked_reason": _export_blocked_reason(entry),
+                },
+            )
+            if len(items) >= limit:
+                break
+        if not page["has_more"]:
+            break
+        offset += len(batch)
+
+    return {
+        "area": area,
+        "memories": items,
+        "total": len(items),
+        "store_total": store_total,
+        "filtered": filtered,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Approvals and evaluations
 # ---------------------------------------------------------------------------
@@ -1108,10 +1415,9 @@ async def list_approvals(limit: int = Query(100, ge=1, le=_LIST_CEILING)) -> dic
                 try:
                     lesson = candidate_learning.CandidateLesson.from_dict(candidate_data)
                     candidate_state = lesson.review_state
-                    still_valid = (
-                        learning_authorization.fingerprint_for(lesson)
-                        == approval.candidate_fingerprint
-                    )
+                    # Same authority as acceptance, for the same reason
+                    # `_candidate_projection` uses it.
+                    still_valid, _reason = approval.authorizes(lesson)
                 except (KeyError, TypeError, ValueError):
                     pass
         items.append(
@@ -1169,11 +1475,13 @@ async def policy_history(limit: int = Query(50, ge=1, le=_LIST_CEILING)) -> dict
     that number would be unresolvable once the policy moved on.
     """
     kernel = _get_kernel()
-    rows = await kernel.mem.list_memories_by_kind([learning_policy.POLICY_KIND], limit=limit)
     history = []
-    for row in rows:
-        if not str(row["key"]).startswith(f"{learning_policy.POLICY_KEY}@r"):
-            continue
+    for row in await _entries_with_key_prefix(
+        kernel,
+        learning_policy.POLICY_KIND,
+        f"{learning_policy.POLICY_KEY}@r",
+        limit,
+    ):
         data = _decode(row)
         if data is not None:
             history.append(data)
@@ -1261,7 +1569,20 @@ async def update_policy(body: PolicyUpdate) -> dict[str, Any]:
 def _export_blocked_reason(entry: dict[str, Any]) -> str | None:
     """Why this record may not be exported, or None if it may.
 
-    Three refusals, and each is a different fact:
+    Three refusals, and each is a different fact.
+
+    One thing to know about the third. `_decorate_entry()` derives the privacy
+    class by re-running the rules over the value *as stored*, and the shipped
+    rules redact the consent-gated classes before storing them -- so a
+    `user.secure` row comes back masked, and its re-derived class is None
+    rather than `user.secure`. That reads like a hole and is not one: the
+    sensitive text is not in the row to export. Where the class survives is
+    exactly where it matters -- a deployment whose `memory_rules.yaml` assigns
+    a restricted class *without* redacting, so the original value is stored,
+    re-derives the same class, and is refused here. The two halves cover each
+    other: redaction removes the content, and this gate removes the record.
+
+    Refusals in detail:
 
     * **unreadable** -- stored encrypted under a key this process does not
       hold. Exporting it would produce a file of ciphertext presented as the
@@ -1362,6 +1683,13 @@ async def export_selection(body: ExportSelection) -> Response:
             continue
 
         entry = by_identity.get((kind, key))
+        if entry is None:
+            # The bulk map is capped at the newest `_LIST_CEILING` rows per
+            # kind, so an older record is absent from it without being absent
+            # from the store. Reporting "no such record" for one the user can
+            # see on screen would be a lie; page for it instead. Bounded by
+            # the selection cap, so this is at most a few full passes.
+            entry = await _decorated_entry(kernel, kind, key)
         if entry is None:
             skipped.append({"kind": kind, "key": key, "reason": "no such record"})
             continue

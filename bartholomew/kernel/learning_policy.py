@@ -111,6 +111,21 @@ EVALUATION_KIND: str = "learning_shadow_evaluation"
 #: Absent from `COMPETENCY_KINDS` for the same reason the candidate is.
 CANDIDATE_REVISION_KIND: str = "candidate_lesson_revision"
 
+#: The `MemoryStore` kind a superseded *competency* record is preserved under
+#: when it is corrected.
+#:
+#: S5.2's training seam records that a supersession happened -- the revision
+#: it replaced and that claim's provenance -- but not what the superseded
+#: record actually said, because a correction is an in-place upsert. That
+#: makes "what did Bartholomew believe before I corrected this?" unanswerable,
+#: and the contract names superseded and corrected knowledge as something a
+#: person must be able to see. Archiving the prior record here answers it
+#: without touching the training seam's own bookkeeping.
+#:
+#: Absent from `COMPETENCY_KINDS`, deliberately and importantly: a superseded
+#: belief must not be retrievable as a current one.
+COMPETENCY_REVISION_KIND: str = "competency_revision"
+
 #: The single canonical policy key. One live policy per runtime, which is one
 #: per tenant -- see `bartholomew.platform.runtime_registry`, where a tenant
 #: *is* an isolated database file. Storing it under a fixed key rather than a

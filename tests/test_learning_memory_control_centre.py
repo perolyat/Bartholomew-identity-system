@@ -49,6 +49,7 @@ from bartholomew.kernel.runtime_contract import (
     LEARNING_OUTCOME_EDITED,
     LEARNING_OUTCOME_EVALUATED,
     LEARNING_OUTCOME_INVALID,
+    LEARNING_OUTCOME_NOT_STORED,
     LEARNING_OUTCOME_POLICY_UPDATED,
     LEARNING_OUTCOME_QUEUED_FOR_CONSENT,
     LEARNING_OUTCOME_REJECTED,
@@ -450,6 +451,320 @@ async def test_b5_a_stale_edit_conflicts_instead_of_overwriting(ctx):
     ), "the first reviewer's edit must survive a stale second edit"
 
 
+async def test_b5b_reverting_a_candidate_does_not_revive_a_cancelled_approval(ctx):
+    """
+    The hole content-only binding leaves, closed.
+
+    An approval invalidated by an edit was revived by editing the candidate
+    *back*: the digest matched again, so an approval the reviewer had been
+    told in those words no longer applied silently accepted a candidate two
+    revisions on from the one they read.
+
+    `LearningAcceptanceApproval.authorizes()` now also requires the revision to
+    match. Any material edit increments it and nothing decrements it, so a
+    cancelled approval stays cancelled however the content moves.
+    """
+    lesson = await _propose(ctx, _run_the_experience(ctx))
+    original_rule = lesson.inferred_rule
+
+    granted = await grant_learning_acceptance_approval(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=lesson.slug,
+        approver=APPROVER,
+    )
+    assert granted.granted is True
+    assert granted.approval.candidate_revision == lesson.revision
+
+    away = await run_candidate_edit_through_runtime_contract(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=lesson.slug,
+        editor=EDITOR,
+        expected_revision=lesson.revision,
+        inferred_rule="Something else entirely",
+    )
+    assert away.approval_invalidated is True
+
+    back = await run_candidate_edit_through_runtime_contract(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=lesson.slug,
+        editor=EDITOR,
+        expected_revision=away.lesson.revision,
+        inferred_rule=original_rule,
+    )
+    assert back.outcome == LEARNING_OUTCOME_EDITED
+    # The digest is back to what was approved...
+    assert back.fingerprint_after == away.fingerprint_before
+    # ...and the edit still reports the approval as no longer applying.
+    assert back.approval_invalidated is True
+
+    refused = await run_candidate_lesson_through_runtime_contract(
+        ctx,
+        LEARNING_ACTION_ACCEPT,
+        competency_id=COMPETENCY_ID,
+        slug=lesson.slug,
+        reviewer=REVIEWER,
+    )
+    assert refused.outcome == LEARNING_OUTCOME_APPROVAL_REQUIRED
+    assert "edited since" in refused.reason
+    assert "currently reads the same" in refused.reason
+    assert refused.consolidated is False
+    assert not await _rows_of_kind(ctx, "competency_heuristic")
+
+
+async def test_b5c_re_proposing_carries_the_revision_forward(ctx):
+    """
+    `expected_revision` is only a staleness token if it never goes backwards.
+
+    Re-proposing used to reset it to 1, which meant an editor holding a stale
+    "1" from before a supersession would pass the check, and an approval
+    recorded at revision 1 could re-apply to a differently-sourced candidate
+    that happened to digest the same.
+    """
+    objective_id = _run_the_experience(ctx)
+    first = await _propose(ctx, objective_id)
+    assert first.revision == 1
+
+    await run_candidate_edit_through_runtime_contract(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=first.slug,
+        editor=EDITOR,
+        expected_revision=1,
+        inferred_rule="Edited once",
+    )
+    reproposed = await _propose(ctx, objective_id)
+    assert reproposed.revision > 2, "a re-proposal must not reset the revision"
+
+    stale = await run_candidate_edit_through_runtime_contract(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=first.slug,
+        editor=EDITOR,
+        expected_revision=1,
+        inferred_rule="Written against a revision that no longer exists",
+    )
+    assert stale.outcome == LEARNING_OUTCOME_REVISION_CONFLICT
+
+
+async def test_b6b_an_edit_is_refused_when_the_prior_revision_cannot_be_kept(ctx):
+    """
+    Losing an edit is recoverable; losing approved wording is not.
+
+    The archive write goes through the same governed path as everything else,
+    so it can be refused or held for consent. When it does not land, the edit
+    is refused outright rather than overwriting the only copy of what somebody
+    approved.
+    """
+    lesson = await _propose(ctx, _run_the_experience(ctx))
+    original_rule = lesson.inferred_rule
+
+    class _RefusingArchive:
+        """Wraps the real store, refusing exactly the archive write."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def upsert_memory(self, kind, key, value, ts, **kwargs):
+            if kind == learning_policy.CANDIDATE_REVISION_KIND:
+                from bartholomew.kernel.memory_store import StoreResult
+
+                return StoreResult(stored=False, outcome="refused")
+            return await self._inner.upsert_memory(kind, key, value, ts, **kwargs)
+
+    real = ctx.mem
+    ctx.mem = _RefusingArchive(real)
+    try:
+        result = await run_candidate_edit_through_runtime_contract(
+            ctx,
+            competency_id=COMPETENCY_ID,
+            slug=lesson.slug,
+            editor=EDITOR,
+            expected_revision=lesson.revision,
+            inferred_rule="An edit that would discard the approved wording",
+        )
+    finally:
+        ctx.mem = real
+
+    assert result.outcome == LEARNING_OUTCOME_NOT_STORED
+    assert "could not be kept" in result.reason
+
+    stored = await _stored_candidate(ctx, lesson)
+    assert stored.inferred_rule == original_rule
+    assert stored.revision == lesson.revision
+
+
+async def test_b6c_an_edit_cannot_land_on_a_recreated_record(ctx):
+    """
+    What `expected_memory_id` actually guards, stated accurately.
+
+    `upsert_memory()` UPDATEs a row in place, so its id survives an ordinary
+    edit and the precondition does not detect a competing *update* -- the
+    revision re-check immediately before the write is what narrows that. What
+    the row-id precondition does catch is the case a revision check cannot see
+    at all: the record deleted and recreated underneath the edit, where the
+    revision may legitimately read the same while the row is somebody else's.
+    That is the ABA problem `correct_memory()`'s docstring describes, and it is
+    why the write carries the id it read.
+    """
+    from bartholomew.kernel.runtime_contract import _write_candidate_lesson
+
+    lesson = await _propose(ctx, _run_the_experience(ctx))
+    stale_memory_id = (await ctx.mem.get_memory(candidate_learning.KIND, lesson.key()))["id"]
+
+    # The record is deleted and something else is written at the same key.
+    await ctx.mem.delete_memory(candidate_learning.KIND, lesson.key())
+    replacement = await _propose(ctx, _run_the_experience(ctx, title="A replacement objective"))
+    replacement.slug = lesson.slug
+    await _write_candidate_lesson(ctx, replacement)
+    live_id = (await ctx.mem.get_memory(candidate_learning.KIND, lesson.key()))["id"]
+    assert live_id != stale_memory_id
+
+    lesson.inferred_rule = "An edit against a row that no longer exists"
+    result = await _write_candidate_lesson(ctx, lesson, expected_memory_id=stale_memory_id)
+    assert result.stored is False
+    assert result.outcome == "precondition_failed"
+
+    live = await _stored_candidate(ctx, lesson)
+    assert live.inferred_rule == replacement.inferred_rule
+
+
+async def test_b6c2_a_stale_revision_is_refused_at_the_write_as_well(ctx):
+    """
+    The re-check immediately before the write, exercised on its own.
+
+    The check at the top of the edit seam is separated from the write by an
+    approval read and an archive write. This one runs at the last moment, so an
+    edit whose base revision was superseded while it was in flight is refused
+    rather than overwriting.
+    """
+    lesson = await _propose(ctx, _run_the_experience(ctx))
+    base_revision = lesson.revision
+
+    class _EditsUnderneath:
+        """Wraps the store and lands somebody else's edit during the archive
+        write -- i.e. after the seam's first revision check, before its own."""
+
+        def __init__(self, inner, ctx_ref, slug):
+            self._inner = inner
+            self._ctx = ctx_ref
+            self._slug = slug
+            self.interfered = False
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def upsert_memory(self, kind, key, value, ts, **kwargs):
+            result = await self._inner.upsert_memory(kind, key, value, ts, **kwargs)
+            if kind == learning_policy.CANDIDATE_REVISION_KIND and not self.interfered:
+                self.interfered = True
+                other = await _load_candidate_lesson(self._ctx, COMPETENCY_ID, self._slug)
+                other.inferred_rule = "Somebody else's wording, landed mid-edit"
+                other.revision += 1
+                await self._inner.upsert_memory(
+                    candidate_learning.KIND,
+                    other.key(),
+                    json.dumps(other.to_dict()),
+                    ts,
+                    summary=other.to_summary_text(),
+                )
+            return result
+
+    from bartholomew.kernel.runtime_contract import _load_candidate_lesson
+
+    real = ctx.mem
+    ctx.mem = _EditsUnderneath(real, ctx, lesson.slug)
+    try:
+        result = await run_candidate_edit_through_runtime_contract(
+            ctx,
+            competency_id=COMPETENCY_ID,
+            slug=lesson.slug,
+            editor=EDITOR,
+            expected_revision=base_revision,
+            inferred_rule="My wording, written against a superseded base",
+        )
+    finally:
+        assert ctx.mem.interfered, "the test must actually have interfered"
+        ctx.mem = real
+
+    assert result.outcome == LEARNING_OUTCOME_REVISION_CONFLICT
+    assert result.stored_lesson is not None
+
+    live = await _stored_candidate(ctx, lesson)
+    assert live.inferred_rule == "Somebody else's wording, landed mid-edit"
+
+
+async def test_b6d_the_material_field_vocabulary_is_enforced_not_documented(ctx):
+    """
+    `MATERIAL_CANDIDATE_FIELDS` declares the partition; this makes it true.
+
+    A constant naming the material set that nothing checks is documentation
+    wearing code's clothes -- it can drift from `fingerprint_for()` without
+    anything noticing. Here every editable material field is edited and must
+    move the fingerprint, and every administrative one must not.
+    """
+    from bartholomew.kernel.runtime_contract import (
+        ADMINISTRATIVE_CANDIDATE_FIELDS,
+        MATERIAL_CANDIDATE_FIELDS,
+    )
+
+    editable_material = {
+        "inferred_rule": "A different rule",
+        "conditions": "Different conditions",
+        "classification": "potentially_generalisable",
+        "confidence": 0.77,
+        "risk_class": "moderate",
+        "reversible": True,
+        "affected_applications": ["calendar"],
+        "sharing_eligible": True,
+    }
+    # The rest of the material set is fixed at proposal time (it names the
+    # experience the lesson stands on), so it is not editable here -- but it
+    # must still be covered by the digest.
+    not_editable = MATERIAL_CANDIDATE_FIELDS - set(editable_material)
+    assert not_editable == {
+        "lesson_kind",
+        "epistemic_status",
+        "objective_id",
+        "supporting_event_ids",
+        "competency_id",
+    }
+
+    for field_name, value in editable_material.items():
+        lesson = await _propose(
+            ctx,
+            _run_the_experience(ctx, title=f"Objective for {field_name}"),
+        )
+        before = learning_authorization.fingerprint_for(lesson)
+        result = await run_candidate_edit_through_runtime_contract(
+            ctx,
+            competency_id=COMPETENCY_ID,
+            slug=lesson.slug,
+            editor=EDITOR,
+            expected_revision=lesson.revision,
+            **{field_name: value},
+        )
+        assert result.material_change is True, f"{field_name} must be material"
+        assert result.fingerprint_after != before
+
+    assert ADMINISTRATIVE_CANDIDATE_FIELDS == {"display_state"}
+    lesson = await _propose(ctx, _run_the_experience(ctx, title="Objective for display state"))
+    admin = await run_candidate_edit_through_runtime_contract(
+        ctx,
+        competency_id=COMPETENCY_ID,
+        slug=lesson.slug,
+        editor=EDITOR,
+        expected_revision=lesson.revision,
+        display_state=candidate_learning.DISPLAY_PINNED,
+    )
+    assert admin.material_change is False
+
+
 async def test_b6_the_prior_revision_is_preserved(ctx):
     """
     Acceptance requirement: "preserve the prior revision and audit history".
@@ -817,6 +1132,83 @@ async def test_e2_shadow_decisions_explain_their_matched_rules_and_reasons(ctx):
     assert payload["execution_mode"] == learning_policy.SHIPPED_EXECUTION_MODE
 
 
+async def test_e2b_the_privacy_exclusion_rule_actually_fires(ctx):
+    """
+    A configured exclusion that silently does nothing is worse than no control.
+
+    The candidate's privacy class has to be *evaluated* over the stored row:
+    `get_memory()` returns no governance metadata, so an earlier version read
+    an always-absent key and the `privacy_class_excluded` rule could never
+    fire. A user could exclude a class from automatic acceptance and the
+    preview would ignore them.
+    """
+    from bartholomew.kernel.runtime_contract import _privacy_class_for_candidate
+
+    lesson = await _propose(ctx, _run_the_experience(ctx))
+    stored = await _stored_candidate(ctx, lesson)
+
+    # The shipped rules classify a candidate lesson, and the seam sees it.
+    privacy_class = await _privacy_class_for_candidate(ctx, stored)
+    assert privacy_class == "user.competency"
+
+    # A policy excluding that class refuses on exactly that ground.
+    policy = learning_policy.LearningPolicy(
+        revision=1,
+        enabled_categories=["procedural"],
+        max_risk="critical",
+        require_reversible=False,
+        min_supporting_experiences=1,
+        min_confidence=0.0,
+        max_affected_capabilities=9,
+        max_affected_applications=9,
+        excluded_privacy_classes=[privacy_class],
+        excluded_classifications=[],
+        exclude_sharing_eligible=False,
+        expires_after_days=None,
+        review_interval_days=None,
+    )
+    facts = learning_policy.facts_from_lesson(
+        stored,
+        learning_authorization.fingerprint_for(stored),
+        risk_class="low",
+        reversible=True,
+        privacy_class=privacy_class,
+        sharing_eligible=False,
+    )
+    decision = learning_policy.evaluate(policy, facts, evaluated_at="2026-09-01T00:00:00+00:00")
+    assert decision.decision == learning_policy.DECISION_WOULD_REFUSE
+    assert [rule.rule_id for rule in decision.matched_rules] == ["privacy_class_excluded"]
+
+
+async def test_e2c_the_new_kinds_are_classified_by_the_memory_rules(ctx):
+    """
+    An archive of a lesson must not be governed more loosely than the lesson.
+
+    `candidate_lesson_revision` holds the same content one edit ago. Without a
+    rule it would carry no privacy class at all, while the live candidate
+    carries `user.competency` -- the sort of gap an archive quietly becomes if
+    nobody writes the rule down.
+    """
+    from bartholomew.kernel.memory_rules import MemoryRulesEngine
+
+    engine = MemoryRulesEngine(watch_file=False)
+    candidate_class = engine.evaluate(
+        {"kind": candidate_learning.KIND, "key": "c.s", "value": "{}"},
+    ).get("privacy_class")
+    assert candidate_class
+
+    for kind in (
+        learning_policy.CANDIDATE_REVISION_KIND,
+        learning_policy.POLICY_KIND,
+        learning_policy.EVALUATION_KIND,
+    ):
+        evaluated = engine.evaluate({"kind": kind, "key": "c.s", "value": "{}"})
+        assert (
+            evaluated.get("privacy_class") == candidate_class
+        ), f"{kind} is classified more loosely than the candidate it relates to"
+        assert evaluated.get("recall_policy") == "context_only"
+
+
 async def test_e3_shadow_evaluation_cannot_create_an_approval(ctx):
     """Acceptance requirement 14."""
     lesson = await _propose(ctx, _run_the_experience(ctx))
@@ -1125,6 +1517,96 @@ async def test_f6_an_unparseable_policy_falls_back_to_the_safe_default(ctx):
     assert row is not None, "the corrupted revision must be preserved for inspection"
 
 
+async def test_f6c_an_unreadable_policy_survives_the_next_update(ctx):
+    """
+    "Left in place for inspection" has to survive an update, not just a read.
+
+    `load_learning_policy()` falls back to the default when the row cannot be
+    parsed, and the default's revision is 0 -- so an update with
+    `expected_revision=0` passes the conflict check, skips the archive branch
+    (there is no revision to archive) and overwrites the corrupted row. The
+    docstring said the row was preserved; it was destroyed by the very next
+    save.
+    """
+    await ctx.mem.upsert_memory(
+        learning_policy.POLICY_KIND,
+        learning_policy.POLICY_KEY,
+        "{not json at all",
+        "2026-09-01T00:00:00+00:00",
+        summary="corrupted policy",
+    )
+
+    result = await run_learning_policy_update_through_runtime_contract(
+        ctx,
+        learning_policy.LearningPolicy(
+            enabled_categories=["procedural"],
+            excluded_privacy_classes=[],
+        ),
+        expected_revision=0,
+        updated_by=REVIEWER,
+    )
+    assert result.outcome == LEARNING_OUTCOME_POLICY_UPDATED, result.reason
+
+    kept = await ctx.mem.get_memory(
+        learning_policy.POLICY_KIND,
+        f"{learning_policy.POLICY_KEY}@unreadable",
+    )
+    assert kept is not None, "the unreadable revision must be kept aside"
+    assert kept["value"] == "{not json at all"
+
+    live = await load_learning_policy(ctx)
+    assert live.revision == 1
+    assert live.enabled_categories == ["procedural"]
+
+
+async def test_f6d_a_policy_update_is_refused_when_the_prior_revision_cannot_be_kept(ctx):
+    """
+    A recorded shadow decision names the revision it ran under.
+
+    If the archive of that revision does not land, the next write destroys it
+    and the decision becomes unexplainable. Refuse rather than lose it -- the
+    same rule the candidate edit seam follows.
+    """
+    first = await _permissive_policy(ctx, updated_by="first")
+    assert first.revision == 1
+
+    class _RefusingArchive:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def upsert_memory(self, kind, key, value, ts, **kwargs):
+            if kind == learning_policy.POLICY_KIND and str(key).endswith("@r1"):
+                from bartholomew.kernel.memory_store import StoreResult
+
+                return StoreResult(stored=False, outcome="refused")
+            return await self._inner.upsert_memory(kind, key, value, ts, **kwargs)
+
+    real = ctx.mem
+    ctx.mem = _RefusingArchive(real)
+    try:
+        result = await run_learning_policy_update_through_runtime_contract(
+            ctx,
+            learning_policy.LearningPolicy(
+                enabled_categories=[],
+                excluded_privacy_classes=[],
+            ),
+            expected_revision=first.revision,
+            updated_by="second",
+        )
+    finally:
+        ctx.mem = real
+
+    assert result.outcome == LEARNING_OUTCOME_NOT_STORED
+    assert "could not be kept" in result.reason
+
+    live = await load_learning_policy(ctx)
+    assert live.revision == first.revision
+    assert live.updated_by == "first"
+
+
 @pytest.mark.parametrize("corrupt", ["[]", '"a string"', "42", "null"])
 async def test_f6b_a_policy_row_that_is_not_an_object_also_falls_back_safely(ctx, corrupt):
     """
@@ -1363,27 +1845,87 @@ async def test_h1_learning_state_is_scoped_to_its_own_runtime(ctx, tmp_path):
     os_mod.ensure_schema(other_db)
     other = _Ctx(other_mem, ObjectiveStore(other_db), _shipped_identity_context())
     try:
+        # Tenant B gets learning state of its own, so this is not a test that a
+        # freshly created empty database is empty -- which would pass against
+        # any implementation, correct or broken. Both runtimes hold records;
+        # the question is whether either can see the other's.
+        b_lesson = await _propose(
+            other,
+            _run_the_experience(other, title="Repair the tenant B fence"),
+        )
+        await grant_learning_acceptance_approval(
+            other,
+            competency_id=COMPETENCY_ID,
+            slug=b_lesson.slug,
+            approver="tenant-b",
+        )
+        await run_shadow_learning_evaluation_through_runtime_contract(
+            other,
+            competency_id=COMPETENCY_ID,
+            slug=b_lesson.slug,
+        )
+        assert await other.mem.list_memories_by_kind(
+            [candidate_learning.KIND],
+            limit=100,
+        ), "tenant B must actually hold records for this test to mean anything"
+
+        # Keys are per-tenant, so they collide by *name*: each runtime numbers
+        # its own objectives from 1, so both candidates land at
+        # "estate_management.lesson_from_objective_1". That is correct, and it
+        # is why isolation has to be checked on content -- comparing keys would
+        # fail against two perfectly isolated runtimes.
+        a_candidates = str(await _rows_of_kind(ctx, candidate_learning.KIND))
+        b_candidates = str(
+            await other.mem.list_memories_by_kind([candidate_learning.KIND], limit=100),
+        )
+        assert "Get the boiler serviced" in a_candidates
+        assert "tenant B fence" not in a_candidates
+        assert "tenant B fence" in b_candidates
+        assert "Get the boiler serviced" not in b_candidates
+
+        # Each runtime holds exactly its own record of each kind, not both.
         for kind in (
             candidate_learning.KIND,
             learning_authorization.KIND,
             learning_policy.EVALUATION_KIND,
-            learning_policy.POLICY_KIND,
-            learning_policy.CANDIDATE_REVISION_KIND,
         ):
-            assert not await other.mem.list_memories_by_kind(
-                [kind],
-                limit=100,
-            ), f"tenant B can see tenant A's {kind} records"
+            assert (
+                len(await other.mem.list_memories_by_kind([kind], limit=100)) == 1
+            ), f"tenant B should hold exactly its own {kind} record"
 
-        # The other runtime's policy is the untouched default, not A's.
-        other_policy = await load_learning_policy(other)
-        assert other_policy.revision == 0
+        # A's approver never appears in B's records, and B's never in A's.
+        a_approvals = str(await _rows_of_kind(ctx, learning_authorization.KIND))
+        b_approvals = str(
+            await other.mem.list_memories_by_kind([learning_authorization.KIND], limit=100),
+        )
+        assert APPROVER in a_approvals and "tenant-b" not in a_approvals
+        assert "tenant-b" in b_approvals and APPROVER not in b_approvals
 
-        # And A's candidate is simply not there to evaluate.
-        missing = await run_shadow_learning_evaluation_through_runtime_contract(
+        # A configured a policy; B's is still the untouched default, and B has
+        # no policy row of its own to confuse with A's.
+        assert (await load_learning_policy(ctx)).revision > 0
+        assert (await load_learning_policy(other)).revision == 0
+        assert not await other.mem.list_memories_by_kind(
+            [learning_policy.POLICY_KIND],
+            limit=100,
+        )
+
+        # Evaluating the colliding key in B previews B's *own* lesson, never
+        # A's. The keys are identical strings; the records are not.
+        collided = await run_shadow_learning_evaluation_through_runtime_contract(
             other,
             competency_id=COMPETENCY_ID,
             slug=lesson.slug,
+        )
+        assert collided.outcome == LEARNING_OUTCOME_EVALUATED
+        assert "tenant B fence" in collided.lesson.inferred_rule
+        assert "Get the boiler serviced" not in collided.lesson.inferred_rule
+
+        # And a key that exists in neither is simply not found.
+        missing = await run_shadow_learning_evaluation_through_runtime_contract(
+            other,
+            competency_id=COMPETENCY_ID,
+            slug="lesson_from_objective_9999",
         )
         assert missing.outcome == "not_found"
     finally:

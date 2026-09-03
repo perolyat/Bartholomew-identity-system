@@ -37,17 +37,24 @@ schema, so a new kind is new rows, not new columns:
 
 | Kind | Key shape | Contents |
 |---|---|---|
-| `learning_policy` | `default`, plus `default@r<N>` archives | One tenant's policy configuration, versioned. |
+| `learning_policy` | `default`, plus `default@r<N>` archives and `default@unreadable` | One tenant's policy configuration, versioned. |
 | `learning_shadow_evaluation` | `<competency_id>.<slug>@<policy revision>` | One inspectable preview. |
 | `candidate_lesson_revision` | `<competency_id>.<slug>@r<N>` | A superseded candidate revision, archived on material edit. |
+| `competency_revision` | `<kind key>@r<N>` | A superseded competency record, archived on correction. |
 
-All three are **absent from `competency.COMPETENCY_KINDS`**, so the chat
+All four are **absent from `competency.COMPETENCY_KINDS`**, so the chat
 retrieval seam's kind filter (`COMPETENCY_KINDS + PERSONAL_FACT_KINDS`) cannot
-see them. Nothing here can be cited as knowledge by a later reasoning turn.
+see them. Nothing here can be cited as knowledge by a later reasoning turn —
+which matters most for `competency_revision`, where the record is a belief
+Bartholomew has since been corrected out of.
 
-All three are registered with `privacy_guard.register_structural_schema()`, so
-their schema *key names* are treated as structure rather than content. Every
-**value** is still scanned in full.
+All four are registered with `privacy_guard.register_structural_schema()` (the
+two learning-policy kinds directly; the revision archives inherit the schema of
+what they archive), and all four are classified in
+`bartholomew/config/memory_rules.yaml` as `user.competency` / `context_only` —
+the same class as the records they relate to, so an archive is never governed
+more loosely than the thing it archives. Every **value** is still scanned in
+full.
 
 ### Changes to an existing kind
 
@@ -163,11 +170,11 @@ python -m uvicorn bartholomew_api_bridge_v0_1.services.api.app:app --reload
 
 ## Rollback
 
-Rolling back the code is sufficient and safe. The three new kinds are rows in
+Rolling back the code is sufficient and safe. The four new kinds are rows in
 `memories` that no earlier code path reads:
 
 - `learning_policy` / `learning_shadow_evaluation` / `candidate_lesson_revision`
-  rows are simply never queried by pre-Package-D code.
+  / `competency_revision` rows are simply never queried by pre-Package-D code.
 - `candidate_lesson` rows written after the upgrade carry five extra JSON keys.
   Pre-Package-D `CandidateLesson.from_dict()` ignores unknown keys, so those
   candidates still load, still validate, and still accept and reject correctly.
@@ -181,11 +188,18 @@ To also remove the rows (not required):
 
 ```sql
 DELETE FROM memories WHERE kind IN
-  ('learning_policy', 'learning_shadow_evaluation', 'candidate_lesson_revision');
+  ('learning_policy', 'learning_shadow_evaluation',
+   'candidate_lesson_revision', 'competency_revision');
 ```
 
 Do this only from a stopped runtime, and prefer restoring the backup. Note that
-deleting `candidate_lesson_revision` rows discards archived edit history.
+deleting `candidate_lesson_revision` or `competency_revision` rows discards the
+archived history of what a lesson said before it was edited, and of what
+Bartholomew believed before a correction.
+
+The rollback also leaves `bartholomew/config/memory_rules.yaml` carrying rules
+for kinds the old code never writes. That is inert — a rule for an absent kind
+never matches — so the file can be left as it is.
 
 ---
 
@@ -235,11 +249,12 @@ existing two views.
 |---|---|
 | Shadow-mode banner | First thing on the view. States that Bartholomew is not accepting lessons on his own, and the live execution mode read from the server. |
 | Counts | Waiting / accepted / rejected candidates, recallable knowledge, previews recorded, approvals granted. |
-| Candidate lessons | Each proposal: its rule, when it applies, confidence, epistemic status, classification, privacy class, risk (or "risk not assessed"), sharing eligibility, and the objective and verbatim observations it stands on. Controls: Edit, Approve this exact lesson, Accept (disabled until an approval applies), Reject, Preview policy, and an export tick-box. |
-| Accepted knowledge | What he can actually recall. Correct (supersedes, keeps history) and Stop recalling this (revokes, keeps the audit). |
-| Everything he remembers | Personal memories and preferences, for export selection. Reading/correcting/forgetting stays on the ordinary view. |
-| Export | Ticked records only; reports everything it left out and why. |
-| Preview policy | Every configurable dimension, with the future-mode control and its disclaimer directly beneath it. |
+| Candidate lessons | Each proposal: its rule, when it applies, confidence, epistemic status, classification, privacy class, retention, risk (or "risk not assessed"), sharing eligibility, and the objective and verbatim observations it stands on. Search and a review-state filter. Controls: Edit, Approve this exact lesson, Accept (disabled until an approval applies), Reject, a "contradicted by" count, Preview policy, and an export tick-box. |
+| Accepted knowledge | What he can actually recall, searchable. Correct (supersedes, keeps the prior wording) and Stop recalling this (revokes, keeps the audit). |
+| What he used to think | Superseded candidate revisions and superseded competency records, each labelled as unrecallable. |
+| Memories and preferences | Both required areas, split by the `preference.<slug>` key convention `personal_facts` already uses, with each record's classification, retention and exportability. Read-only here: correcting and forgetting stay on the ordinary view, which owns them. |
+| Export | Ticked records only; a record the export would refuse is disabled with the reason on the row, and the result names everything it left out. |
+| Preview policy | All twelve configurable dimensions, with the future-mode control and its disclaimer directly beneath it. |
 | Recorded previews | Each preview, its decision chip, its reasons, and the policy revision it ran under. |
 | Acceptance approvals | Every approval and whether it still applies. |
 
@@ -262,18 +277,34 @@ front of it.
 | POST | `…/candidates/{competency_id}/{slug}/edit` | `learning:review` |
 | POST | `…/candidates/{competency_id}/{slug}/reject` | `learning:review` |
 | POST | `…/candidates/{competency_id}/{slug}/shadow-evaluate` | `learning:review` |
-| POST | `…/competencies/{kind}/{key}/correct` | `learning:review` |
 | POST | `…/competencies/{kind}/{key}/revoke` | `learning:review` |
+| GET | `/api/learning/superseded` | `learning:read` |
+| GET | `/api/learning/memories` | `memory:read` |
 | POST | `…/candidates/{competency_id}/{slug}/approve` | **`learning:approve`** |
 | POST | `…/candidates/{competency_id}/{slug}/accept` | **`learning:approve`** |
+| POST | `…/competencies/{kind}/{key}/correct` | **`learning:approve`** |
 | GET / PUT | `/api/learning/policy` | `learning:policy` |
 | GET | `/api/learning/policy/history` | `learning:policy` |
 | POST | `/api/learning/export` | `learning:export` |
 
-Five capabilities rather than one. The split follows the architecture, not the
-screen: the only two rows behind `learning:approve` are the two acts that can
-make a lesson trusted. A future delegated reviewer can hold `learning:review`
-without being able to make anything trusted.
+Five capabilities rather than one, plus `memory:read` for the memories panel.
+The split follows the architecture, not the screen: the three rows behind
+`learning:approve` are the acts that can change what Bartholomew actually
+recalls — granting a candidate-bound approval, accepting, and correcting a
+record the retrieval seam already serves. A future delegated reviewer can hold
+`learning:review` and triage a queue without being able to make anything
+trusted or rewrite anything already trusted.
+
+Revoking is deliberately at review level: like `learning_reject`, it can only
+reduce what he recalls, and the audit of what was once accepted survives it.
+
+Reading personal memories through `/api/learning/memories` takes `memory:read`
+rather than `learning:read`, so this surface does not become a way around the
+memory capability. `POST /api/learning/export` is as strong as
+`memory:export` for the records a user selects — deliberately, because the
+control centre exists so a lesson can be exported with the memories that
+explain it; both sit in the same user capability set, so nothing is widened
+today.
 
 ---
 
@@ -387,3 +418,18 @@ class SharingInterface:
   therefore "since the lesson was proposed".
 - **No JavaScript test runner.** The page's properties are pinned structurally
   (`tests/test_ui_learning_control_centre.py`), as every other UI suite here is.
+- **Concurrent edits are guarded, not serialised.** A candidate edit is
+  revision-checked at entry and again immediately before the write, and the
+  write itself is conditional on the row id — which catches the record being
+  deleted and recreated underneath it. `MemoryStore` offers no compare-and-swap
+  on a record's *content*, so two edits issued against the same revision within
+  the same instant still resolve to the later write. Both editors saw the same
+  lesson; the case people actually hit — a tab left open for ten minutes — is
+  refused with both versions returned.
+- **A lesson affects exactly one capability** in this slice, so
+  `max_affected_capabilities` only ever distinguishes 0 from 1. The control is
+  real and the rule fires; the vocabulary is just narrower than it looks.
+- **`recall_policy: context_only` does not block export.** It is a recall
+  policy, not a privacy restriction, and refusing a person their own
+  context-only records would be over-restrictive. The export gate turns on the
+  restricted privacy classes and on readability.

@@ -846,6 +846,8 @@
         <h3 style="margin:0">Accepted knowledge</h3>
         <button onclick="refreshCompetencies()">Refresh</button>
       </div>
+      <input id="learning-competency-search" placeholder="Search what he has learned…"
+             oninput="debouncedCompetencies()" aria-label="Search accepted knowledge"/>
       <div class="learn-sub">
         These are the only records here he can actually recall. Correcting one
         keeps its history; revoking one stops him recalling it, and keeps the
@@ -854,19 +856,43 @@
       <div id="learning-competencies"></div>
     </div>
 
+    <h2 class="section-heading">What he used to think</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Superseded and corrected</h3>
+        <button onclick="refreshSuperseded()">Refresh</button>
+      </div>
+      <div class="learn-sub">
+        Earlier versions of lessons you edited, and of knowledge you corrected.
+        Kept so you can see what changed. None of it can be recalled: he only
+        ever uses the current version.
+      </div>
+      <div id="learning-superseded"></div>
+    </div>
+
     <h2 class="section-heading">Everything he remembers</h2>
     <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Memories and preferences</h3>
+        <div class="row">
+          <select id="learning-memory-area" aria-label="Which memories to show"
+                  onchange="refreshMemoryPicker()">
+            <option value="all">Everything</option>
+            <option value="preferences">Preferences</option>
+            <option value="facts">Other memories</option>
+          </select>
+          <button onclick="refreshMemoryPicker()">Refresh</button>
+        </div>
+      </div>
       <div class="learn-sub">
-        Personal memories and preferences, from the same store. Reading,
-        correcting and forgetting them lives on the
-        <a href="#/" onclick="showView('home')">Bartholomew</a> view; this
-        panel is here so you can select records to export alongside a lesson.
+        What he has stored about you, with how each record is classified and
+        how long it is kept. Correcting and forgetting them lives on the
+        <a href="#/" onclick="showView('home')">Bartholomew</a> view, which
+        already owns those; here you can read them and pick records to export
+        alongside a lesson.
       </div>
-      <div class="row">
-        <input id="learning-memory-search" placeholder="Search his memories…"
-               oninput="debouncedMemoryPicker()" aria-label="Search memories to export"/>
-        <button onclick="refreshMemoryPicker()">Search</button>
-      </div>
+      <input id="learning-memory-search" placeholder="Search his memories…"
+             oninput="debouncedMemoryPicker()" aria-label="Search memories and preferences"/>
       <div id="learning-memory-picker" style="margin-top:10px"></div>
     </div>
 
@@ -2604,6 +2630,28 @@
 
     function selKey(kind, key){ return kind + " " + key; }
 
+    // Messages that must survive the list re-render that follows an action.
+    //
+    // Every mutating handler here refreshes the list so the page shows what is
+    // actually stored -- which destroys the element the confirmation was just
+    // written into. The user then saw their edit apply with no explanation of
+    // whether it changed the lesson's meaning, which is precisely the sentence
+    // this view exists to say. Keyed by record identity rather than by list
+    // position, so a message cannot end up attached to a different record when
+    // the refreshed list comes back in a different order.
+    const learningNotices = new Map();
+
+    function setNotice(kind, key, cls, text){
+      if(text) learningNotices.set(selKey(kind, key), { cls, text });
+      else learningNotices.delete(selKey(kind, key));
+    }
+
+    function noticeMarkup(kind, key){
+      const notice = learningNotices.get(selKey(kind, key));
+      if(!notice) return '';
+      return `<div class="memory-note ${escapeHtml(notice.cls)}">${escapeHtml(notice.text)}</div>`;
+    }
+
     // A blank line inside a confirm() dialog. Named, because these dialogs
     // carry the one sentence that separates "I approve of this wording" from
     // "teach this to Bartholomew", and that sentence needs to be readable.
@@ -2613,6 +2661,11 @@
     function debouncedCandidates(){
       clearTimeout(candidateTimer);
       candidateTimer = setTimeout(refreshCandidates, 250);
+    }
+    let competencyTimer = null;
+    function debouncedCompetencies(){
+      clearTimeout(competencyTimer);
+      competencyTimer = setTimeout(refreshCompetencies, 250);
     }
     let memoryPickerTimer = null;
     function debouncedMemoryPicker(){
@@ -2734,6 +2787,13 @@
               ${c.review_state === 'proposed' ? '<button data-cact="approve">Approve this exact lesson</button>' : ''}
               ${c.review_state === 'proposed' ? `<button class="ack" data-cact="accept"${c.can_accept_now ? '' : ' disabled title="Approve this exact lesson first."'}>Accept</button>` : ''}
               ${c.review_state === 'proposed' ? '<button class="dismiss" data-cact="reject">Reject</button>' : ''}
+              <label class="row" style="gap:4px;font-size:12px"
+                     title="Recorded observations you know of that contradict this lesson. Nothing in this release measures that automatically, so a zero here means nobody has said otherwise — not that nothing does.">
+                contradicted by
+                <input type="number" min="0" value="0" class="learn-check"
+                       style="width:56px" data-cact="contradictions"
+                       aria-label="How many recorded observations contradict this lesson"/>
+              </label>
               <button data-cact="preview">Preview policy</button>
               <label class="row" style="gap:4px;font-size:12px">
                 <input type="checkbox" class="learn-check" data-cact="select"
@@ -2748,11 +2808,12 @@
             <div>Objective ${escapeHtml(String(experience.objective_id ?? '?'))}: ${escapeHtml(experience.objective_title || '')} (${escapeHtml(experience.resolution || 'no recorded resolution')})</div>
             <ul>${observations || '<li>No observations recorded.</li>'}</ul>
             <div style="margin-top:6px">Recorded by ${escapeHtml((c.provenance||{}).recorded_by || 'unknown')} from ${escapeHtml((c.provenance||{}).source_type || 'unknown')} · ${sharingLine}</div>
+            <div style="margin-top:4px">How it is kept: ${escapeHtml(c.retention || 'not recorded')}</div>
           </div>
           ${approval}
           <div class="candidate-editor" style="display:none"></div>
           <div class="candidate-preview"></div>
-          <div class="candidate-status"></div>
+          <div class="candidate-status">${noticeMarkup(c.kind, c.key)}</div>
         </div>`;
     }
 
@@ -2761,11 +2822,16 @@
     }
 
     function setCandidateStatus(index, cls, text){
+      const c = learningCandidates[index];
+      if(c) setNotice(c.kind, c.key, cls, text);
       const node = candidateNode(index);
       if(!node) return;
       const el = node.querySelector(".candidate-status");
-      el.className = "candidate-status memory-note " + cls;
-      el.textContent = text;
+      el.innerHTML = '';
+      const line = document.createElement("div");
+      line.className = "memory-note " + cls;
+      line.textContent = text;
+      el.appendChild(line);
     }
 
     function bindCandidateActions(){
@@ -2774,6 +2840,8 @@
         const index = Number(item.dataset.cindex);
         if(!Number.isInteger(index) || !learningCandidates[index]) return;
         const act = control.dataset.cact;
+        // A value input, not a button: nothing to bind, it is read on preview.
+        if(act === "contradictions") return;
         if(act === "select"){
           const c = learningCandidates[index];
           control.checked = learningSelection.has(selKey(c.kind, c.key));
@@ -2864,6 +2932,26 @@
           <input id="cedit-apps-${index}" type="text" placeholder="comma separated, or blank"/>
         </div>
         <div class="policy-field">
+          <label for="cedit-class-${index}">How it is classified</label>
+          <select id="cedit-class-${index}">
+            <option value="personal">Personal to me</option>
+            <option value="potentially_generalisable">Might apply more widely</option>
+            <option value="system">About how Bartholomew works</option>
+          </select>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-conf-${index}">How confident he should be (0–1)</label>
+          <input id="cedit-conf-${index}" type="number" min="0" max="1" step="0.05"/>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-share-${index}">Could it be shared beyond you?</label>
+          <select id="cedit-share-${index}">
+            <option value="">Work it out from the classification</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </div>
+        <div class="policy-field">
           <label for="cedit-display-${index}">Display (does not change its meaning)</label>
           <select id="cedit-display-${index}">
             <option value="normal">Normal</option>
@@ -2881,6 +2969,12 @@
       editor.querySelector(`#cedit-rev-${index}`).value =
         c.reversible === null || c.reversible === undefined ? "" : String(c.reversible);
       editor.querySelector(`#cedit-apps-${index}`).value = (c.affected_applications || []).join(", ");
+      editor.querySelector(`#cedit-class-${index}`).value = c.classification || "personal";
+      editor.querySelector(`#cedit-conf-${index}`).value =
+        c.confidence === null || c.confidence === undefined ? "" : String(c.confidence);
+      editor.querySelector(`#cedit-share-${index}`).value =
+        c.sharing_eligible_explicit === null || c.sharing_eligible_explicit === undefined
+          ? "" : String(c.sharing_eligible_explicit);
       editor.querySelector(`#cedit-display-${index}`).value = c.display_state || "normal";
       editor.querySelector('[data-cedit="save"]').onclick = () => saveCandidateEdit(index);
       editor.querySelector('[data-cedit="cancel"]').onclick = () => { editor.style.display = "none"; };
@@ -2893,6 +2987,8 @@
       const reversible = editor.querySelector(`#cedit-rev-${index}`).value;
       const apps = editor.querySelector(`#cedit-apps-${index}`).value
         .split(",").map(a => a.trim()).filter(Boolean);
+      const shareable = editor.querySelector(`#cedit-share-${index}`).value;
+      const confidenceRaw = (editor.querySelector(`#cedit-conf-${index}`).value || "").trim();
       const body = {
         // Always sent. The API refuses an edit that does not say which
         // version it was based on, which is what stops a stale tab
@@ -2904,6 +3000,9 @@
         risk_class: editor.querySelector(`#cedit-risk-${index}`).value || null,
         reversible: reversible === "" ? null : reversible === "true",
         affected_applications: apps,
+        classification: editor.querySelector(`#cedit-class-${index}`).value,
+        confidence: confidenceRaw === "" ? null : Number(confidenceRaw),
+        sharing_eligible: shareable === "" ? null : shareable === "true",
         display_state: editor.querySelector(`#cedit-display-${index}`).value
       };
       try{
@@ -2925,6 +3024,7 @@
         }
         setCandidateStatus(index, j.material_change ? "memory-note-warn" : "memory-note-ok", j.detail);
         await refreshCandidates();
+        await refreshSuperseded();
         await refreshLearningOverview();
       }catch(e){
         setCandidateStatus(index, "memory-note-err", "The change was not saved: " + e.message);
@@ -2994,6 +3094,10 @@
         setCandidateStatus(index, j.consolidated ? "memory-note-ok" : "memory-note-warn", j.detail);
         await refreshCandidates();
         await refreshCompetencies();
+        // The approval this consumed now describes an accepted lesson, not a
+        // proposed one. Leaving that panel stale would show the wrong state
+        // for the record whose state just changed most.
+        await refreshApprovals();
         await refreshLearningOverview();
       }catch(e){
         setCandidateStatus(index, "memory-note-err", "Nothing was accepted: " + e.message);
@@ -3023,6 +3127,7 @@
         }
         setCandidateStatus(index, "memory-note-ok", j.detail);
         await refreshCandidates();
+        await refreshApprovals();
         await refreshLearningOverview();
       }catch(e){
         setCandidateStatus(index, "memory-note-err", "Nothing was rejected: " + e.message);
@@ -3042,7 +3147,10 @@
         const r = await fetch(API + `/api/learning/candidates/${encodeURIComponent(c.competency_id)}/${encodeURIComponent(c.slug)}/shadow-evaluate`, {
           method: "POST",
           headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ requested_by: "you", contradicting_evidence_count: 0 })
+          body: JSON.stringify({
+            requested_by: "you",
+            contradicting_evidence_count: contradictionCount(index)
+          })
         });
         const j = await r.json().catch(() => ({}));
         if(!r.ok){
@@ -3053,6 +3161,18 @@
       }catch(e){
         target.innerHTML = `<div class="memory-note memory-note-err">The preview could not be produced: ${escapeHtml(e.message)}</div>`;
       }
+    }
+
+    // What the reviewer typed into this candidate's "contradicted by" box.
+    // Supplied rather than inferred, because nothing in this release measures
+    // contradiction -- and a fabricated zero would be a policy input nobody
+    // checked.
+    function contradictionCount(index){
+      const node = candidateNode(index);
+      if(!node) return 0;
+      const input = node.querySelector('[data-cact="contradictions"]');
+      const n = Number((input && input.value) || 0);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
     }
 
     function renderShadowDecision(evaluation, shadow){
@@ -3091,15 +3211,20 @@
     async function refreshCompetencies(){
       const el = document.getElementById("learning-competencies");
       if(!el) return;
+      const search = ((document.getElementById("learning-competency-search") || {}).value || "").trim();
+      const params = new URLSearchParams({ limit: "100" });
+      if(search) params.set("search", search);
       try{
-        const r = await fetch(API + "/api/learning/competencies?limit=100");
+        const r = await fetch(API + "/api/learning/competencies?" + params.toString());
         if(!r.ok){
           el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load accepted knowledge"))}</div>`;
           return;
         }
         learningCompetencies = (await r.json()).competencies || [];
         if(!learningCompetencies.length){
-          el.innerHTML = '<div class="empty-state">Bartholomew has not been taught anything yet.</div>';
+          el.innerHTML = search
+            ? '<div class="empty-state">Nothing he has learned matches that.</div>'
+            : '<div class="empty-state">Bartholomew has not been taught anything yet.</div>';
           return;
         }
         el.innerHTML = learningCompetencies.map(renderCompetencyItem).join('');
@@ -3123,6 +3248,10 @@
         tags.push(`<span class="memory-tag memory-tag-privacy">${escapeHtml(k.privacy_class)}</span>`);
       }
       const provenance = k.provenance || {};
+      const kSharing = k.sharing || {};
+      const sharingLine = kSharing.transport_available
+        ? `sharing: ${escapeHtml(kSharing.state)}`
+        : `sharing: ${kSharing.eligible ? 'could be shared' : 'not shareable'} — ${escapeHtml(kSharing.detail || '')}`;
       return `
         <div class="memory-item" data-kindex="${index}">
           <div class="memory-head">
@@ -3142,12 +3271,14 @@
           <div class="memory-value">${escapeHtml(k.conditions || k.summary || '')}</div>
           <div class="memory-tags">${tags.join('')}</div>
           <div class="provenance">
-            <strong>Where this came from:</strong>
+            <div><strong>Where this came from:</strong>
             ${escapeHtml(provenance.source_type || 'unknown')} ·
-            ${escapeHtml(provenance.detail || 'no detail recorded')}
+            ${escapeHtml(provenance.detail || 'no detail recorded')}</div>
+            <div style="margin-top:4px">${sharingLine}</div>
+            <div style="margin-top:4px">How it is kept: ${escapeHtml(k.retention || 'not recorded')}</div>
           </div>
           <div class="competency-editor" style="display:none"></div>
-          <div class="competency-status"></div>
+          <div class="competency-status">${noticeMarkup(k.kind, k.key)}</div>
         </div>`;
     }
 
@@ -3156,11 +3287,16 @@
     }
 
     function setCompetencyStatus(index, cls, text){
+      const k = learningCompetencies[index];
+      if(k) setNotice(k.kind, k.key, cls, text);
       const node = competencyNode(index);
       if(!node) return;
       const el = node.querySelector(".competency-status");
-      el.className = "competency-status memory-note " + cls;
-      el.textContent = text;
+      el.innerHTML = '';
+      const line = document.createElement("div");
+      line.className = "memory-note " + cls;
+      line.textContent = text;
+      el.appendChild(line);
     }
 
     function bindCompetencyActions(){
@@ -3232,6 +3368,7 @@
         }
         setCompetencyStatus(index, j.ok ? "memory-note-ok" : "memory-note-warn", j.detail);
         await refreshCompetencies();
+        await refreshSuperseded();
       }catch(e){
         setCompetencyStatus(index, "memory-note-err", "The correction was not saved: " + e.message);
       }
@@ -3265,20 +3402,59 @@
       }
     }
 
-    // --- the memory picker, for export selection only ---------------------
+    // --- memories and preferences ------------------------------------------
+    //
+    // Read through /api/learning/memories rather than /api/memory, because
+    // that endpoint is the one that separates preferences from other memories
+    // and states each record's retention. It is read-only: correcting and
+    // forgetting stay on the ordinary view, which already owns them, and a
+    // second way to do the same governed thing would be a second place to get
+    // it wrong.
+    async function refreshSuperseded(){
+      const el = document.getElementById("learning-superseded");
+      if(!el) return;
+      try{
+        const r = await fetch(API + "/api/learning/superseded?limit=50");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load superseded versions"))}</div>`;
+          return;
+        }
+        const items = (await r.json()).superseded || [];
+        if(!items.length){
+          el.innerHTML = '<div class="empty-state">Nothing has been edited or corrected yet.</div>';
+          return;
+        }
+        el.innerHTML = items.map(x => `
+          <div class="nudge-item">
+            <div class="row" style="justify-content:space-between">
+              <span class="nudge-kind">${escapeHtml(x.supersedes)}</span>
+              <span class="memory-tag">revision ${escapeHtml(String(x.revision ?? '?'))}</span>
+            </div>
+            <div class="nudge-msg">${escapeHtml(x.text || '(no wording recorded)')}</div>
+            <div class="nudge-ts">
+              ${escapeHtml(x.what_it_is)} · archived ${escapeHtml(formatTimeAgo(x.archived_at) || x.archived_at || '')} ·
+              ${escapeHtml(x.retention || '')} · he cannot recall this
+            </div>
+          </div>`).join('');
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load superseded versions: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
     async function refreshMemoryPicker(){
       const el = document.getElementById("learning-memory-picker");
       if(!el) return;
       const search = (document.getElementById("learning-memory-search").value || "").trim();
-      const params = new URLSearchParams({ limit: "50" });
+      const area = (document.getElementById("learning-memory-area") || {}).value || "all";
+      const params = new URLSearchParams({ limit: "100", area });
       if(search) params.set("search", search);
       try{
-        const r = await fetch(API + "/api/memory?" + params.toString());
+        const r = await fetch(API + "/api/learning/memories?" + params.toString());
         if(!r.ok){
           el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load memories"))}</div>`;
           return;
         }
-        learningMemoryRows = (await r.json()).entries || [];
+        learningMemoryRows = (await r.json()).memories || [];
         if(!learningMemoryRows.length){
           el.innerHTML = '<div class="empty-state">Nothing stored matches that.</div>';
           return;
@@ -3288,14 +3464,20 @@
             <div class="memory-head">
               <div>
                 <div class="memory-key">${escapeHtml(m.key)}</div>
-                <div class="memory-kind">${escapeHtml(m.kind)}${m.privacy_class ? ' · ' + escapeHtml(m.privacy_class) : ''}</div>
+                <div class="memory-kind">${escapeHtml(m.area)} · ${escapeHtml(m.kind)}${m.privacy_class ? ' · ' + escapeHtml(m.privacy_class) : ''}</div>
               </div>
-              <label class="row" style="gap:4px;font-size:12px">
+              <label class="row" style="gap:4px;font-size:12px"
+                     title="${m.exportable ? 'Can be exported.' : escapeHtml(m.export_blocked_reason || '')}">
                 <input type="checkbox" class="learn-check" data-mact="select"
+                       ${m.exportable ? '' : 'disabled'}
                        aria-label="Select this memory for export"/> export
               </label>
             </div>
-            <div class="memory-value">${escapeHtml(m.readable === false ? (m.unreadable_reason || 'Stored encrypted; cannot be displayed.') : m.value)}</div>
+            <div class="memory-value">${escapeHtml(m.readable === false ? (m.unreadable_reason || 'Stored encrypted; cannot be displayed.') : (m.value || ''))}</div>
+            <div class="nudge-ts" style="margin-top:6px">
+              How it is kept: ${escapeHtml(m.retention || 'not recorded')}${m.last_updated ? ' · last updated ' + escapeHtml(formatTimeAgo(m.last_updated) || m.last_updated) : ''}
+            </div>
+            ${m.exportable ? '' : `<div class="nudge-ts">Not exportable: ${escapeHtml(m.export_blocked_reason || '')}</div>`}
           </div>`).join('');
         document.querySelectorAll('#learning-memory-picker [data-mact="select"]').forEach(control => {
           const index = Number(control.closest(".memory-item").dataset.mindex);
@@ -3402,11 +3584,22 @@
         `<option value="${escapeHtml(cb)}"${cb === p.contradiction_behaviour ? ' selected' : ''}>${escapeHtml(cb)}</option>`).join('');
       const categoryOptions = (vocab.lesson_categories || []).map(c =>
         `<label class="row" style="gap:4px"><input type="checkbox" class="learn-check" data-cat="${escapeHtml(c)}"${(p.enabled_categories||[]).includes(c) ? ' checked' : ''}/> ${escapeHtml(c)}</label>`).join('');
+      const excludedCategoryOptions = (vocab.lesson_categories || []).map(c =>
+        `<label class="row" style="gap:4px"><input type="checkbox" class="learn-check" data-excat="${escapeHtml(c)}"${(p.excluded_categories||[]).includes(c) ? ' checked' : ''}/> ${escapeHtml(c)}</label>`).join('');
       return `
         <div class="policy-field">
           <label>Kinds of lesson this could ever apply to</label>
           <div class="row" id="policy-categories">${categoryOptions}</div>
           <div class="hint">Nothing ticked means the policy would refuse everything.</div>
+        </div>
+        <div class="policy-field">
+          <label>Kinds of lesson to rule out entirely</label>
+          <div class="row" id="policy-excluded-categories">${excludedCategoryOptions}</div>
+          <div class="hint">
+            An exclusion wins over an inclusion, so a kind ticked in both is
+            ruled out. Omitting this control used to send an empty list on
+            every save, which silently deleted whatever you had excluded.
+          </div>
         </div>
         <div class="policy-field">
           <label for="policy-max-risk">Most risk it could accept without asking</label>
@@ -3491,6 +3684,9 @@
       statusEl.textContent = "Saving…";
       const categories = Array.from(document.querySelectorAll('#policy-categories [data-cat]'))
         .filter(c => c.checked).map(c => c.dataset.cat);
+      const excludedCategories = Array.from(
+        document.querySelectorAll('#policy-excluded-categories [data-excat]'))
+        .filter(c => c.checked).map(c => c.dataset.excat);
       const splitList = id => (document.getElementById(id).value || "")
         .split(",").map(v => v.trim()).filter(Boolean);
       const expiry = (document.getElementById("policy-expiry").value || "").trim();
@@ -3500,7 +3696,7 @@
         expected_revision: learningPolicy ? learningPolicy.revision : 0,
         updated_by: "you",
         enabled_categories: categories,
-        excluded_categories: [],
+        excluded_categories: excludedCategories,
         max_risk: document.getElementById("policy-max-risk").value,
         require_reversible: document.getElementById("policy-reversible").checked,
         min_supporting_experiences: policyNumber("policy-min-exp", 2),
@@ -3612,6 +3808,9 @@
     // the page re-reads every panel from the server, so nothing on this view
     // survives as stale client state.
     async function refreshLearningView(){
+      // A notice describes what just happened, not what is stored. Re-entering
+      // the view is a fresh look, so it starts without them.
+      learningNotices.clear();
       renderLearningSelectionCount();
       await refreshLearningOverview();
       await refreshCandidates();
@@ -3619,6 +3818,7 @@
       await refreshPolicy();
       await refreshEvaluations();
       await refreshApprovals();
+      await refreshSuperseded();
       await refreshMemoryPicker();
     }
 

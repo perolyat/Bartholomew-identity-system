@@ -138,9 +138,16 @@ def test_the_banner_is_rendered_from_the_server_not_from_a_constant(ui_source: s
     assert "function renderShadowBanner(shadow)" in ui_source
     assert "shadow.execution_mode" in ui_source
     assert "shadow.automatic_acceptance_enabled" in ui_source
-    # Never a hard-coded claim about the mode in the script.
+    # Never a hard-coded claim about the mode in the script. Matched as a
+    # pattern rather than one exact spelling: forbidding a single string with
+    # one particular arrangement of spaces and quotes would let the same claim
+    # back in written any other way, which is not a guard.
     script = ui_source.split("<script>", 1)[1]
-    assert 'execution_mode = "shadow"' not in script
+    hardcoded = re.findall(
+        r"""(execution_mode|automatic_acceptance_enabled)\s*[:=]\s*['"]?(shadow|true|false)""",
+        script,
+    )
+    assert not hardcoded, f"the page states the mode itself: {hardcoded}"
     assert "renderShadowBanner(j.shadow_mode)" in ui_source
 
 
@@ -355,6 +362,145 @@ def test_accepted_knowledge_is_distinguished_from_proposals(learning_view: str):
     assert "the only records here he can actually recall" in learning_view
 
 
+def test_every_required_area_has_a_panel(learning_view: str):
+    """
+    The contract names the areas one coherent control centre must expose.
+
+    Each gets a heading or a panel of its own, so "it is technically in the
+    API" is not mistaken for "a person can see it".
+    """
+    for heading in (
+        "Candidate lessons",
+        "Accepted knowledge",
+        "Superseded and corrected",
+        "Memories and preferences",
+        "Recorded previews",
+        "Acceptance approvals",
+        "If Bartholomew could accept lessons on his own",
+    ):
+        assert heading in learning_view, f"no panel for: {heading}"
+
+
+def test_preferences_are_a_named_area_not_a_lump(learning_view: str, ui_source: str):
+    """
+    "Personal memories" and "preferences" are two required areas.
+
+    They live in the same store -- `personal_facts` writes a preference as a
+    `user_profile` row keyed `preference.<slug>` -- so the control that
+    separates them is the only thing that makes them two areas rather than one
+    list a person has to read through.
+    """
+    assert 'id="learning-memory-area"' in learning_view
+    assert ">Preferences<" in learning_view
+    assert ">Other memories<" in learning_view
+    assert '"/api/learning/memories?"' in ui_source
+
+
+def test_retention_is_shown_beside_every_record(ui_source: str):
+    """
+    "Privacy and retention classifications" is a required area, and retention
+    is the half that is easy to leave in the API and never render.
+    """
+    assert ui_source.count("How it is kept:") >= 3
+
+
+def test_contradictory_evidence_can_be_supplied(learning_view: str, ui_source: str):
+    """
+    A required evaluator input that nothing in this release measures.
+
+    If the interface cannot supply it, the policy's contradiction rule is
+    unreachable in practice however carefully it is configured.
+    """
+    assert 'data-cact="contradictions"' in ui_source
+    assert "function contradictionCount(index)" in ui_source
+    assert "contradicting_evidence_count: contradictionCount(index)" in ui_source
+
+
+def test_every_material_field_the_help_text_names_is_editable(ui_source: str):
+    """
+    The edit form's own help text lists what counts as a change of meaning.
+
+    Naming a field there and not offering a control for it tells the user
+    something is editable when it is not.
+    """
+    start = ui_source.index("function beginEditCandidate(index)")
+    end = ui_source.index("async function saveCandidateEdit(index)")
+    form = ui_source[start:end]
+    for control in (
+        "cedit-rule-",
+        "cedit-cond-",
+        "cedit-risk-",
+        "cedit-rev-",
+        "cedit-apps-",
+        "cedit-class-",
+        "cedit-conf-",
+        "cedit-share-",
+        "cedit-display-",
+    ):
+        assert control in form, f"the edit form has no control for {control}"
+
+
+def test_the_policy_form_cannot_silently_erase_excluded_categories(ui_source: str):
+    """
+    The defect this pins: the form rendered no control for
+    `excluded_categories` and then hard-coded `excluded_categories: []` into
+    every save, so opening the policy screen and pressing Save deleted whatever
+    the user had excluded.
+    """
+    assert 'id="policy-excluded-categories"' in ui_source
+    assert "data-excat=" in ui_source
+    assert "excluded_categories: excludedCategories" in ui_source
+    assert "excluded_categories: []" not in ui_source
+
+
+def test_the_policy_form_exposes_every_required_dimension(ui_source: str):
+    """All twelve dimensions the contract names, each with a control."""
+    start = ui_source.index("function renderPolicyForm(p, vocab)")
+    end = ui_source.index("function policyNumber(id, fallback)")
+    form = ui_source[start:end]
+    for control in (
+        "policy-categories",
+        "policy-excluded-categories",
+        "policy-max-risk",
+        "policy-reversible",
+        "policy-min-exp",
+        "policy-min-conf",
+        "policy-contradiction",
+        "policy-max-caps",
+        "policy-max-apps",
+        "policy-privacy",
+        "policy-classifications",
+        "policy-sharing",
+        "policy-expiry",
+        "policy-review",
+    ):
+        assert control in form, f"the policy form has no control for {control}"
+
+
+def test_superseded_versions_are_shown_as_unrecallable(learning_view: str, ui_source: str):
+    """
+    "Superseded or corrected knowledge" is a required area, and the one thing
+    it must not imply is that Bartholomew still uses any of it.
+    """
+    assert "What he used to think" in learning_view
+    assert "None of it can be recalled" in learning_view
+    assert "he cannot recall this" in ui_source
+    assert "async function refreshSuperseded()" in ui_source
+
+
+def test_a_record_that_cannot_be_exported_says_so_before_it_is_ticked(ui_source: str):
+    """
+    Better than a refusal after the fact: the box is disabled and the reason is
+    on the row.
+    """
+    start = ui_source.index("async function refreshMemoryPicker()")
+    end = ui_source.index("function toggleLearningSelection(kind, key, on)")
+    block = ui_source[start:end]
+    assert "m.exportable" in block
+    assert "Not exportable:" in block
+    assert "disabled" in block
+
+
 # ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
@@ -432,7 +578,9 @@ def test_every_new_control_is_labelled_for_a_screen_reader(learning_view: str):
     for label in (
         'aria-label="Search candidate lessons"',
         'aria-label="Filter candidate lessons by review state"',
-        'aria-label="Search memories to export"',
+        'aria-label="Search memories and preferences"',
+        'aria-label="Which memories to show"',
+        'aria-label="Search accepted knowledge"',
         'role="status"',
     ):
         assert label in learning_view, f"missing accessibility attribute: {label}"

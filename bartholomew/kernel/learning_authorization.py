@@ -52,7 +52,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from bartholomew.kernel.candidate_learning import key_for
+from bartholomew.kernel.candidate_learning import REVIEW_PROPOSED, key_for
 from bartholomew.kernel.memory.privacy_guard import register_structural_schema
 
 #: The `MemoryStore` kind an acceptance approval is stored under.
@@ -226,7 +226,42 @@ class LearningAcceptanceApproval:
         Returns `(allowed, reason)`. The reason is always populated on refusal
         and is written verbatim into the refusal's Reflection, so an audit can
         tell "nobody approved this" apart from "the candidate changed after it
-        was approved".
+        was approved" apart from "the candidate has moved on since".
+
+        Three checks, in order: identity, then content, then revision.
+
+        The **revision** check is the one that is not obvious, and it exists
+        because content binding alone has a hole. An approval is invalidated by
+        an edit only because the digest moved -- so editing a candidate away
+        from its approved wording and then editing it *back* restores the
+        digest and silently revives an approval the reviewer was told, in those
+        words, no longer applied. The candidate is two revisions on from the
+        one they read, and a decision they believe they cancelled accepts it.
+
+        Requiring the revision to match as well closes that: an edit increments
+        it, and nothing decrements it.
+
+        Two things make the check precise rather than blunt:
+
+        * It runs **after** the content check, so a candidate whose wording
+          genuinely changed is still refused for that reason, in those words.
+          The revision check only ever speaks about a candidate that reads
+          identically to the approved one.
+        * It applies only while the candidate is still `proposed`, which is
+          exactly the window in which an edit can happen -- the edit seam
+          refuses a terminal candidate. Acceptance and rejection also increment
+          the revision, and a terminal candidate is already refused by the
+          review-state rules, which explain themselves better than "no
+          approval" would.
+
+        The comparison is safe against acceptance's own bookkeeping for the
+        same reason: the whole admission runs *before* `accept()` mutates the
+        candidate.
+
+        `candidate_revision` is optional on this record, so an approval that
+        never recorded one falls back to content binding alone rather than
+        being refused outright. Every approval
+        `grant_learning_acceptance_approval()` writes records it.
         """
         if lesson is None:
             return False, "acceptance authorization must be bound to a candidate lesson"
@@ -241,6 +276,20 @@ class LearningAcceptanceApproval:
                 False,
                 f"the candidate {self.key()!r} has changed since it was approved by "
                 f"{self.approver!r}; a new approval is required",
+            )
+        lesson_revision = getattr(lesson, "revision", None)
+        still_under_review = getattr(lesson, "review_state", REVIEW_PROPOSED) == REVIEW_PROPOSED
+        if (
+            still_under_review
+            and self.candidate_revision is not None
+            and self.candidate_revision != lesson_revision
+        ):
+            return (
+                False,
+                f"the candidate {self.key()!r} was approved by {self.approver!r} at "
+                f"revision {self.candidate_revision} and has been edited since "
+                f"(it is now at revision {lesson_revision}); a new approval is "
+                "required even though it currently reads the same",
             )
         return True, None
 

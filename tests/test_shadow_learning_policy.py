@@ -383,112 +383,120 @@ def test_an_unknown_risk_class_ranks_above_critical():
 # ===========================================================================
 
 
+#: Every configurable dimension, as (policy, facts, rule, expected decision).
+#: Shared by the per-dimension test below and by
+#: `test_every_declared_rule_is_reachable`, so "the engine can produce this
+#: rule" is established by running it rather than by a second hand-written
+#: list that could agree with the first while both are wrong.
+_DIMENSION_CASES = [
+    (
+        {"excluded_categories": ["procedural"]},
+        {},
+        "category_excluded",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"enabled_categories": []},
+        {},
+        "category_not_enabled",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"max_risk": "low"},
+        {"risk_class": "high"},
+        "risk_above_maximum",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"require_reversible": True},
+        {"reversible": False},
+        "not_reversible",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"min_supporting_experiences": 4},
+        {"independent_experience_count": 1},
+        "insufficient_supporting_experiences",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"min_confidence": 0.9},
+        {"confidence": 0.4},
+        "confidence_below_threshold",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"contradiction_behaviour": learning_policy.CONTRADICTION_REFUSE},
+        {"contradicting_evidence_count": 1},
+        "contradictory_evidence",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"contradiction_behaviour": learning_policy.CONTRADICTION_ESCALATE},
+        {"contradicting_evidence_count": 1},
+        "contradictory_evidence",
+        learning_policy.DECISION_WOULD_ESCALATE,
+    ),
+    (
+        {"max_affected_capabilities": 0},
+        {},
+        "too_many_affected_capabilities",
+        learning_policy.DECISION_WOULD_ESCALATE,
+    ),
+    (
+        {"max_affected_applications": 0},
+        {"affected_applications": ["calendar"]},
+        "too_many_affected_applications",
+        learning_policy.DECISION_WOULD_ESCALATE,
+    ),
+    (
+        {"excluded_privacy_classes": ["user.health"]},
+        {"privacy_class": "user.health"},
+        "privacy_class_excluded",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"excluded_classifications": ["potentially_generalisable"]},
+        {"classification": "potentially_generalisable"},
+        "classification_excluded",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {"exclude_sharing_eligible": True},
+        {"sharing_eligible": True},
+        "sharing_eligible_excluded",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+    (
+        {},
+        {"sharing_state": learning_policy.SHARING_SHARED},
+        "already_shared",
+        learning_policy.DECISION_WOULD_ESCALATE,
+    ),
+    (
+        {"expires_after_days": 30},
+        {"experience_age_days": 400.0},
+        "supporting_experience_expired",
+        learning_policy.DECISION_WOULD_ESCALATE,
+    ),
+    (
+        {"review_interval_days": 30},
+        {"days_since_last_review": 400.0},
+        "review_interval_elapsed",
+        learning_policy.DECISION_WOULD_ESCALATE,
+    ),
+    (
+        {},
+        {"epistemic_status": "observation"},
+        "epistemic_status_not_inference",
+        learning_policy.DECISION_WOULD_REFUSE,
+    ),
+]
+
+
 @pytest.mark.parametrize(
     ("policy_kwargs", "facts_kwargs", "rule_id", "expected"),
-    [
-        (
-            {"excluded_categories": ["procedural"]},
-            {},
-            "category_excluded",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"enabled_categories": []},
-            {},
-            "category_not_enabled",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"max_risk": "low"},
-            {"risk_class": "high"},
-            "risk_above_maximum",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"require_reversible": True},
-            {"reversible": False},
-            "not_reversible",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"min_supporting_experiences": 4},
-            {"independent_experience_count": 1},
-            "insufficient_supporting_experiences",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"min_confidence": 0.9},
-            {"confidence": 0.4},
-            "confidence_below_threshold",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"contradiction_behaviour": learning_policy.CONTRADICTION_REFUSE},
-            {"contradicting_evidence_count": 1},
-            "contradictory_evidence",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"contradiction_behaviour": learning_policy.CONTRADICTION_ESCALATE},
-            {"contradicting_evidence_count": 1},
-            "contradictory_evidence",
-            learning_policy.DECISION_WOULD_ESCALATE,
-        ),
-        (
-            {"max_affected_capabilities": 0},
-            {},
-            "too_many_affected_capabilities",
-            learning_policy.DECISION_WOULD_ESCALATE,
-        ),
-        (
-            {"max_affected_applications": 0},
-            {"affected_applications": ["calendar"]},
-            "too_many_affected_applications",
-            learning_policy.DECISION_WOULD_ESCALATE,
-        ),
-        (
-            {"excluded_privacy_classes": ["user.health"]},
-            {"privacy_class": "user.health"},
-            "privacy_class_excluded",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"excluded_classifications": ["potentially_generalisable"]},
-            {"classification": "potentially_generalisable"},
-            "classification_excluded",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {"exclude_sharing_eligible": True},
-            {"sharing_eligible": True},
-            "sharing_eligible_excluded",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-        (
-            {},
-            {"sharing_state": learning_policy.SHARING_SHARED},
-            "already_shared",
-            learning_policy.DECISION_WOULD_ESCALATE,
-        ),
-        (
-            {"expires_after_days": 30},
-            {"experience_age_days": 400.0},
-            "supporting_experience_expired",
-            learning_policy.DECISION_WOULD_ESCALATE,
-        ),
-        (
-            {"review_interval_days": 30},
-            {"days_since_last_review": 400.0},
-            "review_interval_elapsed",
-            learning_policy.DECISION_WOULD_ESCALATE,
-        ),
-        (
-            {},
-            {"epistemic_status": "observation"},
-            "epistemic_status_not_inference",
-            learning_policy.DECISION_WOULD_REFUSE,
-        ),
-    ],
+    _DIMENSION_CASES,
 )
 def test_each_configured_dimension_changes_the_decision(
     policy_kwargs,
@@ -513,26 +521,28 @@ def test_each_configured_dimension_changes_the_decision(
 
 
 def test_every_declared_rule_is_reachable():
-    """`RULE_ORDER` is the contract; an unreachable entry in it is a lie."""
-    covered = {
-        "category_excluded",
-        "category_not_enabled",
-        "epistemic_status_not_inference",
-        "risk_above_maximum",
-        "not_reversible",
-        "insufficient_supporting_experiences",
-        "confidence_below_threshold",
-        "contradictory_evidence",
-        "too_many_affected_capabilities",
-        "too_many_affected_applications",
-        "privacy_class_excluded",
-        "classification_excluded",
-        "sharing_eligible_excluded",
-        "already_shared",
-        "supporting_experience_expired",
-        "review_interval_elapsed",
-    }
-    assert set(learning_policy.RULE_ORDER) == covered
+    """
+    `RULE_ORDER` is the contract; an unreachable entry in it is a lie.
+
+    The covered set is *derived by running the engine* over the parametrised
+    cases above, not copied out by hand. A hand-copied literal proves only that
+    someone updated two lists together, which is exactly the drift it was
+    supposed to catch -- and it would keep passing after a rule was made
+    unreachable, as long as its name stayed in both places.
+    """
+    fired: set[str] = set()
+    for policy_kwargs, facts_kwargs, _rule_id, _expected in _DIMENSION_CASES:
+        decision = learning_policy.evaluate(
+            _permissive(**policy_kwargs),
+            _facts(**facts_kwargs),
+            evaluated_at=AT,
+        )
+        fired.update(rule.rule_id for rule in decision.matched_rules)
+
+    assert fired == set(learning_policy.RULE_ORDER), (
+        "these declared rules were never produced by the engine: "
+        f"{sorted(set(learning_policy.RULE_ORDER) - fired)}"
+    )
     assert len(learning_policy.RULE_ORDER) == len(set(learning_policy.RULE_ORDER))
 
 
@@ -572,20 +582,19 @@ def test_unassessed_candidate_dimensions_default_to_the_cautious_answer():
     dimension can only make a preview stricter.
     """
 
-    class _Source:
-        objective_id = 1
-        supporting_event_ids = [1, 2]
+    lesson = candidate_learning.CandidateLesson(
+        competency_id="estate_management",
+        slug="lesson_from_objective_1",
+        source=candidate_learning.SourceExperience(
+            objective_id=1,
+            supporting_event_ids=[1, 2],
+            observations=["fact: a", "action: b"],
+        ),
+        inferred_rule="A rule",
+    )
+    assert lesson.validate() == [], "the fixture must be a valid candidate"
 
-    class _Lesson:
-        competency_id = "estate_management"
-        slug = "lesson_from_objective_1"
-        lesson_kind = "procedural"
-        classification = "personal"
-        confidence = 0.4
-        epistemic_status = "inference"
-        source = _Source()
-
-    facts = learning_policy.facts_from_lesson(_Lesson(), "f" * 64)
+    facts = learning_policy.facts_from_lesson(lesson, "f" * 64)
     assert facts.risk_class == "critical"
     assert facts.reversible is False
     assert facts.affected_applications == []
@@ -602,21 +611,21 @@ def test_a_verbose_objective_is_still_one_experience():
     shape of the mistake the threshold exists to prevent.
     """
 
-    class _Source:
-        objective_id = 1
-        supporting_event_ids = list(range(1, 11))
-
-    class _Lesson:
-        competency_id = "c"
-        slug = "s"
-        lesson_kind = "procedural"
-        classification = "personal"
-        confidence = 0.9
-        epistemic_status = "inference"
-        source = _Source()
+    lesson = candidate_learning.CandidateLesson(
+        competency_id="c",
+        slug="s",
+        source=candidate_learning.SourceExperience(
+            objective_id=1,
+            supporting_event_ids=list(range(1, 11)),
+            observations=[f"fact: {i}" for i in range(1, 11)],
+        ),
+        inferred_rule="A rule",
+        confidence=0.9,
+    )
+    assert lesson.validate() == [], "the fixture must be a valid candidate"
 
     facts = learning_policy.facts_from_lesson(
-        _Lesson(),
+        lesson,
         "f" * 64,
         risk_class="low",
         reversible=True,

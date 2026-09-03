@@ -181,15 +181,27 @@ def test_every_learning_route_is_classified_and_none_is_public():
         "learning:approve",
         "learning:policy",
         "learning:export",
+        # Reading personal memories through this surface is the same power
+        # `GET /api/memory` grants, so it takes the same capability rather
+        # than letting learning:read become a way around memory:read.
+        "memory:read",
     }
+    assert ROUTE_CAPABILITIES[("GET", "/api/learning/memories")].value == "memory:read"
 
 
-def test_only_approving_and_accepting_sit_behind_the_approve_capability():
+def test_only_the_operations_that_change_what_he_knows_need_learning_approve():
     """
     The split is the architecture, not the screen layout.
 
-    Granting a candidate-bound approval and consolidating are the two acts
-    that can make a lesson trusted; everything else is review or reading.
+    Three acts can change what Bartholomew actually recalls: granting a
+    candidate-bound approval, consolidating, and correcting a record the
+    retrieval seam already serves. Everything else is review or reading, and a
+    delegated reviewer who may triage a queue must not thereby be able to
+    rewrite accepted knowledge.
+
+    Revoking is deliberately *not* here: like `learning_reject`, it can only
+    reduce what he recalls, and the audit of what was once accepted survives
+    it.
     """
     approve_routes = {
         path
@@ -199,7 +211,12 @@ def test_only_approving_and_accepting_sit_behind_the_approve_capability():
     assert approve_routes == {
         "/api/learning/candidates/{competency_id}/{slug}/approve",
         "/api/learning/candidates/{competency_id}/{slug}/accept",
+        "/api/learning/competencies/{kind}/{key}/correct",
     }
+    assert (
+        ROUTE_CAPABILITIES[("POST", "/api/learning/competencies/{kind}/{key}/revoke")].value
+        == "learning:review"
+    )
 
 
 def test_no_learning_endpoint_accepts_an_identity_or_a_database_path(client):
@@ -292,26 +309,42 @@ def test_a_candidate_detail_exposes_provenance_and_supporting_experience(client,
 
 
 def test_listing_candidates_carries_governance_metadata(client, candidate):
-    """Acceptance requirement 2: a view must not present a row without its
-    classification."""
+    """
+    Acceptance requirement 2: a view must not present a row without its
+    classification -- and must show the classification the memory authority
+    actually assigned, not a placeholder.
+
+    Asserting key *presence* would pass against a projection that hard-coded
+    every one of them to None, which is exactly the failure this is meant to
+    catch. So each value is checked against what the rules engine says about
+    that row.
+    """
+    from bartholomew.kernel.memory_rules import MemoryRulesEngine
+
+    competency_id, slug = candidate
     response = client.get("/api/learning/candidates")
     assert response.status_code == 200
     entries = response.json()["candidates"]
-    assert entries
+    entry = next(e for e in entries if e["slug"] == slug)
 
-    entry = entries[0]
-    for field in (
-        "privacy_class",
-        "category",
-        "recall_policy",
-        "governance_known",
-        "readable",
-        "classification",
-        "confidence",
-        "epistemic_status",
-        "review_state",
-    ):
-        assert field in entry, f"a candidate listing must expose {field}"
+    expected = MemoryRulesEngine(watch_file=False).evaluate(
+        {
+            "kind": candidate_learning.KIND,
+            "key": candidate_learning.key_for(competency_id, slug),
+            "value": "{}",
+        },
+    )
+    assert entry["privacy_class"] == expected["privacy_class"] == "user.competency"
+    assert entry["recall_policy"] == expected["recall_policy"] == "context_only"
+    assert entry["governance_known"] is True
+    assert entry["readable"] is True
+    assert entry["retention"], "retention must be described, not just classified"
+
+    # And the candidate's own epistemic fields, which the review depends on.
+    assert entry["classification"] == "personal"
+    assert entry["epistemic_status"] == "inference"
+    assert entry["confidence"] == candidate_learning.SINGLE_EXPERIENCE_CONFIDENCE
+    assert entry["review_state"] == "proposed"
 
 
 # ===========================================================================
@@ -637,23 +670,262 @@ def test_a_configured_auto_accept_policy_is_stored_but_never_enabled(client):
 
 
 def test_a_stale_policy_update_returns_409_with_the_stored_policy(client):
-    """Acceptance requirements 19 and 24, on the policy surface."""
-    current = client.get("/api/learning/policy").json()["policy"]
+    """
+    Acceptance requirements 19 and 24, on the policy surface.
+
+    A policy is saved first, deliberately. An earlier version computed the
+    stale revision as `max(0, revision - 1)`, which on a database where nothing
+    had been saved is 0 -- the *correct* revision for an unconfigured runtime,
+    so the request would have succeeded. It only passed because another test
+    happened to run first and leave a revision behind, which is a test that
+    passes for a reason unrelated to what it claims.
+    """
+    baseline = client.get("/api/learning/policy").json()["policy"]
+    saved = client.put(
+        "/api/learning/policy",
+        json={
+            "expected_revision": baseline["revision"],
+            "updated_by": "first-tab",
+            "enabled_categories": [],
+            "excluded_privacy_classes": [],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    current = saved.json()["policy"]
+    assert current["revision"] > baseline["revision"]
+
     response = client.put(
         "/api/learning/policy",
         json={
-            "expected_revision": max(0, current["revision"] - 1),
+            "expected_revision": baseline["revision"],
             "updated_by": "second-tab",
             "enabled_categories": [],
+            "excluded_privacy_classes": [],
         },
     )
     assert response.status_code == 409
     detail = response.json()["detail"]
     assert detail["outcome"] == "revision_conflict"
     assert detail["stored_policy"]["revision"] == current["revision"]
+    assert detail["your_expected_revision"] == baseline["revision"]
 
     unchanged = client.get("/api/learning/policy").json()["policy"]
     assert unchanged["revision"] == current["revision"]
+    assert unchanged["updated_by"] == "first-tab"
+
+
+def test_omitting_a_policy_field_does_not_drop_its_conservative_default(client):
+    """
+    A request body is where defaults get weakened by accident.
+
+    An earlier version restated the engine's defaults in the Pydantic model and
+    got three wrong, so a client that omitted `excluded_privacy_classes`
+    silently saved a policy with no privacy exclusions at all. The body now
+    derives them, and this pins that it still does.
+    """
+    from bartholomew_api_bridge_v0_1.services.api.routes.learning import PolicyUpdate
+
+    engine_default = learning_policy.default_policy()
+    body = PolicyUpdate(expected_revision=0, updated_by="you")
+
+    assert body.excluded_privacy_classes == engine_default.excluded_privacy_classes
+    assert body.excluded_classifications == engine_default.excluded_classifications
+    assert body.expires_after_days == engine_default.expires_after_days
+    assert body.review_interval_days == engine_default.review_interval_days
+    assert body.min_confidence == engine_default.min_confidence
+    assert body.min_supporting_experiences == engine_default.min_supporting_experiences
+    assert body.max_risk == engine_default.max_risk
+    assert body.require_reversible == engine_default.require_reversible
+    assert body.exclude_sharing_eligible == engine_default.exclude_sharing_eligible
+
+
+def test_excluded_categories_survive_a_save(client):
+    """
+    The defect this pins on the API side: the form sent an empty list.
+
+    Whatever the UI does, the endpoint must round-trip the field.
+    """
+    current = client.get("/api/learning/policy").json()["policy"]
+    response = client.put(
+        "/api/learning/policy",
+        json={
+            "expected_revision": current["revision"],
+            "updated_by": "you",
+            "enabled_categories": [],
+            "excluded_categories": ["procedural"],
+            "excluded_privacy_classes": [],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["policy"]["excluded_categories"] == ["procedural"]
+    assert client.get("/api/learning/policy").json()["policy"]["excluded_categories"] == [
+        "procedural",
+    ]
+
+
+def test_a_correction_refused_by_governance_is_not_reported_as_success(client):
+    """
+    A halted system is not "waiting on consent".
+
+    The training seam reports a Parking Brake refusal as
+    `governance_allowed=False` with a per-record outcome and *no* error, so a
+    route that raised only on `errors` returned HTTP 200 with a detail saying
+    the correction was waiting for the user. It was refused, and the user
+    would have gone looking in an inbox that never receives it.
+    """
+    from bartholomew.kernel import training as training_module
+
+    class _Blocked:
+        competency_id = "c"
+        governance_allowed = False
+        governance_reason = "parking brake engaged for scope 'training'"
+        errors: list[str] = []
+        outcomes = [
+            training_module.TrainingRecordOutcome(
+                kind="competency_heuristic",
+                key="c.s",
+                outcome=training_module.OUTCOME_BLOCKED_BY_GOVERNANCE,
+                detail="parking brake engaged for scope 'training'",
+            ),
+        ]
+        stored_count = 0
+
+        def to_dict(self):
+            return {"competency_id": self.competency_id}
+
+    from bartholomew_api_bridge_v0_1.services.api.routes import learning as learning_routes
+
+    async def _blocked(*args, **kwargs):
+        return _Blocked()
+
+    original = learning_routes.run_competency_correction_through_runtime_contract
+    learning_routes.run_competency_correction_through_runtime_contract = _blocked
+    try:
+        response = client.post(
+            "/api/learning/competencies/competency_heuristic/c.s/correct",
+            json={"corrected_by": REVIEWER, "expected_revision": 1, "updates": {"rule": "x"}},
+        )
+    finally:
+        learning_routes.run_competency_correction_through_runtime_contract = original
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["outcome"] == "blocked_by_governance"
+    assert "parking brake" in detail["detail"]
+
+
+def test_preferences_are_a_separate_area_from_other_memories(client):
+    """
+    Two required areas, one store.
+
+    `personal_facts` writes a preference as a `user_profile` row keyed
+    `preference.<slug>`, so the split comes from the key convention the writer
+    already uses rather than a second classification invented here.
+    """
+    assert _seed_memory("user_profile", "preference.tea", "prefers tea to coffee")
+    assert _seed_memory("user_profile", "given_name", "Taylor")
+
+    preferences = client.get("/api/learning/memories", params={"area": "preferences"}).json()
+    keys = {m["key"] for m in preferences["memories"]}
+    assert "preference.tea" in keys
+    assert "given_name" not in keys
+    assert all(m["area"] == "preference" for m in preferences["memories"])
+
+    facts = client.get("/api/learning/memories", params={"area": "facts"}).json()
+    fact_keys = {m["key"] for m in facts["memories"]}
+    assert "given_name" in fact_keys
+    assert "preference.tea" not in fact_keys
+
+
+def test_memories_carry_their_retention_and_exportability(client):
+    """
+    "Privacy and retention classifications" is a required area, and a record
+    the export would refuse says so before anyone ticks it.
+    """
+    assert _seed_memory("user_profile", "retention_probe", "Taylor")
+    body = client.get("/api/learning/memories", params={"search": "retention_probe"}).json()
+    entry = next(m for m in body["memories"] if m["key"] == "retention_probe")
+
+    assert entry["privacy_class"] == "user.identity"
+    assert entry["recall_policy"] == "always"
+    assert entry["always_keep"] is True
+    assert "always bring this up" in entry["retention"]
+    assert "not set to expire" in entry["retention"]
+    assert entry["exportable"] is True
+    assert entry["export_blocked_reason"] is None
+    assert entry["last_updated"]
+
+
+def test_a_correction_keeps_what_the_record_used_to_say(client):
+    """
+    Acceptance requirement 20, on the half that was missing.
+
+    S5.2's training seam records *that* a supersession happened, not what the
+    superseded record said -- a correction is an in-place upsert. Without
+    archiving the prior record, "what did he believe before I corrected this?"
+    is unanswerable, and the contract names superseded and corrected knowledge
+    as something a person must be able to see.
+    """
+    competency_id, slug = _seed_candidate(title="An objective to accept then correct twice")
+    detail = client.get(f"/api/learning/candidates/{competency_id}/{slug}").json()["candidate"]
+    client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/approve",
+        json={"approver": REVIEWER, "expected_revision": detail["revision"]},
+    )
+    accepted = client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/accept",
+        json={"reviewer": REVIEWER},
+    ).json()
+    kind, key = accepted["consolidated_kind"], accepted["consolidated_key"]
+
+    before = next(
+        c
+        for c in client.get("/api/learning/competencies").json()["competencies"]
+        if c["key"] == key and c["kind"] == kind
+    )
+    original_rule = before["rule"]
+
+    corrected = client.post(
+        f"/api/learning/competencies/{kind}/{key}/correct",
+        json={
+            "corrected_by": REVIEWER,
+            "expected_revision": before["revision"],
+            "updates": {"rule": "The corrected wording"},
+        },
+    )
+    assert corrected.status_code == 200, corrected.text
+
+    superseded = client.get("/api/learning/superseded").json()["superseded"]
+    archived = next(x for x in superseded if x["supersedes"] == key)
+    assert archived["text"] == original_rule
+    assert archived["revision"] == before["revision"]
+    assert archived["retrievable"] is False
+    assert "before it was corrected" in archived["what_it_is"]
+
+    # And the superseded belief is not retrievable as a current one.
+    live = client.get("/api/learning/competencies").json()["competencies"]
+    assert all(c["kind"] != learning_policy.COMPETENCY_REVISION_KIND for c in live)
+
+
+def test_an_edited_candidate_keeps_what_it_used_to_say(client, candidate):
+    """The same guarantee on the candidate side, through the superseded view."""
+    competency_id, slug = candidate
+    detail = client.get(f"/api/learning/candidates/{competency_id}/{slug}").json()["candidate"]
+    original = detail["rule"]
+
+    client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/edit",
+        json={
+            "expected_revision": detail["revision"],
+            "editor": REVIEWER,
+            "inferred_rule": "Rewritten",
+        },
+    )
+    superseded = client.get("/api/learning/superseded").json()["superseded"]
+    archived = next(x for x in superseded if x["supersedes"] == detail["key"])
+    assert archived["text"] == original
+    assert archived["retrievable"] is False
+    assert "before it was edited" in archived["what_it_is"]
 
 
 # ===========================================================================
@@ -729,11 +1001,20 @@ def test_sensitive_content_is_redacted_before_it_can_ever_be_exported(client):
     row = next(item for item in listed["entries"] if item["key"] == key)
     assert "12345678" not in row["value"], "the account number must not have been stored"
 
-    export = client.post(
+    response = client.post(
         "/api/learning/export",
         json={"records": [{"kind": "fact", "key": key}]},
-    ).json()
+    )
+    assert response.status_code == 200
+    export = response.json()
+    # Whatever the gate decides about this row, the number is not in the file.
     assert "12345678" not in json.dumps(export)
+    assert export["selection_size"] == 1
+    assert export["exported_count"] + len(export["skipped"]) == 1
+    if export["exported_count"]:
+        exported_value = json.dumps(export["records"][0])
+        assert "12345678" not in exported_value
+        assert "*" in exported_value, "the stored value must be the masked one"
 
 
 @pytest.mark.parametrize(
@@ -847,6 +1128,78 @@ def test_the_default_policy_excludes_the_same_classes_the_export_blocks():
     )
 
 
+def test_the_export_gate_refuses_a_real_restricted_row(client, tmp_path, monkeypatch):
+    """
+    The privacy gate, on the real data path rather than a hand-built dict.
+
+    The shipped rules redact every consent-gated class before storing it, so a
+    restricted class never survives to be read back -- which is why the
+    parametrised test above has to call the gate directly. That leaves the
+    branch unproven end to end, and "unreachable with these rules" is not the
+    same as "works when reached": `memory_rules.yaml` is user-editable, and a
+    deployment that classifies without redacting is exactly the case the gate
+    exists for.
+
+    So this test *is* that deployment. It points the one rules engine at a
+    configuration that assigns `user.health` to a kind and does not redact it,
+    stores a real record through the real store, reads it back through the real
+    API, and requires the export to refuse it.
+    """
+    import yaml
+
+    from bartholomew.kernel import memory_rules as memory_rules_module
+    from bartholomew.kernel import memory_store as memory_store_module
+    from bartholomew.kernel.memory_rules import MemoryRulesEngine
+
+    rules_path = tmp_path / "memory_rules.yaml"
+    rules_path.write_text(
+        yaml.safe_dump(
+            {
+                "always_keep": [
+                    {
+                        "match": {"kind": "health_probe_kind"},
+                        "metadata": {"privacy_class": "user.health", "recall_policy": "always"},
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+    engine = MemoryRulesEngine(config_path=str(rules_path), watch_file=False)
+    # Both module globals, deliberately. `memory_store` holds a by-value
+    # reference to the singleton, and `MemoryRulesEngine.evaluate()` delegates
+    # to `memory_rules._rules_engine` whenever `self` is not it -- so patching
+    # only one of the two leaves the real shipped rules in force and the test
+    # silently proves nothing.
+    monkeypatch.setattr(memory_rules_module, "_rules_engine", engine)
+    monkeypatch.setattr(memory_store_module, "_rules_engine", engine)
+    assert (
+        engine.evaluate({"kind": "health_probe_kind", "key": "k", "value": "v"})["privacy_class"]
+        == "user.health"
+    ), "the test rules must actually be in force"
+
+    key = "export_gate_real_row"
+    assert _seed_memory(
+        "health_probe_kind",
+        key,
+        "a plainly stored sentence",
+    ), "the probe must store, or the gate is not what is being tested"
+
+    listed = client.get("/api/memory", params={"kind": "health_probe_kind"}).json()
+    row = next(item for item in listed["entries"] if item["key"] == key)
+    assert row["privacy_class"] == "user.health"
+    assert row["value"] == "a plainly stored sentence", "this row is deliberately not redacted"
+
+    export = client.post(
+        "/api/learning/export",
+        json={"records": [{"kind": "health_probe_kind", "key": key}]},
+    ).json()
+    assert export["exported_count"] == 0
+    assert export["records"] == []
+    assert "user.health" in export["skipped"][0]["reason"]
+    assert "a plainly stored sentence" not in json.dumps(export)
+
+
 def test_the_export_gate_allows_an_ordinary_classified_record():
     """The gate must not refuse everything -- that would be a different bug."""
     from bartholomew_api_bridge_v0_1.services.api.routes.learning import (
@@ -918,6 +1271,109 @@ def test_export_reports_a_record_it_could_not_find(client):
     assert payload["skipped"] == [
         {"kind": candidate_learning.KIND, "key": "nothing.here", "reason": "no such record"},
     ]
+
+
+def test_the_approvals_evaluations_and_history_endpoints_answer(client):
+    """
+    The four read endpoints nothing else exercised.
+
+    `/approvals` in particular: it is a required area, it sits at the lowest
+    capability, and it returns approver identities and notes -- so it needs a
+    test that it answers and that it reports validity through the same
+    authority acceptance uses, rather than being assumed to work because the
+    UI calls it.
+    """
+    competency_id, slug = _seed_candidate(title="An objective for the read endpoints")
+    detail = client.get(f"/api/learning/candidates/{competency_id}/{slug}").json()["candidate"]
+    client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/approve",
+        json={"approver": REVIEWER, "expected_revision": detail["revision"]},
+    )
+    client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/shadow-evaluate",
+        json={},
+    )
+
+    approvals = client.get("/api/learning/approvals")
+    assert approvals.status_code == 200
+    entry = next(a for a in approvals.json()["approvals"] if a["candidate_key"] == detail["key"])
+    assert entry["approver"] == REVIEWER
+    assert entry["valid_for_current_revision"] is True
+    assert entry["candidate_review_state"] == "proposed"
+
+    evaluations = client.get("/api/learning/evaluations")
+    assert evaluations.status_code == 200
+    body = evaluations.json()
+    assert body["shadow_mode"]["automatic_acceptance_enabled"] is False
+    assert any(e["candidate_key"] == detail["key"] for e in body["evaluations"])
+
+    superseded = client.get("/api/learning/superseded")
+    assert superseded.status_code == 200
+    assert "superseded" in superseded.json()
+
+    history = client.get("/api/learning/policy/history")
+    assert history.status_code == 200
+    assert history.json()["shadow_mode"]["execution_mode"] == "shadow"
+    # Only archives, never the live policy row.
+    assert all(
+        h.get("revision") is not None for h in history.json()["history"]
+    ), "the history must not include the live policy row"
+
+
+def test_an_approval_stops_being_offered_the_moment_it_stops_authorising(client):
+    """
+    A control that offers an action the system will refuse is worse than none.
+
+    `can_accept_now` and `valid_for_current_revision` come from
+    `LearningAcceptanceApproval.authorizes()` -- the same function acceptance
+    calls -- rather than a fingerprint comparison of their own. Comparing
+    fingerprints drifted the moment approvals also bound to the revision:
+    after an edit-and-revert the digests matched, so the button lit up and
+    acceptance refused.
+    """
+    competency_id, slug = _seed_candidate(title="An objective to edit and revert")
+    detail = client.get(f"/api/learning/candidates/{competency_id}/{slug}").json()["candidate"]
+    original_rule = detail["rule"]
+
+    client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/approve",
+        json={"approver": REVIEWER, "expected_revision": detail["revision"]},
+    )
+    away = client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/edit",
+        json={
+            "expected_revision": detail["revision"],
+            "editor": REVIEWER,
+            "inferred_rule": "Something else entirely",
+        },
+    ).json()
+    back = client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/edit",
+        json={
+            "expected_revision": away["revision"],
+            "editor": REVIEWER,
+            "inferred_rule": original_rule,
+        },
+    ).json()
+    assert (
+        back["fingerprint_after"] == away["fingerprint_before"]
+    ), "the digest must be back to what was approved, or this proves nothing"
+
+    reloaded = client.get(f"/api/learning/candidates/{competency_id}/{slug}").json()["candidate"]
+    assert reloaded["approval"]["valid_for_current_revision"] is False
+    assert reloaded["can_accept_now"] is False
+    assert "edited since" in reloaded["approval"]["detail"]
+
+    listed = client.get("/api/learning/approvals").json()["approvals"]
+    listed_entry = next(a for a in listed if a["candidate_key"] == detail["key"])
+    assert listed_entry["valid_for_current_revision"] is False
+
+    refused = client.post(
+        f"/api/learning/candidates/{competency_id}/{slug}/accept",
+        json={"reviewer": REVIEWER},
+    )
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["outcome"] == "acceptance_approval_required"
 
 
 # ===========================================================================
