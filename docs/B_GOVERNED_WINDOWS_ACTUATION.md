@@ -476,6 +476,13 @@ that `status` reports rather than throwing. It installs nothing.
   `BARTH_RUNTIME_USER_ID`.
 * **No transport pinning.** The companion trusts the platform's TLS
   configuration; it does not pin a certificate.
+* **A credential in a URL's *path* is not detected.** The secret detector runs
+  on a URL's query and fragment, which is where credentials travel
+  (`?access_token=`, `#id_token=`). A path-borne single-use token --
+  `/i/7Hq2Xb`, `/reset/<token>` -- is too short for any entropy test that does
+  not also reject every ordinary path, so it is not caught, and the host and
+  path are kept in the audit for the life of the database. The URL-domain
+  allowlist is the control: the action can only reach a host somebody chose.
 * **Typed and copied text is Basic-Multilingual-Plane only.** Windows carries a
   typed character in a 16-bit field, and some characters above U+FFFF truncate
   into control codes -- U+1000D into Enter, U+10009 into Tab. Rather than emit
