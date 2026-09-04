@@ -75,13 +75,39 @@ def install_seams(
     report = SeamReport()
 
     # -- A + E: one device truth -----------------------------------------
+    #
+    # One truth per deployment, chosen explicitly by the operator, rather than
+    # one truth per device resolved by whichever source answered first.
+    #
+    # Package B ships a real, supported alpha configuration in which
+    # `BARTH_ACTION_DEVICE_ENROLMENT` names a file that *is* the device
+    # registry. Overriding that with Session E's registry would silently
+    # unenrol every device an operator had configured that way -- the file
+    # would still be read for allowlists, and the deployment would look
+    # configured while refusing everything.
+    #
+    # So a deployment that has named an interim enrolment file keeps it, and
+    # says so on the health surface (`interim: true`, and the registry names
+    # what replaces it). A deployment that has not gets Session E's registry.
+    # Having both would be two contradictory answers to "which devices are
+    # enrolled", which is the thing this seam exists to prevent.
     try:
+        import os
+
         from bartholomew.actuation import devices as actuation_devices
+        from bartholomew.actuation.devices import ENROLMENT_PATH_ENV
         from bartholomew.integration.device_registry import RegistryBackedDeviceRegistry
 
-        registry = RegistryBackedDeviceRegistry(db_path=platform_db_path)
-        actuation_devices.install_registry(registry)
-        report.device_registry = registry.LABEL
+        if (os.getenv(ENROLMENT_PATH_ENV) or "").strip():
+            interim = actuation_devices.get_registry()
+            report.device_registry = (
+                f"{getattr(interim, 'LABEL', type(interim).__name__)} "
+                f"-- kept because {ENROLMENT_PATH_ENV} names an enrolment file"
+            )
+        else:
+            registry = RegistryBackedDeviceRegistry(db_path=platform_db_path)
+            actuation_devices.install_registry(registry)
+            report.device_registry = registry.LABEL
     except Exception as e:  # noqa: BLE001 - a failed seam is reported, not fatal
         # Deliberately not re-raised: failing to install leaves B's own
         # fail-closed default in place, which enrols nothing. A startup that

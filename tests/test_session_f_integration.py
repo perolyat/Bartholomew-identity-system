@@ -765,6 +765,59 @@ def test_the_action_channel_stays_closed_unless_explicitly_opened(monkeypatch):
     assert maybe_install_action_resolver_from_env() is False
 
 
+def test_an_explicitly_configured_interim_registry_is_not_overridden(tmp_path, monkeypatch):
+    """One device truth per deployment, chosen by the operator -- not two.
+
+    Package B ships a real, supported alpha configuration in which
+    `BARTH_ACTION_DEVICE_ENROLMENT` names a file that *is* the registry.
+    Installing Session E's registry over it would silently unenrol every
+    device configured that way: the file would still be read for allowlists,
+    so the deployment would look configured while refusing everything, and
+    every refusal would say "device not enrolled" about a device the operator
+    had enrolled.
+
+    This is a regression test for exactly that -- it is what took Package B's
+    real-HTTP suite from green to eight failures during this integration.
+    """
+    from bartholomew.actuation import devices as actuation_devices
+    from bartholomew.actuation.devices import ENROLMENT_PATH_ENV
+    from bartholomew.integration.device_action_resolver import DEVICE_ACTION_AUTH_ENV
+    from bartholomew.integration.install import install_seams
+
+    enrolment = tmp_path / "enrolment.json"
+    enrolment.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "device_id": "alpha-pc",
+                        "tenant_id": "local",
+                        "platform": "windows",
+                        "capabilities": ["windows.focus_window"],
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv(DEVICE_ACTION_AUTH_ENV, raising=False)
+    monkeypatch.setenv(ENROLMENT_PATH_ENV, str(enrolment))
+    actuation_devices.install_registry(None)
+    try:
+        report = install_seams(db_path=str(tmp_path / "k.db"), tenant_id="local")
+
+        # The operator's registry survived, and still enrols their device.
+        registry = actuation_devices.get_registry()
+        found = registry.lookup(tenant_id="local", device_id="alpha-pc")
+        assert found is not None and found.enrolled is True
+        # And the health surface says plainly which registry is running.
+        assert registry.describe()["interim"] is True
+        assert ENROLMENT_PATH_ENV in report.device_registry
+    finally:
+        actuation_devices.install_registry(None)
+
+
 def test_installing_the_seams_reports_what_is_live(tmp_path, monkeypatch):
     """An operator can tell an integrated deployment from one on stand-ins."""
     from bartholomew.integration.device_action_resolver import DEVICE_ACTION_AUTH_ENV

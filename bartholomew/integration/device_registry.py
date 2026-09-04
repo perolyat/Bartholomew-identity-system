@@ -54,6 +54,7 @@ Fail-closed, in the four ways B's contract names
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from bartholomew.actuation.allowlists import (
@@ -85,12 +86,25 @@ _ACTIVE = "active"
 #: enrolment ceremony, which is exactly what "registered" means.
 VERIFICATION_REGISTERED = "registered"
 
+#: Where the parameter allowlists come from when Session E's registry is the
+#: device truth. Deliberately a *different* variable from
+#: `ENROLMENT_PATH_ENV`: that one selects Package B's interim registry, in
+#: which the file is the whole device truth, and this one names a file that is
+#: only ever an overlay on E's enrolment. One variable for both would make
+#: "which registry is running" depend on a file whose purpose had silently
+#: changed.
+PARAMETER_ALLOWLIST_ENV = "BARTH_ACTION_PARAMETER_ALLOWLIST"
+
 
 def _allowlist_source(enrolment_path: str | None) -> StaticDeviceRegistry | None:
-    """B's operator file, used *only* for parameter allowlists. May be absent."""
-    if enrolment_path:
-        return StaticDeviceRegistry(enrolment_path)
-    return StaticDeviceRegistry()
+    """The operator file, used *only* for parameter allowlists. May be absent.
+
+    Reuses `StaticDeviceRegistry` as a parser rather than as a registry: what
+    is read off the result is the three allowlists and `trusted_autonomy`, and
+    never `enrolled`, which comes from E and only from E.
+    """
+    path = enrolment_path or (os.getenv(PARAMETER_ALLOWLIST_ENV) or "").strip()
+    return StaticDeviceRegistry(path) if path else None
 
 
 class RegistryBackedDeviceRegistry:
