@@ -343,17 +343,131 @@ in `companion.env`.
 
 ### Negative check worth doing while you are there
 
-Engage the brake mid-window (`bartholomew brake engage --scope actuation`) and
+Engage the brake mid-window (`bartholomew brake on --scope global --db <the
+path the server resolves -- see `BARTH_DB_PATH`, and Finding 4 in §9>`) and
 confirm `channel status` immediately reports `armed: false` with
 `brake_engaged: true`, and that an approved action is refused — with time still
 on the clock.
 
 ---
 
-## 9. Limitations
+## 9. Live Windows golden path — recorded results (2026-09-04)
 
-* **The live test above has not been run.** No interactive Windows desktop was
-  available to this session.
+The procedure in §8 was executed on a real Windows desktop, interactively, by
+the operator. This section records what was **observed**, not what was
+expected. Where a target was not met it is marked as such; nothing simulated is
+reported as real.
+
+### Environment
+
+Windows 10 19045 · Python 3.12.10 (3.14 was present and deliberately not used;
+every dependency, `comtypes` included, installed from pre-built wheels with no
+compilation) · repo at `C:\Users\<user>\bartholomew-src` on this branch ·
+server on `127.0.0.1:8000`, loopback only (`non_loopback_enabled: False`) ·
+`BARTH_RUNTIME_USER_ID` bound to the account · `BARTH_DEVICE_ACTION_AUTH=1`.
+
+Three processes: the API server, the action companion
+(`python -m bartholomew.windows_actuation run`), and an operator shell.
+
+### Results against the acceptance targets
+
+| # | Target | Result |
+|---|---|---|
+| 1 | Enrolment ceremony | **Met.** `pending` → `approved` (ceiling of four capabilities) → `complete` → active. The device reported `approved, not active` until first verified contact, exactly as designed. |
+| 2 | Credential OS-protected | **Met.** `WinVaultKeyring` — Windows Credential Manager / DPAPI. `credential show` reported protection without ever returning the secret. |
+| 3 | Real enrolled-device authentication | **Met.** The multimodal start returned `tenant_id` and `principal_id` derived by the server from the enrolment row, not from anything the caller sent. The action channel's `POST /api/device-actions/lease` returned `200`. |
+| 4 | Real observation start | **NOT MET — blocked.** Refused with `consent_denied`, `"No consent handler registered (fail-closed)"`. See Finding 1. |
+| 5 | Channel initially disarmed | **Met.** `armed: false`, with the detail noting that this holds "including actions that are already approved". |
+| 6 | Explicit 15-minute arm | **Met.** `armed_at 07:15:02Z` → `expires_at 07:30:02Z`, `seconds_remaining: 900`. |
+| 7 | Arming approves no action | **Met.** With the channel armed, requesting an action recorded it at `pending_approval`, `lease_count: 0`, and nothing happened on the desktop. |
+| 8 | Governed `windows.type_text` → real keystrokes in Notepad | **Met.** After explicit approval, `Bartholomew live golden path test` physically appeared in Notepad. Notepad's status bar read `Ln 1, Col 34`, matching the recorded `text_length: 33`. |
+| 9 | Result honesty | **Met, and notable.** The action was recorded `unknown` / `effect_unverifiable`: *"every keystroke was accepted by Windows; whether the characters landed in the intended field is not observable without reading the field back, which this build does not do"*, with `events_sent: 66`. It did not claim success for an effect it could not observe. The human observation supplied what the machine would not assert. |
+| 10 | Audit digest-only | **Met.** Neither the action row nor the result row carried the typed text. Only `text_sha256` and `text_length`. |
+| 11 | Typing is never delegable | **Met.** `risk_class: sensitive`, `approval_requirement: always`, `trusted_autonomy_eligible: false` — compared with `focus_window`'s `low` / `required_autonomy_eligible` / `true`. |
+| 12 | Parking Brake forces `armed: false` | **Met.** Two ways. Arming under an engaged brake was refused outright. With a *live* window (`seconds_remaining: 861`), status reported `armed: false`, `brake_engaged: true`, and kept the window's real times visible rather than rewriting them. |
+| 13 | Learning candidate-only | **Met.** `accepted: 0`, `accepted_competencies: 0`, `auto_acceptance_enabled: false`, `execution_mode: shadow`. Nothing was even proposed. |
+
+`windows.focus_window` was also exercised and **failed** — see Finding 3. Because
+of it, **Notepad's focus was established by the human operator, not by
+Bartholomew.** The typing result above is real; the focusing step was not
+performed by the system.
+
+### Findings
+
+**1 — Observation cannot be started in a headless server deployment.** *(Blocking
+for the observation half of this package.)* `set_consent_handler()` is called in
+exactly one non-test place in the repository: `chat.py`, the interactive
+terminal front-end. The API server never registers one, so the fail-closed
+consent gate — the anti-autonomy enforcement point for Decision 2 — has no
+channel to reach a human, and every device observation start refuses. This is
+correct fail-closed behaviour and nothing was observed; the gap is that the
+package added the authenticated route and the governance path without an
+operator-reachable consent channel for a server process. Closing it is design
+work (who is asked, through what surface, and what happens when nobody is
+present), not configuration.
+
+**2 — The action companion does not use the OS keyring.** It reads its
+credential from `BARTH_ACTION_CREDENTIAL_HEADERS`, by design: its config module
+reads only `BARTH_ACTION_*` and shares nothing with the observation companion.
+The credential therefore lives in that process's environment rather than in
+Credential Manager. Acceptable for a local loopback test; worth closing.
+
+**3 — `windows.focus_window` cannot succeed from a background process.**
+Windows' foreground lock refuses `SetForegroundWindow` to a process that does
+not already own the foreground. Recorded honestly: `permission_denied`,
+*"Windows did not give the window the foreground. No keystroke-injection
+fallback is attempted"*, with both window handles as evidence. The behaviour is
+right — it refused to force focus by synthesising keystrokes — but the
+capability is effectively unusable in this deployment shape and the closeout
+should say so rather than list it as working.
+
+**4 — `brake on` does not honour `BARTH_DB_PATH`.** *(Safety-relevant.)* The
+server resolves its database through `resolve_db_path()`, which reads
+`BARTH_DB_PATH`; the CLI's `--db` defaults to a literal `data/bartholomew.db`
+(itself a second mismatch — the server's default basename is `barth.db`). On the
+test machine `BARTH_DB_PATH` was set, so `brake on` printed
+`⚠ Parking brake ENGAGED` while the running server was entirely unaffected —
+twice, before the divergence was found. **The emergency stop appears to work
+while doing nothing.** The brake itself is sound; the operator command reaches
+the wrong file.
+
+**5 — §8 names a command that does not exist.** It says
+`bartholomew brake engage --scope actuation`; the actual verbs are
+`brake on` / `brake off` / `brake status`, and they take `--db`.
+
+**6 — Hidden-prompt paste fails in the Windows console.** `devices complete`
+prompts for the enrolment secret with hidden input, into which `Ctrl+V` does not
+paste; the result is a bare `unknown device credential`, which reads as a bad
+secret rather than an input-method problem. Piping the secret on stdin worked.
+
+**7 — `companion observe start` needs a device id it does not ask for.** Without
+`--device-id` or `BARTH_COMPANION_DEVICE_ID` the keyring cannot be enumerated,
+and the error names only the `--device-id` flag, not the environment variable
+most operators will want.
+
+**8 — There is no operator console.** First-time setup required hand-writing two
+JSON files, three terminals, environment variables in each, and raw HTTP calls
+for requesting and approving actions (no CLI exists for either). Every gate
+demanding a human is deliberate; the absence of any surface through which a
+human can answer is not.
+
+### What this test did not establish
+
+* No screen, microphone or accessibility observation was performed at all.
+* `windows.focus_window` was never observed to succeed.
+* Nothing was tested off loopback, and no non-loopback transport was exercised.
+* Multi-tenant and cross-tenant refusal paths were not exercised live; they
+  remain covered only by the test suite.
+
+---
+
+## 10. Limitations
+
+* **The live test has now been run; see §9 for what it did and did not
+  establish.** Observation was never started (no consent channel exists in a
+  server process) and `windows.focus_window` never succeeded (Windows
+  foreground lock). The governed `windows.type_text` path was exercised end to
+  end on a real desktop.
 * **Anti-autonomy rests on the consent gate.** A deployment that registers a
   permissive auto-approving consent handler would let an authenticated
   companion start observing without a person answering. The gate is
@@ -370,7 +484,7 @@ on the clock.
 
 ---
 
-## 10. Deployment and rollback
+## 11. Deployment and rollback
 
 Inert by default. The action-channel resolver stays behind
 `BARTH_DEVICE_ACTION_AUTH`; the channel additionally stays disarmed until
@@ -385,7 +499,7 @@ F's behaviour exactly — no start route, and dispatch without an arming gate.
 
 ---
 
-## 11. Statement
+## 12. Statement
 
 Nothing was merged to main. PR #89 remains open, draft and unmerged.
 Auto-merge is off on both PRs.
