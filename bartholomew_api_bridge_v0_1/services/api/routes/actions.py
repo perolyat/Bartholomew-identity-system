@@ -401,7 +401,7 @@ async def arm_channel(request: Request) -> Any:
         # credential for one machine open another machine's channel.
         raise HTTPException(
             403,
-            "the channel may only be armed for the device that authenticated " "this request",
+            "the channel may only be armed for the device that authenticated this request",
         )
     # Ownership is checked against the platform's identity when the platform
     # has one. `LOCAL_TENANT` is `resolved_tenant_id`'s named sentinel for "this
