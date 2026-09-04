@@ -171,7 +171,7 @@ EXECUTABLE_EXTENSIONS = frozenset(
         ".scf",
         ".scr",
         ".sct",
-        ".searchConnector-ms",
+        ".searchconnector-ms",  # lowercase: every lookup is on `.suffix.lower()`
         ".settingcontent-ms",
         ".sh",
         ".shb",
@@ -492,13 +492,29 @@ def _validate_open_url(raw: dict[str, Any], ctx: ValidationContext) -> Validated
     if len(canonical_url) > MAX_URL_CHARS:
         raise ParameterError("the canonical URL exceeds the length limit")
 
-    # The same detector `type_text` and `clipboard_write` use. A URL is not
-    # obviously "text somebody typed", which is why this was missed -- but
-    # `https://host/callback?access_token=...` is a credential travelling
-    # through a field this capability opens in a browser and writes into an
-    # audit row, and refusing embedded userinfo while waving through a token in
-    # the query was a distinction without a difference.
-    _refuse_secrets(canonical_url, "url")
+    # The detector runs on the **query and fragment**, not the whole URL.
+    #
+    # Scanning the whole thing was worse than not scanning at all. The
+    # high-entropy candidate class includes `/`, so a URL's path is one long
+    # token: `https://github.com/anthropics/claude-code/blob/main/README.md`
+    # scored 4.30 bits per character and was refused as credential material --
+    # as was essentially every real URL with a path. Ordinary English slugs sit
+    # at 3.8-4.3, well above the 3.5 threshold that is only comfortable for
+    # long prose samples. That did not merely block the capability: because
+    # this refusal has its own audit category "so an audit can count attempts
+    # to have a credential typed", every ordinary page load was being recorded
+    # as one, destroying the signal the category exists for.
+    #
+    # A credential in a URL travels in the query or the fragment
+    # (`?access_token=...`, `#id_token=...`), which is what the finding was
+    # about and what this now scans. A path-borne single-use token
+    # (`/i/7Hq2Xb`) is not caught -- it is too short for any entropy test that
+    # does not also reject ordinary paths -- and is named as a limitation in
+    # `docs/B_GOVERNED_WINDOWS_ACTUATION.md` rather than pretended away.
+    if parts.query:
+        _refuse_secrets(parts.query, "the URL's query string")
+    if parts.fragment:
+        _refuse_secrets(parts.fragment, "the URL's fragment")
 
     canonical = {"url": canonical_url}
     # **The redacted view drops the query and the fragment.** That view is the
@@ -511,8 +527,10 @@ def _validate_open_url(raw: dict[str, Any], ctx: ValidationContext) -> Validated
         "host": host,
         "url_sha256": hashlib.sha256(canonical_url.encode("utf-8")).hexdigest(),
     }
-    if parts.query or parts.fragment:
+    if parts.query:
         redacted["has_query"] = True
+    if parts.fragment:
+        redacted["has_fragment"] = True
     return ValidatedParameters(
         kind=CapabilityKind.OPEN_URL,
         canonical=canonical,

@@ -273,9 +273,27 @@ jobs:
             exit 1
           }
 
-          # Nothing was created. The script is opt-in, and this proves it.
-          if (Test-Path (Join-Path $env:LOCALAPPDATA 'Bartholomew')) {
-            Write-Host '::error::the script created %LOCALAPPDATA%\Bartholomew without a verb'
+          # ...and, the case that actually shipped broken, on a machine that
+          # IS installed but has no configuration. A stub at the path
+          # `Test-Installed` probes is enough to reach the branch; nothing is
+          # really installed and it is removed again immediately.
+          $root = Join-Path $env:LOCALAPPDATA 'Bartholomew'
+          New-Item -ItemType Directory -Force -Path (Join-Path $root 'venv/Scripts') | Out-Null
+          Set-Content -Path (Join-Path $root 'venv/Scripts/python.exe') -Value ''
+          try {
+            & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+            Write-Host 'status reports on an installed-but-unconfigured machine.'
+          } catch {
+            Write-Host "::error::status threw on an installed-but-unconfigured machine: $_"
+            exit 1
+          } finally {
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          }
+
+          # Nothing the script created survives. It is opt-in, and this proves
+          # it -- the stub above was removed in the `finally`.
+          if (Test-Path $root) {
+            Write-Host '::error::%LOCALAPPDATA%\Bartholomew exists after read-only verbs'
             exit 1
           }
           Write-Host 'Inert: no verb, no changes.'

@@ -102,11 +102,16 @@ INPUT_STRUCT_SIZE = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
 #: windows of the same application apart, not to be reported anywhere.
 MAX_TITLE_CHARS = 256
 
-#: Longest clipboard read this module will return. The clipboard is untrusted
-#: input from every program on the machine, so the read is bounded here as well
-#: as validated by the caller. The same bound `parameters.py` applies to a
-#: clipboard *write*, imported rather than restated so the two cannot drift.
+#: The bound `parameters.py` applies to a clipboard *write*, imported rather
+#: than restated so the two cannot drift.
 MAX_CLIPBOARD_CHARS = _MAX_CLIPBOARD_CHARS
+
+#: Hard cap on a clipboard *read*. Deliberately far above the write bound and
+#: above the secret detector's scan window: its job is to stop an enormous
+#: clipboard exhausting the companion, not to trim the text to something the
+#: detector will scan clean. Truncating to the scan window was a way past the
+#: detector -- see `read_clipboard_text`.
+MAX_CLIPBOARD_READ_CHARS = 256 * 1024
 
 
 class PlatformUnsupportedError(RuntimeError):
@@ -692,10 +697,16 @@ def read_clipboard_text() -> str | None:
             lib.kernel32.GlobalUnlock(handle)
         if text is None:
             return None
-        # Bounded by the caller's own limit rather than by whatever another
-        # application put on the clipboard: this is untrusted input from every
-        # program on the machine.
-        return text[:MAX_CLIPBOARD_CHARS]
+        # Bounded, but **not silently truncated to the detector's scan window**.
+        #
+        # Cutting the clipboard at exactly `MAX_CLIPBOARD_CHARS` handed the
+        # secret detector a prefix and let anything past it through unscanned:
+        # 4,096 filler characters followed by an API key was recorded as
+        # `sensitive: False`. The hard cap here exists so an enormous clipboard
+        # cannot exhaust the companion; it is far above the scan window, so an
+        # over-long clipboard reaches the detector as over-long and is refused
+        # rather than scanned clean.
+        return text[:MAX_CLIPBOARD_READ_CHARS]
 
 
 def write_clipboard_text(text: str) -> bool:

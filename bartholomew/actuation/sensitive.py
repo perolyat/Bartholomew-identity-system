@@ -165,9 +165,13 @@ def detect_secrets(text: str) -> tuple[SecretFinding, ...]:
         # **Refused, not truncated.** Scanning a prefix and returning "nothing
         # found" for the rest is a detector that can be walked past by padding:
         # put 4,096 harmless characters in front of a credential and the
-        # credential is never looked at. Every caller bounds its input well
-        # below this, so reaching here means something bypassed a bound -- and
-        # the safe answer to that is a finding, not a clean scan.
+        # credential is never looked at.
+        #
+        # This branch is genuinely reachable, which is the point. A
+        # `clipboard_write` is bounded at exactly this length, so it never gets
+        # here -- but a `clipboard_read` returns whatever another program put on
+        # the clipboard, bounded only by a much larger hard cap, and an
+        # over-long one arrives here and is refused instead of scanned clean.
         return (SecretFinding(category="unscannable_length", offset=MAX_SCANNED_CHARS),)
     scanned = text
     findings: list[SecretFinding] = []

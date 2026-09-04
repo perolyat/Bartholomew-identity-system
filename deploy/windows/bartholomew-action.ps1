@@ -336,7 +336,7 @@ function Invoke-EnableStartup {
   * log:        $LogFile
 
 It creates no service, no registry Run key, no HKLM entry, and nothing that
-survives `disable-startup`. Remove it any time with:
+survives ``disable-startup``. Remove it any time with:
   .\bartholomew-action.ps1 disable-startup
 "@
     if (-not (Confirm-Change $summary)) { Write-Host 'Nothing was changed.'; return }
@@ -400,7 +400,10 @@ logs -- those are yours. Pass -Purge to remove them too.
 
 function Invoke-Rollback {
     if (-not (Test-Path $VenvBackup)) {
-        throw "No previous environment at $VenvBackup. `install` takes that backup, so there is nothing to roll back to yet."
+        throw (
+            "No previous environment at $VenvBackup. The 'install' verb takes that " +
+            "backup, so there is nothing to roll back to yet."
+        )
     }
     $summary = @"
   * stop the companion if this script started it

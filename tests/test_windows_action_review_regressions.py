@@ -1551,16 +1551,25 @@ def test_the_installer_parenthesises_its_command_call_in_a_boolean():
     assert "if (Test-Installed -and" not in script
 
 
-def test_no_here_string_contains_an_accidental_escape():
-    """A backtick in a double-quoted here-string is an escape, not a quote.
+def test_no_expandable_string_contains_a_lone_backtick():
+    """A backtick inside a double-quoted string is an escape, not a quote.
 
-    `` `rollback` `` rendered as a carriage return followed by `ollback``,
-    corrupting the consent text a person is shown before approving an install.
+    Two ways it bites, and the first fix only covered one: `` `rollback` ``
+    rendered as a carriage return through the middle of the install consent
+    text, and `` `disable-startup` `` in the *other* consent text lost both
+    backticks silently. The first is corruption, the second is a person being
+    shown different words from the ones in the source -- and both are in text
+    somebody reads before approving a change to their machine.
+
+    So this checks every lone backtick in expandable text, not only the escapes
+    PowerShell happens to recognise, and it covers double-quoted lines as well
+    as here-strings.
     """
     import re
 
     script = Path("deploy/windows/bartholomew-action.ps1").read_text(encoding="utf-8")
     inside_here_string = False
+    offenders = []
     for number, line in enumerate(script.splitlines(), start=1):
         if line.strip().endswith('@"'):
             inside_here_string = True
@@ -1568,16 +1577,23 @@ def test_no_here_string_contains_an_accidental_escape():
         if line.strip() == '"@':
             inside_here_string = False
             continue
-        if not inside_here_string:
+        expandable = inside_here_string or ('"' in line and not line.lstrip().startswith("#"))
+        if not expandable:
             continue
-        # `` is an escaped backtick and is fine; a lone one before a letter
-        # PowerShell recognises is not.
+        # What is being looked for is a word *quoted* with backticks in text a
+        # person reads -- ``install`` rendered as `install`, or worse as a
+        # carriage return. A single lone backtick is legitimate PowerShell: it
+        # is either a deliberate escape (`n in a joined string) or a
+        # line continuation at the end of a line. A *pair* around a word in an
+        # expandable string is the mistake, every time.
         stripped = line.replace("``", "")
-        risky = re.search(r"`[rnt0abfve]", stripped)
-        assert risky is None, (
-            f"line {number} of the installer has a live escape inside a here-string: "
-            f"{line.strip()!r}"
-        )
+        if re.search(r"(?<!`)`[A-Za-z][\w.-]*`(?!`)", stripped):
+            offenders.append((number, line.strip()))
+    assert (
+        not offenders
+    ), "lone backticks in expandable strings render as escapes or vanish: " + "; ".join(
+        f"line {n}: {t!r}" for n, t in offenders
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1974,3 +1990,220 @@ async def test_a_lease_that_expires_in_the_gap_is_reported_as_expired(db_path):
     assert store.try_lease(db_path, tenant_id=TENANT, action_id=action_id, repeatable=False) is None
     fresh = store.get_action(db_path, tenant_id=TENANT, action_id=action_id)
     assert fresh.state is ActionState.APPROVED and fresh.lease_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 25. The URL secret scan refused nearly every real URL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/anthropics/claude-code/blob/main/README.md",
+        "https://example.com/wiki/List_of_Unicode_characters",
+        "https://example.com/products/winter-coats-for-children",
+        "https://example.com/handbook/onboarding/first-week-checklist",
+        "https://example.com/calendar/u/0/r/week/2026/9/3",
+        "https://example.com/guide",
+        "https://example.com/",
+    ],
+)
+def test_an_ordinary_url_is_not_mistaken_for_credential_material(url):
+    """Scanning the whole URL was worse than not scanning at all.
+
+    The high-entropy candidate class includes `/`, so a path is one long token
+    -- and ordinary English slugs score 3.8-4.3 bits per character against a
+    3.5 threshold that is only comfortable for long prose. Every real URL with
+    a path was refused, *and* recorded in the audit under the category that
+    exists to count credential attempts, destroying that signal.
+    """
+    ctx = ValidationContext(url_domains=UrlDomainAllowlist.from_iterable(["example.com"]))
+    validate(CapabilityKind.OPEN_URL, {"url": url}, ctx)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/callback?access_token={token}",
+        "https://example.com/cb#id_token={token}",
+        "https://example.com/x?password=hunter2correcthorse",
+        "https://example.com/x?api_key={token}",
+    ],
+)
+def test_a_credential_in_the_query_or_fragment_is_still_refused(url):
+    """The true positive the scan exists for, still caught."""
+    ctx = ValidationContext(url_domains=UrlDomainAllowlist.from_iterable(["example.com"]))
+    token = "gh" + "p_" + "a" * 36
+    with pytest.raises(ParameterError) as excinfo:
+        validate(CapabilityKind.OPEN_URL, {"url": url.format(token=token)}, ctx)
+    assert "credential material" in str(excinfo.value)
+
+
+def test_a_fragment_is_not_reported_as_a_query():
+    """`has_query` was set for a fragment-only URL, so the row said one existed."""
+    ctx = ValidationContext(url_domains=UrlDomainAllowlist.from_iterable(["example.com"]))
+    fragment_only = validate(
+        CapabilityKind.OPEN_URL,
+        {"url": "https://example.com/page#section"},
+        ctx,
+    )
+    assert "has_query" not in fragment_only.redacted
+    assert fragment_only.redacted["has_fragment"] is True
+
+    query_only = validate(
+        CapabilityKind.OPEN_URL,
+        {"url": "https://example.com/page?a=b"},
+        ctx,
+    )
+    assert query_only.redacted["has_query"] is True
+    assert "has_fragment" not in query_only.redacted
+
+
+# ---------------------------------------------------------------------------
+# 26. A silent truncation walked the clipboard past the detector
+# ---------------------------------------------------------------------------
+
+
+def test_an_over_long_clipboard_is_refused_rather_than_scanned_clean():
+    """`read_clipboard_text` used to cut at exactly the detector's window.
+
+    So 4,096 filler characters followed by an API key was handed to the
+    detector as a clean prefix and recorded as `sensitive: False` -- the very
+    padding bypass the `unscannable_length` branch was added to prevent, one
+    call frame away from it.
+    """
+    from bartholomew.actuation.sensitive import MAX_SCANNED_CHARS, secret_categories
+    from bartholomew.windows_actuation.win32 import (
+        MAX_CLIPBOARD_CHARS,
+        MAX_CLIPBOARD_READ_CHARS,
+    )
+
+    assert MAX_CLIPBOARD_READ_CHARS > MAX_SCANNED_CHARS, (
+        "the read cap must sit above the scan window, or an over-long clipboard "
+        "arrives already trimmed to something that scans clean"
+    )
+    assert MAX_CLIPBOARD_READ_CHARS > MAX_CLIPBOARD_CHARS
+
+    padded = "a" * (MAX_SCANNED_CHARS + 100) + "AKIA" + "IOSFODNN" + "7EXAMPLE"
+    assert secret_categories(padded) == ("unscannable_length",)
+
+
+# ---------------------------------------------------------------------------
+# 27. An outcome "kept for re-delivery" was only ever re-delivered at start-up
+# ---------------------------------------------------------------------------
+
+
+def test_an_unreported_outcome_is_resent_on_a_later_cycle(tmp_path):
+    """`resend_unreported()` ran once per process, not once per cycle.
+
+    The condition that refuses a report -- a rotated credential, a resolver
+    that comes back -- clears server-side without the client restarting, so a
+    long-running companion never delivered the outcome it had deliberately
+    kept. The server's row sat at `leased` until it was swept: exactly the
+    "an action that happened, recorded as one that never did" the retention
+    was for.
+    """
+    from bartholomew.actuation.result import HandlerOutcome
+    from bartholomew.windows_actuation.channel import ChannelResult, ChannelStatus
+    from bartholomew.windows_actuation.config import ActionCompanionConfig
+    from bartholomew.windows_actuation.runner import ActionCompanionRunner
+    from bartholomew.windows_actuation.state import ActionStateFile
+
+    config = ActionCompanionConfig(
+        base_url="https://127.0.0.1:5173",
+        device_id=DEVICE,
+        state_path=tmp_path / "action-state.json",
+        applications=ApplicationAllowlist.from_pairs({}),
+        url_domains=UrlDomainAllowlist.from_iterable(()),
+        filesystem_roots=FilesystemRootAllowlist.from_iterable(()),
+        capabilities=(),
+    )
+
+    class _RecoveringClient:
+        """Refuses the first report, then accepts everything."""
+
+        device_id = DEVICE
+
+        def __init__(self):
+            self.reports: list[str] = []
+            self.refusing = True
+
+        def lease(self, *, limit):
+            return ChannelResult(ChannelStatus.OK, 200, {"actions": []}), [], []
+
+        def report(self, *, action_id, outcome, observed_at):
+            self.reports.append(action_id)
+            if self.refusing:
+                return ChannelResult(ChannelStatus.REFUSED, 401, None, "credential rotated")
+            return ChannelResult(ChannelStatus.OK, 200, {}, "")
+
+    client = _RecoveringClient()
+    runner = ActionCompanionRunner(config, client=client, sleep=lambda _s: None)
+    runner._record_executed("act-ran", HandlerOutcome.succeeded("it really ran"))
+    runner.report("act-ran", HandlerOutcome.succeeded("it really ran"), "now")
+    assert ActionStateFile(config.state_path).load().executed["act-ran"].reported is False
+
+    # The credential is fixed server-side. The process does NOT restart.
+    client.refusing = False
+    runner.run(cycles=1)
+
+    assert client.reports.count("act-ran") == 2, "re-sent on the next cycle"
+    assert ActionStateFile(config.state_path).load().executed["act-ran"].reported is True
+
+
+# ---------------------------------------------------------------------------
+# 28. An extension that could never match, and a test that could never fail
+# ---------------------------------------------------------------------------
+
+
+def test_every_executable_extension_can_actually_match():
+    """Each is compared against `.suffix.lower()`, so a capital never matches.
+
+    `.searchConnector-ms` was in the set with a capital C, which meant the one
+    entry aimed at a Windows search-connector file was dead.
+    """
+    from bartholomew.actuation.parameters import EXECUTABLE_EXTENSIONS
+
+    wrong_case = sorted(e for e in EXECUTABLE_EXTENSIONS if e != e.lower())
+    assert not wrong_case, f"these can never match a lowercased suffix: {wrong_case}"
+    assert all(e.startswith(".") for e in EXECUTABLE_EXTENSIONS)
+
+
+def test_the_surrogate_regression_asserts_the_surrogate_and_nothing_else():
+    """Three of its cases used to pass on the allowlist error instead.
+
+    `assert "surrogate" in str(e) or "allowlist" in str(e).lower()` was
+    satisfied by `AllowlistError` for `launch_app`, `focus_window` and
+    `manage_window`, so deleting the surrogate check left them green. The
+    refusal has to be *the* refusal, not any refusal.
+    """
+    ctx = ValidationContext(
+        applications=ApplicationAllowlist.from_pairs({"notepad": "C:\\Windows\\notepad.exe"}),
+        url_domains=UrlDomainAllowlist.from_iterable(["example.com"]),
+        filesystem_roots=FilesystemRootAllowlist.from_iterable(["C:\\Docs"]),
+    )
+    lone = json.loads('"\\ud800"')
+    # An app_id that is otherwise valid apart from the surrogate, so the
+    # allowlist cannot be what refuses it.
+    for kind, params in (
+        (CapabilityKind.LAUNCH_APP, {"app_id": f"notepad{lone}"}),
+        (CapabilityKind.FOCUS_WINDOW, {"app_id": f"notepad{lone}"}),
+        (
+            CapabilityKind.MANAGE_WINDOW,
+            {"app_id": "notepad", "operation": f"maximize{lone}"},
+        ),
+        (
+            CapabilityKind.ACCESSIBILITY_ACTION,
+            {"app_id": f"notepad{lone}", "operation": "expand", "element_name": "D"},
+        ),
+        (
+            CapabilityKind.ACCESSIBILITY_ACTION,
+            {"app_id": "notepad", "operation": f"expand{lone}", "element_name": "D"},
+        ),
+    ):
+        with pytest.raises(ParameterError) as excinfo:
+            validate(kind, params, ctx)
+        assert "surrogate" in str(
+            excinfo.value,
+        ), f"{kind.value} refused for the wrong reason: {excinfo.value}"

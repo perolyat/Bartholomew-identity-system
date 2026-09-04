@@ -7,8 +7,10 @@ reporting comes back knowing it already acted. The alternative order -- report,
 then record -- loses exactly that, and loses it in the case that matters:
 a crash right after a `launch_app` would otherwise launch it again on restart.
 
-An unreported result is retried on the next cycle from the ledger, so an
-outcome is not lost either. Both properties come from the same file.
+An unreported result is retried at the top of the next cycle from the ledger,
+so an outcome is not lost either. Both properties come from the same file, and
+`poll_once` is where the retry happens -- doing it once at start-up instead
+would lose every outcome whose refusal cleared without the process restarting.
 
 Nothing else happens here. There is no branch in this module driven by anything
 in a response body other than the typed `LeasedAction` list, and every one of
@@ -222,7 +224,19 @@ class ActionCompanionRunner:
     # -- lifecycle ---------------------------------------------------------
 
     def poll_once(self) -> list[HandlerOutcome]:
-        """One cycle: lease what is waiting, run each, report each."""
+        """One cycle: re-send what is owed, then lease what is waiting.
+
+        The re-send comes **first, every cycle**, not once at start-up. A
+        refused report is deliberately left unreported so it can be delivered
+        when the credential works again -- and a companion that only retried on
+        process start never delivered it, because the condition that refused it
+        (a rotated credential, a resolver that came back) clears server-side
+        without the client restarting. The outcome sat in the ledger for days
+        while the server's row stayed `leased`: exactly the "an action that
+        happened, recorded as one that never did" this was supposed to prevent.
+        Cheap when there is nothing owed -- it iterates an empty list.
+        """
+        self.resend_unreported()
         result, actions, malformed = self.client.lease(limit=self.config.lease_batch)
         if malformed:
             logger.warning(
@@ -250,8 +264,10 @@ class ActionCompanionRunner:
         `cycles=None` runs until interrupted, which is the real deployment.
         A bounded `cycles` is what the tests use, so the same code path is
         exercised rather than a test-only variant of it.
+
+        The re-send at the top of every cycle lives in `poll_once`, so it
+        happens on each pass rather than only here.
         """
-        self.resend_unreported()
         completed = 0
         try:
             while cycles is None or completed < cycles:
