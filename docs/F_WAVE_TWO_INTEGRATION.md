@@ -363,7 +363,36 @@ Local: `ruff check .` and `black --check .` clean across 465 files.
 
 Full-suite and CI results are in the PR; see the final CI state on #89.
 
-### One integration defect found and fixed
+### Integration defects found and fixed
+
+**The seam installer unenrolled every device in Package B's alpha
+configuration.** `install_seams()` installed E's registry unconditionally,
+overriding the supported configuration in which
+`BARTH_ACTION_DEVICE_ENROLMENT` names a file that *is* the registry. The file
+was still read for parameter allowlists, so such a deployment looked
+configured while refusing everything, and every refusal said "device not
+enrolled" about a device the operator had enrolled. It took B's real-HTTP
+suite from green to eight failures.
+
+Resolved as **one device truth per deployment, chosen explicitly**, rather
+than one per device resolved by whichever source answered first: a deployment
+naming an enrolment file keeps its interim registry and says so on the health
+surface (`interim: true`); one that does not gets E's registry. Having both
+would be two contradictory answers to "which devices are enrolled" — the thing
+the seam exists to prevent. The parameter-allowlist overlay moved to its own
+variable, `BARTH_ACTION_PARAMETER_ALLOWLIST`, so the file that *selects* B's
+interim registry is never the same file that only *overlays* allowlists onto
+E's. The eight failures were reproduced without the fix and all 26 tests pass
+with it; a regression test now covers it.
+
+**A's registry test asserted it held exactly its own two event types.**
+Integration makes that premise false in the intended way — C's five multimodal
+types share the registry, which is the "no second event bus" property. The
+assertion was corrected to the integrated seven-type set rather than loosened
+to a subset, and made deterministic by importing the integration module, which
+is what had made it an order-dependent failure.
+
+
 
 The seam installer targeted `multimodal.runtime.install_event_sink`, but the
 hook lives in `multimodal.events`. It surfaced as a failed seam install rather
@@ -442,7 +471,12 @@ decision rather than a convenience.
 
 **A — must fix for integration correctness (fixed this session):**
 
+* The seam installer overrode Package B's configured interim registry,
+  unenrolling every device in that supported alpha configuration. Fixed by
+  choosing one device truth per deployment; see §11.
 * The seam installer targeted the wrong module for C's event sink. Fixed.
+* A's event-registry test asserted a set that integration correctly widens.
+  Corrected to the integrated set, not loosened.
 * D's sharing projection claimed sharing was unimplemented after E implemented
   it, and would have offered shares of candidate lessons that E refuses. Fixed
   by asking E.
