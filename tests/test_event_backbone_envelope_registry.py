@@ -160,7 +160,36 @@ def test_the_idempotency_key_is_the_pair_capture_made_unique(captured):
 
 
 def test_the_registered_types_are_the_declared_ones():
-    assert registry.registered_types() == (OBSERVATION_NOTE, OBSERVATION_STATUS)
+    """Exactly the declared types, and nothing has slipped in unannounced.
+
+    Session F added Package C's five multimodal types to this one registry --
+    that is the "no second event bus" property, and it is why they are named
+    here rather than tolerated by loosening the assertion to a subset. The
+    integration module is imported explicitly so the expected set does not
+    depend on whether some earlier test in the session happened to import it.
+
+    A new event type appearing here without being added to this list is what
+    this test is for: registration is how something becomes processable, and
+    it should not be possible to do quietly.
+    """
+    import bartholomew.integration.multimodal_events  # noqa: F401
+    from bartholomew.multimodal.events import (
+        EVENT_TYPE_ACCESSIBILITY,
+        EVENT_TYPE_SCREEN,
+        EVENT_TYPE_SESSION_STATE,
+        EVENT_TYPE_SPEECH,
+        EVENT_TYPE_TRANSCRIPT,
+    )
+
+    assert set(registry.registered_types()) == {
+        OBSERVATION_NOTE,
+        OBSERVATION_STATUS,
+        EVENT_TYPE_TRANSCRIPT,
+        EVENT_TYPE_SCREEN,
+        EVENT_TYPE_ACCESSIBILITY,
+        EVENT_TYPE_SPEECH,
+        EVENT_TYPE_SESSION_STATE,
+    }
     for spec in registry.describe_registry():
         assert spec["description"]
 
