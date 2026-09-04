@@ -1,0 +1,224 @@
+name: Merge Candidate
+
+# ---------------------------------------------------------------------------
+# Tier: MERGE CANDIDATE  (target: under 15-20 minutes wall-clock)
+#
+# Strong pre-main verification for an integrated wave head, and post-merge
+# verification of main itself. Runs on: every push to main; a merge queue;
+# a pull request labelled `ci:merge-candidate`; a pull request whose head
+# branch is a wave integration branch (`wave/w03-f-*`); or by hand.
+#
+# Everything the Integration tier runs, widened to both supported Pythons,
+# plus the full default suite on Windows. Governance coverage is not thinned
+# to hit the timing target: the suites are the same, only spread wider.
+# ---------------------------------------------------------------------------
+on:
+  push:
+    branches: [main]
+  merge_group:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-merge-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  tests-coverage:
+    name: Tests + coverage (Ubuntu, py${{ matrix.python-version }})
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'ci:merge-candidate')
+      || startsWith(github.head_ref, 'wave/w03-f-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      - name: pip check
+        run: python -m pip check
+
+      - name: "Default test suite with coverage (gate: line >= 70%)"
+        run: >-
+          python -m pytest -p no:cacheprovider
+          -n auto --dist loadfile
+          --cov=bartholomew
+          --cov=identity_interpreter
+          --cov=bartholomew_api_bridge_v0_1
+          --cov-branch
+          --cov-report=term-missing:skip-covered
+          --cov-report=xml
+          --cov-fail-under=70
+          --junitxml=junit-merge-candidate-py${{ matrix.python-version }}.xml
+
+      - name: Upload coverage.xml and junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-and-junit-merge-candidate-py${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            junit-merge-candidate-py${{ matrix.python-version }}.xml
+          if-no-files-found: ignore
+          retention-days: 30
+
+  critical:
+    name: Critical integration + lifecycle (Ubuntu, py${{ matrix.python-version }})
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'ci:merge-candidate')
+      || startsWith(github.head_ref, 'wave/w03-f-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      - name: Integration-marked tests (excluded by default addopts)
+        run: python -m pytest -m "integration or slow" -p no:cacheprovider
+
+      - name: Clean-start persistence + lifecycle
+        run: python -m pytest tests/test_clean_start_lifecycle.py -p no:cacheprovider
+
+      - name: Scheduler startup readiness (fresh DB schema before start returns)
+        run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
+
+      - name: Parking brake / governance integration
+        run: |
+          python -m pytest -p no:cacheprovider \
+            tests/integration/test_parking_brake_integration.py \
+            tests/test_parking_brake_scoped_blocks.py \
+            tests/unit/safety/test_parking_brake.py
+
+  windows-full:
+    name: Windows full default suite + actuation (py3.11)
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'ci:merge-candidate')
+      || startsWith(github.head_ref, 'wave/w03-f-')
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      - name: pip check
+        run: python -m pip check
+
+      - name: Packaging contract (imports, console scripts, declared deps)
+        run: python -m pytest tests/smoke/test_packaging_contract.py -p no:cacheprovider
+
+      - name: Clean-start persistence + lifecycle
+        run: python -m pytest tests/test_clean_start_lifecycle.py -p no:cacheprovider
+
+      - name: Scheduler startup readiness
+        run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
+
+      - name: Governed Windows actuation (real Win32, nothing substituted)
+        if: hashFiles('tests/integration/test_windows_action_real.py') != ''
+        run: python -m pytest tests/integration/test_windows_action_real.py -p no:cacheprovider -m integration
+
+      # The whole default suite on Windows, in parallel. This is where a
+      # Windows-only failure in an ordinary unit test surfaces before main.
+      - name: Default test suite on Windows (parallel, no coverage)
+        run: python -m pytest -p no:cacheprovider -n auto --dist loadfile --junitxml=junit-windows-full.xml
+
+      - name: Upload junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-windows-full
+          path: junit-windows-full.xml
+          if-no-files-found: ignore
+          retention-days: 30
+
+  smoke:
+    name: smoke
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'ci:merge-candidate')
+      || startsWith(github.head_ref, 'wave/w03-f-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Start uvicorn server
+        run: |
+          uvicorn app:app --host 127.0.0.1 --port 5173 &
+      - name: Wait for server to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5173/healthz; then break; fi
+            sleep 1
+          done
+      - name: Health endpoints
+        run: |
+          response=$(curl -fsS http://127.0.0.1:5173/healthz)
+          echo "$response" | jq -e '.status == "ok"' || exit 1
+          curl -fsS http://127.0.0.1:5173/api/health | jq .
+          curl -fsS http://127.0.0.1:5173/docs > /dev/null

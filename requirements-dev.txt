@@ -22,3 +22,7 @@ pytest-timeout
 # CVE-2026-54283 / GHSA-82w8-qh3p-5jfq). Not used by application code —
 # do not remove even if no other dev tool still pulls it in transitively.
 packaging
+# pytest-xdist parallelises the default suite across runner cores in the PR
+# Fast, Integration and Merge Candidate tiers (`-n auto --dist loadfile`).
+# The Nightly tier deliberately runs serial without it.
+pytest-xdist
