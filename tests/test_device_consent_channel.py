@@ -728,7 +728,8 @@ async def test_stopping_a_session_while_its_ask_is_open_refuses_it_without_error
 
 
 async def test_unbound_loopback_routes_still_find_the_accounts_asks(
-    unbound_consent_client, db_path,
+    unbound_consent_client,
+    db_path,
 ):
     """With no principal and no runtime binding there is one tenant. The
     routes must not filter by the `local` sentinel, which no ask carries."""
