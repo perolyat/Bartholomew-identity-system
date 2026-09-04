@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from bartholomew.actuation import devices, seam, store
+from bartholomew.actuation import arming, devices, seam, store
 from bartholomew.actuation.allowlists import (
     ApplicationAllowlist,
     FilesystemRootAllowlist,
@@ -38,6 +38,27 @@ from bartholomew.actuation.store import ActionPersistenceError, ActionState
 
 TENANT = "tenant-a"
 DEVICE = "desk-pc"
+
+
+@pytest.fixture(autouse=True)
+def _armed_channel():
+    """Dispatch in this file runs on an armed channel.
+
+    The arming window is a separate, coarser gate than anything these
+    regressions are about: it says the machine's channel is open at all right
+    now, and authorises no action by itself. Opening it here keeps it from
+    becoming the reason any of these assertions passes or fails. The unarmed
+    cases have their own tests in
+    `tests/test_windows_companion_completion.py`.
+    """
+    arming.arm(
+        tenant_id=TENANT,
+        device_id=DEVICE,
+        armed_by="test-fixture",
+        reason="review regression suite",
+    )
+    yield
+    arming.reset_for_tests()
 
 
 # ---------------------------------------------------------------------------

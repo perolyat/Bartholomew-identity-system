@@ -26,7 +26,7 @@ from datetime import timedelta
 
 import pytest
 
-from bartholomew.actuation import devices, seam, store
+from bartholomew.actuation import arming, devices, seam, store
 from bartholomew.actuation.allowlists import (
     ApplicationAllowlist,
     FilesystemRootAllowlist,
@@ -130,6 +130,35 @@ class _RaisingRegistry:
 
     def lookup(self, *, tenant_id, device_id):
         raise devices.DeviceRegistryError("the registry is unreachable")
+
+
+@pytest.fixture(autouse=True)
+def armed_channel():
+    """Every dispatch in this file runs on an armed channel.
+
+    The arming window is a separate, coarser gate than anything this file
+    tests: it says the machine's channel is open at all right now, and it
+    authorises no action by itself. Opening it here for every tenant and
+    device this module uses keeps arming from becoming the reason any of these
+    assertions passes or fails, so each test still discriminates exactly what
+    it did before the window existed.
+
+    The unarmed cases are tested on their own, in
+    `tests/test_windows_companion_completion.py`.
+    """
+    # One window per tenant, naming the device that tenant dispatches with --
+    # which is `DEVICE` in both cases here, including the cross-tenant test,
+    # so that test is still denied for the reason it is about (the action does
+    # not exist in the other tenant) rather than for an unarmed channel.
+    for tenant in (TENANT, OTHER_TENANT):
+        arming.arm(
+            tenant_id=tenant,
+            device_id=DEVICE,
+            armed_by="test-fixture",
+            reason="governance suite",
+        )
+    yield
+    arming.reset_for_tests()
 
 
 @pytest.fixture

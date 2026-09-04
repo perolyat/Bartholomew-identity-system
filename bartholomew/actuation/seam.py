@@ -69,7 +69,7 @@ from bartholomew.orchestrator.safety.governance_store import (
     is_blocked_fail_closed_off_loop,
 )
 
-from . import store
+from . import arming, store
 from .approval import KIND as APPROVAL_KIND
 from .approval import ActionApproval, ApprovalError, build_approval
 from .capabilities import UnsupportedCapabilityError
@@ -1222,6 +1222,22 @@ async def evaluate_dispatch_admission(
     brake = await evaluate_actuation_brake(ctx, ACTION_KIND_DISPATCH)
     if not brake.allowed:
         return brake
+
+    # 8b. The arming window, immediately after the brake and before anything
+    #     else is read. Arming is not approval and approval is not arming: both
+    #     are required, and this is the one that says the machine's channel is
+    #     open at all right now. Checked after the brake on purpose, so an
+    #     engaged brake closes the channel however much time is left.
+    armed = arming.check(
+        tenant_id=request.tenant_id,
+        device_id=request.device_id,
+        now=moment,
+    )
+    if not armed.allowed:
+        return ActionAdmission.deny(
+            ErrorCategory.GOVERNANCE_DENIED,
+            armed.reason or "the Windows action channel is not armed",
+        )
 
     # 7. Expiry, on both the action and (below) its approval.
     if request.has_expired(now=moment):

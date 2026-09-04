@@ -35,14 +35,24 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from bartholomew.actuation import seam
+from bartholomew.actuation import arming, seam
 from bartholomew.actuation.result import ActionResultStatus, ErrorCategory
 from bartholomew.actuation.store import ActionPersistenceError
 
 from .. import device_action_auth
+from ..companion_auth import require_companion
 from ..db import resolve_db_path
 
 logger = logging.getLogger(__name__)
+
+#: The capability a device must declare before its channel may be armed.
+#: `windows.focus_window` is the least powerful Windows capability in the
+#: vocabulary -- naming it here asks "is this a Windows actuation device at
+#: all?", not "may it do the specific thing somebody will approve later".
+#: Which capability an individual action needs is still checked per action, by
+#: the seam, against the device's own declaration.
+WINDOWS_ARM_CAPABILITY = "windows.focus_window"
+WINDOWS_ARM_CAPABILITY_VERSION = 1
 
 router = APIRouter(prefix="/api/actions", tags=["actions"])
 
@@ -333,6 +343,135 @@ def _ctx(kernel: Any) -> Any:
     no adapter object to keep in step with it.
     """
     return kernel
+
+
+class ArmRequestIn(BaseModel):
+    """Arming one device's channel. Deliberately tiny.
+
+    There is no `tenant_id` here and there cannot be: which tenant is arming
+    is the platform's answer, from `_tenant()`, and a body that could name one
+    would be a cross-tenant arming primitive. `seconds` is accepted but capped
+    by `arming.MAX_ARM_SECONDS`, so a caller cannot ask for a longer window
+    than the design allows.
+    """
+
+    device_id: str
+    seconds: int | None = None
+    reason: str | None = None
+
+
+def _arm_brake_engaged() -> bool:
+    """Whether any brake scope is engaged. Fail-closed on an unreadable brake.
+
+    Reads the same `GovernanceStore` every other gate reads -- there is no
+    second safety authority here. Arming while halted is refused, and an
+    unreadable brake refuses too: "we could not tell" is not "clear".
+    """
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    try:
+        return bool(GovernanceStore(resolve_db_path()).is_blocked("actuation"))
+    except Exception:
+        logger.exception("Brake state unreadable while arming; refusing")
+        return True
+
+
+@router.post("/channel/arm")
+async def arm_channel(request: Request) -> Any:
+    """Open this tenant's Windows action channel for a bounded window.
+
+    **Arming is not approval.** It authorises no action: every action still
+    needs its own explicit, content-bound approval, and an unapproved one is
+    refused on an armed channel exactly as it was on a closed one. What this
+    opens is the coarser question of whether the machine may carry out
+    anything at all right now.
+
+    Five things must hold, and each is checked by whoever owns it: the caller
+    is an authenticated enrolled device (Session E's credential), the device
+    belongs to the server-derived tenant, it declares Windows actuation, the
+    Parking Brake is clear, and the request is explicit. None of them is read
+    from the body.
+    """
+    payload: ArmRequestIn = await _validated_body(request, ArmRequestIn)
+    companion = require_companion(request)
+    tenant = _tenant(request)
+
+    if payload.device_id != companion.device_id:
+        # Arming a device other than the one that authenticated would let a
+        # credential for one machine open another machine's channel.
+        raise HTTPException(
+            403,
+            "the channel may only be armed for the device that authenticated " "this request",
+        )
+    # Ownership is checked against the platform's identity when the platform
+    # has one. `LOCAL_TENANT` is `resolved_tenant_id`'s named sentinel for "this
+    # process is unbound and no principal exists" -- the single-runtime local
+    # deployment, where there is exactly one account and nothing to cross. It
+    # is not a tenant a device can belong to, so comparing against it would
+    # refuse every real enrolment rather than catching anything.
+    if tenant not in (device_action_auth.LOCAL_TENANT, companion.owner_user_id):
+        raise HTTPException(403, "that device does not belong to this account")
+
+    companion.require_capability(WINDOWS_ARM_CAPABILITY, WINDOWS_ARM_CAPABILITY_VERSION)
+
+    if _arm_brake_engaged():
+        raise HTTPException(
+            409,
+            "The Parking Brake is engaged; the action channel cannot be armed.",
+        )
+
+    window = arming.arm(
+        tenant_id=tenant,
+        device_id=companion.device_id,
+        armed_by=_requesting_identity(request),
+        seconds=payload.seconds,
+        reason=payload.reason,
+    )
+    return {"armed": True, "channel": window.describe()}
+
+
+@router.get("/channel")
+async def read_channel(request: Request) -> Any:
+    """Whether the channel is armed, for how long, and for which device.
+
+    Readable without a device credential, and readable while the brake is
+    engaged: "can this machine act right now?" is exactly the question a
+    person needs answered when they are worried, and an inspection surface
+    that disappears under a halt is the wrong shape.
+    """
+    described = arming.describe(tenant_id=_tenant(request))
+    if described["armed"] and _arm_brake_engaged():
+        # Truthful rather than merely accurate: the window is open, and the
+        # brake means nothing can be carried out through it anyway.
+        described = dict(described)
+        described["armed"] = False
+        described["brake_engaged"] = True
+        described["detail"] = (
+            "The Parking Brake is engaged. The arming window is still open, but "
+            "nothing can be carried out while the brake holds."
+        )
+    else:
+        described["brake_engaged"] = False
+    return {"channel": described}
+
+
+@router.post("/channel/disarm")
+async def disarm_channel(request: Request) -> Any:
+    """Close this tenant's channel immediately. Idempotent.
+
+    Deliberately needs no device credential and is never refused by the brake:
+    disarming is a strictly-tightening safety act, and a control that removes
+    authority must not be reachable only by whoever still holds it.
+    """
+    window = arming.disarm(tenant_id=_tenant(request))
+    return {
+        "disarmed": window is not None,
+        "detail": (
+            "The Windows action channel is disarmed."
+            if window is not None
+            else "The Windows action channel was already disarmed."
+        ),
+    }
 
 
 @router.post("", status_code=201)

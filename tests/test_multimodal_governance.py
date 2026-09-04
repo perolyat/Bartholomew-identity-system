@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 
 import pytest
+from fastapi import FastAPI
 
 from bartholomew.kernel.runtime_contract import (
     run_multimodal_session_through_runtime_contract,
@@ -321,18 +322,54 @@ class TestContentCannotStartCapture:
     def test_a_human_principal_is_accepted(self):
         assert _request(principal_id="user:taylor").principal_id == "user:taylor"
 
-    def test_the_api_exposes_no_start_endpoint(self):
-        """Capture initiation is not reachable over the unauthenticated bridge."""
+    def test_capture_initiation_is_never_reachable_unauthenticated(self):
+        """Starting capture requires an enrolled device credential. Nothing less.
+
+        This test used to assert that no start endpoint existed at all, because
+        the API bridge had no authentication and an unauthenticated start would
+        be exactly the shape contract §7 forbids. The bridge now authenticates
+        an enrolled device (Session E), so the route exists -- and the property
+        that mattered is asserted directly instead of being approximated by the
+        route's absence: an unauthenticated caller cannot start capture.
+
+        The route existing is not the risk; the route being reachable without a
+        credential would be. So that is what is checked, empirically, against
+        the real app.
+        """
+        from fastapi.testclient import TestClient
+
         from bartholomew_api_bridge_v0_1.services.api.routes import multimodal
 
-        paths = {r.path for r in multimodal.router.routes}
         methods = {
             (r.path, method)
             for r in multimodal.router.routes
             for method in getattr(r, "methods", set())
         }
-        assert not any("start" in p for p in paths)
-        assert ("/api/multimodal/sessions", "POST") not in methods
+        # Every POST is still either the start or a stop: nothing else on this
+        # surface may change state.
         for path, method in methods:
             if method == "POST":
-                assert "stop" in path, f"the only POST routes may be stops: {path}"
+                assert (
+                    "stop" in path or path == "/api/multimodal/sessions"
+                ), f"unexpected state-changing route on the multimodal surface: {path}"
+
+        app = FastAPI()
+        app.include_router(multimodal.router)
+        with TestClient(app) as client:
+            refused = client.post(
+                "/api/multimodal/sessions",
+                json={"modality": "screen", "scope": {"kind": "display", "display_id": "1"}},
+            )
+        assert (
+            refused.status_code == 401
+        ), "an unauthenticated caller must not be able to start capture"
+
+    def test_the_start_route_is_classified_by_the_route_policy(self):
+        """A state-changing control-plane route that nothing classifies is a hole."""
+        from bartholomew.platform.capabilities import Capability
+        from bartholomew.platform.route_policy import ROUTE_CAPABILITIES
+
+        assert (
+            ROUTE_CAPABILITIES[("POST", "/api/multimodal/sessions")]
+            is Capability.MULTIMODAL_SESSION_START
+        )

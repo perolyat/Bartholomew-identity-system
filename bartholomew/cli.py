@@ -37,6 +37,13 @@ app.add_typer(share_app, name="share")
 multimodal_app = typer.Typer(help="Multimodal presence (microphone, screen, speech)")
 app.add_typer(multimodal_app, name="multimodal")
 
+# The Windows companion's operator surface. Same reasoning as Package E's
+# commands above: the implementation lives in `bartholomew/cli_companion.py`
+# rather than here, because this file is a shared integration hotspot.
+from bartholomew.cli_companion import companion_app  # noqa: E402
+
+app.add_typer(companion_app, name="companion")
+
 
 @embeddings_app.command("stats")
 def embeddings_stats(

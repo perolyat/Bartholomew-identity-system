@@ -219,6 +219,15 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # do the first must not thereby be able to do the second.
     ("POST", "/api/actions/{action_id}/approve"): Capability.ACTION_APPROVE,
     ("POST", "/api/actions/{action_id}/cancel"): Capability.ACTION_REQUEST,
+    # Arming and disarming the channel. Reading it is SELF_READ: "can this
+    # machine act right now" is a statement about Bartholomew's current state,
+    # and it stays readable under a halt because that is exactly when somebody
+    # wants to know. Disarming is BRAKE_ENGAGE -- the same class as engaging
+    # the brake, strictly tightening, and granting no power its holder did not
+    # already have.
+    ("POST", "/api/actions/channel/arm"): Capability.ACTION_ARM,
+    ("GET", "/api/actions/channel"): Capability.SELF_READ,
+    ("POST", "/api/actions/channel/disarm"): Capability.BRAKE_ENGAGE,
     ("POST", "/api/device-actions/lease"): Capability.DEVICE_ACTION_CHANNEL,
     ("POST", "/api/device-actions/{action_id}/result"): Capability.DEVICE_ACTION_CHANNEL,
     # --- multimodal presence (Package C) -------------------------------------
@@ -238,6 +247,9 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # keeps stopping available to exactly the people who can already halt the
     # system, without minting a capability whose only holder would be the same
     # set.
+    # Beginning a session is its own capability, and the only widening
+    # operation on this surface. Everything else here reads or stops.
+    ("POST", "/api/multimodal/sessions"): Capability.MULTIMODAL_SESSION_START,
     ("GET", "/api/multimodal/status"): Capability.SELF_READ,
     ("GET", "/api/multimodal/sessions"): Capability.SELF_READ,
     ("POST", "/api/multimodal/sessions/{session_id}/stop"): Capability.BRAKE_ENGAGE,
