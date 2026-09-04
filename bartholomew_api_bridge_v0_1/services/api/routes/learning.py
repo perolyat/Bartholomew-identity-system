@@ -429,6 +429,38 @@ async def _decorated_entry(kernel, kind: str, key: str) -> dict[str, Any] | None
         offset += len(batch)
 
 
+
+def _sharing_projection(*, eligible: bool, source_kind: str | None) -> dict[str, Any]:
+    """The sharing projection, from Session E's real state where it can be read.
+
+    Package D's own construction said "Household sharing is not connected in
+    this release", which Session E made untrue. The resolver reads E's group
+    membership and publication tables and answers with what is actually the
+    case: whether there is any trusted group to share into, and whether a
+    live, unrevoked package exists for this record.
+
+    Falls back to D's original constructed projection if E's tables cannot be
+    read at all. That fallback claims *less* than the truth (no transport,
+    nothing shared), never more, so an unreadable control plane cannot make
+    the control centre show a share that does not exist.
+    """
+    from bartholomew.platform.runtime_registry import bound_runtime_user_id
+
+    user_id = bound_runtime_user_id()
+    if not user_id:
+        return learning_policy.SharingInterface(eligible=eligible).to_dict()
+    try:
+        from bartholomew.integration.learning_adapters import resolve_sharing
+
+        return resolve_sharing(
+            user_id=user_id,
+            eligible=eligible,
+            source_kind=source_kind,
+        ).to_dict()
+    except Exception:  # noqa: BLE001 - a read failure must not break the page
+        return learning_policy.SharingInterface(eligible=eligible).to_dict()
+
+
 def _candidate_projection(
     entry: dict[str, Any],
     lesson: Any,
@@ -475,9 +507,14 @@ def _candidate_projection(
         "reversible": lesson.reversible,
         "affected_capabilities": [lesson.competency_id],
         "affected_applications": list(lesson.affected_applications),
-        "sharing": learning_policy.SharingInterface(
+        "sharing": _sharing_projection(
             eligible=lesson.effective_sharing_eligible,
-        ).to_dict(),
+            # A candidate is never an eligible source for a share in Session
+            # E's model: publishing an unreviewed inference would export a
+            # guess as though the publisher stood behind it. Naming the kind
+            # here is what makes the projection say so.
+            source_kind=candidate_learning.KIND,
+        ),
         # The raw field, so an edit form can show "work it out from the
         # classification" as distinct from an explicit yes or no. `sharing`
         # above is the resolved answer, which is what a reader wants.
@@ -580,9 +617,10 @@ def _competency_projection(entry: dict[str, Any]) -> dict[str, Any]:
         ),
         # Same projection as a candidate's, so the two read alike: eligibility
         # is real, and the state is honestly "not connected in this release".
-        "sharing": learning_policy.SharingInterface(
+        "sharing": _sharing_projection(
             eligible=record.get("classification") not in (None, "personal"),
-        ).to_dict(),
+            source_kind=entry.get("kind"),
+        ),
         "privacy_class": entry.get("privacy_class"),
         "category": entry.get("category"),
         "recall_policy": entry.get("recall_policy"),

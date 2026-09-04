@@ -162,6 +162,12 @@ async def start_session(
 
     # Gate input 1: the device's declared capability (§3.3). Resolved here
     # because Package C consumes the declaration; it does not own the registry.
+    #
+    # An explicit argument always wins. Only an unset one falls back to what
+    # Session F installed, so a production caller reaches Session E's registry
+    # while a caller that named its own resolver is never overridden.
+    if capability_resolver is None:
+        capability_resolver = get_capability_resolver()
     capability = resolve_modality_capability(
         capability_resolver,
         request.device_id,
@@ -305,4 +311,31 @@ def _start_microphone(
             "_thread": thread,
             "_observation": observation_holder,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# The installed capability resolver (Session F)
+# ---------------------------------------------------------------------------
+# `start_session` keeps its explicit `capability_resolver` parameter, and an
+# explicit argument still wins: a caller that passes one is never overridden
+# by what happens to be installed. This holder is only what an *unset*
+# argument now falls back to, so a production caller gets Session E's registry
+# instead of the fail-closed None, and every existing test that passes its own
+# resolver behaves exactly as it did.
+
+_INSTALLED_RESOLVER: dict[str, DeviceCapabilityResolver | None] = {"resolver": None}
+
+
+def get_capability_resolver() -> DeviceCapabilityResolver | None:
+    """The installed resolver, or None -- which `resolve_modality_capability` denies."""
+    return _INSTALLED_RESOLVER["resolver"]
+
+
+def install_capability_resolver(resolver: DeviceCapabilityResolver | None) -> None:
+    """Install the registry-backed resolver. None restores the fail-closed default."""
+    _INSTALLED_RESOLVER["resolver"] = resolver
+    logger.info(
+        "Multimodal capability resolver installed: %s",
+        type(resolver).__name__ if resolver is not None else "none (fail-closed)",
     )

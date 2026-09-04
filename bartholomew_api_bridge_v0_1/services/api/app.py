@@ -544,6 +544,31 @@ async def startup():
 
     device_action_auth.maybe_install_test_resolver_from_env()
 
+    # Session F: put the cross-package seams in place before the kernel
+    # starts, so no tick, drive or request is ever served by a stand-in that
+    # a later line was about to replace. This installs Session E's registry
+    # as the one device truth for Packages B and C, and Session A's ingress
+    # as the one destination for Package C's events.
+    #
+    # It opens nothing on its own: the action channel stays behind its own
+    # environment gate, and a seam that fails to install leaves its package's
+    # fail-closed default in force rather than killing startup.
+    import logging as _logging
+
+    try:
+        from bartholomew.integration.install import install_seams
+        from bartholomew.platform.runtime_registry import bound_runtime_user_id
+
+        app.state.seam_report = install_seams(
+            db_path=resolve_db_path(),
+            tenant_id=bound_runtime_user_id(),
+        )
+    except Exception:
+        _logging.getLogger(__name__).exception(
+            "Session F seam installation failed; every package's fail-closed "
+            "default remains in force",
+        )
+
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
 
@@ -954,6 +979,28 @@ def _component_health(extra: dict[str, Any] | None = None) -> dict[str, Any]:
         }
     except Exception:
         components["device_actions"] = {"status": "unknown"}
+
+    # Session F: which cross-package seams are actually live. An operator
+    # must be able to tell an integrated deployment from one running on each
+    # package's stand-in, and "the process is up" answers neither.
+    try:
+        from bartholomew.integration.install import last_report
+
+        report = last_report()
+        components["integration_seams"] = (
+            {"status": "ok", **report.to_dict()}
+            if report is not None
+            else {
+                "status": "ok",
+                "integrated": False,
+                "detail": (
+                    "Session F seams have not been installed in this process; "
+                    "every package's fail-closed default is in force."
+                ),
+            }
+        )
+    except Exception:
+        components["integration_seams"] = {"status": "unknown"}
 
     if extra:
         components.update(extra)

@@ -283,3 +283,37 @@ def serialize_session_state(session: MultimodalSession) -> dict[str, Any]:
         },
         classification,
     )
+
+
+# ---------------------------------------------------------------------------
+# The installed sink (Session F)
+# ---------------------------------------------------------------------------
+# A holder rather than a bare module global, for the reason
+# `actuation.devices._INSTALLED` gives: a rebound module attribute is invisible
+# to a module that already imported the name.
+#
+# The default is unchanged -- `NullEventSink`, which drops what it is given.
+# This adds a place for Session F to put A's ingress; it does not add a
+# delivery path that exists when nobody installed one.
+
+_INSTALLED_SINK: dict[str, MultimodalEventSink | None] = {"sink": None}
+
+
+def get_event_sink() -> MultimodalEventSink:
+    """The installed sink, defaulting to the one that drops events.
+
+    Never returns None: "no sink" would be an unanswered question at a call
+    site that has an event in its hand, and the honest answer with nothing
+    installed is a sink that discards and says so.
+    """
+    sink = _INSTALLED_SINK["sink"]
+    return sink if sink is not None else NullEventSink()
+
+
+def install_event_sink(sink: MultimodalEventSink | None) -> None:
+    """Install the delivery path. Passing None restores the dropping default."""
+    _INSTALLED_SINK["sink"] = sink
+    logger.info(
+        "Multimodal event sink installed: %s",
+        type(sink).__name__ if sink is not None else "NullEventSink (default)",
+    )
