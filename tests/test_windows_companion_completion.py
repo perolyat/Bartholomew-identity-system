@@ -837,3 +837,43 @@ async def test_a_successful_action_does_not_become_accepted_learning(action_ctx)
     )
     assert "learning_accept" not in allowlist
     assert learning_policy.default_policy().execution_mode == "shadow"
+
+
+def test_only_the_double_gated_test_resolver_arms_anything_automatically():
+    """The one code path that arms without a person, and what confines it.
+
+    Package B's test resolver exists so the whole action path is provable
+    against a real server process, and the arming window is now part of that
+    path -- so a deployment that has said twice that it is a test also gets its
+    test device armed. That is the only automatic arming there is.
+
+    Both of its gates are required, neither exists in any deployed
+    configuration, and the health surface names it separately from an
+    operator's own arming so a running service can never be dispatching on a
+    channel nobody deliberately opened without saying so. This test is what
+    stops that path from quietly widening.
+    """
+    import inspect
+
+    from bartholomew_api_bridge_v0_1.services.api import app as app_module
+    from bartholomew_api_bridge_v0_1.services.api import device_action_auth
+
+    source = inspect.getsource(app_module)
+    # Arming at startup happens under exactly one condition.
+    assert source.count("_arming.arm(") == 1
+    assert "if device_action_auth.resolver_is_test_only():" in source
+    # And the test resolver itself still needs both of its own gates.
+    assert device_action_auth.ALLOW_TEST_RESOLVER_ENV
+    assert device_action_auth.TEST_RESOLVER_TOKEN_ENV
+    # The health surface distinguishes it from a person's arming.
+    assert '"armed_by_test_resolver"' in source
+
+
+def test_no_deployed_configuration_arms_itself(monkeypatch):
+    """With the test resolver's gates unset, nothing is armed at startup."""
+    from bartholomew_api_bridge_v0_1.services.api import device_action_auth
+
+    monkeypatch.delenv(device_action_auth.ALLOW_TEST_RESOLVER_ENV, raising=False)
+    monkeypatch.delenv(device_action_auth.TEST_RESOLVER_TOKEN_ENV, raising=False)
+    assert device_action_auth.maybe_install_test_resolver_from_env() is False
+    assert device_action_auth.resolver_is_test_only() is False
