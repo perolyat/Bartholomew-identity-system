@@ -429,7 +429,6 @@ async def _decorated_entry(kernel, kind: str, key: str) -> dict[str, Any] | None
         offset += len(batch)
 
 
-
 def _sharing_projection(*, eligible: bool, source_kind: str | None) -> dict[str, Any]:
     """The sharing projection, from Session E's real state where it can be read.
 

@@ -77,7 +77,6 @@ GUARDED_OPTIONAL_IMPORTS = {
     # works without it, and nothing server-side needs it at all.
     # See docs/B_GOVERNED_WINDOWS_ACTUATION.md §6.
     "comtypes",
-
     # Package C's three optional multimodal backends. Each is imported inside a
     # try/except in a `default_*()` factory that returns a Null adapter with the
     # reason when the package is absent, so a machine without them reports the

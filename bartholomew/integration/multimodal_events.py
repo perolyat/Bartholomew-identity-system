@@ -195,12 +195,16 @@ def _envelope_provenance(payload: Any) -> dict[str, Any]:
         "causation_id": payload.get("causation_id"),
         "privacy_class": payload.get("privacy_class"),
         "retention_class": payload.get("retention_class"),
-        "session_id": (payload.get("payload") or {}).get("session_id")
-        if isinstance(payload.get("payload"), dict)
-        else None,
-        "modality": (payload.get("payload") or {}).get("modality")
-        if isinstance(payload.get("payload"), dict)
-        else None,
+        "session_id": (
+            (payload.get("payload") or {}).get("session_id")
+            if isinstance(payload.get("payload"), dict)
+            else None
+        ),
+        "modality": (
+            (payload.get("payload") or {}).get("modality")
+            if isinstance(payload.get("payload"), dict)
+            else None
+        ),
         "device_id": source.get("device_id") if isinstance(source, dict) else None,
         "verification": source.get("verification") if isinstance(source, dict) else None,
     }

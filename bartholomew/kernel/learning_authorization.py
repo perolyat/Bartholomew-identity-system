@@ -169,7 +169,6 @@ def fingerprint_for(lesson: Any) -> str:
     if extra:
         material["extra"] = extra
 
-
     extensions = _material_extensions(lesson)
     if extensions:
         material["control_centre_material"] = extensions

@@ -115,7 +115,6 @@ _USER_CAPABILITIES = frozenset(
         Capability.ACTION_APPROVE,
         Capability.ACTION_READ,
         Capability.DEVICE_ACTION_CHANNEL,
-
         Capability.LEARNING_READ,
         Capability.LEARNING_REVIEW,
         # A person holds this over their own Bartholomew: reviewing what it

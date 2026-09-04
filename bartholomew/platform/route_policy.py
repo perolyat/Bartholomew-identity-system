@@ -221,7 +221,6 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/actions/{action_id}/cancel"): Capability.ACTION_REQUEST,
     ("POST", "/api/device-actions/lease"): Capability.DEVICE_ACTION_CHANNEL,
     ("POST", "/api/device-actions/{action_id}/result"): Capability.DEVICE_ACTION_CHANNEL,
-
     # --- multimodal presence (Package C) -------------------------------------
     # Reads and stops only; there is no start route to classify, deliberately
     # (see bartholomew_api_bridge_v0_1/.../routes/multimodal.py).
