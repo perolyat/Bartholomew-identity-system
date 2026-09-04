@@ -3552,6 +3552,56 @@ async def _record_inbound_reflection(
     return await record_action_reflection(mem, reflection)
 
 
+class EventBacklogFullError(RuntimeError):
+    """Capture is refused because the event backbone's backlog is at its limit.
+
+    Package A. Retryable and explicitly not a failure of the sender: nothing
+    was written, and re-delivering once the backlog drains is the correct
+    response. Distinct from `ParkingBrakeEngagedError` so an operator reading
+    a 503 can tell "Bartholomew is halted" from "Bartholomew is behind".
+    """
+
+    def __init__(self, message: str, *, backlog: int, limit: int):
+        super().__init__(message)
+        self.backlog = backlog
+        self.limit = limit
+
+
+async def _refuse_if_event_backlog_full(
+    db_path: str,
+    runtime_cfg: dict[str, Any] | None,
+) -> None:
+    """Refuse capture when the processing backlog is at its configured limit.
+
+    Deliberately *not* fail-closed on an unreadable backlog. A brake is a
+    safety gate and an unreadable one must refuse; this is a capacity gate,
+    and refusing every event because a count could not be taken would convert
+    a reporting problem into an outage. The failure is logged and capture
+    proceeds -- the honest posture for a limit whose purpose is to protect
+    the disk, not the user.
+    """
+    from bartholomew.kernel.event_processing.config import resolve_settings
+    from bartholomew.kernel.event_processing.store import pending_count
+
+    settings = resolve_settings(runtime_cfg)
+    try:
+        backlog = await run_off_loop(pending_count, db_path)
+    except Exception:
+        logger.exception(
+            "Inbound capture: the event-processing backlog could not be read; "
+            "accepting this event rather than refusing on an unreadable count",
+        )
+        return
+    if backlog >= settings.backlog_max:
+        raise EventBacklogFullError(
+            f"The event-processing backlog is full ({backlog} of "
+            f"{settings.backlog_max} unprocessed events). Nothing was captured; "
+            "the sender should retry once processing has caught up.",
+            backlog=backlog,
+            limit=settings.backlog_max,
+        )
+
+
 async def run_inbound_through_runtime_contract(
     *,
     db_path: str,
@@ -3563,6 +3613,7 @@ async def run_inbound_through_runtime_contract(
     occurred_at: str | None = None,
     runtime_id: str | None = None,
     identity_context: IdentityContext | None = None,
+    runtime_cfg: dict[str, Any] | None = None,
 ) -> InboundRuntimeResult:
     """Trace one inbound event through the Runtime Contract seam.
 
@@ -3584,13 +3635,28 @@ async def run_inbound_through_runtime_contract(
          *engaged at all* rather than on a subsystem scope, matching the
          existing memory-mutation gate: capture mutates governed state and
          belongs to none of the existing subsystem scopes.
-      2. Identity Policy Decision (additive; skipped when no IdentityContext
+      2. Backpressure. Package A. If the event backbone's non-terminal
+         backlog is already at its limit, capture is refused -- retryably,
+         and before anything is written. A door that keeps accepting into a
+         queue nothing is draining fills the disk silently; refusing is the
+         honest alternative, and the sender's own retry re-delivers once the
+         backlog drains. Deliberately *after* the brake and *before* the
+         Identity gate: a halted system refuses for the halt's reason, not a
+         queue-depth one, and a policy denial should not be reachable by an
+         event that was never going to be accepted anyway.
+      3. Identity Policy Decision (additive; skipped when no IdentityContext
          is wired in, matching every other surface).
-      3. Capture -- reached only if both gates allowed.
+      4. Capture -- reached only if every gate allowed.
 
-    Raises `ParkingBrakeEngagedError` when the brake is engaged, so the caller
-    reports an honest retryable refusal, and `InboundPersistenceError` when
-    the write fails. Neither is a success and neither may be reported as one.
+    `runtime_cfg` is the loaded kernel config, passed by the API boundary so
+    the backlog limit honours `config/kernel.yaml`. Optional: with none, the
+    limit falls back to the environment and the built-in default, which is the
+    right behaviour for a caller that has no kernel.
+
+    Raises `ParkingBrakeEngagedError` when the brake is engaged,
+    `EventBacklogFullError` when the backbone cannot take more work, and
+    `InboundPersistenceError` when the write fails. None is a success and none
+    may be reported as one.
     """
     from bartholomew.kernel.inbound_store import (
         OUTCOME_CAPTURED,
@@ -3636,6 +3702,12 @@ async def run_inbound_through_runtime_contract(
             "retry once it is released.",
             scopes=state.scopes,
         )
+
+    # Governance gate 2: backpressure (Package A). Reads the backbone's
+    # durable backlog and refuses before anything is written. A missing
+    # processing table reads as an empty backlog, which is truthful: a
+    # database that has never processed an event has nothing queued.
+    await _refuse_if_event_backlog_full(db_path, runtime_cfg)
 
     # Schema before either write path. The Identity-policy branch below
     # records its refusal into the same table a capture uses, so preparing it

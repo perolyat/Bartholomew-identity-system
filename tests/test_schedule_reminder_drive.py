@@ -415,7 +415,15 @@ class TestDefaultOff:
         class _Off:
             cfg = {"proactive": {"schedule_reminders": False}}
 
-        assert set(resolve_registry(_Off())) == set(drives_module.REGISTRY)
+        # Every always-on drive is still registered. Asserted as a superset
+        # rather than an equality because `resolve_registry` also carries
+        # optional drives that default ON (Package A's
+        # `inbound_event_processing`), and this test is about schedule
+        # reminders not disturbing the always-on set -- not about that set
+        # being the whole registry.
+        resolved = set(resolve_registry(_Off()))
+        assert set(drives_module.REGISTRY) <= resolved
+        assert SCHEDULE_REMINDER_DRIVE not in resolved
 
     def test_no_cadence_is_scheduled_for_it_when_off(self):
         """Registration, not merely cadence: a drive that is off must never

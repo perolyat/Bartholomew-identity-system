@@ -37,7 +37,26 @@ from bartholomew.runtime.evidence import END_CLEAN, EvidenceStore, Incarnation
 
 #: Bumped when the *shape* of a report changes, so an old artifact is never
 #: silently read against new expectations.
-REPORT_SCHEMA_VERSION = 1
+#:
+#: 2 -- Package A adds `sources.event_processing` and the four summary counts
+#: that go with it. A version-1 artifact is still a valid report; it simply
+#: predates the backbone, and a reader must not treat its silence about
+#: processing as "nothing was processed".
+REPORT_SCHEMA_VERSION = 2
+
+
+#: The event backbone's states, named here rather than imported, so a frozen
+#: report keeps rendering every state a *past* build could have written even
+#: if a future build renames or adds one. An evidence document that silently
+#: stopped showing a state would be worse than one that shows it as zero.
+_PROCESSING_STATES = (
+    "captured",
+    "claimed",
+    "processed",
+    "irrelevant",
+    "refused",
+    "quarantined",
+)
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -271,6 +290,83 @@ def build_report(db_path: str, run_id: str, *, item_limit: int = 200) -> dict[st
                 "The inbound_events table does not exist in this database.",
             )
 
+        # What became of the captured events (Package A). Attributed by
+        # identity, like inbound capture and for the same reason: the rows
+        # carry the tenant `runtime_id` capture recorded, and a time-window
+        # attribution would be weaker evidence about the one thing this
+        # section exists to show. Reported as a disposition tally rather than
+        # row-by-row -- a reviewer needs to know that every captured event
+        # reached an answer, and which answers, not to re-read third-party
+        # content that `inbound_events` already accounts for.
+        if _table_exists(conn, "event_processing"):
+            states = {
+                row[0]: int(row[1])
+                for row in conn.execute(
+                    "SELECT state, COUNT(*) FROM event_processing GROUP BY state",
+                ).fetchall()
+            }
+            oldest_pending = conn.execute(
+                "SELECT received_at FROM event_processing "
+                "WHERE state IN ('captured', 'claimed') "
+                "ORDER BY received_ts ASC, id ASC LIMIT 1",
+            ).fetchone()
+            last_processed = conn.execute(
+                "SELECT settled_at FROM event_processing WHERE state = 'processed' "
+                "ORDER BY settled_at DESC LIMIT 1",
+            ).fetchone()
+            retries = conn.execute(
+                "SELECT COALESCE(SUM(CASE WHEN attempts > 1 THEN attempts - 1 ELSE 0 END), 0) "
+                "FROM event_processing",
+            ).fetchone()
+            quarantined_rows = conn.execute(
+                "SELECT source_id, event_id, event_type, attempts, disposition_reason, "
+                "last_error, settled_at FROM event_processing WHERE state = 'quarantined' "
+                "ORDER BY settled_at ASC, id ASC LIMIT ?",
+                (item_limit,),
+            ).fetchall()
+            total_events = conn.execute("SELECT COUNT(*) FROM event_processing").fetchone()[0]
+            event_processing = {
+                "available": True,
+                "table": "event_processing",
+                "count": int(total_events),
+                # `items` is the quarantined events specifically -- the ones a
+                # reviewer has to look at -- not a sample of every processed
+                # event, which `inbound_events` already accounts for. So
+                # `truncated` describes that list, and the attribution line
+                # says which list it is.
+                "truncated": states.get("quarantined", 0) > len(quarantined_rows),
+                "attribution": (
+                    "tenant runtime_id recorded at capture; no time-window inference. "
+                    "`items` lists the quarantined events, not every processed one."
+                ),
+                "states": {name: states.get(name, 0) for name in sorted(_PROCESSING_STATES)},
+                "backlog": states.get("captured", 0) + states.get("claimed", 0),
+                "oldest_unprocessed_at": oldest_pending[0] if oldest_pending else None,
+                "last_successful_processing_at": last_processed[0] if last_processed else None,
+                "retry_attempts": int(retries[0]) if retries else 0,
+                "quarantined": states.get("quarantined", 0),
+                "quarantined_truncated": states.get("quarantined", 0) > len(quarantined_rows),
+                "items": [
+                    {
+                        "source_id": r[0],
+                        "event_id": r[1],
+                        "event_type": r[2],
+                        "attempts": r[3],
+                        "reason": r[4],
+                        "last_error": r[5],
+                        "quarantined_at": r[6],
+                    }
+                    for r in quarantined_rows
+                ],
+            }
+        else:
+            event_processing = _unavailable(
+                "event_processing",
+                "The event_processing table does not exist in this database, so "
+                "nothing can be said about what became of captured events -- "
+                "which is not the same as nothing having been processed.",
+            )
+
         if _table_exists(conn, "brake_runtime"):
             row = conn.execute(
                 "SELECT runtime_id, started_at, clean, write_fence_open FROM brake_runtime",
@@ -357,6 +453,7 @@ def build_report(db_path: str, run_id: str, *, item_limit: int = 200) -> dict[st
             "governance_audit": governance,
             "governed_skill_actions": skill_actions,
             "inbound_events": inbound,
+            "event_processing": event_processing,
             "startup_incidents": incidents,
             "final_runtime_marker": final_marker,
         },
@@ -370,6 +467,7 @@ def build_report(db_path: str, run_id: str, *, item_limit: int = 200) -> dict[st
             skill_actions=skill_actions,
             inbound=inbound,
             incidents=incidents,
+            event_processing=event_processing,
         ),
     }
     return record
@@ -386,6 +484,7 @@ def _summarise(
     skill_actions: dict[str, Any],
     inbound: dict[str, Any],
     incidents: dict[str, Any],
+    event_processing: dict[str, Any],
 ) -> dict[str, Any]:
     """The paragraph a reviewer reads first. Never more confident than the data.
 
@@ -402,6 +501,7 @@ def _summarise(
             "governance_audit": governance,
             "governed_skill_actions": skill_actions,
             "inbound_events": inbound,
+            "event_processing": event_processing,
             "startup_incidents": incidents,
         }.items()
         if not src["available"]
@@ -448,6 +548,14 @@ def _summarise(
         "governance_decision_count": governance.get("count"),
         "governed_skill_action_count": skill_actions.get("count"),
         "inbound_event_count": inbound.get("count"),
+        # Package A. Four numbers rather than one, because they answer four
+        # different questions and no one of them implies the others: how much
+        # was accounted for, how much is still waiting, how much was given up
+        # on, and how much work was redone.
+        "event_processing_count": event_processing.get("count"),
+        "event_processing_backlog": event_processing.get("backlog"),
+        "event_processing_quarantined": event_processing.get("quarantined"),
+        "event_processing_retry_attempts": event_processing.get("retry_attempts"),
         "startup_incident_count": incidents.get("count"),
         "complete": complete,
         "verdict": verdict,

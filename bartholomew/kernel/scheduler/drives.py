@@ -985,6 +985,91 @@ async def drive_objective_continuity_check(ctx: Any) -> Nudge | None:
     return None
 
 
+# =============================================================================
+# Package A: the canonical event backbone's one drive.
+# =============================================================================
+#
+# Everything about processing captured inbound events lives in
+# bartholomew.kernel.event_processing. This is the whole of its connection to
+# the scheduler: one registered drive that runs one bounded pass. There is no
+# second loop, no worker process, no broker and no thread -- the autonomy loop
+# that already exists is the only thing that runs it.
+
+#: The drive's task_id. Also its `tool_use.allowlist` entry in Identity.yaml:
+#: this drive is deliberately NOT in `_SELF_MAINTENANCE_DRIVES`, because
+#: processing third-party events into a user's objectives is specific user
+#: content, not kernel housekeeping -- the same reasoning
+#: `drive_awaiting_response_check` records for itself.
+INBOUND_EVENT_PROCESSING_DRIVE = "inbound_event_processing"
+
+
+async def drive_inbound_event_processing(ctx: Any) -> Nudge | None:
+    """Run one governed pass of the event-processing backbone.
+
+    Thin on purpose. Every decision -- whether a halt is in force, which
+    events to claim, what each one means, whether the write is permitted,
+    what to record -- belongs to `event_processing.processor.process_batch()`
+    and the authorities it consults. This function exists to be the thing the
+    scheduler can call, and to say afterwards what happened.
+
+    **Emits no nudge, ever.** Processing an inbound event is not a reason to
+    interrupt the user: the evidence lands in the objective's own history,
+    where it is read when the objective is next surfaced by the drive whose
+    job that is. A backbone that queued a notification per event would turn
+    every verified webhook into a demand for attention, which is precisely
+    the shape `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md` requires an explicit
+    consent flag for.
+
+    Failures are visible without one: a genuine fault raises, so the tick is
+    recorded as `success=0` against this task_id in `ticks`, and the backlog,
+    retry and quarantine counters are on the health surface either way.
+    """
+    from bartholomew.kernel.event_processing.processor import process_batch
+
+    outcome = await process_batch(ctx)
+
+    if outcome.deferred and not outcome.claimed:
+        # Nothing was claimed at all: the pass declined before touching the
+        # queue. Deliberately conditioned on `claimed` rather than on
+        # `deferred` alone, because a brake that lands *mid*-batch also sets
+        # `deferred` -- and reporting "no events were changed" for a pass that
+        # had already processed four of them would be untrue.
+        log.info(
+            "[Scheduler] inbound_event_processing: no events were claimed or changed (%s)",
+            outcome.deferred,
+        )
+        return None
+
+    if outcome.errors:
+        # Not swallowed and not converted into a nudge. Raising marks the tick
+        # a failure, which is the honest record of a pass that could not do
+        # what it claimed -- and the per-event state (attempts, quarantine)
+        # is already durable, so nothing is retried by raising here.
+        log.error(
+            "[Scheduler] inbound_event_processing: %s event(s) failed this pass: %s",
+            len(outcome.errors),
+            "; ".join(outcome.errors[:5]),
+        )
+        raise RuntimeError(
+            f"event processing had {len(outcome.errors)} failing event(s): "
+            f"{'; '.join(outcome.errors[:5])}",
+        )
+
+    if outcome.claimed or outcome.swept:
+        log.info(
+            "[Scheduler] inbound_event_processing: swept=%s claimed=%s processed=%s "
+            "irrelevant=%s refused=%s quarantined=%s released=%s",
+            outcome.swept,
+            outcome.claimed,
+            outcome.processed,
+            outcome.irrelevant,
+            outcome.refused,
+            outcome.quarantined,
+            outcome.released,
+        )
+    return None
+
+
 # Drive registry with default cadences
 REGISTRY: dict[str, dict[str, Any]] = {
     "self_check": {
@@ -1031,6 +1116,16 @@ OPTIONAL_REGISTRY: dict[str, dict[str, Any]] = {
         # raise.
         "cadence": "every:10800",  # Every 3 hours
     },
+    INBOUND_EVENT_PROCESSING_DRIVE: {
+        "fn": drive_inbound_event_processing,
+        # Tight, because this one is latency-bearing in a way the others are
+        # not: an event that arrived is already late by the time it is
+        # captured, and the whole point of the backbone is that it does not
+        # sit unlooked-at. Cheap when idle -- two indexed reads against an
+        # empty queue -- and bounded when busy by `event_processing`'s own
+        # batch limit and deadline.
+        "cadence": "every:15",
+    },
 }
 
 
@@ -1063,6 +1158,36 @@ def proactive_objective_continuity_enabled(ctx: Any) -> bool:
     return bool(proactive.get("objective_continuity", False))
 
 
+def inbound_event_processing_enabled(ctx: Any) -> bool:
+    """Whether this context runs the event-processing backbone.
+
+    Default **ON**, unlike the two proactive drives above, and the difference
+    is not an oversight. Those two decide whether Bartholomew may contact the
+    user unprompted, which is a consent question and therefore has exactly one
+    deliberate authority. This one decides whether Bartholomew looks at events
+    a verified source already delivered to it: it sends nothing, contacts
+    nobody, and its only durable effect is a `fact` row on an objective the
+    user opened -- through the same governed seam, behind the same Parking
+    Brake and the same Identity policy, that every other objective write uses.
+    Capturing events and never reading them is the surprising behaviour, not
+    the safe one.
+
+    Two switches, and they are not symmetrical:
+
+    * `config/kernel.yaml`'s `event_processing.enabled` is the only thing that
+      can turn it **on**.
+    * `BARTH_EVENT_PROCESSING_ENABLED=0` can only turn it **off**.
+
+    The environment variable is a kill switch, not a second authority: an
+    operator dealing with an incident should not have to edit a file to stop
+    processing, and being able to stop something is never the risk that
+    needing one deliberate act to start it is guarding against.
+    """
+    from bartholomew.kernel.event_processing.config import resolve_settings
+
+    return resolve_settings(getattr(ctx, "cfg", None)).enabled
+
+
 def resolve_registry(ctx: Any) -> dict[str, dict[str, Any]]:
     """
     The drives this context actually runs: the always-on REGISTRY, plus any
@@ -1078,4 +1203,6 @@ def resolve_registry(ctx: Any) -> dict[str, dict[str, Any]]:
         resolved[SCHEDULE_REMINDER_DRIVE] = OPTIONAL_REGISTRY[SCHEDULE_REMINDER_DRIVE]
     if proactive_objective_continuity_enabled(ctx):
         resolved[OBJECTIVE_CONTINUITY_DRIVE] = OPTIONAL_REGISTRY[OBJECTIVE_CONTINUITY_DRIVE]
+    if inbound_event_processing_enabled(ctx):
+        resolved[INBOUND_EVENT_PROCESSING_DRIVE] = OPTIONAL_REGISTRY[INBOUND_EVENT_PROCESSING_DRIVE]
     return resolved

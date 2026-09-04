@@ -795,10 +795,10 @@ async def _model_health() -> dict[str, Any]:
     return info
 
 
-def _component_health() -> dict[str, Any]:
+def _component_health(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Whether each always-on component is actually alive (Session D).
 
-    Four components an operator needs distinguished, because "the process is
+    Five components an operator needs distinguished, because "the process is
     up" answers none of them:
 
     * **service**  -- this HTTP process. If you are reading this, it is up.
@@ -810,6 +810,10 @@ def _component_health() -> dict[str, Any]:
       (no resolver) is a normal, reportable state, not a fault; a test-only
       resolver is flagged loudly so a running service can never be admitting
       events on test credentials unnoticed.
+    * **event_processing** -- what became of the events that came through that
+      door (Package A). Passed in through `extra` rather than computed here,
+      because it is a database read and this function runs on the event loop;
+      the caller takes it off-loop first.
 
     Returns the components plus a private `_overall` key: "ok" only when
     nothing is failed, "degraded" otherwise. Never raises -- a health endpoint
@@ -861,9 +865,63 @@ def _component_health() -> dict[str, Any]:
     except Exception:
         components["inbound"] = {"status": "unknown"}
 
+    if extra:
+        components.update(extra)
+
     failed = any(isinstance(v, dict) and v.get("status") == "failed" for v in components.values())
     components["_overall"] = "degraded" if failed else "ok"
     return components
+
+
+#: How long `/api/health` will wait for the event backbone's state before
+#: reporting that it could not tell. Generous for two indexed aggregate reads,
+#: short enough that a saturated worker thread cannot stall the health answer.
+EVENT_PROCESSING_HEALTH_TIMEOUT_S = 3.0
+
+
+async def _event_processing_health() -> dict[str, Any]:
+    """The event backbone's component, read off the event loop (Package A).
+
+    Degrades to "unknown" rather than raising, and reports a database that has
+    never processed anything as unavailable rather than as zero -- the same
+    rule `evidence_report` holds to, because "nothing was processed" and "we
+    could not tell" are opposite findings.
+
+    Bounded, because it runs on the daemon's shared worker thread and this
+    endpoint is what an operator (and `wait_for_health`) polls to find out
+    whether the service is alive. A health answer that hangs behind a slow
+    kernel operation is worse than one that says it could not tell in time,
+    so the wait is capped and a timeout is reported as exactly that. The
+    abandoned read is a read: nothing is left half-written by giving up on it.
+    """
+    if _kernel is None:
+        return {"status": "unknown", "reason": "no runtime is loaded in this process"}
+    try:
+        from bartholomew.kernel.blocking_executor import run_off_loop
+        from bartholomew.kernel.event_processing.health import health_component
+
+        return await asyncio.wait_for(
+            run_off_loop(
+                health_component,
+                _kernel.mem.db_path,
+                getattr(_kernel, "cfg", None),
+                executor=getattr(_kernel, "blocking_executor", None),
+            ),
+            timeout=EVENT_PROCESSING_HEALTH_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        return {
+            "status": "unknown",
+            "reason": (
+                "Processing state could not be read within "
+                f"{EVENT_PROCESSING_HEALTH_TIMEOUT_S}s."
+            ),
+        }
+    except Exception as e:  # pragma: no cover - a health read must never 500
+        import logging
+
+        logging.getLogger(__name__).exception("Event-processing health could not be read")
+        return {"status": "unknown", "reason": f"{type(e).__name__}: {e}"}
 
 
 def _retrieval_health() -> dict[str, Any]:
@@ -933,7 +991,7 @@ async def health():
         kernel_info = {"kernel_online": False}
 
     model_info = await _model_health()
-    components = _component_health()
+    components = _component_health({"event_processing": await _event_processing_health()})
     retrieval_info = _retrieval_health()
 
     return {

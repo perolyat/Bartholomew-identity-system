@@ -14,7 +14,7 @@ this route never conflates them:
 | 200  | A duplicate delivery of an event already captured; the existing row is reported and no second logical event exists. |
 | 401  | Not verified. Nothing was read as authoritative and nothing was written. |
 | 422  | The envelope is malformed. Nothing was written. |
-| 503  | The Parking Brake is engaged, or the runtime/persistence is unavailable. Nothing was written; the sender should retry. |
+| 503  | The Parking Brake is engaged, the event-processing backlog is full, or the runtime/persistence is unavailable. Nothing was written; the sender should retry. |
 
 There is no code here that means "processed". Acknowledgement never outruns
 what actually happened.
@@ -197,7 +197,10 @@ async def receive_event(request: Request) -> Any:
     db_path = getattr(getattr(kernel, "mem", None), "db_path", None) or resolve_db_path()
 
     from bartholomew.kernel.inbound_store import InboundPersistenceError
-    from bartholomew.kernel.runtime_contract import run_inbound_through_runtime_contract
+    from bartholomew.kernel.runtime_contract import (
+        EventBacklogFullError,
+        run_inbound_through_runtime_contract,
+    )
 
     try:
         result = await run_inbound_through_runtime_contract(
@@ -214,11 +217,23 @@ async def receive_event(request: Request) -> Any:
             # `inbound_auth.resolved_runtime_id`.
             runtime_id=inbound_auth.resolved_runtime_id(request),
             identity_context=getattr(kernel, "identity_context", None),
+            # The loaded kernel config, so the event backbone's backlog limit
+            # honours `config/kernel.yaml` rather than only the environment.
+            # Read here rather than in the seam because the kernel is what
+            # owns the config, and the seam takes a db_path, not a daemon.
+            runtime_cfg=getattr(kernel, "cfg", None),
         )
     except ParkingBrakeEngagedError as e:
         # "Inspect, but do not mutate." Nothing was written -- no event row,
         # no reflection -- and the refusal is retryable, so the sender's own
         # retry re-delivers once the brake is released.
+        raise HTTPException(503, str(e)) from e
+    except EventBacklogFullError as e:
+        # Backpressure, not a fault and not a halt. Nothing was written, the
+        # refusal is retryable, and the sender re-delivers once processing has
+        # caught up. Reported with the numbers so an operator reading the
+        # sender's logs can tell this from a brake refusal without guessing.
+        logger.warning("Inbound capture refused: %s", e)
         raise HTTPException(503, str(e)) from e
     except InboundPersistenceError as e:
         # Never a fabricated success: the event was not stored, so it is not

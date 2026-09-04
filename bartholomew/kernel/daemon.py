@@ -494,6 +494,26 @@ class KernelDaemon:
             await self.scheduler_store.ensure_schema()
             resources_started.append("scheduler_schema")
 
+            # Package A: the event backbone's durable processing state, on the
+            # same fail-closed footing and immediately after the scheduler's
+            # own schema. Placed here, after the integrity check rather than
+            # alongside the store constructions above, deliberately: an
+            # unclean prior shutdown is checked and repaired before this
+            # creates anything, so a possibly-damaged database is not written
+            # to first. The health surface, the frozen evidence report and the
+            # inbound backpressure check all read this table and any of them
+            # can be reached the instant the API starts serving, so it is a
+            # precondition of a started daemon rather than something the first
+            # scheduler tick gets round to.
+            from bartholomew.kernel.event_processing import store as event_processing_store
+
+            await run_off_loop(
+                event_processing_store.ensure_schema,
+                self.mem.db_path,
+                executor=self.blocking_executor,
+            )
+            resources_started.append("event_processing_schema")
+
             # Stage 3: Initialize experience kernel state
             await self._init_experience_kernel()
             resources_started.append("experience_kernel")
