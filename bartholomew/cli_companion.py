@@ -41,6 +41,29 @@ def _emit(payload: Any) -> None:
     typer.echo(json.dumps(payload, indent=2, default=str))
 
 
+def is_safe_base_url(base_url: str) -> bool:
+    """https anywhere, or plaintext http only to a genuinely loopback host.
+
+    Parsed, not prefix-matched: `http://localhost.example.net` starts with
+    `http://localhost` and is not loopback.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(str(base_url or ""))
+    if parts.scheme == "https":
+        return True
+    if parts.scheme != "http":
+        return False
+    host = (parts.hostname or "").strip("[]").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _credential(device_id: str | None) -> tuple[str, str]:
     """The stored credential, or exit with an instruction rather than a stack trace."""
     from bartholomew.platform.companion_credential import load
@@ -79,7 +102,7 @@ def _call(
         if body is not None and "device_id" in body and not body["device_id"]:
             body["device_id"] = resolved_device
 
-    if not base_url.startswith(("http://127.0.0.1", "http://localhost", "https://")):
+    if not is_safe_base_url(base_url):
         # The credential travels in this header. Sending it over plaintext HTTP
         # to anything but loopback would put a long-lived device secret on the
         # wire, so it is refused rather than warned about.

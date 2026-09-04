@@ -530,7 +530,44 @@ person's.
 `companion observe start` now waits for the answer (it says so, and names the
 commands to run in another window) rather than timing out at 30 seconds.
 
-### 10.3 What the retest must show
+### 10.3 Hardening from adversarial review, before the retest
+
+Five independent review lenses were run over the two repairs; the findings
+that survived verification were fixed and are held by tests:
+
+* **A brake engaged while the person is deciding.** Consent can take
+  minutes; the brake read at gate 2 was stale by the time the answer came.
+  The multimodal seam now re-reads the brake at the moment of action, after
+  consent -- the same discipline an approved Windows action gets at lease.
+* **Stop must never be unreachable.** A session parked in
+  `awaiting_approval` had no legal edge to `stopped`, so `observe stop`
+  during the wait would have raised. It now ends the session `refused`,
+  abandons the open ask so the waiting start returns at once, and the start
+  path refuses to touch a device for a session that was stopped meanwhile.
+* **The per-tenant cap held only for sequential starts.** The count and the
+  registration are now one critical section, before anything is awaited.
+* **Two concurrent answers could disagree with the record.** Only the answer
+  whose database update wins may resolve the waiting start; the other is
+  told it was decided concurrently.
+* **Unbound single-account servers could never match an ask.** The routes
+  filtered by the `local` sentinel while asks carry the enrolment account id.
+  With no principal and no runtime binding there is one tenant and no
+  filter; with either, the filter is strict.
+* Smaller: database marks on the cancel and error paths now run off the event
+  loop; the CLI's plaintext guard is a real loopback check rather than a
+  string prefix (`http://localhost.example.net` no longer passes); and the
+  channel's docstring no longer claims a disconnecting companion abandons
+  its ask -- on this stack it does not, and the residual (one human-approved
+  start the requester is no longer attached to, bounded by its own expiry
+  and stoppable) is stated instead.
+
+Recorded for follow-up, not changed here: pending asks are not pre-denied on
+shutdown, so a restart with an open ask burns the graceful-shutdown budget
+before denying; and `POST /api/multimodal/sessions` inherits the
+`/api/multimodal` admission exemption whose justification ("there is no start
+endpoint") this package changed.
+
+### 10.4 What the retest must show
 
 Recorded in §11 once run: `brake on` with no `--db` forcing `armed: false`
 against the running server; `observe start` producing a pending ask, the

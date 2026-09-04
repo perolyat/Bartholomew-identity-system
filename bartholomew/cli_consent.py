@@ -21,7 +21,7 @@ from typing import Any
 import requests
 import typer
 
-from bartholomew.cli_companion import DEFAULT_BASE_URL
+from bartholomew.cli_companion import DEFAULT_BASE_URL, is_safe_base_url
 from bartholomew.kernel.db_paths import resolve_kernel_db_path
 from bartholomew.multimodal import device_consent
 
@@ -42,7 +42,7 @@ def _db(explicit: str | None) -> str:
 
 
 def _loopback_only(base_url: str) -> None:
-    if not base_url.startswith(("http://127.0.0.1", "http://localhost", "https://")):
+    if not is_safe_base_url(base_url):
         typer.echo(
             f"Refusing to send a consent nonce to {base_url!r} over plaintext HTTP. "
             "Use loopback, or a URL with https://.",

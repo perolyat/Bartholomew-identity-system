@@ -24,8 +24,13 @@ How one ask works
    attempt asks again. A grant is a single start attempt, never continuing
    access.
 4. An unanswered ask expires after `DEFAULT_TTL_SECONDS` and denies. A
-   cancelled request (client gone) abandons its ask, and a late answer to an
-   expired or abandoned ask is refused rather than resurrecting the start.
+   session stopped while its ask is open abandons the ask
+   (`abandon_session`), and a late answer to an expired or abandoned ask is
+   refused rather than resurrecting the start. A companion that merely
+   disconnects does *not* abandon its ask on this stack -- the HTTP layer
+   does not cancel the handler -- so an approved ask can start a session
+   the requester is no longer attached to; it is still one human-approved
+   start, bounded by its own expiry, and the person can stop it.
 
 Why the companion cannot answer its own ask
 -------------------------------------------
@@ -115,6 +120,9 @@ class _Pending:
     tenant_id: str
     future: asyncio.Future
     loop: asyncio.AbstractEventLoop
+    session_id: str | None = None
+    #: Set when the session was stopped while its ask was open.
+    abandoned: bool = False
 
 
 #: In a holder rather than bare module globals, for the reason
@@ -221,20 +229,30 @@ async def ask(request: DeviceConsentRequest) -> bool:
         logger.warning("Device consent asked with no tenant; denying")
         return False
 
+    request_id = f"dcr-{uuid.uuid4().hex}"
+    nonce = secrets.token_hex(32)
+    created = _now()
+    expires = created + timedelta(seconds=ttl_seconds())
+
+    # Reserve the slot and register the ask in ONE critical section, before
+    # anything is awaited: a count-then-register that spanned the database
+    # insert let every concurrent start observe zero open asks and walk
+    # through the cap together.
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future = loop.create_future()
+    pending = _Pending(request_id, tenant, future, loop, session_id=request.session_id)
     with _LOCK:
         open_for_tenant = sum(1 for p in _PENDING.values() if p.tenant_id == tenant)
-    if open_for_tenant >= MAX_PENDING_PER_TENANT:
+        over_cap = open_for_tenant >= MAX_PENDING_PER_TENANT
+        if not over_cap:
+            _PENDING[request_id] = pending
+    if over_cap:
         logger.warning(
             "Tenant %s already has %d device-consent asks open; denying a further start",
             tenant,
             open_for_tenant,
         )
         return False
-
-    request_id = f"dcr-{uuid.uuid4().hex}"
-    nonce = secrets.token_hex(32)
-    created = _now()
-    expires = created + timedelta(seconds=ttl_seconds())
 
     try:
         await asyncio.to_thread(
@@ -248,13 +266,11 @@ async def ask(request: DeviceConsentRequest) -> bool:
             expires,
         )
     except Exception:
+        with _LOCK:
+            _PENDING.pop(request_id, None)
         logger.exception("Could not record a device-consent ask; denying")
         return False
 
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future = loop.create_future()
-    with _LOCK:
-        _PENDING[request_id] = _Pending(request_id, tenant, future, loop)
     logger.info(
         "Device consent requested: %s (device=%s modality=%s, expires %s)",
         request_id,
@@ -265,21 +281,52 @@ async def ask(request: DeviceConsentRequest) -> bool:
 
     try:
         decision = await asyncio.wait_for(future, timeout=ttl_seconds())
+        if pending.abandoned:
+            # Stopped from the session surface while waiting: the answer is
+            # no, and the row says why.
+            await asyncio.to_thread(_mark_if_undecided, db_path, request_id, DECISION_ABANDONED)
+            return False
         return bool(decision)
     except asyncio.TimeoutError:
         await asyncio.to_thread(_mark_if_undecided, db_path, request_id, DECISION_EXPIRED)
         logger.info("Device consent %s expired unanswered; denied", request_id)
         return False
     except asyncio.CancelledError:
-        _mark_if_undecided(db_path, request_id, DECISION_ABANDONED)
+        # Off the loop, fire-and-forget: a cancelled task must not busy-wait
+        # on a database lock in the loop thread.
+        loop.run_in_executor(None, _mark_if_undecided, db_path, request_id, DECISION_ABANDONED)
         raise
     except Exception:
         logger.exception("Device consent %s failed while waiting; denied", request_id)
-        _mark_if_undecided(db_path, request_id, DECISION_ABANDONED)
+        loop.run_in_executor(None, _mark_if_undecided, db_path, request_id, DECISION_ABANDONED)
         return False
     finally:
         with _LOCK:
             _PENDING.pop(request_id, None)
+
+
+def abandon_session(session_id: str, *, reason: str = "stopped before consent") -> bool:
+    """A session was stopped while its ask was pending: answer it no.
+
+    Safe from any thread. Returns whether an open ask was waiting for that
+    session. The waiting `ask()` marks the row abandoned on its own loop.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    with _LOCK:
+        matches = [p for p in _PENDING.values() if p.session_id == sid]
+        for p in matches:
+            p.abandoned = True
+    for p in matches:
+
+        def _refuse(fut: asyncio.Future = p.future) -> None:
+            if not fut.done():
+                fut.set_result(False)
+
+        p.loop.call_soon_threadsafe(_refuse)
+        logger.info("Device consent %s abandoned: %s", p.request_id, reason)
+    return bool(matches)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +395,14 @@ def answer(
         return AnswerOutcome("refused", rid, "The answer did not carry this request's nonce.")
 
     decision = DECISION_APPROVED if approve else DECISION_DENIED
-    _decide(db_path, rid, decision, decided_by=decided_by, note=note)
+    if not _decide(db_path, rid, decision, decided_by=decided_by, note=note):
+        # Two answers raced past the checks above; the row records the one
+        # that won, and only that one may resolve the waiting start.
+        return AnswerOutcome(
+            "already_decided",
+            rid,
+            "This request was decided concurrently by another answer; nothing changed.",
+        )
 
     with _LOCK:
         pending = _PENDING.get(rid)
@@ -509,15 +563,17 @@ def _decide(
     *,
     decided_by: str,
     note: str | None,
-) -> None:
+) -> bool:
+    """Record the decision. True only if this call was the one that decided."""
     conn = connect(db_path)
     try:
-        conn.execute(
+        cursor = conn.execute(
             f"UPDATE {TABLE} SET decision = ?, decided_at = ?, decided_by = ?, note = ? "
             "WHERE request_id = ? AND decision IS NULL",
             (decision, _iso(_now()), decided_by, note, request_id),
         )
         conn.commit()
+        return cursor.rowcount == 1
     finally:
         conn.close()
 
@@ -549,6 +605,7 @@ __all__ = [
     "MAX_PENDING_PER_TENANT",
     "AnswerOutcome",
     "DeviceConsentError",
+    "abandon_session",
     "answer",
     "ask",
     "configure",

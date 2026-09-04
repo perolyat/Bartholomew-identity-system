@@ -186,17 +186,28 @@ async def test_an_unanswered_ask_expires_and_denies(db_path):
     assert rows == [], "an expired ask must not remain listed as pending"
 
 
+_ASK_COUNTER = {"n": 0}
+
+
 async def _open_ask(db_path: str, **overrides: Any):
-    task = asyncio.create_task(device_consent.ask(_request(**overrides)))
-    for _ in range(100):
+    """Start one ask and return (task, its row). Selects the row by a unique
+    session id rather than "the newest", so a slow insert cannot hand back a
+    previous ask's row."""
+    _ASK_COUNTER["n"] += 1
+    session_id = overrides.pop("session_id", f"mms_test_{_ASK_COUNTER['n']}")
+    task = asyncio.create_task(device_consent.ask(_request(session_id=session_id, **overrides)))
+    row = None
+    for _ in range(250):
         await asyncio.sleep(0.02)
-        if device_consent.list_pending(db_path):
+        rows = [
+            r
+            for r in device_consent.list_pending(db_path, include_nonce=True)
+            if r["session_id"] == session_id
+        ]
+        if rows:
+            (row,) = rows
             break
-    (row,) = [
-        r
-        for r in device_consent.list_pending(db_path, include_nonce=True)
-        if r["tenant_id"] == overrides.get("tenant_id", TENANT)
-    ][-1:]
+    assert row is not None, "the ask never appeared"
     return task, row
 
 
@@ -402,7 +413,21 @@ def consent_client(db_path, monkeypatch):
     from bartholomew_api_bridge_v0_1.services.api.routes import device_consent as routes
 
     monkeypatch.setattr(routes, "resolve_db_path", lambda: db_path)
-    monkeypatch.setattr(routes, "resolved_tenant_id", lambda request: TENANT)
+    monkeypatch.setattr(routes, "_consent_tenant", lambda request: TENANT)
+    app = FastAPI()
+    app.include_router(routes.router)
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture
+def unbound_consent_client(db_path, monkeypatch):
+    """The single-account loopback deployment: no principal, no runtime
+    binding. The routes must still find the account's asks."""
+    from bartholomew_api_bridge_v0_1.services.api.routes import device_consent as routes
+
+    monkeypatch.setattr(routes, "resolve_db_path", lambda: db_path)
+    monkeypatch.delenv("BARTH_RUNTIME_USER_ID", raising=False)
     app = FastAPI()
     app.include_router(routes.router)
     with TestClient(app) as client:
@@ -587,3 +612,148 @@ async def test_a_brake_engaged_during_the_wait_denies_even_after_approval(db_pat
     assert answered.outcome == "approved", "the person did approve"
     assert result.governance_allowed is False
     assert result.outcome == "parking_brake_denied"
+
+
+# ===========================================================================
+# Review findings, held closed
+# ===========================================================================
+
+
+async def test_the_per_tenant_cap_holds_under_concurrent_starts(db_path):
+    """Check-then-register across an await let every concurrent start see
+    zero open asks. The reservation is now one critical section."""
+    device_consent.configure(db_path=db_path, ttl_seconds=30)
+    n = device_consent.MAX_PENDING_PER_TENANT + 5
+    tasks = [
+        asyncio.create_task(device_consent.ask(_request(session_id=f"mms_cap_{i}")))
+        for i in range(n)
+    ]
+    await asyncio.sleep(0.3)
+    open_asks = device_consent.list_pending(db_path, include_nonce=True)
+    assert len(open_asks) == device_consent.MAX_PENDING_PER_TENANT
+    denied_immediately = [t for t in tasks if t.done() and t.result() is False]
+    assert len(denied_immediately) == n - device_consent.MAX_PENDING_PER_TENANT
+    for row in open_asks:
+        device_consent.answer(db_path, row["request_id"], nonce=row["answer_nonce"], approve=False)
+    for t in tasks:
+        assert await asyncio.wait_for(t, 5) is False
+
+
+async def test_two_concurrent_answers_cannot_disagree_with_the_record(db_path):
+    """Exactly one answer decides; the other is told so and resolves nothing,
+    so the Future's value is always the recorded decision."""
+    device_consent.configure(db_path=db_path, ttl_seconds=30)
+    task, row = await _open_ask(db_path)
+
+    outcomes = await asyncio.gather(
+        asyncio.to_thread(
+            device_consent.answer,
+            db_path,
+            row["request_id"],
+            nonce=row["answer_nonce"],
+            approve=False,
+            decided_by="denier",
+        ),
+        asyncio.to_thread(
+            device_consent.answer,
+            db_path,
+            row["request_id"],
+            nonce=row["answer_nonce"],
+            approve=True,
+            decided_by="approver",
+        ),
+    )
+    decided = [o for o in outcomes if o.outcome in ("approved", "denied")]
+    losers = [o for o in outcomes if o.outcome == "already_decided"]
+    assert len(decided) == 1 and len(losers) == 1
+    started = await asyncio.wait_for(task, 5)
+    recorded = device_consent._load(db_path, row["request_id"])
+    assert recorded["decision"] == decided[0].outcome
+    assert started is (recorded["decision"] == "approved")
+
+
+async def test_stopping_a_session_while_its_ask_is_open_refuses_it_without_error(db_path, tmp_path):
+    """Stop must never be unreachable. A session parked in AWAITING_APPROVAL
+    can be stopped: the record ends REFUSED, the ask is abandoned so the
+    waiting start returns at once, and no device is touched."""
+    from bartholomew.multimodal.modality import CaptureScope, Modality, ScopeKind
+    from bartholomew.multimodal.runtime import SessionRequest, start_session
+    from bartholomew.multimodal.session import SessionState
+    from bartholomew.multimodal.store import SessionStore
+
+    device_consent.install(db_path=db_path, ttl_seconds=30)
+    store = SessionStore()
+    request = SessionRequest(
+        tenant_id=TENANT,
+        principal_id=TENANT,
+        device_id=DEVICE,
+        modality=Modality.SCREEN,
+        correlation_id="cor-stop",
+        scope=CaptureScope(kind=ScopeKind.DISPLAY, display_id="0"),
+    )
+
+    async def permissive_seam(modality, **kwargs):
+        # The device capability is Session E's question, not this test's.
+        kwargs["capability_supported"] = True
+        return await rc.run_multimodal_session_through_runtime_contract(modality, **kwargs)
+
+    async def stop_when_asked():
+        for _ in range(250):
+            await asyncio.sleep(0.02)
+            open_asks = device_consent.list_pending(db_path)
+            if open_asks:
+                session = store.get(open_asks[0]["session_id"])
+                assert session is not None
+                assert session.state is SessionState.AWAITING_APPROVAL
+                assert store.stop(session.session_id, reason="operator pressed stop") is True
+                return session
+        raise AssertionError("no ask appeared")
+
+    result, session = await asyncio.gather(
+        start_session(
+            request,
+            store=store,
+            db_path=str(tmp_path / "kernel.db"),
+            seam=permissive_seam,
+        ),
+        stop_when_asked(),
+    )
+    assert result.allowed is False
+    assert result.outcome == "stopped"
+    assert session.state is SessionState.REFUSED
+    assert device_consent.list_pending(db_path) == []
+    # And a late approval cannot resurrect it.
+    rows = device_consent.list_pending(db_path, include_nonce=True)
+    assert rows == []
+
+
+async def test_unbound_loopback_routes_still_find_the_accounts_asks(
+    unbound_consent_client, db_path,
+):
+    """With no principal and no runtime binding there is one tenant. The
+    routes must not filter by the `local` sentinel, which no ask carries."""
+    device_consent.configure(db_path=db_path, ttl_seconds=30)
+    task, row = await _open_ask(db_path)
+    listed = await asyncio.to_thread(unbound_consent_client.get, "/api/device-consent/pending")
+    assert listed.status_code == 200
+    assert [a["request_id"] for a in listed.json()["pending"]] == [row["request_id"]]
+    answered = await asyncio.to_thread(
+        unbound_consent_client.post,
+        f"/api/device-consent/{row['request_id']}/answer",
+        json={"nonce": row["answer_nonce"], "approve": True},
+    )
+    assert answered.status_code == 200, answered.text
+    assert await asyncio.wait_for(task, 5) is True
+
+
+def test_cli_url_guard_is_a_real_loopback_check():
+    from bartholomew.cli_companion import is_safe_base_url
+
+    assert is_safe_base_url("http://127.0.0.1:8000")
+    assert is_safe_base_url("http://localhost:8000")
+    assert is_safe_base_url("http://[::1]:8000")
+    assert is_safe_base_url("https://anything.example")
+    assert not is_safe_base_url("http://localhost.example.net:8000")
+    assert not is_safe_base_url("http://127.0.0.1.example.net:8000")
+    assert not is_safe_base_url("http://10.0.0.5:8000")
+    assert not is_safe_base_url("ftp://127.0.0.1")

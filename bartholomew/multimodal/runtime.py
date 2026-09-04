@@ -198,6 +198,20 @@ async def start_session(
         },
     )
 
+    if session.is_terminal:
+        # Stopped from the session surface while the person was being asked.
+        # The record already says so; nothing here may reopen it, and no
+        # device is touched whatever the seam concluded.
+        session.consent_decision = False
+        return SessionStartResult(
+            session=session,
+            allowed=False,
+            outcome="stopped",
+            reason=session.outcome_reason or "stopped before it started",
+            provenance_degraded=result.provenance_degraded,
+            provenance_error=result.provenance_error,
+        )
+
     session.governance_decision = bool(result.governance_allowed)
     session.consent_decision = result.outcome == "started" or None
     if result.outcome == "consent_denied":
