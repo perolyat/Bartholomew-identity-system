@@ -283,10 +283,15 @@ in `companion.env`.
 1. **Confirm the channel starts disarmed.**
    `bartholomew companion channel status` → `"armed": false`.
 
-2. **Start observation.** Open Notepad first, then:
-   `bartholomew companion observe start --modality screen --window-title Notepad`
-   Bartholomew asks you to confirm. **Answer it.** Nothing is observed until
-   you do.
+2. **Start observation.** Open Notepad first, then, in one window:
+   `bartholomew companion observe start --modality screen --display-id 0`
+   (a screen session must name exactly one capture scope; `--window-title`
+   alone is not one). The command waits. Bartholomew records an ask for you;
+   in **another** window:
+   `bartholomew consent pending` → shows the ask, its device and modality;
+   `bartholomew consent approve <request_id>` → answers it, once.
+   Nothing is observed until you do, and the ask expires unanswered after
+   180 seconds. The first window then reports the session as started.
 
 3. **Confirm a real observation arrived.**
    `bartholomew companion observe status` → the session is live and names the
@@ -343,8 +348,9 @@ in `companion.env`.
 
 ### Negative check worth doing while you are there
 
-Engage the brake mid-window (`bartholomew brake on --scope global --db <the
-path the server resolves -- see `BARTH_DB_PATH`, and Finding 4 in §9>`) and
+Engage the brake mid-window (`bartholomew brake on --scope global` -- since
+§10.1 this addresses the same database the server reads; the command prints
+which file it touched) and
 confirm `channel status` immediately reports `armed: false` with
 `brake_engaged: true`, and that an approved action is refused — with time still
 on the clock.
@@ -395,7 +401,7 @@ performed by the system.
 ### Findings
 
 **1 — Observation cannot be started in a headless server deployment.** *(Blocking
-for the observation half of this package.)* `set_consent_handler()` is called in
+for the observation half of this package. Repaired in §10.2.)* `set_consent_handler()` is called in
 exactly one non-test place in the repository: `chat.py`, the interactive
 terminal front-end. The API server never registers one, so the fail-closed
 consent gate — the anti-autonomy enforcement point for Decision 2 — has no
@@ -421,7 +427,7 @@ right — it refused to force focus by synthesising keystrokes — but the
 capability is effectively unusable in this deployment shape and the closeout
 should say so rather than list it as working.
 
-**4 — `brake on` does not honour `BARTH_DB_PATH`.** *(Safety-relevant.)* The
+**4 — `brake on` does not honour `BARTH_DB_PATH`.** *(Safety-relevant. Repaired in §10.1.)* The
 server resolves its database through `resolve_db_path()`, which reads
 `BARTH_DB_PATH`; the CLI's `--db` defaults to a literal `data/bartholomew.db`
 (itself a second mismatch — the server's default basename is `barth.db`). On the
@@ -461,7 +467,80 @@ human can answer is not.
 
 ---
 
-## 10. Limitations
+## 10. Repairs after the live test
+
+Two of §9's findings were repaired in a bounded pass, on the operator's
+instruction, before the live retest. Nothing else in this section was changed;
+`windows.focus_window` (Finding 3) was explicitly left alone.
+
+### 10.1 The brake command and the server now name the same database (Finding 4)
+
+`bartholomew/kernel/db_paths.py` is the one resolver: an explicit path wins,
+then `BARTH_DB_PATH` as-is, then `<project root>/data/barth.db`, read fresh on
+every call. The server (`services/api/db.py`), the kernel daemon
+(`daemon._default_db_path`) and `brake on/off/status` all delegate to it, so
+the brake a person engages from a shell is the brake the server reads -- in
+both configurations, variable set or unset. The commands now print the file
+they touched and, for `status`, where that path came from.
+
+`--db` still wins unconditionally: tests address per-test databases while a
+session-wide `BARTH_DB_PATH` is set, and a per-user runtime sets the variable
+for itself. Ten other kernel-database `--db` options (`train`, `say`,
+`unattended-report`, `embeddings *`, `share *-local`) carry the same stale
+default and were deliberately not widened into this pass; they are listed as
+follow-up.
+
+### 10.2 An operator-reachable consent channel for observation (Finding 1)
+
+`bartholomew/multimodal/device_consent.py`. The Runtime Contract's consent
+gate (`_resolve_device_consent`) now consults a **separate** device-consent
+handler registry (`privacy_guard.set_device_consent_handler`) ahead of the
+plain string handler, and the API server installs the channel at startup.
+It is a separate registry for one reason that matters: `MemoryStore` branches
+on whether the plain handler is `None` to decide whether a sensitive write is
+*queued for review* (none) or *asked and discarded* (any handler). Registering
+a server-side channel on the shared global would have silently turned every
+unanswered memory prompt from "held for you" into "thrown away". Memory
+behaviour does not move; only the device seams see the new channel.
+
+One ask: the gate calls `ask()`, which mints a request id and a separate
+high-entropy answer nonce, records the pending ask in the kernel database,
+and awaits an `asyncio.Future` -- never blocking the event loop, so `status`,
+`stop` and `disarm` keep answering while a person decides. A person lists and
+answers:
+
+```
+bartholomew consent pending
+bartholomew consent approve <request_id>      # or: deny
+```
+
+The answer resolves that one Future exactly once and nothing is remembered;
+the next start attempt asks again. Unanswered asks expire after 180 seconds
+and deny. At most three asks may be open per tenant.
+
+Why the companion cannot answer its own ask, given that HTTP identity is
+disabled on loopback: the answer route (`POST /api/device-consent/{id}/answer`,
+classified `CONSENT_DECIDE`) and the listing route (`SELF_READ`) both refuse
+any request carrying the device credential; no response the companion can
+receive carries the nonce; and the nonce is written only to the kernel
+database, which `bartholomew consent approve` reads on the operator's own
+machine and account. Reading that file is what proves the answer is the
+person's.
+
+`companion observe start` now waits for the answer (it says so, and names the
+commands to run in another window) rather than timing out at 30 seconds.
+
+### 10.3 What the retest must show
+
+Recorded in §11 once run: `brake on` with no `--db` forcing `armed: false`
+against the running server; `observe start` producing a pending ask, the
+operator approving it, and a real screen session starting; then the full loop
+-- observation running, governed `windows.type_text` approved, keystrokes in
+Notepad, and the resulting state observed.
+
+---
+
+## 11. Limitations
 
 * **The live test has now been run; see §9 for what it did and did not
   establish.** Observation was never started (no consent channel exists in a
@@ -484,7 +563,7 @@ human can answer is not.
 
 ---
 
-## 11. Deployment and rollback
+## 12. Deployment and rollback
 
 Inert by default. The action-channel resolver stays behind
 `BARTH_DEVICE_ACTION_AUTH`; the channel additionally stays disarmed until
@@ -499,7 +578,7 @@ F's behaviour exactly — no start route, and dispatch without an arming gate.
 
 ---
 
-## 12. Statement
+## 13. Statement
 
 Nothing was merged to main. PR #89 remains open, draft and unmerged.
 Auto-merge is off on both PRs.

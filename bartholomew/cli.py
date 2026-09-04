@@ -41,8 +41,13 @@ app.add_typer(multimodal_app, name="multimodal")
 # commands above: the implementation lives in `bartholomew/cli_companion.py`
 # rather than here, because this file is a shared integration hotspot.
 from bartholomew.cli_companion import companion_app  # noqa: E402
+from bartholomew.cli_consent import consent_app  # noqa: E402
 
 app.add_typer(companion_app, name="companion")
+# The person's answer to a device's ask to observe. Separate from `companion`
+# on purpose: that group speaks with the device credential, and this one must
+# never carry it.
+app.add_typer(consent_app, name="consent")
 
 
 @embeddings_app.command("stats")
@@ -574,6 +579,23 @@ def embeddings_rebuild_vss(
 
 _CLI_BRAKE_REASON_PREFIX = "CLI"
 
+# The brake commands used to default `--db` to a literal "data/bartholomew.db"
+# -- a scratch file the running server never opened. On the live Windows test
+# that printed "ENGAGED" while the server carried on dispatching. They now
+# resolve through the same path the server and kernel daemon use, and say
+# which file they touched. An explicit --db still wins, unconditionally.
+_KERNEL_DB_HELP = (
+    "Kernel database. Default: BARTH_DB_PATH, else <project root>/data/barth.db "
+    "-- the same file the running server reads. Pass a path to address a "
+    "different one; the running server is then untouched."
+)
+
+
+def _kernel_db(explicit: str | None) -> str:
+    from bartholomew.kernel.db_paths import resolve_kernel_db_path
+
+    return resolve_kernel_db_path(explicit)
+
 
 @brake_app.command("on")
 def brake_on(
@@ -583,8 +605,9 @@ def brake_on(
         help="Scopes to block (global, skills, sight, voice, scheduler, training)",
     ),
     db: str = typer.Option(
-        default="data/bartholomew.db",
-        help="Path to database file",
+        None,
+        "--db",
+        help=_KERNEL_DB_HELP,
     ),
 ):
     """Engage parking brake (block specified scopes)"""
@@ -596,6 +619,7 @@ def brake_on(
     # Default to global if no scopes specified
     scopes = scope if scope else ["global"]
 
+    db = _kernel_db(db)
     store = GovernanceStore(db)
     try:
         store.engage(
@@ -608,13 +632,14 @@ def brake_on(
         raise typer.Exit(1) from e
 
     console.print(
-        f"\n[yellow]⚠ Parking brake ENGAGED[/yellow] - Scopes: {', '.join(sorted(scopes))}\n",
+        f"\n[yellow]⚠ Parking brake ENGAGED[/yellow] - Scopes: {', '.join(sorted(scopes))}",
     )
+    console.print(f"Database: {db}\n")
 
 
 @brake_app.command("off")
 def brake_off(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
 ):
     """Disengage parking brake (allow all components)"""
     from bartholomew.orchestrator.safety.governance_store import (
@@ -623,6 +648,7 @@ def brake_off(
         WriteFenceClosedError,
     )
 
+    db = _kernel_db(db)
     store = GovernanceStore(db)
     try:
         store.disengage(reason=f"{_CLI_BRAKE_REASON_PREFIX}: brake off", actor="cli")
@@ -636,21 +662,25 @@ def brake_off(
         )
         raise typer.Exit(1) from e
 
-    console.print("\n[green]✓ Parking brake DISENGAGED[/green] - All components allowed\n")
+    console.print("\n[green]✓ Parking brake DISENGAGED[/green] - All components allowed")
+    console.print(f"Database: {db}\n")
 
 
 @brake_app.command("status")
 def brake_status(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
 ):
     """Show parking brake status"""
+    from bartholomew.kernel.db_paths import describe_kernel_db_path
     from bartholomew.orchestrator.safety.governance_store import GovernanceStore
 
+    resolved = describe_kernel_db_path(db)
+    db = _kernel_db(db)
     store = GovernanceStore(db)
     state = store.state()
 
     console.print("\n[bold]Parking Brake Status[/bold]")
-    console.print(f"Database: {db}\n")
+    console.print(f"Database: {db}  (from {resolved['source']})\n")
 
     if state.engaged:
         console.print("[yellow]Status: ENGAGED (blocking)[/yellow]")

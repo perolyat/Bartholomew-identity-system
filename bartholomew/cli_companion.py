@@ -65,6 +65,7 @@ def _call(
     device_id: str | None = None,
     body: dict | None = None,
     authenticate: bool = True,
+    timeout: float = 30,
 ) -> int:
     """One loopback call. Returns the process exit code."""
     import requests
@@ -95,7 +96,7 @@ def _call(
             f"{base_url.rstrip('/')}{path}",
             headers=headers,
             json=body,
-            timeout=30,
+            timeout=timeout,
         )
     except Exception as e:  # noqa: BLE001 - a CLI reports, it does not raise
         typer.echo(f"Could not reach Bartholomew at {base_url}: {e}", err=True)
@@ -184,6 +185,19 @@ def observe_start(
     body = {"modality": modality, "scope": scope}
     if max_seconds:
         body["max_duration_seconds"] = max_seconds
+
+    # The server holds this call open while it asks a person. The answer comes
+    # from another window (`bartholomew consent pending` / `approve`), so the
+    # wait here must outlast the ask's own expiry.
+    from bartholomew.multimodal.device_consent import DEFAULT_TTL_SECONDS
+
+    typer.echo(
+        "Asking Bartholomew to observe. Bartholomew will ask you to confirm: in "
+        "another window run  bartholomew consent pending  then  "
+        "bartholomew consent approve <request_id>  "
+        f"(within {DEFAULT_TTL_SECONDS}s). This command waits for your answer.",
+        err=True,
+    )
     raise typer.Exit(
         code=_call(
             "POST",
@@ -191,6 +205,7 @@ def observe_start(
             base_url=base_url,
             device_id=device_id,
             body=body,
+            timeout=DEFAULT_TTL_SECONDS + 30,
         ),
     )
 

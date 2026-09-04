@@ -250,6 +250,12 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # Beginning a session is its own capability, and the only widening
     # operation on this surface. Everything else here reads or stops.
     ("POST", "/api/multimodal/sessions"): Capability.MULTIMODAL_SESSION_START,
+    # The person's answer to a device observation ask. Reading the open asks
+    # is SELF_READ; deciding one is CONSENT_DECIDE, the same act as deciding a
+    # queued sensitive memory write -- a human deciding a consent question.
+    # Neither route accepts the device credential (see routes/device_consent.py).
+    ("GET", "/api/device-consent/pending"): Capability.SELF_READ,
+    ("POST", "/api/device-consent/{request_id}/answer"): Capability.CONSENT_DECIDE,
     ("GET", "/api/multimodal/status"): Capability.SELF_READ,
     ("GET", "/api/multimodal/sessions"): Capability.SELF_READ,
     ("POST", "/api/multimodal/sessions/{session_id}/stop"): Capability.BRAKE_ENGAGE,
