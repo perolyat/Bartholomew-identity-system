@@ -76,7 +76,23 @@ def fingerprint_for(lesson: Any) -> str:
     itself mutates (`review_state`, `reviewer`, `reviewed_at`, `revision`,
     `updated_at`) are excluded, because including them would make every
     approval invalid at the moment it is used.
+
+    Duck-typed on the candidate's material attributes rather than on its type,
+    so a candidate whose origin is not a local objective -- a trusted-group
+    share adopted under `bartholomew.kernel.share_adoption` -- binds through
+    this same approval rather than acquiring a second authorization path. Such
+    a candidate honestly reports `objective_id = None` (it stands on no local
+    experience) and an empty supporting-event list, which is why both are read
+    tolerantly here. For every `CandidateLesson` the objective id is always an
+    integer, so this produces byte-identical material to before.
+
+    `lesson_kind` is part of the material, which is also what keeps the two
+    candidate families' approvals from ever being interchangeable: an approval
+    fingerprinted over `procedural` can never match one over `adopted_share`.
     """
+    source = getattr(lesson, "source", None)
+    objective_id = getattr(source, "objective_id", None)
+    supporting = getattr(source, "supporting_event_ids", None) or ()
     material = {
         "competency_id": lesson.competency_id,
         "slug": lesson.slug,
@@ -86,9 +102,22 @@ def fingerprint_for(lesson: Any) -> str:
         "epistemic_status": lesson.epistemic_status,
         "classification": lesson.classification,
         "confidence": float(lesson.confidence),
-        "objective_id": int(lesson.source.objective_id),
-        "supporting_event_ids": sorted(int(i) for i in lesson.source.supporting_event_ids),
+        "objective_id": int(objective_id) if objective_id is not None else None,
+        "supporting_event_ids": sorted(int(i) for i in supporting),
     }
+    # A candidate whose meaning depends on more than the fields above may
+    # contribute the rest through `extra_fingerprint_material`. Added only
+    # when present and truthy, so a `CandidateLesson` -- which has no such
+    # attribute -- produces byte-identical material to before this existed.
+    # A trusted-group share uses it to bind the approval to the sanitized
+    # content the reviewer actually read, which `inferred_rule` alone
+    # summarises rather than covers.
+    extra = getattr(lesson, "extra_fingerprint_material", None)
+    if callable(extra):
+        extra = extra()
+    if extra:
+        material["extra"] = extra
+
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

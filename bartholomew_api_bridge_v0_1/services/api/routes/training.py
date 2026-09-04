@@ -61,11 +61,18 @@ class TrainingSubmitRequest(BaseModel):
 @router.get("/source-types")
 async def list_source_types() -> dict:
     """The provenance source types this endpoint accepts, and those it does
-    not. The rejected set is S5.4's (Bartholomew-originated learning), not a
-    permanent property of the seam."""
+    not. The rejected sets are the governed consolidation paths' -- S5.4's
+    Bartholomew-originated learning, and Package E's adopted trusted-group
+    shares -- not a permanent property of the seam.
+
+    `reserved` is the complete rejected set; `reserved_for_s5_4` is kept
+    alongside it so an existing client reading that key still gets the answer
+    it always got rather than silently losing a value."""
     return {
         "allowed": sorted(training.ALLOWED_TRAINING_SOURCE_TYPES),
+        "reserved": sorted(training.RESERVED_SOURCE_TYPES),
         "reserved_for_s5_4": sorted(training.S5_4_RESERVED_SOURCE_TYPES),
+        "reserved_for_trusted_share": sorted(training.SHARE_ADOPTION_SOURCE_TYPES),
         "kinds": sorted(training.RECORD_CLASSES),
     }
 

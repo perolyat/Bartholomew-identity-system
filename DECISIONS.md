@@ -2633,3 +2633,144 @@
   primacy), with `tests/test_wave_cross_stream_integration.py` running the integrated wave on
   the shipped allowlist.
 - **Date:** 2026-09-01
+
+## Decision: Device identity is issued by the platform; a payload `device_id` stays a claim
+- **Decision:** A companion's identity is a **server-generated `device_id` in a control-plane
+  registry**, established by explicit operator enrolment and proved by a credential the platform
+  issued and can withdraw. The companion's `payload["device_id"]` remains what
+  `docs/D_PC_COMPANION_OBSERVATION.md` §3 has always said it is -- an operator-chosen label and
+  *claimed* provenance -- and **nothing converts one into the other**. A device credential
+  authenticates as exactly one device, for exactly one tenant, and only while that device is
+  `active`.
+- **Alternatives:** A `device` `PrincipalKind` (rejected: `PrincipalKind` is pinned to
+  `{user, platform_admin}` by
+  `tests/test_s8_governance_authority.py::test_there_is_no_anonymous_principal_kind` precisely
+  so a third authority kind is a decision rather than a drift, and a device is not an identity that may *act* -- it is
+  a machine that may *speak for* one); promoting the existing payload label to an authenticated
+  id (rejected: two different values would share one key name, and every doc and test that says
+  the label is unauthenticated would become half-true, which is worse than either state);
+  per-request request signing now (deferred: it is a larger design and the identity has to exist
+  before there is anything to sign).
+- **Why:** `docs/D_PC_COMPANION_OBSERVATION.md` §5 states "This prototype does not implement
+  device authentication", §8 lists "No pairing, enrolment or revocation flow exists", and
+  `docs/S8_ALPHA_OPERATOR_GUIDE.md` promises that "genuine per-request replay resistance arrives
+  with device authentication". The first two are now discharged; the third is explicitly only
+  half-discharged, and says so.
+- **Consequences:** Seven additive tables in `platform.db` -- `platform_devices` and
+  `platform_device_credentials` here, and `platform_trusted_groups`, `platform_group_members`,
+  `platform_group_invitations`, `platform_share_packages` and `platform_share_receipts` for the
+  entry below -- created with `CREATE TABLE IF NOT EXISTS`, plus one additive column, so
+  `test_the_schema_upgrade_is_additive_and_idempotent` stays green and there is no data-loss
+  path. Only the SHA-256 digest of a credential is stored, as
+  `sessions.py` does for session tokens; the plaintext is returned once and appears in no row, no
+  read surface and no log. The capability vocabulary is **frozen** at twelve kinds, all version 1,
+  and an unknown kind or version is *unsupported*, never approximated. Isolation in the control
+  plane is by `user_id` predicate rather than by file boundary -- weaker in kind than
+  `runtime_registry`'s per-user databases, stated plainly in
+  `docs/E_DEVICE_TRUST_AND_TRUSTED_GROUPS.md` §7 rather than left to be inferred.
+- **What this does not weaken:** No new principal kind, no new brake scope, no new audit log, no
+  new consent mechanism. The inbound route is unchanged: the device resolver plugs into the seam
+  `services/api/inbound_auth.py` was written for, is off unless `BARTH_DEVICE_INBOUND_AUTH` is
+  set, and refuses to install alongside the test-only resolver. Local-alpha posture stays
+  loopback; nothing here authorises exposure, which `ASSUMPTIONS.md` and `RISKS.md` still gate on
+  a reviewed cross-device threat model that does not yet exist.
+- **Deliberately not built:** Windows actuation, multimodal capture, request signing, HTTP routes
+  for device administration (the operator surface is the local CLI, for the same reason account
+  provisioning has no remote endpoint), and any un-revoke path -- revocation is terminal so a
+  recovered laptop cannot quietly resume.
+- **Proven by:** `tests/test_device_registry_trust.py` (unenrolled / pending / approved /
+  disabled / revoked cannot authenticate, credentials do not cross devices or tenants, rotation
+  invalidates the previous credential, no plaintext survives in any table discovered from
+  `sqlite_master`, no read surface or log carries one, undeclared and unknown-version
+  capabilities are refused, last-seen updates only after verified contact) and
+  `tests/test_device_inbound_identity.py` (the claimed payload `device_id` cannot override the
+  verified identity, through the real ingress).
+- **Amended 2026-09-02 (operator capability ceiling):** an adversarial pass observed that
+  approving a *device* and believing its *capability declaration* were the same act -- a
+  companion asked to declare one capability could declare three and be authorised for all of
+  them on its own say-so. `approve_enrolment(permitted_capabilities=...)` now records an
+  operator ceiling on `platform_devices.approved_capabilities` (an additive column, in both
+  `_SCHEMA` and `_ADDITIVE_COLUMNS`), and `VerifiedDevice.authorizes()` requires all three of:
+  this deployment understands the capability, the device declared it, and the ceiling admits it.
+  An unreadable ceiling authorises nothing. `None` -- the default -- leaves it at whatever this
+  deployment understands, which preserves the original behaviour for an operator standing in
+  front of the machine.
+- **Date:** 2026-09-01
+
+## Decision: Trusted-group sharing crosses tenants only as a sanitized typed package, and lands as a candidate
+- **Decision:** An opt-in trusted group may exchange **only** an explicitly selected, sanitized,
+  typed package (`competency`, `correction`, `household_routine`, `guidance`) -- there is
+  deliberately **no generic raw-memory package**. Adoption by a recipient creates a *local
+  candidate* under the kind `adopted_share_candidate`, which is absent from
+  `competency.COMPETENCY_KINDS` and therefore structurally invisible to the retrieval seam.
+  Making it retrievable knowledge requires **PR #83's candidate-bound acceptance authorization**,
+  not an analogue of it: `evaluate_share_admission()` delegates the accept branch to
+  `evaluate_learning_admission(ctx, "learning_accept", lesson=candidate)`, so `share_accept` is
+  absent from `tool_use.allowlist` and adding it there makes acceptance no more reachable than
+  adding `learning_accept` does.
+- **Alternatives:** A parallel approval type for shares (rejected: two authorization records
+  would drift, and an operator asking "what has been authorised to become knowledge here?"
+  should read one kind); adoption writing a `candidate_lesson` directly (rejected: its
+  `SourceExperience` requires an objective and evidence event ids, and inventing them would be a
+  provenance lie about local experience the recipient never had); a denylist sanitizer (rejected:
+  an allowlist per package kind is the only shape where a field nobody anticipated fails closed).
+- **Why:** Sharing between people who trust each other is the useful case; public discovery,
+  automatic propagation and confidence-based adoption are the cases that turn one household's
+  judgement into everybody's. The distinction has to be structural, because a UI that merely
+  hides a field is a UI one refactor away from not hiding it.
+- **Consequences:** Sanitization runs in three ordered layers, all below the UI: eligibility
+  (raw memory, conversation, episodes, inbound events, reflections, objectives, personal facts,
+  competency *evidence*, candidates, approvals and exports are structurally ineligible); a
+  prohibited field anywhere at any depth **refuses the whole publication** rather than being
+  stripped; and everything not on the per-kind content allowlist is removed and recorded by name
+  in `sanitization.removed_fields`. The publisher's envelope -- `provenance.detail` above all --
+  never travels, so a package cannot re-identify its publisher. Publishing names one group twice;
+  a revision is a new `(share_id, revision)` row and the recipient's candidate slug carries the
+  revision, so a publisher update is structurally incapable of overwriting an adopted or
+  customised copy. A stale revision raises `ConcurrentRevisionError` and writes nothing; there is
+  no force flag. Revocation blocks new adoption and further updates and stays visible in
+  provenance, but **does not delete a recipient's adopted record** -- a publisher who could reach
+  into another person's runtime would hold a remote delete on their memory. `trusted_share` is a
+  new `PROVENANCE_SOURCE_TYPE`, reserved from the ordinary training seam exactly as `experience`
+  is and lifted by one caller, because recording someone else's rule as `user_instruction` would
+  claim the recipient said it.
+- **What this does not weaken:** The Parking Brake on the existing `training` scope is evaluated
+  first for every share action -- sharing acquired no scope of its own -- and an approval is
+  never an override. `learning_authorization.fingerprint_for()` gained duck-typed tolerance of a
+  candidate with no objective, which is byte-identical for every `CandidateLesson` and is pinned
+  by a regression test; `lesson_kind` is part of the fingerprint material, so an approval for a
+  locally inferred lesson can never authorise an adopted share or the reverse.
+- **Deliberately not built:** Global learning, public discovery, a marketplace, anonymous
+  sharing, group-wide automatic acceptance, automatic propagation, confidence-based adoption,
+  system-level promotion, training on other users' raw memories, centralised cloud learning,
+  cross-group search, customer-scale multi-tenancy, billing, and HTTP routes -- the operator
+  surface is `bartholomew groups` / `bartholomew share`, and a web surface is a separate stream's
+  work with its own route-policy classification.
+- **Proven by:** `tests/test_trusted_groups_isolation.py` (roles, expiring single-use
+  invitations, and a non-member's refusal being indistinguishable from a nonexistent group's),
+  `tests/test_trusted_share_sanitization.py` (eligibility, prohibited fields and content,
+  removed-field recording, explicit two-step publication, revisions, concurrency, revocation and
+  content-free audit) and `tests/test_share_adoption_governance.py` (adoption is not acceptance,
+  acceptance requires the PR #83 approval even under a default-allow Identity with
+  `share_accept` allowlisted, forks survive upstream revisions, and the brake halts both).
+- **Amended 2026-09-02 (what an approval binds, and what consolidation reads):** an adversarial
+  pass found three ways the "the reviewer approved what was consolidated" claim did not hold, and
+  all three are closed. (a) The acceptance fingerprint covered the candidate's summary line but
+  not the sanitized `content` that `to_competency_record()` actually reads;
+  `learning_authorization.fingerprint_for()` now folds in an optional
+  `extra_fingerprint_material`, which an adopted share uses to bind the content digest and the
+  origin, and which is absent -- and therefore byte-identical -- for every `CandidateLesson`.
+  (b) Adoption upserted unconditionally, so a standing `share_adopt` grant could replace an
+  already-approved candidate's content; a different package at the same key is now refused, and
+  a decided or forked candidate is never overwritten. (c) `customise()` edited the summary while
+  consolidation built the record from the publisher's content, so a correction was silently
+  discarded; every field `customise()` edits is now one consolidation reads, and a shared rule's
+  `counterexamples` travel with it rather than being dropped.
+  Also closed in the same pass: the sanitizer's per-kind content allowlist is re-applied by
+  `TrustedSharePackage.validate()`, so a hand-written package file cannot bypass it; prohibited
+  field matching folds plurals and looks for high-signal terms anywhere inside a key; the content
+  scan reads dict keys as well as values; a disabled account is no longer a live group member;
+  `publish()` and `publish_revision()` no longer distinguish "a share you cannot see" from "no
+  such share"; every mutating path re-derives membership inside its own write transaction; and
+  the group audit filter is anchored rather than a substring search over operator-supplied names.
+- **Date:** 2026-09-01

@@ -15,6 +15,8 @@ except ImportError:
     sys.exit(1)
 
 
+from bartholomew.cli_trust import devices_app, groups_app, share_app
+
 app = typer.Typer(help="Bartholomew Admin CLI")
 console = Console()
 embeddings_app = typer.Typer(help="Embeddings management commands")
@@ -25,6 +27,12 @@ app.add_typer(embeddings_app, name="embeddings")
 app.add_typer(brake_app, name="brake")
 app.add_typer(accounts_app, name="accounts")
 app.add_typer(platform_brake_app, name="platform-brake")
+# Package E. The commands live in `bartholomew/cli_trust.py` rather than here:
+# this file is a shared integration hotspot, and three registration lines are
+# a smaller thing for every other stream to merge around than six hundred.
+app.add_typer(devices_app, name="devices")
+app.add_typer(groups_app, name="groups")
+app.add_typer(share_app, name="share")
 
 
 @embeddings_app.command("stats")
