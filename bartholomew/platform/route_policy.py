@@ -171,6 +171,33 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/actions/{action_id}/cancel"): Capability.ACTION_REQUEST,
     ("POST", "/api/device-actions/lease"): Capability.DEVICE_ACTION_CHANNEL,
     ("POST", "/api/device-actions/{action_id}/result"): Capability.DEVICE_ACTION_CHANNEL,
+
+    # --- multimodal presence (Package C) -------------------------------------
+    # Reads and stops only; there is no start route to classify, deliberately
+    # (see bartholomew_api_bridge_v0_1/.../routes/multimodal.py).
+    #
+    # Reads are SELF_READ rather than LIVENESS. Health probes are LIVENESS
+    # because they hold no personal data, but "which window is Bartholomew
+    # observing" carries a window title -- it is a statement about what the
+    # person is doing, not about whether the process is up, and it belongs with
+    # the other reads of Bartholomew's current state.
+    #
+    # Stops are BRAKE_ENGAGE. Ending a capture session is a strictly-tightening
+    # safety act, the same class as engaging the brake, and it grants no power
+    # that capability does not already carry: anyone who can engage the voice
+    # or sight brake can already stop every one of these sessions. Reusing it
+    # keeps stopping available to exactly the people who can already halt the
+    # system, without minting a capability whose only holder would be the same
+    # set.
+    ("GET", "/api/multimodal/status"): Capability.SELF_READ,
+    ("GET", "/api/multimodal/sessions"): Capability.SELF_READ,
+    ("POST", "/api/multimodal/sessions/{session_id}/stop"): Capability.BRAKE_ENGAGE,
+    ("POST", "/api/multimodal/sessions/stop-all"): Capability.BRAKE_ENGAGE,
+    # Diagnostics is LIVENESS: unlike the reads above it reports only whether
+    # this machine has a microphone, speaker, accessibility provider and
+    # capture backend. It observes nothing and names nothing the person is
+    # doing.
+    ("GET", "/api/multimodal/diagnostics"): Capability.LIVENESS,
     # --- kernel command -----------------------------------------------------
     ("POST", "/kernel/command/{cmd}"): Capability.KERNEL_COMMAND,
     # --- metrics -------------------------------------------------------------
