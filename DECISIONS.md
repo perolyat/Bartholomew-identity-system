@@ -2773,4 +2773,118 @@
   `publish()` and `publish_revision()` no longer distinguish "a share you cannot see" from "no
   such share"; every mutating path re-derives membership inside its own write transaction; and
   the group audit filter is anchored rather than a substring search over operator-supplied names.
+
+## Decision: The learning policy is built in full and shipped structurally unable to accept
+
+- **Context:** `COGNITIVE_RUNTIME.md` describes a "high-confidence, low-impact" branch that
+  consolidates a candidate lesson without review. The S5.4 slice deliberately omitted it, and
+  PR #83 made `learning_accept` require a `LearningAcceptanceApproval` bound to one exact
+  candidate. Package D needed to give a person one place to see, understand and control what
+  Bartholomew has learned -- and to answer, honestly and over months, the question "would I ever
+  want him to accept some of these on his own?". That question cannot be answered without a
+  policy, and a policy that can act is the thing the whole design refuses.
+- **Decision:** Build the configurable policy system in full -- versioned, tenant-scoped,
+  deterministic, inspectable, covering every dimension a future governed auto-acceptance would
+  need -- and ship it in **shadow mode only**. For each candidate it produces `would_accept`,
+  `would_refuse` or `would_escalate`, with the rules that matched and reasons written for a
+  person. It performs none of it.
+- **Why a policy engine that cannot act:** the alternative to building it was leaving the
+  question unanswerable, and the alternative to shadow mode was shipping the branch. A preview
+  the user can read for months before deciding is the only version of this that lets the
+  decision be made on evidence rather than on intuition.
+- **The prohibition, as five independent structural properties** (each pinned in
+  `tests/test_shadow_learning_policy.py` and exercised end-to-end in
+  `tests/test_learning_memory_control_centre.py`):
+  1. **No writer.** `bartholomew/kernel/learning_policy.py` imports no `MemoryStore`, no
+     `aiosqlite`, no `runtime_contract` -- the same purity `competency.py` and
+     `candidate_learning.py` hold to. It cannot persist an acceptance because it cannot persist.
+  2. **No approval constructor.** The module never names `LearningAcceptanceApproval` in code,
+     and `ShadowDecision.authorizes_acceptance` is a property returning `False` with no setter.
+  3. **A decision is not a permission.** `evaluate_learning_admission()` does not read
+     evaluation records and has no parameter through which one could be supplied. `would_accept`
+     is a counterfactual about a policy, never a statement about a lesson.
+  4. **The execution mode is a constant.** `SHIPPED_EXECUTION_MODE` is a module-level `Final`
+     fixed to `"shadow"`. `LearningPolicy.requested_execution_mode` may be set to `"auto"` --
+     because describing the wanted future is the point of letting a person configure this -- and
+     `LearningPolicy.execution_mode` ignores it and returns the constant. A hand-edited
+     `execution_mode` in the stored row changes nothing: the field is written for the audit
+     record and never read back.
+  5. **The write surface is enumerated.** `FORBIDDEN_SHADOW_WRITE_KINDS` names the candidate
+     kind, the approval kind and every member of `COMPETENCY_KINDS` (derived, not hand-listed).
+     The shadow seam's single write goes through `_assert_shadow_writable()`, which raises
+     `ShadowWriteViolationError` for all of them.
+- **Determinism:** `evaluate()` takes its timestamp as an argument rather than reading a clock,
+  evaluates every rule rather than short-circuiting, reports matched rules in a fixed
+  `RULE_ORDER`, and derives the decision purely from the matched set (any refusal refuses; else
+  any escalation escalates; else it would have accepted). Two runs over the same inputs are
+  byte-identical, which is what makes "deterministic" testable rather than claimed.
+- **Conservative derivation:** dimensions the S5.4 candidate does not record -- risk class,
+  reversibility, affected applications -- are reviewer-assigned and default to *unassessed*,
+  which the evaluator treats as the strictest value (unassessed risk is `critical`, unassessed
+  reversibility is irreversible). An unmeasured dimension can only make a preview stricter,
+  never more permissive. One objective is counted as one experience, so a verbose objective
+  cannot masquerade as corroboration.
+- **Material edit and approval invalidation:** the control centre's edit seam re-fingerprints
+  the candidate through the same `learning_authorization.fingerprint_for()` acceptance checks
+  against, bumps the revision, archives the prior revision under
+  `candidate_lesson_revision`, and leaves the prior approval row in place -- so the audit of who
+  approved what survives while the approval itself stops authorising anything. `display_state`
+  is deliberately excluded from the fingerprint: pinning a lesson to look at later is not a
+  change to what it claims, and a fingerprint that moved for that reason would be a misleading
+  one. The fingerprint was extended to cover the four new material dimensions, but only when
+  a dimension has been *assigned* -- so a candidate written before this package digests exactly
+  as it did under PR #83 and approvals granted beforehand remain valid.
+- **Versioning and conflicts:** policy revisions and candidate edits are both conflict-guarded,
+  never last-write-wins. A stale edit is refused with both versions returned; the UI shows them
+  side by side and leaves the user's text in the box. Evaluation records are keyed
+  `<candidate key>@<policy revision>`, so a new revision produces a new record rather than
+  rewriting the verdict an earlier revision gave.
+- **Privacy is not relaxed for the settings screen:** a policy that excludes `user.health`
+  material contains the word "health", and `privacy_guard.is_sensitive()` scans stored values in
+  full. Such a revision is therefore held in the existing pending-consent inbox rather than
+  stored, the previous policy stays in force, and the result says so
+  (`LEARNING_OUTCOME_QUEUED_FOR_CONSENT`). This is a false positive in the sense that no health
+  data is in the row; it is kept because the alternatives -- exempting this kind from the guard,
+  or encoding the vocabulary so it no longer reads as itself -- both trade a governance default
+  for the convenience of a form.
+- **Export:** explicit selection only, with no argument that means "everything". Unreadable
+  records, records whose classification could not be derived, records in a restricted privacy
+  class, and acceptance approvals are all refused, and every refusal is named in `skipped`. An
+  export that quietly omitted a record the user ticked would misrepresent itself as complete.
+- **What this does not weaken:** the Parking Brake is still first for every learning action; the
+  candidate-bound approval is still required for acceptance and is still checked against the
+  candidate's exact material content; rejection is still terminal; the new kinds
+  (`learning_policy`, `learning_shadow_evaluation`, `candidate_lesson_revision`) are all absent
+  from `COMPETENCY_KINDS` and therefore invisible to the retrieval seam. Four new action kinds
+  were added to the allowlist and every one of them is either inert or conservative -- none is a
+  route to acceptance.
+- **Deliberately not built:** automatic acceptance in any form, a blanket "learning enabled"
+  switch, standing authorization for `learning_accept`, confidence-only consolidation, a second
+  memory or approval authority, and Session E's sharing transport (represented here as
+  `SharingInterface`, which reports eligibility and states plainly that sharing is not
+  connected).
+- **Approval binding, corrected after adversarial review:** an approval binds to the candidate's
+  **revision** as well as its content digest. Content binding alone had a hole -- editing a
+  candidate away from its approved wording and back again restored the digest and silently
+  revived an approval the reviewer had been told, in those words, no longer applied, accepting a
+  candidate two revisions on from the one they read. The revision check runs *after* the content
+  check, so a genuinely changed candidate is still refused in PR #83's own words, and applies
+  only while the candidate is `proposed` -- the window in which an edit can happen, and the one
+  in which acceptance and rejection have not yet incremented the revision themselves. Related:
+  re-proposing now carries the revision forward instead of resetting it to 1, which is what
+  makes `expected_revision` a sound staleness token at all.
+- **What archives, and why refusing beats losing:** a material candidate edit archives the prior
+  revision under `candidate_lesson_revision`, and a competency correction archives the prior
+  record under `competency_revision` -- S5.2's training seam records *that* a supersession
+  happened but not what the superseded record said, so without this "what did he believe before
+  I corrected this?" is unanswerable. Both archive writes are checked, and both operations are
+  **refused outright** when the archive does not land: losing an edit is recoverable, losing the
+  wording somebody approved is not. The same rule applies to a superseded policy revision, and
+  an unreadable policy row is moved to `default@unreadable` before a new one overwrites it.
+- **Proven by:** `tests/test_shadow_learning_policy.py` (purity, determinism, every configurable
+  dimension, conservative defaults), `tests/test_learning_memory_control_centre.py` (the
+  governed seams against real stores, including the revert-revives-approval case, archive
+  refusal, and the material/administrative partition enforced rather than documented),
+  `tests/test_learning_control_centre_api.py` (the HTTP boundary, stale state, export and the
+  privacy-class drift guard), and `tests/test_ui_learning_control_centre.py` (the page).
 - **Date:** 2026-09-01

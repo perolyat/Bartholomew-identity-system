@@ -715,6 +715,41 @@ tool_use:
     # housemate shared becomes trusted knowledge on the same terms as
     # something Bartholomew inferred for itself: never automatically, and
     # never by a switch.
+
+    #
+    # Learning and Memory Control Centre (Package D). Four kinds, every one
+    # of them either inert or conservative, and not one of them a route to
+    # acceptance.
+    #
+    # `learning_shadow_evaluate` runs the shadow policy engine over one
+    # candidate and records what the policy *would* have decided. It writes
+    # exactly one row, under the `learning_shadow_evaluation` kind, which is
+    # absent from competency.COMPETENCY_KINDS and therefore invisible to the
+    # retrieval seam. It cannot write the candidate, the approval or any
+    # competency kind -- runtime_contract._assert_shadow_writable() refuses
+    # all seven by name. A "would_accept" result is a counterfactual, not a
+    # permission: evaluate_learning_admission() never reads one, so
+    # allowlisting this cannot widen into allowlisting acceptance.
+    - "learning_shadow_evaluate"
+    # `learning_policy_update` records a new revision of that policy. It
+    # cannot enable automatic acceptance either: learning_policy.LearningPolicy
+    # .execution_mode is a property returning a module constant fixed to
+    # "shadow", so a user who configures `requested_execution_mode: auto` has
+    # recorded a preference for a later wave and changed nothing about this
+    # one.
+    - "learning_policy_update"
+    # `learning_candidate_edit` lets a reviewer change what a proposed lesson
+    # says before deciding on it. Conservative by construction: a material
+    # edit produces a new fingerprint, which is exactly what stops a prior
+    # LearningAcceptanceApproval authorising the changed candidate. Editing
+    # can only ever require *more* review, never less.
+    - "learning_candidate_edit"
+    # `learning_competency_revoke` withdraws an already-accepted competency
+    # record from future retrieval, through MemoryStore.forget_memory(). Like
+    # learning_reject, standing permission here can only reduce what
+    # Bartholomew retains -- and the candidate row, the approval and every
+    # Reflection survive it, so "was this ever accepted?" stays answerable.
+    - "learning_competency_revoke"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]

@@ -108,6 +108,56 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # exfiltrating an entire personal memory are different powers, and a
     # future read-only role should be able to hold one without the other.
     ("GET", "/api/memory/export"): Capability.MEMORY_EXPORT,
+    # --- learning and memory control centre (Package D) -------------------
+    # Read, review, approve, configure, export: five capabilities, mapped so
+    # that the rows which can change what Bartholomew *knows* -- granting an
+    # acceptance approval, accepting, and correcting accepted knowledge -- are
+    # the only ones behind LEARNING_APPROVE.
+    ("GET", "/api/learning/overview"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/candidates"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/candidates/{competency_id}/{slug}"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/competencies"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/approvals"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/evaluations"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/superseded"): Capability.LEARNING_READ,
+    # Reading personal memories and preferences through the control centre is
+    # the same power `GET /api/memory` grants, so it takes the same capability
+    # rather than letting learning:read become a way around memory:read.
+    ("GET", "/api/learning/memories"): _MEMORY,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/edit"): Capability.LEARNING_REVIEW,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/reject"): Capability.LEARNING_REVIEW,
+    (
+        "POST",
+        "/api/learning/candidates/{competency_id}/{slug}/shadow-evaluate",
+    ): Capability.LEARNING_REVIEW,
+    # Revoking is conservative in the same way `learning_reject` is: it can
+    # only ever reduce what Bartholomew recalls, and the audit of what was
+    # once accepted survives it. Review-level is the right grain.
+    ("POST", "/api/learning/competencies/{kind}/{key}/revoke"): Capability.LEARNING_REVIEW,
+    # The three that change what Bartholomew knows.
+    #
+    # Correcting is here rather than with the review operations above because
+    # it rewrites a record the retrieval seam will serve: it changes what he
+    # believes, not just what is proposed to him. A delegated reviewer who may
+    # triage a queue must not thereby be able to rewrite accepted knowledge.
+    ("POST", "/api/learning/competencies/{kind}/{key}/correct"): Capability.LEARNING_APPROVE,
+    (
+        "POST",
+        "/api/learning/candidates/{competency_id}/{slug}/approve",
+    ): Capability.LEARNING_APPROVE,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/accept"): Capability.LEARNING_APPROVE,
+    ("GET", "/api/learning/policy"): Capability.LEARNING_POLICY,
+    ("PUT", "/api/learning/policy"): Capability.LEARNING_POLICY,
+    ("GET", "/api/learning/policy/history"): Capability.LEARNING_POLICY,
+    # Deliberately covers whatever the user ticked, including personal
+    # memories: the control centre exists so a lesson can be exported together
+    # with the memories that explain it, and an export that could not carry
+    # them would send people back to /api/memory/export for half of it.
+    # LEARNING_EXPORT is therefore as strong as MEMORY_EXPORT for selected
+    # records, and both sit in the same user capability set -- so this widens
+    # nothing today. A future role that should hold one without the other
+    # needs this route split first.
+    ("POST", "/api/learning/export"): Capability.LEARNING_EXPORT,
     # --- consent ---------------------------------------------------------
     ("GET", "/api/consent/pending-writes"): Capability.CONSENT_DECIDE,
     ("POST", "/api/consent/pending-writes/{pending_id}/approve"): Capability.CONSENT_DECIDE,
