@@ -46,11 +46,12 @@ No newer package work was substituted for any frozen head.
 |---|---|
 | Session F branch | `claude/bartholomew-wave-two-integration-qjrxkr` |
 | Session F PR | #89 (draft, against `main`) |
-| Commits ahead of main | 26 (5 integration merges, 3 Session F commits, 18 carried package commits) |
-| Files changed vs main | 138 |
-| Net change vs main | +63,088 / −34 |
-
-Final head SHA, mergeability and CI result are recorded in §11.
+| Final head SHA | `65141a189506069bd42f714c7c1637c6187dd35b` |
+| Commits ahead of main | 30 |
+| Files changed vs main | 139 |
+| Net change vs main | +63,767 / −34 |
+| Mergeability | `clean` (draft, unmerged, auto-merge not enabled) |
+| CI | **9 / 9 green** |
 
 ---
 
@@ -359,9 +360,33 @@ real accounts and a real enrolment ceremony, a real `inbound_events` table,
 real memory, governance and action schemas. Nothing that could be asserted
 about persistence is asserted against a mock.
 
-Local: `ruff check .` and `black --check .` clean across 465 files.
+Local: `ruff check .` and `black --check .` clean across 465 files. The full
+default suite passes locally, run in two halves (`tests/test_[a-l]*` and
+`tests/test_[m-z]* + test_*.py`), both exit 0. Package B's real-HTTP
+integration suite passes (26/26).
 
-Full-suite and CI results are in the PR; see the final CI state on #89.
+**CI: 9 / 9 green** on `65141a1`:
+
+| Check | Result |
+|---|---|
+| Quality (format, lint, packaging contract) | pass |
+| smoke | pass |
+| lint-test (3.10) / (3.11) | pass |
+| Tests + coverage (Ubuntu, py3.10) / (py3.11) | pass |
+| Critical integration + lifecycle (Ubuntu, py3.10) / (py3.11) | pass |
+| Windows lifecycle + compatibility (py3.11) | pass |
+
+### Cost of the integration, measured
+
+The whole CI workflow takes ~28 min on the integrated branch against ~16 min
+on main. The growth is concentrated where it should be — the integration-marked
+step goes from 3.5 min to 10.5 min as five packages' integration tests join it,
+and the default suite step from 14.5 min to ~27 min.
+
+The Session F seams themselves cost effectively nothing: on a representative
+API subset run warm and interleaved three ways, main was 49 s, the five
+packages merged without the seams 51-52 s, and the seams added 52-53 s. All
+five packages' own suites together run in ~4 min 16 s.
 
 ### Integration defects found and fixed
 
