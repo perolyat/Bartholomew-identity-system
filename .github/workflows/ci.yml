@@ -213,5 +213,90 @@ jobs:
       - name: Scheduler startup readiness
         run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
 
+      # Governed Windows actuation (Session B). The unit and structural suites
+      # run on every platform in the `tests` job; these two steps exist because
+      # the actuation claims are Windows claims:
+      #
+      #   * the real suite uses the actual Win32 API with nothing substituted
+      #     -- real CreateProcessW, real EnumWindows, real clipboard -- and is
+      #     skipped everywhere else, so without this step it would never run;
+      #   * the structural suite is re-run here because the path allowlist and
+      #     the executable-extension refusals behave differently under
+      #     Windows path semantics, and a Linux-only pass would not have
+      #     exercised them.
+      - name: Governed Windows actuation (real Win32, nothing substituted)
+        run: python -m pytest tests/integration/test_windows_action_real.py -p no:cacheprovider -m integration
+
+      - name: Governed Windows actuation (capabilities, governance, prohibitions)
+        run: >-
+          python -m pytest
+          tests/test_windows_action_capabilities.py
+          tests/test_windows_action_governance.py
+          tests/test_windows_action_prohibitions.py
+          tests/test_windows_action_channel_separation.py
+          tests/test_windows_action_dispatch_results.py
+          -p no:cacheprovider
+
+      # The Windows alpha installer. Parsed, never installed -- and the two
+      # things checked here are the two the script promises: that it is inert
+      # until given a verb, and that `status` reports rather than throwing.
+      #
+      # This runs on Windows because there is no PowerShell on the Ubuntu jobs,
+      # and a parse error in an install script otherwise surfaces only when a
+      # person runs it. A real one shipped: `if (Test-Installed -and (...))`
+      # parses as a command invocation, so `status` died on any machine where
+      # the companion was installed but not yet configured.
+      - name: Windows companion script parses and stays inert
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'deploy/windows/bartholomew-action.ps1'),
+            [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) {
+            $errors | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
+          Write-Host 'bartholomew-action.ps1 parses cleanly.'
+
+          # No verb: prints help, changes nothing, exits 0.
+          & ./deploy/windows/bartholomew-action.ps1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::invoking the script with no verb did not exit 0'
+            exit 1
+          }
+
+          # `status` on a machine with nothing installed must report, not throw.
+          & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::`status` failed on a machine with nothing installed'
+            exit 1
+          }
+
+          # ...and, the case that actually shipped broken, on a machine that
+          # IS installed but has no configuration. A stub at the path
+          # `Test-Installed` probes is enough to reach the branch; nothing is
+          # really installed and it is removed again immediately.
+          $root = Join-Path $env:LOCALAPPDATA 'Bartholomew'
+          New-Item -ItemType Directory -Force -Path (Join-Path $root 'venv/Scripts') | Out-Null
+          Set-Content -Path (Join-Path $root 'venv/Scripts/python.exe') -Value ''
+          try {
+            & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+            Write-Host 'status reports on an installed-but-unconfigured machine.'
+          } catch {
+            Write-Host "::error::status threw on an installed-but-unconfigured machine: $_"
+            exit 1
+          } finally {
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          }
+
+          # Nothing the script created survives. It is opt-in, and this proves
+          # it -- the stub above was removed in the `finally`.
+          if (Test-Path $root) {
+            Write-Host '::error::%LOCALAPPDATA%\Bartholomew exists after read-only verbs'
+            exit 1
+          }
+          Write-Host 'Inert: no verb, no changes.'
+
       - name: Smoke tests
         run: python -m pytest -m smoke -p no:cacheprovider

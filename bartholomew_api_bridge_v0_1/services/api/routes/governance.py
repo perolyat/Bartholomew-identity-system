@@ -39,7 +39,14 @@ router = APIRouter(prefix="/api/governance", tags=["governance"])
 # stopping the other. Registration here is load-bearing, not cosmetic -- this
 # allowlist rejects unknown scopes, so an unregistered scope would be
 # enforceable inside the kernel yet impossible to engage from the API or UI.
-VALID_SCOPES = frozenset({"global", "skills", "sight", "voice", "scheduler", "training"})
+# "actuation" (Session B): governed Windows actions. Registered here as well
+# as in platform/authority.py because this allowlist rejects unknown scopes --
+# an unregistered scope would be enforceable inside the kernel yet impossible
+# to engage from the API or the UI, which is the failure this list's own
+# comment above warns about.
+VALID_SCOPES = frozenset(
+    {"global", "skills", "sight", "voice", "scheduler", "training", "actuation"},
+)
 
 
 class BrakeEngageRequest(BaseModel):

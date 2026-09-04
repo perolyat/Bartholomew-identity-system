@@ -150,6 +150,27 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/inbound/events"): Capability.INBOUND_SUBMIT,
     ("GET", "/api/inbound/events"): Capability.INBOUND_READ,
     ("GET", "/api/inbound/events/{event_id}"): Capability.INBOUND_READ,
+    # --- governed Windows actuation (Session B) ------------------------------
+    # Four capabilities across two routers, because they are two trust
+    # channels. `/api/actions` is the person's surface: ask for an action,
+    # look at what is pending, approve exactly one, withdraw one. Nothing on
+    # it reaches an operating system.
+    #
+    # `/api/device-actions` is the enrolled device's surface, and it is the
+    # only place a validated action's parameters leave this process. It is
+    # separately authenticated by `device_action_auth`, whose resolver is a
+    # different module global from the inbound observation resolver's --
+    # opening observation capture does not open actuation.
+    ("POST", "/api/actions"): Capability.ACTION_REQUEST,
+    ("GET", "/api/actions"): Capability.ACTION_READ,
+    ("GET", "/api/actions/{action_id}"): Capability.ACTION_READ,
+    # Approving is its own capability, not action:request. Asking for an
+    # action and authorising one are different powers, and a surface that may
+    # do the first must not thereby be able to do the second.
+    ("POST", "/api/actions/{action_id}/approve"): Capability.ACTION_APPROVE,
+    ("POST", "/api/actions/{action_id}/cancel"): Capability.ACTION_REQUEST,
+    ("POST", "/api/device-actions/lease"): Capability.DEVICE_ACTION_CHANNEL,
+    ("POST", "/api/device-actions/{action_id}/result"): Capability.DEVICE_ACTION_CHANNEL,
     # --- kernel command -----------------------------------------------------
     ("POST", "/kernel/command/{cmd}"): Capability.KERNEL_COMMAND,
     # --- metrics -------------------------------------------------------------

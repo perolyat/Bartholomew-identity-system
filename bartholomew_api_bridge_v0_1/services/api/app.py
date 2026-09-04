@@ -54,9 +54,11 @@ from . import db_ctx
 from .db import DB_PATH, resolve_db_path
 from .models import ChatIn, ChatOut, ConversationList
 from .routes import (
+    actions,
     auth,
     awaiting_response,
     consent,
+    device_actions,
     governance,
     inbound,
     liveness,
@@ -110,6 +112,23 @@ app.include_router(training.router)
 # governed state and needs a live kernel, so it must be refused during the
 # startup and shutdown windows like every other real ingress point.
 app.include_router(inbound.router)
+
+# Governed Windows actuation (Session B). Two routers, because they are two
+# trust channels and must stay separable:
+#
+#   * `actions`        -- the person's surface. Request, inspect, approve,
+#                         cancel. Nothing on it reaches an operating system.
+#   * `device_actions` -- the enrolled device's surface, authenticated by its
+#                         own fail-closed resolver (`device_action_auth`),
+#                         which is a different module global from the inbound
+#                         observation resolver's. Opening observation capture
+#                         does not open actuation.
+#
+# Deliberately NOT added to `_ADMISSION_EXEMPT_PATHS`: both write governed
+# state and need a live kernel, so they must be refused during the startup and
+# shutdown windows like every other real ingress point.
+app.include_router(actions.router)
+app.include_router(device_actions.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)
@@ -493,6 +512,15 @@ async def startup():
 
     maybe_install_device_resolver_from_env()
 
+    # The device action channel is fail-closed on its own, separate resolver.
+    # Installing the inbound observation resolver above does not open it, and
+    # this call installs nothing unless its own two independent gates are both
+    # set -- neither of which exists in any deployed configuration. See
+    # `device_action_auth`'s module docstring.
+    from . import device_action_auth
+
+    device_action_auth.maybe_install_test_resolver_from_env()
+
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
 
@@ -873,6 +901,36 @@ def _component_health(extra: dict[str, Any] | None = None) -> dict[str, Any]:
         }
     except Exception:
         components["inbound"] = {"status": "unknown"}
+
+    try:
+        from bartholomew.actuation import devices
+
+        from . import device_action_auth
+
+        open_for_actions = device_action_auth.get_resolver() is not None
+        registry = devices.get_registry()
+        components["device_actions"] = {
+            # An intentionally closed channel is working correctly, so this is
+            # "ok" either way -- what matters is that it says which it is, and
+            # that a deployment dispatching actions on test credentials cannot
+            # hide the fact.
+            "status": "ok",
+            "open": open_for_actions,
+            "test_resolver_active": device_action_auth.resolver_is_test_only(),
+            "registry": (
+                registry.describe()
+                if hasattr(registry, "describe")
+                else {"registry": type(registry).__name__}
+            ),
+            "detail": (
+                "The device action channel is closed: no device resolver installed. "
+                "Nothing is dispatched to any device."
+                if not open_for_actions
+                else "The device action channel is open."
+            ),
+        }
+    except Exception:
+        components["device_actions"] = {"status": "unknown"}
 
     if extra:
         components.update(extra)

@@ -61,6 +61,20 @@ embeddings = [
     "sentence-transformers>=2.2.0",
 ]
 
+# The Windows action companion's accessibility adapter (Session B). Deliberately
+# an extra, and deliberately Windows-only: `comtypes` is what reaches UI
+# Automation, which two capabilities need -- `windows.type_text`, to see whether
+# the caret is in a password field before it types, and
+# `windows.accessibility_action`, whose whole surface is the tree.
+#
+# Without it those two capabilities **refuse** rather than degrade. A companion
+# that cannot see where it is typing does not type; see
+# `bartholomew/windows_actuation/uia.py`. Every other capability works without
+# it, and nothing about the server side needs it at all.
+windows = [
+    "comtypes>=1.4; sys_platform == 'win32'",
+]
+
 [project.scripts]
 bartholomew = "bartholomew.cli:main"
 bartholomew-backfill-fts = "scripts.backfill_fts:main"
