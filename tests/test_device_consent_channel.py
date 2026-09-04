@@ -547,3 +547,43 @@ def test_cli_refuses_to_send_a_nonce_over_plaintext_off_loopback(db_path):
     )
     assert result.exit_code == 2
     assert "Refusing" in (result.output + str(result.stderr_bytes or b""))
+
+
+# ===========================================================================
+# A brake engaged while the person is deciding still stops the start
+# ===========================================================================
+
+
+async def test_a_brake_engaged_during_the_wait_denies_even_after_approval(db_path, tmp_path):
+    """Consent can take minutes. The brake read at gate 2 is stale by the
+    time the person answers; the seam re-reads it at the moment of action."""
+    from bartholomew.orchestrator.safety.governance_store import GovernanceStore
+
+    kernel_db = str(tmp_path / "kernel.db")
+    device_consent.install(db_path=db_path, ttl_seconds=30)
+
+    async def engage_brake_then_approve():
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            open_asks = device_consent.list_pending(db_path, include_nonce=True)
+            if open_asks:
+                GovernanceStore(kernel_db).engage("global", reason="test", actor="tester")
+                row = open_asks[0]
+                return device_consent.answer(
+                    db_path,
+                    row["request_id"],
+                    nonce=row["answer_nonce"],
+                    approve=True,
+                )
+        raise AssertionError("no ask appeared")
+
+    seam = rc.run_multimodal_session_through_runtime_contract(
+        "screen",
+        db_path=kernel_db,
+        capability_supported=True,
+        consent_context={"tenant_id": TENANT, "principal_id": TENANT, "device_id": DEVICE},
+    )
+    result, answered = await asyncio.gather(seam, engage_brake_then_approve())
+    assert answered.outcome == "approved", "the person did approve"
+    assert result.governance_allowed is False
+    assert result.outcome == "parking_brake_denied"

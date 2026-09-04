@@ -2465,8 +2465,13 @@ async def run_multimodal_session_through_runtime_contract(
             f"device does not declare the {kind} capability (fail-closed)"
         )
 
-    # Governance gate 2: ParkingBrake, read through GovernanceStore.
-    if allowed:
+    async def _brake_denies() -> tuple[bool, str | None]:
+        """(denied, reason) for the brake as it stands right now.
+
+        Read through `GovernanceStore` -- the same authority every other gate
+        reads -- and fail-closed on any error: an unreadable safety gate
+        denies a device start.
+        """
         try:
             from bartholomew.orchestrator.safety.governance_store import (
                 is_blocked_fail_closed_off_loop,
@@ -2477,17 +2482,22 @@ async def run_multimodal_session_through_runtime_contract(
                 resolved_db_path,
                 executor=blocking_executor,
             ):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = f"Blocked by parking brake (scope={brake_scope})"
+                return True, f"Blocked by parking brake (scope={brake_scope})"
+            return False, None
         except Exception:
             logger.exception(
                 "Brake check failed for scope=%s; failing closed",
                 brake_scope,
             )
+            return True, "Parking brake check errored"
+
+    # Governance gate 2: ParkingBrake, read through GovernanceStore.
+    if allowed:
+        denied, why = await _brake_denies()
+        if denied:
             allowed = False
             outcome = "parking_brake_denied"
-            reason = "Parking brake check errored"
+            reason = why
 
     # Governance gate 3: Identity Policy Decision (additive; see sight docstring).
     if allowed and identity_context is not None:
@@ -2503,6 +2513,17 @@ async def run_multimodal_session_through_runtime_contract(
             consent_prompt or prompt_subject,
             context=consent_context,
         )
+
+    # Gate 2 again, after the person answered. Consent can take minutes on an
+    # operator-reachable channel, and a brake engaged during that wait must
+    # stop the start: the gate is re-read at the moment of action, the same
+    # discipline an approved Windows action gets when its device leases it.
+    if allowed:
+        denied, why = await _brake_denies()
+        if denied:
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = why
 
     device_reflection = await _record_device_reflection(
         resolved_db_path,
