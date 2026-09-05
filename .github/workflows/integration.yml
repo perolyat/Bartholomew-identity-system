@@ -28,6 +28,9 @@ concurrency:
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONUNBUFFERED: "1"
+  # Wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output under xdist worker tmp paths (see ci.yml for the full rationale).
+  COLUMNS: "200"
 
 # A draft PR without the opt-in label runs nothing here (the workflow still
 # registers, with every job skipped).

@@ -37,6 +37,12 @@ concurrency:
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # A wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output. Without it, xdist worker tmp paths (…/popen-gw0/…) push the DB-path
+  # the brake commands print past an 80-col default and split it mid-token, so
+  # a substring assertion like ".../barth.db" fails on ".../ba\nrth.db". The
+  # tests are correct; only the rendered width was environment-dependent.
+  COLUMNS: "200"
   # The test session enables the deterministic-hash embedder explicitly (see
   # conftest.py); nothing here provisions a real model.
   PYTHONUNBUFFERED: "1"

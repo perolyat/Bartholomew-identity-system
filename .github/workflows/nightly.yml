@@ -23,6 +23,10 @@ on:
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONUNBUFFERED: "1"
+  # Wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output (see ci.yml for the full rationale). The serial Nightly runs would
+  # not trip it, but keeping it consistent avoids a tier-dependent surprise.
+  COLUMNS: "200"
 
 jobs:
   serial-full:

@@ -125,14 +125,49 @@ Candidate correctly skipped on the draft.
 Before → after for ordinary PR feedback: **~15.8 min → ~3.8 min on a main-based
 PR**, and the default suite runs once instead of four times.
 
+### Re-measured on the merged (post-Wave-2) tree
+
+Once the wave-two baseline merged, the default suite grew from 2,626 to **4,151
+tests**. On the merged tree the PR Fast `fast-tests` job runs the whole suite
+under `xdist -n auto --dist loadfile` in **~6 min** (measured 6:05), i.e. above
+the < 5 min aspiration. Quality (with the manifest and packaging contracts),
+smoke and Windows-fast stay ~1–2 min. Two things surfaced only under
+parallelism and were handled at the CI-config level, skipping no test:
+
+1. **Rich/Click path wrapping (deterministic, fixed).** Three
+   `test_kernel_db_path_resolution` tests assert a resolved DB path appears in
+   captured CLI output. Under xdist the worker tmp path (`…/popen-gw0/…`) pushes
+   the line past an 80-column default, so Rich split `barth.db` as `ba\nrth.db`
+   and the substring assertion failed. Fixed by setting **`COLUMNS: "200"`** at
+   every tier's workflow env; verified locally that the three tests pass under
+   xdist with it and fail without it. The tests are correct; only the rendered
+   width was environment-dependent.
+2. **The documented quiet-hours flake (probabilistic, not masked).**
+   `test_notifications_api.py::test_healthy_quiet_hours_response_is_not_marked_degraded`
+   returned 400 once under full-suite parallel load. It passed 3/3 in isolation
+   and 2/2 for its whole file under xdist, so it is the pre-existing quiet-hours
+   flake (writer lock lost during the scheduler startup burst; RISKS.md, CI.md,
+   docs/SESSION_HANDOFF.md) surfacing under contention, not a new break. It is
+   **not skipped, quarantined or retried away**; its root-cause fix remains a
+   separately-authorised product package, and the Nightly flake-hunt measures
+   its rate. A tier that hits it re-runs once to confirm the known flake, per
+   the repo's drive-to-green convention.
+
 ## 6. Unresolved bottlenecks & deferred improvements
 
+- **PR Fast is ~6 min on the merged tree, above the < 5 min aspiration.** The
+  full 4,151-test default suite under xdist is the cause. The deferred tuning
+  option, faithful to the tier definition ("a compact set of high-value
+  checks"), is to run a compact governance-plus-contracts subset in PR Fast and
+  keep the full suite with coverage in the Integration and Merge Candidate tiers
+  (where it already runs). Not done here to avoid a brittle hand-maintained
+  selection under time pressure; recorded as the first CI tuning follow-up.
 - **Integration / Merge Candidate wall-clock is projected, not yet CI-measured**
   — those jobs skip on a draft. Measure on the first PR marked ready or labelled
-  `ci:integration`; the components (coverage-xdist ≈ 5–6 min, integration/slow
-  serial 3:23, Windows lifecycle ≈ 2 min) project comfortably under target, but
-  confirm and tune (e.g. shard integration/slow) if the Windows full suite in
-  Merge Candidate approaches 20 min.
+  `ci:integration`; the components (coverage-xdist ≈ 6–8 min, integration/slow
+  serial 3:23, Windows lifecycle ≈ 2 min) project under target, but confirm and
+  tune (e.g. shard integration/slow) if the Windows full suite in Merge
+  Candidate approaches 20 min.
 - **Two ~10 s brake-contention governance tests** remain in PR Fast. They are
   governance-critical and cheap enough in parallel; revisit only if PR Fast
   exceeds target.
