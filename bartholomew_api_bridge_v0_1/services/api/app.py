@@ -54,14 +54,19 @@ from . import db_ctx
 from .db import DB_PATH, resolve_db_path
 from .models import ChatIn, ChatOut, ConversationList
 from .routes import (
+    actions,
     auth,
     awaiting_response,
     consent,
+    device_actions,
+    device_consent,
     governance,
     inbound,
+    learning,
     liveness,
     memory,
     metrics,
+    multimodal,
     notifications,
     onboarding,
     self_state,
@@ -105,11 +110,43 @@ app.include_router(awaiting_response.router)
 app.include_router(onboarding.router)
 app.include_router(training.router)
 
+# Package C: the visible multimodal status and stop surface. Read-and-stop
+# only -- there is deliberately no start endpoint here, because this API
+# bridge has no authentication and capture initiation must never be reachable
+# from an unauthenticated call (contract §7). See routes/multimodal.py.
+app.include_router(multimodal.router)
+# The person's answer to a device's ask to observe. Its routes refuse the
+# device credential; see routes/device_consent.py.
+app.include_router(device_consent.router)
+
+# Learning and Memory Control Centre (Package D). Deliberately NOT added to
+# `_ADMISSION_EXEMPT_PATHS`: every route here reads or mutates governed
+# learning state and needs a live kernel, so it must be refused during the
+# startup and shutdown windows like every other real ingress point.
+app.include_router(learning.router)
+
 # Governed inbound capture (Session D). Deliberately NOT added to
 # `_ADMISSION_EXEMPT_PATHS`: unlike health and static UI, capture writes
 # governed state and needs a live kernel, so it must be refused during the
 # startup and shutdown windows like every other real ingress point.
 app.include_router(inbound.router)
+
+# Governed Windows actuation (Session B). Two routers, because they are two
+# trust channels and must stay separable:
+#
+#   * `actions`        -- the person's surface. Request, inspect, approve,
+#                         cancel. Nothing on it reaches an operating system.
+#   * `device_actions` -- the enrolled device's surface, authenticated by its
+#                         own fail-closed resolver (`device_action_auth`),
+#                         which is a different module global from the inbound
+#                         observation resolver's. Opening observation capture
+#                         does not open actuation.
+#
+# Deliberately NOT added to `_ADMISSION_EXEMPT_PATHS`: both write governed
+# state and need a live kernel, so they must be refused during the startup and
+# shutdown windows like every other real ingress point.
+app.include_router(actions.router)
+app.include_router(device_actions.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)
@@ -161,7 +198,16 @@ atexit.register(lambda: db_ctx.wal_checkpoint_truncate(DB_PATH))
 _ADMISSION_EXEMPT_PATHS = frozenset(
     {"/", "/healthz", "/api/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"},
 )
-_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding", "/ui")
+# "/api/multimodal" (Package C): the capture/output status and stop surface.
+# Exempt for the same reason the UI shell is -- and one stronger one. These
+# routes read a process-local session registry and never touch the kernel, so
+# admission buys nothing; and a person who can see "Bartholomew is listening"
+# must be able to press stop during the startup and shutdown windows too. A
+# stop that 503s exactly when someone urgently wants capture to end would be
+# the wrong failure. Exempting these is safe in the direction that matters:
+# the surface can only report state and end sessions, never begin one -- there
+# is no start endpoint (see routes/multimodal.py).
+_ADMISSION_EXEMPT_PREFIXES = ("/api/liveness", "/api/onboarding", "/ui", "/api/multimodal")
 
 
 # =============================================================================
@@ -484,6 +530,93 @@ async def startup():
 
     inbound_auth.maybe_install_test_resolver_from_env()
 
+    # Package E: the real resolver the line above has always been a stand-in
+    # for. Off unless BARTH_DEVICE_INBOUND_AUTH is set, and it refuses to
+    # install alongside the test resolver rather than silently replacing it --
+    # a deployment configured with both has said two contradictory things
+    # about how it authenticates, and startup is where that must stop.
+    from bartholomew.platform.device_inbound import maybe_install_device_resolver_from_env
+
+    maybe_install_device_resolver_from_env()
+
+    # The device action channel is fail-closed on its own, separate resolver.
+    # Installing the inbound observation resolver above does not open it, and
+    # this call installs nothing unless its own two independent gates are both
+    # set -- neither of which exists in any deployed configuration. See
+    # `device_action_auth`'s module docstring.
+    from . import device_action_auth
+
+    device_action_auth.maybe_install_test_resolver_from_env()
+
+    # The double-gated test resolver exists so the whole action path -- HTTP
+    # boundary, validation, governance, approval, lease, result -- is provable
+    # against a real server process. The arming window is now part of that
+    # path, so a deployment that has said twice that it is a test also gets its
+    # test device armed; otherwise the test resolver would open a channel that
+    # nothing could ever carry an action through.
+    #
+    # This is the only code path that arms anything without an explicit human
+    # request, it is unreachable without BOTH of the test resolver's gates
+    # (neither of which exists in any deployed configuration), and it announces
+    # itself on `/api/health` exactly as the test resolver does.
+    if device_action_auth.resolver_is_test_only():
+        from bartholomew.actuation import arming as _arming
+        from bartholomew.platform.runtime_registry import (
+            bound_runtime_user_id as _bound_user,
+        )
+
+        _test_device = (
+            os.getenv(device_action_auth.TEST_RESOLVER_DEVICE_ENV) or ""
+        ).strip() or "test-device"
+        _arming.arm(
+            tenant_id=_bound_user() or device_action_auth.LOCAL_TENANT,
+            device_id=_test_device,
+            armed_by=device_action_auth.TEST_RESOLVER_LABEL,
+            reason="test resolver installed (both gates set)",
+        )
+
+    # Session F: put the cross-package seams in place before the kernel
+    # starts, so no tick, drive or request is ever served by a stand-in that
+    # a later line was about to replace. This installs Session E's registry
+    # as the one device truth for Packages B and C, and Session A's ingress
+    # as the one destination for Package C's events.
+    #
+    # It opens nothing on its own: the action channel stays behind its own
+    # environment gate, and a seam that fails to install leaves its package's
+    # fail-closed default in force rather than killing startup.
+    import logging as _logging
+
+    try:
+        from bartholomew.integration.install import install_seams
+        from bartholomew.platform.runtime_registry import bound_runtime_user_id
+
+        app.state.seam_report = install_seams(
+            db_path=resolve_db_path(),
+            tenant_id=bound_runtime_user_id(),
+        )
+    except Exception:
+        _logging.getLogger(__name__).exception(
+            "Session F seam installation failed; every package's fail-closed "
+            "default remains in force",
+        )
+
+    # The operator-reachable consent channel for device observation starts.
+    # Without it a headless server has no way for a person to answer the
+    # Runtime Contract's fail-closed consent gate, and every observation
+    # start refuses. It registers only the *device* consent handler: the
+    # plain memory-write consent handler stays unset, so queued sensitive
+    # writes keep queueing. It opens nothing on its own -- every ask still
+    # needs a person to answer it, once, within its expiry.
+    try:
+        from bartholomew.multimodal import device_consent as _device_consent
+
+        _device_consent.install(db_path=resolve_db_path())
+    except Exception:
+        _logging.getLogger(__name__).exception(
+            "Device consent channel installation failed; every device "
+            "observation start will refuse (fail-closed)",
+        )
+
     # Import here to avoid circular imports
     from bartholomew.kernel.daemon import KernelDaemon
 
@@ -556,6 +689,15 @@ async def startup():
 async def shutdown():
     if _kernel:
         await _kernel.stop()
+
+    # Take the device consent channel down with the process that installed
+    # it, so nothing outlives the server that could answer for it.
+    try:
+        from bartholomew.multimodal import device_consent as _device_consent
+
+        _device_consent.uninstall()
+    except Exception:
+        pass
 
     # Recorded after the kernel has actually stopped, never before: the whole
     # value of this row is that it distinguishes a process that completed its
@@ -795,10 +937,10 @@ async def _model_health() -> dict[str, Any]:
     return info
 
 
-def _component_health() -> dict[str, Any]:
+def _component_health(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Whether each always-on component is actually alive (Session D).
 
-    Four components an operator needs distinguished, because "the process is
+    Five components an operator needs distinguished, because "the process is
     up" answers none of them:
 
     * **service**  -- this HTTP process. If you are reading this, it is up.
@@ -810,6 +952,10 @@ def _component_health() -> dict[str, Any]:
       (no resolver) is a normal, reportable state, not a fault; a test-only
       resolver is flagged loudly so a running service can never be admitting
       events on test credentials unnoticed.
+    * **event_processing** -- what became of the events that came through that
+      door (Package A). Passed in through `extra` rather than computed here,
+      because it is a database read and this function runs on the event loop;
+      the caller takes it off-loop first.
 
     Returns the components plus a private `_overall` key: "ok" only when
     nothing is failed, "degraded" otherwise. Never raises -- a health endpoint
@@ -861,9 +1007,119 @@ def _component_health() -> dict[str, Any]:
     except Exception:
         components["inbound"] = {"status": "unknown"}
 
+    try:
+        from bartholomew.actuation import devices
+
+        from . import device_action_auth
+
+        open_for_actions = device_action_auth.get_resolver() is not None
+        registry = devices.get_registry()
+        components["device_actions"] = {
+            # An intentionally closed channel is working correctly, so this is
+            # "ok" either way -- what matters is that it says which it is, and
+            # that a deployment dispatching actions on test credentials cannot
+            # hide the fact.
+            "status": "ok",
+            "open": open_for_actions,
+            "test_resolver_active": device_action_auth.resolver_is_test_only(),
+            # Armed by the test resolver's own gates rather than by a person.
+            # Named separately so a running service can never be dispatching on
+            # a channel nobody deliberately opened without saying so.
+            "armed_by_test_resolver": device_action_auth.resolver_is_test_only(),
+            "registry": (
+                registry.describe()
+                if hasattr(registry, "describe")
+                else {"registry": type(registry).__name__}
+            ),
+            "detail": (
+                "The device action channel is closed: no device resolver installed. "
+                "Nothing is dispatched to any device."
+                if not open_for_actions
+                else "The device action channel is open."
+            ),
+        }
+    except Exception:
+        components["device_actions"] = {"status": "unknown"}
+
+    # Session F: which cross-package seams are actually live. An operator
+    # must be able to tell an integrated deployment from one running on each
+    # package's stand-in, and "the process is up" answers neither.
+    try:
+        from bartholomew.integration.install import last_report
+
+        report = last_report()
+        components["integration_seams"] = (
+            {"status": "ok", **report.to_dict()}
+            if report is not None
+            else {
+                "status": "ok",
+                "integrated": False,
+                "detail": (
+                    "Session F seams have not been installed in this process; "
+                    "every package's fail-closed default is in force."
+                ),
+            }
+        )
+    except Exception:
+        components["integration_seams"] = {"status": "unknown"}
+
+    if extra:
+        components.update(extra)
+
     failed = any(isinstance(v, dict) and v.get("status") == "failed" for v in components.values())
     components["_overall"] = "degraded" if failed else "ok"
     return components
+
+
+#: How long `/api/health` will wait for the event backbone's state before
+#: reporting that it could not tell. Generous for two indexed aggregate reads,
+#: short enough that a saturated worker thread cannot stall the health answer.
+EVENT_PROCESSING_HEALTH_TIMEOUT_S = 3.0
+
+
+async def _event_processing_health() -> dict[str, Any]:
+    """The event backbone's component, read off the event loop (Package A).
+
+    Degrades to "unknown" rather than raising, and reports a database that has
+    never processed anything as unavailable rather than as zero -- the same
+    rule `evidence_report` holds to, because "nothing was processed" and "we
+    could not tell" are opposite findings.
+
+    Bounded, because it runs on the daemon's shared worker thread and this
+    endpoint is what an operator (and `wait_for_health`) polls to find out
+    whether the service is alive. A health answer that hangs behind a slow
+    kernel operation is worse than one that says it could not tell in time,
+    so the wait is capped and a timeout is reported as exactly that. The
+    abandoned read is a read: nothing is left half-written by giving up on it.
+    """
+    if _kernel is None:
+        return {"status": "unknown", "reason": "no runtime is loaded in this process"}
+    try:
+        from bartholomew.kernel.blocking_executor import run_off_loop
+        from bartholomew.kernel.event_processing.health import health_component
+
+        return await asyncio.wait_for(
+            run_off_loop(
+                health_component,
+                _kernel.mem.db_path,
+                getattr(_kernel, "cfg", None),
+                executor=getattr(_kernel, "blocking_executor", None),
+            ),
+            timeout=EVENT_PROCESSING_HEALTH_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        return {
+            "status": "unknown",
+            "reason": (
+                "Processing state could not be read within "
+                f"{EVENT_PROCESSING_HEALTH_TIMEOUT_S}s."
+            ),
+        }
+    except Exception as e:  # pragma: no cover - a health read must never 500
+        import logging
+
+        logging.getLogger(__name__).exception("Event-processing health could not be read")
+        return {"status": "unknown", "reason": f"{type(e).__name__}: {e}"}
 
 
 def _retrieval_health() -> dict[str, Any]:
@@ -933,7 +1189,7 @@ async def health():
         kernel_info = {"kernel_online": False}
 
     model_info = await _model_health()
-    components = _component_health()
+    components = _component_health({"event_processing": await _event_processing_health()})
     retrieval_info = _retrieval_health()
 
     return {

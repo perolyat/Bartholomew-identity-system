@@ -23,26 +23,22 @@ wave:
     from explicitly governed corrections. Target loop:
     Observe -> Interpret -> Decide -> Govern -> Act -> Verify -> Learn.
   baseline:
-    # Wave 3 is built on the wave-two integration candidate, NOT on bare main.
-    # main @ adea4b1 carries none of packages A-E; the wave-two work (packages
-    # A canonical event backbone, B governed Windows actuation, C multimodal
-    # presence, D learning/memory control centre, E device registry & trusted
-    # groups) plus the companion-completion repairs (authentication, an
+    # The wave-two baseline is now MERGED to main. main @ 99ee734 carries all of
+    # packages A-E (A canonical event backbone, B governed Windows actuation,
+    # C multimodal presence, D learning/memory control centre, E device registry
+    # & trusted groups) plus the companion-completion repairs (authentication, an
     # operator-reachable device consent channel, an arming window, one DB path
-    # resolver) live only on the unmerged PR #89/#90 heads.
-    main_sha: adea4b132138f180d37ee81dd3d854c4b9c9f459
+    # resolver). PR #89 merged as 68222a3, PR #90 as 99ee734. Builders branch
+    # from main directly; the earlier "merge the baseline first" blocker is
+    # discharged.
+    main_sha: 99ee734af701f87e472229fe0191ac0b1b00e7b5
     wave_two_integration_pr: 89
-    wave_two_integration_branch: claude/bartholomew-wave-two-integration-qjrxkr
-    wave_two_integration_sha: e3f92565c975d683fd75895395745a95842ab23d
+    wave_two_integration_merge_sha: 68222a3
     companion_completion_pr: 90
-    companion_completion_branch: claude/windows-companion-completion-pkg
-    companion_completion_sha: a957a7e0e921406c4053b01ede4066b695e9ccf1
+    companion_completion_merge_sha: 99ee734af701f87e472229fe0191ac0b1b00e7b5
     build_on: >-
-      Each W03 builder branches from the wave-two integration head once it is
-      merged to main. Until it is, builders branch from
-      claude/bartholomew-wave-two-integration-qjrxkr. The one blocker before
-      builders start is that this baseline must be merged to main (see
-      W03_PREP_ASSESSMENT.md "Blockers before builders start").
+      Each W03 builder branches from main (>= 99ee734), which carries the whole
+      wave-two baseline. No pre-branch merge is pending.
   ci_tiers:
     pr_fast:
       workflow: .github/workflows/ci.yml
@@ -85,7 +81,7 @@ sessions:
     branch: claude/wave-3-prep-ci-6g1u86
     contract: docs/waves/W03/README.md
     required_ci_tier: pr_fast
-    status: in_progress
+    status: complete
     depends_on: []
     owns:
       - .github/workflows
@@ -101,7 +97,7 @@ sessions:
     handoff: BARTHOLOMEW_W03_A_HANDOFF.md
     contract: docs/waves/W03/W03_A_CONTRACT.md
     required_ci_tier: integration
-    status: not_started
+    status: ready_to_start
     depends_on: []
     requires_frozen: []
     owns:
@@ -119,7 +115,7 @@ sessions:
     handoff: BARTHOLOMEW_W03_B_HANDOFF.md
     contract: docs/waves/W03/W03_B_CONTRACT.md
     required_ci_tier: integration
-    status: not_started
+    status: ready_to_start
     depends_on:
       - W03-A
       - W03-C
@@ -137,7 +133,7 @@ sessions:
     handoff: BARTHOLOMEW_W03_C_HANDOFF.md
     contract: docs/waves/W03/W03_C_CONTRACT.md
     required_ci_tier: integration
-    status: not_started
+    status: ready_to_start
     depends_on:
       - W03-A
     requires_frozen: []
@@ -159,7 +155,7 @@ sessions:
     handoff: BARTHOLOMEW_W03_D_HANDOFF.md
     contract: docs/waves/W03/W03_D_CONTRACT.md
     required_ci_tier: integration
-    status: not_started
+    status: ready_to_start
     depends_on: []
     requires_frozen: []
     owns:

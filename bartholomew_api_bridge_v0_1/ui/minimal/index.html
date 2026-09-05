@@ -183,6 +183,42 @@
     .memory-note-warn { background:#2a2011; color:#fbbf24; }
     .memory-note-err { background:#2a1113; color:#f87171; }
 
+    /* === Learning and Memory Control Centre (Package D) ===
+       Reuses the memory-item vocabulary above wherever the shape is the same
+       (a record, its tags, its note) and adds only what this view genuinely
+       needs: a mode banner that cannot be mistaken for decoration, a decision
+       chip whose three states are visually distinct, and a conflict panel
+       that shows two versions side by side. */
+    .shadow-banner { border:1px solid #92400e; background:#231a0e; border-radius:12px;
+                     padding:14px 16px; margin-bottom:16px; line-height:1.6; }
+    .shadow-banner strong { color:#fbbf24; }
+    .shadow-banner .shadow-mode { font-family: ui-monospace, monospace; color:#fbbf24; }
+    .learn-sub { font-size:12px; color:#6b7280; margin:-4px 0 12px; line-height:1.6; }
+    .learn-grid { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+    .learn-stat { border:1px solid #263041; border-radius:10px; padding:8px 12px; min-width:110px; }
+    .learn-stat-n { font-size:18px; font-weight:600; }
+    .learn-stat-l { font-size:11px; color:#6b7280; text-transform:uppercase; letter-spacing:.6px; }
+    .decision { font-size:11px; border-radius:999px; padding:3px 10px; border:1px solid #374151; }
+    .decision-would_accept { border-color:#059669; color:#6ee7b7; }
+    .decision-would_escalate { border-color:#d97706; color:#fbbf24; }
+    .decision-would_refuse { border-color:#dc2626; color:#f87171; }
+    .provenance { background:#0b1220; border-radius:8px; padding:10px 12px; margin-top:8px;
+                  font-size:12px; line-height:1.7; color:#9ca3af; }
+    .provenance strong { color:#e8f0fe; }
+    .provenance ul { margin:6px 0 0; padding-left:18px; }
+    .conflict { border:1px solid #92400e; background:#231a0e; border-radius:10px;
+                padding:12px; margin-top:8px; font-size:13px; line-height:1.6; }
+    .conflict-pair { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
+    .conflict-side { flex:1 1 240px; border:1px solid #263041; border-radius:8px; padding:10px;
+                     background:#0b1220; }
+    .conflict-side h5 { margin:0 0 6px; font-size:11px; text-transform:uppercase;
+                        letter-spacing:.6px; color:#6b7280; }
+    .policy-field { display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
+    .policy-field label { flex:0 0 260px; font-size:13px; }
+    .policy-field input[type=number], .policy-field input[type=text] { width:160px; }
+    .policy-field .hint { font-size:11px; color:#6b7280; flex:1 1 100%; margin-left:0; }
+    .learn-check { width:auto; }
+
     .brake-checked { font-size:11px; color:#6b7280; margin-top:8px; }
     .brake-checked-stale { color:#f87171; }
 
@@ -323,6 +359,8 @@
       <nav class="viewnav" role="tablist" aria-label="Views">
         <button class="viewtab" role="tab" id="tab-home"
                 aria-controls="view-home" onclick="showView('home')">Bartholomew</button>
+        <button class="viewtab" role="tab" id="tab-learning"
+                aria-controls="view-learning" onclick="showView('learning')">Learning &amp; Memory</button>
         <button class="viewtab" role="tab" id="tab-workshop"
                 aria-controls="view-workshop" onclick="showView('workshop')">Workshop</button>
       </nav>
@@ -740,6 +778,178 @@
        See the sprint handoff for the residual D4 items. -->
 
   </section><!-- /view-workshop -->
+
+  <!-- =====================================================================
+       Learning and Memory Control Centre (Package D)
+
+       One place for what Bartholomew believes he has learned, what he is
+       proposing to learn, what a future auto-acceptance policy *would* have
+       decided, and what any of it stands on.
+
+       The first thing on the view is the statement that automatic acceptance
+       is off, because it is the thing a person most needs to know and the
+       thing a preview screen could most easily imply otherwise. It is not
+       decoration: it is rendered from /api/learning/overview's shadow_mode
+       block, which is the same value the seam records in its audit, so the
+       banner and the behaviour cannot disagree.
+
+       Approving and accepting are two buttons, deliberately. Collapsing them
+       into one would make "I approve of this" and "learn this now" the same
+       gesture, which is the distinction the whole learning design rests on.
+
+       Diagnostics are available here (fingerprints, matched rule ids, policy
+       revisions) but they sit under the plain-language explanation, never in
+       front of it.
+       ===================================================================== -->
+  <section id="view-learning" role="tabpanel" aria-labelledby="tab-learning" hidden>
+
+    <div id="learning-banner" class="shadow-banner" role="status">
+      <div><strong>Bartholomew is not accepting lessons on his own.</strong></div>
+      <div id="learning-banner-notice" style="margin-top:6px">
+        Loading what he currently believes and proposes&hellip;
+      </div>
+      <div class="nudge-ts" style="margin-top:8px">
+        Execution mode: <span id="learning-mode" class="shadow-mode">checking…</span>
+      </div>
+    </div>
+
+    <div id="learning-stats" class="learn-grid"></div>
+
+    <h2 class="section-heading">Lessons he is proposing</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Candidate lessons</h3>
+        <div class="row">
+          <select id="learning-state" aria-label="Filter candidate lessons by review state"
+                  onchange="refreshCandidates()">
+            <option value="proposed">Waiting for you</option>
+            <option value="">All</option>
+            <option value="accepted">Accepted</option>
+            <option value="rejected">Rejected</option>
+          </select>
+          <button onclick="refreshCandidates()">Refresh</button>
+        </div>
+      </div>
+      <div class="learn-sub">
+        Each of these is something Bartholomew inferred from one recorded
+        outcome. Nothing here changes what he knows until you approve that
+        exact lesson and then accept it.
+      </div>
+      <input id="learning-search" placeholder="Search what he is proposing…"
+             oninput="debouncedCandidates()" aria-label="Search candidate lessons"/>
+      <div id="learning-candidates" style="margin-top:10px"></div>
+    </div>
+
+    <h2 class="section-heading">What he has learned</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Accepted knowledge</h3>
+        <button onclick="refreshCompetencies()">Refresh</button>
+      </div>
+      <input id="learning-competency-search" placeholder="Search what he has learned…"
+             oninput="debouncedCompetencies()" aria-label="Search accepted knowledge"/>
+      <div class="learn-sub">
+        These are the only records here he can actually recall. Correcting one
+        keeps its history; revoking one stops him recalling it, and keeps the
+        record that you once agreed to it.
+      </div>
+      <div id="learning-competencies"></div>
+    </div>
+
+    <h2 class="section-heading">What he used to think</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Superseded and corrected</h3>
+        <button onclick="refreshSuperseded()">Refresh</button>
+      </div>
+      <div class="learn-sub">
+        Earlier versions of lessons you edited, and of knowledge you corrected.
+        Kept so you can see what changed. None of it can be recalled: he only
+        ever uses the current version.
+      </div>
+      <div id="learning-superseded"></div>
+    </div>
+
+    <h2 class="section-heading">Everything he remembers</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Memories and preferences</h3>
+        <div class="row">
+          <select id="learning-memory-area" aria-label="Which memories to show"
+                  onchange="refreshMemoryPicker()">
+            <option value="all">Everything</option>
+            <option value="preferences">Preferences</option>
+            <option value="facts">Other memories</option>
+          </select>
+          <button onclick="refreshMemoryPicker()">Refresh</button>
+        </div>
+      </div>
+      <div class="learn-sub">
+        What he has stored about you, with how each record is classified and
+        how long it is kept. Correcting and forgetting them lives on the
+        <a href="#/" onclick="showView('home')">Bartholomew</a> view, which
+        already owns those; here you can read them and pick records to export
+        alongside a lesson.
+      </div>
+      <input id="learning-memory-search" placeholder="Search his memories…"
+             oninput="debouncedMemoryPicker()" aria-label="Search memories and preferences"/>
+      <div id="learning-memory-picker" style="margin-top:10px"></div>
+    </div>
+
+    <h2 class="section-heading">Export</h2>
+    <div class="card">
+      <div class="learn-sub">
+        Only the records you tick are exported. There is no "export everything"
+        button, and sensitive, unreadable or internal approval records are left
+        out and listed with the reason.
+      </div>
+      <div class="row">
+        <span id="learning-export-count" class="badge">nothing selected</span>
+        <button class="primary" onclick="exportSelectedLearning()">Export selected</button>
+        <button onclick="clearLearningSelection()">Clear selection</button>
+      </div>
+      <div id="learning-export-status" class="memory-note" style="display:none"></div>
+    </div>
+
+    <h2 class="section-heading">Preview policy</h2>
+    <div class="card" id="learning-policy-card">
+      <h3 style="margin:0 0 6px">If Bartholomew could accept lessons on his own</h3>
+      <div class="learn-sub">
+        These settings describe what you would want a future version to do.
+        They change what the preview says. They cannot make him accept
+        anything: this release can only show you what it would have decided.
+      </div>
+      <div id="learning-policy-form"></div>
+      <div id="learning-policy-status" class="memory-note" style="display:none"></div>
+    </div>
+
+    <h2 class="section-heading">Previews and approvals</h2>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Recorded previews</h3>
+        <button onclick="refreshEvaluations()">Refresh</button>
+      </div>
+      <div class="learn-sub">
+        A record of what the policy would have decided, each one naming the
+        policy revision it ran under. None of them accepted anything.
+      </div>
+      <div id="learning-evaluations"></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">Acceptance approvals</h3>
+        <button onclick="refreshApprovals()">Refresh</button>
+      </div>
+      <div class="learn-sub">
+        Every approval you have granted, and whether it still applies. Editing
+        a lesson after approving it cancels the approval — the record of the
+        decision is kept either way.
+      </div>
+      <div id="learning-approvals"></div>
+    </div>
+
+  </section><!-- /view-learning -->
 
   <script>
     const API = location.origin;
@@ -2046,7 +2256,7 @@
     // Two views, addressed by URL hash so a reload keeps you where you were
     // and a view can be linked. Not a privilege boundary -- see the comment
     // on <header> -- a separation of attention.
-    const VIEWS = ["home", "workshop"];
+    const VIEWS = ["home", "learning", "workshop"];
 
     function showView(name){
       if(!VIEWS.includes(name)) name = "home";
@@ -2064,6 +2274,14 @@
         // replaceState, not assignment: switching views should not stack up
         // history entries the back button has to walk through.
         history.replaceState(null, "", target);
+      }
+      // Learning & Memory is loaded on demand rather than on page load: it is
+      // several requests, and an ordinary session that never opens it should
+      // not pay for them. Re-read on every activation, so returning to the
+      // view after acting elsewhere shows what is actually stored rather than
+      // whatever was rendered last time.
+      if(name === "learning" && typeof refreshLearningView === "function"){
+        refreshLearningView();
       }
     }
 
@@ -2389,6 +2607,1219 @@
       }catch(e){
         alert("The export could not be produced: " + e.message);
       }
+    }
+
+    // === Learning and Memory Control Centre (Package D) ===
+    //
+    // Every call goes to /api/learning, which is a translation layer over the
+    // governed seams -- nothing here decides what may be learned, stored or
+    // shown. In particular this file never assembles an approval, never posts
+    // to /accept off the back of a preview, and never treats a "would accept"
+    // as permission to do anything.
+    //
+    // Records are addressed by index into these arrays, never by
+    // interpolating a key into markup -- the same rule, for the same reason,
+    // that renderMemoryItem() documents at length above.
+    let learningCandidates = [];
+    let learningCompetencies = [];
+    let learningMemoryRows = [];
+    let learningPolicy = null;
+    // Selected export records, keyed "<kind> <key>" so a kind and key
+    // containing a separator character cannot collide.
+    const learningSelection = new Map();
+
+    function selKey(kind, key){ return kind + " " + key; }
+
+    // Messages that must survive the list re-render that follows an action.
+    //
+    // Every mutating handler here refreshes the list so the page shows what is
+    // actually stored -- which destroys the element the confirmation was just
+    // written into. The user then saw their edit apply with no explanation of
+    // whether it changed the lesson's meaning, which is precisely the sentence
+    // this view exists to say. Keyed by record identity rather than by list
+    // position, so a message cannot end up attached to a different record when
+    // the refreshed list comes back in a different order.
+    const learningNotices = new Map();
+
+    function setNotice(kind, key, cls, text){
+      if(text) learningNotices.set(selKey(kind, key), { cls, text });
+      else learningNotices.delete(selKey(kind, key));
+    }
+
+    function noticeMarkup(kind, key){
+      const notice = learningNotices.get(selKey(kind, key));
+      if(!notice) return '';
+      return `<div class="memory-note ${escapeHtml(notice.cls)}">${escapeHtml(notice.text)}</div>`;
+    }
+
+    // A blank line inside a confirm() dialog. Named, because these dialogs
+    // carry the one sentence that separates "I approve of this wording" from
+    // "teach this to Bartholomew", and that sentence needs to be readable.
+    const NL2 = "\n\n";
+
+    let candidateTimer = null;
+    function debouncedCandidates(){
+      clearTimeout(candidateTimer);
+      candidateTimer = setTimeout(refreshCandidates, 250);
+    }
+    let competencyTimer = null;
+    function debouncedCompetencies(){
+      clearTimeout(competencyTimer);
+      competencyTimer = setTimeout(refreshCompetencies, 250);
+    }
+    let memoryPickerTimer = null;
+    function debouncedMemoryPicker(){
+      clearTimeout(memoryPickerTimer);
+      memoryPickerTimer = setTimeout(refreshMemoryPicker, 250);
+    }
+
+    // The banner is rendered from the server's own shadow_mode block rather
+    // than from a constant in this file, so the page cannot claim a mode the
+    // backend is not in.
+    function renderShadowBanner(shadow){
+      const notice = document.getElementById("learning-banner-notice");
+      const mode = document.getElementById("learning-mode");
+      if(!notice || !mode || !shadow) return;
+      notice.textContent = shadow.notice || "";
+      mode.textContent = shadow.execution_mode + (
+        shadow.automatic_acceptance_enabled ? " (automatic acceptance ON)" : " — preview only"
+      );
+    }
+
+    async function refreshLearningOverview(){
+      const statsEl = document.getElementById("learning-stats");
+      if(!statsEl) return;
+      try{
+        const r = await fetch(API + "/api/learning/overview");
+        if(!r.ok){
+          statsEl.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load the learning overview"))}</div>`;
+          return;
+        }
+        const j = await r.json();
+        renderShadowBanner(j.shadow_mode);
+        const stats = [
+          ["Waiting for you", j.candidates.proposed],
+          ["Accepted", j.candidates.accepted],
+          ["Rejected", j.candidates.rejected],
+          ["He can recall", j.counts.accepted_competencies],
+          ["Previews recorded", j.counts.shadow_evaluations],
+          ["Approvals granted", j.counts.acceptance_approvals],
+        ];
+        statsEl.innerHTML = stats.map(([label, n]) => `
+          <div class="learn-stat">
+            <div class="learn-stat-n">${escapeHtml(String(n ?? 0))}</div>
+            <div class="learn-stat-l">${escapeHtml(label)}</div>
+          </div>`).join('');
+      }catch(e){
+        statsEl.innerHTML = `<div class="empty-state">Could not load the learning overview: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function refreshCandidates(){
+      const el = document.getElementById("learning-candidates");
+      if(!el) return;
+      const state = document.getElementById("learning-state").value;
+      const search = (document.getElementById("learning-search").value || "").trim();
+      const params = new URLSearchParams({ limit: "100" });
+      if(state) params.set("review_state", state);
+      if(search) params.set("search", search);
+      try{
+        const r = await fetch(API + "/api/learning/candidates?" + params.toString());
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load candidate lessons"))}</div>`;
+          return;
+        }
+        const j = await r.json();
+        renderShadowBanner(j.shadow_mode);
+        learningCandidates = j.candidates || [];
+        if(!learningCandidates.length){
+          el.innerHTML = '<div class="empty-state">Nothing here. Bartholomew proposes a lesson only after an objective reaches a recorded outcome.</div>';
+          return;
+        }
+        el.innerHTML = learningCandidates.map(renderCandidateItem).join('');
+        bindCandidateActions();
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load candidate lessons: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function renderCandidateItem(c, index){
+      const tags = [];
+      tags.push(`<span class="memory-tag">${escapeHtml(c.review_state)}</span>`);
+      tags.push(`<span class="memory-tag">${escapeHtml(c.epistemic_status)}</span>`);
+      tags.push(`<span class="memory-tag">confidence ${escapeHtml(Number(c.confidence).toFixed(2))}</span>`);
+      tags.push(`<span class="memory-tag">${escapeHtml(c.classification)}</span>`);
+      if(c.privacy_class){
+        tags.push(`<span class="memory-tag memory-tag-privacy">${escapeHtml(c.privacy_class)}</span>`);
+      }
+      if(c.risk_class){
+        tags.push(`<span class="memory-tag">risk: ${escapeHtml(c.risk_class)}</span>`);
+      }else{
+        tags.push('<span class="memory-tag" title="Nobody has assessed how risky acting on this would be. The preview treats an unassessed lesson as the most risky.">risk not assessed</span>');
+      }
+      if(c.display_state && c.display_state !== "normal"){
+        tags.push(`<span class="memory-tag memory-tag-keep">${escapeHtml(c.display_state.replace(/_/g,' '))}</span>`);
+      }
+
+      // Sharing: eligibility is real, state is not yet connected to anything.
+      const sharing = c.sharing || {};
+      const sharingLine = sharing.transport_available
+        ? `sharing: ${escapeHtml(sharing.state)}`
+        : `sharing: ${sharing.eligible ? 'could be shared' : 'not shareable'} — ${escapeHtml(sharing.detail || '')}`;
+
+      const approval = c.approval
+        ? `<div class="memory-note ${c.approval.valid_for_current_revision ? 'memory-note-ok' : 'memory-note-warn'}">${escapeHtml(c.approval.detail)} (approved by ${escapeHtml(c.approval.approver)})</div>`
+        : '<div class="nudge-ts">Not approved. Accepting needs your approval of this exact lesson first.</div>';
+
+      const experience = c.supporting_experience || {};
+      const observations = (experience.observations || [])
+        .map(o => `<li>${escapeHtml(o)}</li>`).join('');
+
+      return `
+        <div class="memory-item" data-cindex="${index}">
+          <div class="memory-head">
+            <div>
+              <div class="memory-key">${escapeHtml(c.rule)}</div>
+              <div class="memory-kind">${escapeHtml(c.key)} · revision ${escapeHtml(String(c.revision))} · updated ${escapeHtml(formatTimeAgo(c.updated_at) || c.updated_at || '')}</div>
+            </div>
+            <div class="row">
+              ${c.review_state === 'proposed' ? '<button data-cact="edit">Edit</button>' : ''}
+              ${c.review_state === 'proposed' ? '<button data-cact="approve">Approve this exact lesson</button>' : ''}
+              ${c.review_state === 'proposed' ? `<button class="ack" data-cact="accept"${c.can_accept_now ? '' : ' disabled title="Approve this exact lesson first."'}>Accept</button>` : ''}
+              ${c.review_state === 'proposed' ? '<button class="dismiss" data-cact="reject">Reject</button>' : ''}
+              <label class="row" style="gap:4px;font-size:12px"
+                     title="Recorded observations you know of that contradict this lesson. Nothing in this release measures that automatically, so a zero here means nobody has said otherwise — not that nothing does.">
+                contradicted by
+                <input type="number" min="0" value="0" class="learn-check"
+                       style="width:56px" data-cact="contradictions"
+                       aria-label="How many recorded observations contradict this lesson"/>
+              </label>
+              <button data-cact="preview">Preview policy</button>
+              <label class="row" style="gap:4px;font-size:12px">
+                <input type="checkbox" class="learn-check" data-cact="select"
+                       aria-label="Select this lesson for export"/> export
+              </label>
+            </div>
+          </div>
+          <div class="memory-value">${escapeHtml(c.conditions || 'No conditions recorded.')}</div>
+          <div class="memory-tags">${tags.join('')}</div>
+          <div class="provenance">
+            <div><strong>What this stands on</strong></div>
+            <div>Objective ${escapeHtml(String(experience.objective_id ?? '?'))}: ${escapeHtml(experience.objective_title || '')} (${escapeHtml(experience.resolution || 'no recorded resolution')})</div>
+            <ul>${observations || '<li>No observations recorded.</li>'}</ul>
+            <div style="margin-top:6px">Recorded by ${escapeHtml((c.provenance||{}).recorded_by || 'unknown')} from ${escapeHtml((c.provenance||{}).source_type || 'unknown')} · ${sharingLine}</div>
+            <div style="margin-top:4px">How it is kept: ${escapeHtml(c.retention || 'not recorded')}</div>
+          </div>
+          ${approval}
+          <div class="candidate-editor" style="display:none"></div>
+          <div class="candidate-preview"></div>
+          <div class="candidate-status">${noticeMarkup(c.kind, c.key)}</div>
+        </div>`;
+    }
+
+    function candidateNode(index){
+      return document.querySelector(`.memory-item[data-cindex="${index}"]`);
+    }
+
+    function setCandidateStatus(index, cls, text){
+      const c = learningCandidates[index];
+      if(c) setNotice(c.kind, c.key, cls, text);
+      const node = candidateNode(index);
+      if(!node) return;
+      const el = node.querySelector(".candidate-status");
+      el.innerHTML = '';
+      const line = document.createElement("div");
+      line.className = "memory-note " + cls;
+      line.textContent = text;
+      el.appendChild(line);
+    }
+
+    function bindCandidateActions(){
+      document.querySelectorAll('#learning-candidates .memory-item [data-cact]').forEach(control => {
+        const item = control.closest(".memory-item");
+        const index = Number(item.dataset.cindex);
+        if(!Number.isInteger(index) || !learningCandidates[index]) return;
+        const act = control.dataset.cact;
+        // A value input, not a button: nothing to bind, it is read on preview.
+        if(act === "contradictions") return;
+        if(act === "select"){
+          const c = learningCandidates[index];
+          control.checked = learningSelection.has(selKey(c.kind, c.key));
+          control.addEventListener("change", () => toggleLearningSelection(c.kind, c.key, control.checked));
+          return;
+        }
+        control.addEventListener("click", () => {
+          if(act === "edit") beginEditCandidate(index);
+          else if(act === "approve") approveCandidate(index);
+          else if(act === "accept") acceptCandidate(index);
+          else if(act === "reject") rejectCandidate(index);
+          else if(act === "preview") previewCandidate(index);
+        });
+      });
+    }
+
+    // A conflict is never resolved for the user. Both versions are shown and
+    // the edit is left in the box so nothing they typed is lost, but the save
+    // did not happen and the page says so.
+    function renderCandidateConflict(index, detail){
+      const node = candidateNode(index);
+      if(!node) return;
+      const editor = node.querySelector(".candidate-editor");
+      const existing = editor.querySelector(".conflict");
+      if(existing) existing.remove();
+      const panel = document.createElement("div");
+      panel.className = "conflict";
+      panel.innerHTML = `
+        <div><strong>This lesson changed while you had it open.</strong> Nothing was saved.</div>
+        <div class="conflict-pair">
+          <div class="conflict-side">
+            <h5>What is stored now (revision ${escapeHtml(String(detail.stored_revision))})</h5>
+            <div>${escapeHtml(detail.stored_rule || '')}</div>
+            <div class="nudge-ts" style="margin-top:6px">${escapeHtml(detail.stored_conditions || '')}</div>
+          </div>
+          <div class="conflict-side">
+            <h5>What you were editing (revision ${escapeHtml(String(detail.your_expected_revision))})</h5>
+            <div>Your changes are still in the box below.</div>
+          </div>
+        </div>
+        <div style="margin-top:8px">Reload this lesson, decide which version you want, and save again.</div>
+        <div class="row" style="margin-top:8px">
+          <button data-conflict="reload">Reload this lesson</button>
+        </div>`;
+      editor.prepend(panel);
+      panel.querySelector('[data-conflict="reload"]').onclick = () => refreshCandidates();
+    }
+
+    function beginEditCandidate(index){
+      const c = learningCandidates[index];
+      const node = candidateNode(index);
+      if(!c || !node) return;
+      const editor = node.querySelector(".candidate-editor");
+      editor.style.display = "block";
+      editor.innerHTML = `
+        <div class="learn-sub" style="margin-top:10px">
+          Changing what this lesson says, what it applies to, how confident it
+          is, how risky it is, which applications it touches or whether it
+          could be shared is a change of meaning: it cancels any approval and
+          you will need to approve the new version.
+          Setting it aside or pinning it is not — that changes nothing about
+          what it claims.
+        </div>
+        <label class="learn-sub" for="cedit-rule-${index}">The lesson</label>
+        <textarea id="cedit-rule-${index}" rows="2" aria-label="The lesson"></textarea>
+        <label class="learn-sub" for="cedit-cond-${index}">When it applies</label>
+        <textarea id="cedit-cond-${index}" rows="2" aria-label="When it applies"></textarea>
+        <div class="policy-field">
+          <label for="cedit-risk-${index}">How risky is acting on it?</label>
+          <select id="cedit-risk-${index}">
+            <option value="">Not assessed</option>
+            <option value="low">Low</option>
+            <option value="moderate">Moderate</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-rev-${index}">Could acting on it be undone?</label>
+          <select id="cedit-rev-${index}">
+            <option value="">Not assessed</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-apps-${index}">Applications it affects</label>
+          <input id="cedit-apps-${index}" type="text" placeholder="comma separated, or blank"/>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-class-${index}">How it is classified</label>
+          <select id="cedit-class-${index}">
+            <option value="personal">Personal to me</option>
+            <option value="potentially_generalisable">Might apply more widely</option>
+            <option value="system">About how Bartholomew works</option>
+          </select>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-conf-${index}">How confident he should be (0–1)</label>
+          <input id="cedit-conf-${index}" type="number" min="0" max="1" step="0.05"/>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-share-${index}">Could it be shared beyond you?</label>
+          <select id="cedit-share-${index}">
+            <option value="">Work it out from the classification</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </div>
+        <div class="policy-field">
+          <label for="cedit-display-${index}">Display (does not change its meaning)</label>
+          <select id="cedit-display-${index}">
+            <option value="normal">Normal</option>
+            <option value="pinned">Pinned</option>
+            <option value="set_aside">Set aside</option>
+          </select>
+        </div>
+        <div class="row">
+          <button class="ack" data-cedit="save">Save changes</button>
+          <button data-cedit="cancel">Cancel</button>
+        </div>`;
+      editor.querySelector(`#cedit-rule-${index}`).value = c.rule || "";
+      editor.querySelector(`#cedit-cond-${index}`).value = c.conditions || "";
+      editor.querySelector(`#cedit-risk-${index}`).value = c.risk_class || "";
+      editor.querySelector(`#cedit-rev-${index}`).value =
+        c.reversible === null || c.reversible === undefined ? "" : String(c.reversible);
+      editor.querySelector(`#cedit-apps-${index}`).value = (c.affected_applications || []).join(", ");
+      editor.querySelector(`#cedit-class-${index}`).value = c.classification || "personal";
+      editor.querySelector(`#cedit-conf-${index}`).value =
+        c.confidence === null || c.confidence === undefined ? "" : String(c.confidence);
+      editor.querySelector(`#cedit-share-${index}`).value =
+        c.sharing_eligible_explicit === null || c.sharing_eligible_explicit === undefined
+          ? "" : String(c.sharing_eligible_explicit);
+      editor.querySelector(`#cedit-display-${index}`).value = c.display_state || "normal";
+      editor.querySelector('[data-cedit="save"]').onclick = () => saveCandidateEdit(index);
+      editor.querySelector('[data-cedit="cancel"]').onclick = () => { editor.style.display = "none"; };
+    }
+
+    async function saveCandidateEdit(index){
+      const c = learningCandidates[index];
+      if(!c) return;
+      const editor = candidateNode(index).querySelector(".candidate-editor");
+      const reversible = editor.querySelector(`#cedit-rev-${index}`).value;
+      const apps = editor.querySelector(`#cedit-apps-${index}`).value
+        .split(",").map(a => a.trim()).filter(Boolean);
+      const shareable = editor.querySelector(`#cedit-share-${index}`).value;
+      const confidenceRaw = (editor.querySelector(`#cedit-conf-${index}`).value || "").trim();
+      const body = {
+        // Always sent. The API refuses an edit that does not say which
+        // version it was based on, which is what stops a stale tab
+        // overwriting somebody else's save.
+        expected_revision: c.revision,
+        editor: "you",
+        inferred_rule: editor.querySelector(`#cedit-rule-${index}`).value,
+        conditions: editor.querySelector(`#cedit-cond-${index}`).value,
+        risk_class: editor.querySelector(`#cedit-risk-${index}`).value || null,
+        reversible: reversible === "" ? null : reversible === "true",
+        affected_applications: apps,
+        classification: editor.querySelector(`#cedit-class-${index}`).value,
+        confidence: confidenceRaw === "" ? null : Number(confidenceRaw),
+        sharing_eligible: shareable === "" ? null : shareable === "true",
+        display_state: editor.querySelector(`#cedit-display-${index}`).value
+      };
+      try{
+        const r = await fetch(API + `/api/learning/candidates/${encodeURIComponent(c.competency_id)}/${encodeURIComponent(c.slug)}/edit`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(body)
+        });
+        const j = await r.json().catch(() => ({}));
+        if(r.status === 409){
+          renderCandidateConflict(index, j.detail || {});
+          setCandidateStatus(index, "memory-note-warn", "Nothing was saved — this lesson changed while you had it open.");
+          return;
+        }
+        if(!r.ok){
+          setCandidateStatus(index, "memory-note-err",
+            (j.detail && j.detail.detail) || await describeHttpFailure(r, "The change was not saved"));
+          return;
+        }
+        setCandidateStatus(index, j.material_change ? "memory-note-warn" : "memory-note-ok", j.detail);
+        await refreshCandidates();
+        await refreshSuperseded();
+        await refreshLearningOverview();
+      }catch(e){
+        setCandidateStatus(index, "memory-note-err", "The change was not saved: " + e.message);
+      }
+    }
+
+    async function approveCandidate(index){
+      const c = learningCandidates[index];
+      if(!c) return;
+      const ok = confirm(
+        "Approve this exact lesson?" + NL2 + '"' + c.rule + '"' + NL2 +
+        "This records that you approve this version. It does not teach it to " +
+        "Bartholomew — accepting is a separate step, and editing the lesson " +
+        "afterwards cancels the approval."
+      );
+      if(!ok) return;
+      try{
+        const r = await fetch(API + `/api/learning/candidates/${encodeURIComponent(c.competency_id)}/${encodeURIComponent(c.slug)}/approve`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ approver: "you", expected_revision: c.revision })
+        });
+        const j = await r.json().catch(() => ({}));
+        if(r.status === 409){
+          setCandidateStatus(index, "memory-note-warn",
+            (j.detail && j.detail.detail) || "This lesson changed since you opened it, so nothing was approved.");
+          await refreshCandidates();
+          return;
+        }
+        if(!r.ok){
+          setCandidateStatus(index, "memory-note-err",
+            (j.detail && j.detail.detail) || await describeHttpFailure(r, "Nothing was approved"));
+          return;
+        }
+        setCandidateStatus(index, "memory-note-ok", j.detail);
+        await refreshCandidates();
+        await refreshApprovals();
+      }catch(e){
+        setCandidateStatus(index, "memory-note-err", "Nothing was approved: " + e.message);
+      }
+    }
+
+    async function acceptCandidate(index){
+      const c = learningCandidates[index];
+      if(!c) return;
+      const ok = confirm(
+        "Teach this to Bartholomew?" + NL2 + '"' + c.rule + '"' + NL2 +
+        "He will be able to recall it from now on. You can correct or revoke " +
+        "it afterwards."
+      );
+      if(!ok) return;
+      try{
+        const r = await fetch(API + `/api/learning/candidates/${encodeURIComponent(c.competency_id)}/${encodeURIComponent(c.slug)}/accept`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ reviewer: "you" })
+        });
+        const j = await r.json().catch(() => ({}));
+        if(!r.ok){
+          setCandidateStatus(index, "memory-note-err",
+            (j.detail && j.detail.detail) || await describeHttpFailure(r, "Nothing was accepted"));
+          await refreshCandidates();
+          return;
+        }
+        // `consolidated` comes from the seam, so a write held in the consent
+        // queue is not reported as a success.
+        setCandidateStatus(index, j.consolidated ? "memory-note-ok" : "memory-note-warn", j.detail);
+        await refreshCandidates();
+        await refreshCompetencies();
+        // The approval this consumed now describes an accepted lesson, not a
+        // proposed one. Leaving that panel stale would show the wrong state
+        // for the record whose state just changed most.
+        await refreshApprovals();
+        await refreshLearningOverview();
+      }catch(e){
+        setCandidateStatus(index, "memory-note-err", "Nothing was accepted: " + e.message);
+      }
+    }
+
+    async function rejectCandidate(index){
+      const c = learningCandidates[index];
+      if(!c) return;
+      const ok = confirm(
+        "Reject this lesson?" + NL2 + '"' + c.rule + '"' + NL2 +
+        "This is final: it cannot be accepted later. The record that it was " +
+        "proposed and declined is kept."
+      );
+      if(!ok) return;
+      try{
+        const r = await fetch(API + `/api/learning/candidates/${encodeURIComponent(c.competency_id)}/${encodeURIComponent(c.slug)}/reject`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ reviewer: "you" })
+        });
+        const j = await r.json().catch(() => ({}));
+        if(!r.ok){
+          setCandidateStatus(index, "memory-note-err",
+            (j.detail && j.detail.detail) || await describeHttpFailure(r, "Nothing was rejected"));
+          return;
+        }
+        setCandidateStatus(index, "memory-note-ok", j.detail);
+        await refreshCandidates();
+        await refreshApprovals();
+        await refreshLearningOverview();
+      }catch(e){
+        setCandidateStatus(index, "memory-note-err", "Nothing was rejected: " + e.message);
+      }
+    }
+
+    // The preview. Rendered with its own explanation attached, so a
+    // "would accept" can never appear on the page without the sentence saying
+    // that nothing happened.
+    async function previewCandidate(index){
+      const c = learningCandidates[index];
+      const node = candidateNode(index);
+      if(!c || !node) return;
+      const target = node.querySelector(".candidate-preview");
+      target.innerHTML = '<div class="nudge-ts">Working out what the policy would say…</div>';
+      try{
+        const r = await fetch(API + `/api/learning/candidates/${encodeURIComponent(c.competency_id)}/${encodeURIComponent(c.slug)}/shadow-evaluate`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            requested_by: "you",
+            contradicting_evidence_count: contradictionCount(index)
+          })
+        });
+        const j = await r.json().catch(() => ({}));
+        if(!r.ok){
+          target.innerHTML = `<div class="memory-note memory-note-err">${escapeHtml((j.detail && j.detail.detail) || await describeHttpFailure(r, "The preview could not be produced"))}</div>`;
+          return;
+        }
+        target.innerHTML = renderShadowDecision(j.evaluation, j.shadow_mode);
+      }catch(e){
+        target.innerHTML = `<div class="memory-note memory-note-err">The preview could not be produced: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    // What the reviewer typed into this candidate's "contradicted by" box.
+    // Supplied rather than inferred, because nothing in this release measures
+    // contradiction -- and a fabricated zero would be a policy input nobody
+    // checked.
+    function contradictionCount(index){
+      const node = candidateNode(index);
+      if(!node) return 0;
+      const input = node.querySelector('[data-cact="contradictions"]');
+      const n = Number((input && input.value) || 0);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    }
+
+    function renderShadowDecision(evaluation, shadow){
+      if(!evaluation) return '';
+      const reasons = (evaluation.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join('');
+      const label = {
+        would_accept: "would have accepted it",
+        would_refuse: "would have refused it",
+        would_escalate: "would have asked you"
+      }[evaluation.decision] || evaluation.decision;
+      // The mode sentence is part of the decision block, not a banner
+      // elsewhere on the page, so scrolling cannot separate them.
+      const notice = escapeHtml((shadow && shadow.notice) || evaluation.shadow_mode_notice || '');
+      const rules = (evaluation.matched_rules || [])
+        .map(r => escapeHtml(r.rule_id)).join(', ') || 'none';
+      return `
+        <div class="provenance">
+          <div class="row" style="justify-content:space-between">
+            <div><strong>Preview:</strong> your policy ${escapeHtml(label)}</div>
+            <span class="decision decision-${escapeHtml(evaluation.decision)}">${escapeHtml(evaluation.decision.replace(/_/g,' '))}</span>
+          </div>
+          <div style="margin-top:6px">${notice}</div>
+          <ul>${reasons}</ul>
+          <details style="margin-top:6px">
+            <summary>Details</summary>
+            <div class="mono" style="margin-top:6px">
+              policy revision ${escapeHtml(String(evaluation.policy_revision))} ·
+              rules matched: ${rules} ·
+              lesson fingerprint ${escapeHtml(String(evaluation.candidate_fingerprint).slice(0,12))}… ·
+              evaluated ${escapeHtml(evaluation.evaluated_at || '')}
+            </div>
+          </details>
+        </div>`;
+    }
+
+    async function refreshCompetencies(){
+      const el = document.getElementById("learning-competencies");
+      if(!el) return;
+      const search = ((document.getElementById("learning-competency-search") || {}).value || "").trim();
+      const params = new URLSearchParams({ limit: "100" });
+      if(search) params.set("search", search);
+      try{
+        const r = await fetch(API + "/api/learning/competencies?" + params.toString());
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load accepted knowledge"))}</div>`;
+          return;
+        }
+        learningCompetencies = (await r.json()).competencies || [];
+        if(!learningCompetencies.length){
+          el.innerHTML = search
+            ? '<div class="empty-state">Nothing he has learned matches that.</div>'
+            : '<div class="empty-state">Bartholomew has not been taught anything yet.</div>';
+          return;
+        }
+        el.innerHTML = learningCompetencies.map(renderCompetencyItem).join('');
+        bindCompetencyActions();
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load accepted knowledge: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function renderCompetencyItem(k, index){
+      const tags = [
+        `<span class="memory-tag">${escapeHtml(k.kind)}</span>`,
+        `<span class="memory-tag">${escapeHtml(k.classification || 'unclassified')}</span>`,
+        `<span class="memory-tag">${escapeHtml(k.epistemic_status)}</span>`,
+        `<span class="memory-tag">revision ${escapeHtml(String(k.revision))}</span>`
+      ];
+      if(k.confidence !== null && k.confidence !== undefined){
+        tags.push(`<span class="memory-tag">confidence ${escapeHtml(Number(k.confidence).toFixed(2))}</span>`);
+      }
+      if(k.privacy_class){
+        tags.push(`<span class="memory-tag memory-tag-privacy">${escapeHtml(k.privacy_class)}</span>`);
+      }
+      const provenance = k.provenance || {};
+      const kSharing = k.sharing || {};
+      const sharingLine = kSharing.transport_available
+        ? `sharing: ${escapeHtml(kSharing.state)}`
+        : `sharing: ${kSharing.eligible ? 'could be shared' : 'not shareable'} — ${escapeHtml(kSharing.detail || '')}`;
+      return `
+        <div class="memory-item" data-kindex="${index}">
+          <div class="memory-head">
+            <div>
+              <div class="memory-key">${escapeHtml(k.rule || k.topic || k.name || k.summary || k.key)}</div>
+              <div class="memory-kind">${escapeHtml(k.key)} · last updated ${escapeHtml(formatTimeAgo(k.updated_at) || k.updated_at || 'unknown')}</div>
+            </div>
+            <div class="row">
+              <button data-kact="correct">Correct</button>
+              <button class="dismiss" data-kact="revoke">Stop recalling this</button>
+              <label class="row" style="gap:4px;font-size:12px">
+                <input type="checkbox" class="learn-check" data-kact="select"
+                       aria-label="Select this knowledge for export"/> export
+              </label>
+            </div>
+          </div>
+          <div class="memory-value">${escapeHtml(k.conditions || k.summary || '')}</div>
+          <div class="memory-tags">${tags.join('')}</div>
+          <div class="provenance">
+            <div><strong>Where this came from:</strong>
+            ${escapeHtml(provenance.source_type || 'unknown')} ·
+            ${escapeHtml(provenance.detail || 'no detail recorded')}</div>
+            <div style="margin-top:4px">${sharingLine}</div>
+            <div style="margin-top:4px">How it is kept: ${escapeHtml(k.retention || 'not recorded')}</div>
+          </div>
+          <div class="competency-editor" style="display:none"></div>
+          <div class="competency-status">${noticeMarkup(k.kind, k.key)}</div>
+        </div>`;
+    }
+
+    function competencyNode(index){
+      return document.querySelector(`.memory-item[data-kindex="${index}"]`);
+    }
+
+    function setCompetencyStatus(index, cls, text){
+      const k = learningCompetencies[index];
+      if(k) setNotice(k.kind, k.key, cls, text);
+      const node = competencyNode(index);
+      if(!node) return;
+      const el = node.querySelector(".competency-status");
+      el.innerHTML = '';
+      const line = document.createElement("div");
+      line.className = "memory-note " + cls;
+      line.textContent = text;
+      el.appendChild(line);
+    }
+
+    function bindCompetencyActions(){
+      document.querySelectorAll('#learning-competencies .memory-item [data-kact]').forEach(control => {
+        const item = control.closest(".memory-item");
+        const index = Number(item.dataset.kindex);
+        if(!Number.isInteger(index) || !learningCompetencies[index]) return;
+        const act = control.dataset.kact;
+        if(act === "select"){
+          const k = learningCompetencies[index];
+          control.checked = learningSelection.has(selKey(k.kind, k.key));
+          control.addEventListener("change", () => toggleLearningSelection(k.kind, k.key, control.checked));
+          return;
+        }
+        control.addEventListener("click", () => {
+          if(act === "correct") beginCorrectCompetency(index);
+          else if(act === "revoke") revokeCompetency(index);
+        });
+      });
+    }
+
+    function beginCorrectCompetency(index){
+      const k = learningCompetencies[index];
+      const node = competencyNode(index);
+      if(!k || !node) return;
+      const editor = node.querySelector(".competency-editor");
+      editor.style.display = "block";
+      editor.innerHTML = `
+        <div class="learn-sub" style="margin-top:10px">
+          A correction supersedes the previous version and keeps its history.
+          It goes through the same governance the original did, so it can be
+          held for your consent rather than applied.
+        </div>
+        <textarea id="kedit-rule-${index}" rows="2" aria-label="Corrected wording"></textarea>
+        <div class="row">
+          <button class="ack" data-kedit="save">Save correction</button>
+          <button data-kedit="cancel">Cancel</button>
+        </div>`;
+      editor.querySelector(`#kedit-rule-${index}`).value = k.rule || k.summary || "";
+      editor.querySelector('[data-kedit="save"]').onclick = () => saveCompetencyCorrection(index);
+      editor.querySelector('[data-kedit="cancel"]').onclick = () => { editor.style.display = "none"; };
+    }
+
+    async function saveCompetencyCorrection(index){
+      const k = learningCompetencies[index];
+      if(!k) return;
+      const value = competencyNode(index).querySelector(`#kedit-rule-${index}`).value;
+      try{
+        const r = await fetch(API + `/api/learning/competencies/${encodeURIComponent(k.kind)}/${encodeURIComponent(k.key)}/correct`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            corrected_by: "you",
+            expected_revision: k.revision,
+            updates: { rule: value }
+          })
+        });
+        const j = await r.json().catch(() => ({}));
+        if(r.status === 409){
+          setCompetencyStatus(index, "memory-note-warn",
+            (j.detail && j.detail.detail) || "This changed while you had it open, so nothing was saved. Reload and try again.");
+          await refreshCompetencies();
+          return;
+        }
+        if(!r.ok){
+          setCompetencyStatus(index, "memory-note-err",
+            (j.detail && j.detail.detail) || await describeHttpFailure(r, "The correction was not saved"));
+          return;
+        }
+        setCompetencyStatus(index, j.ok ? "memory-note-ok" : "memory-note-warn", j.detail);
+        await refreshCompetencies();
+        await refreshSuperseded();
+      }catch(e){
+        setCompetencyStatus(index, "memory-note-err", "The correction was not saved: " + e.message);
+      }
+    }
+
+    async function revokeCompetency(index){
+      const k = learningCompetencies[index];
+      if(!k) return;
+      const ok = confirm(
+        "Stop Bartholomew recalling this?" + NL2 + '"' + (k.rule || k.summary || k.key) + '"' + NL2 +
+        "He will not use it again. The record that you once accepted it is kept. " +
+        "This cannot be undone."
+      );
+      if(!ok) return;
+      try{
+        const r = await fetch(API + `/api/learning/competencies/${encodeURIComponent(k.kind)}/${encodeURIComponent(k.key)}/revoke?confirm=true`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ revoked_by: "you" })
+        });
+        const j = await r.json().catch(() => ({}));
+        if(!r.ok){
+          setCompetencyStatus(index, "memory-note-err",
+            (j.detail && j.detail.detail) || await describeHttpFailure(r, "It was not revoked"));
+          return;
+        }
+        await refreshCompetencies();
+        await refreshLearningOverview();
+      }catch(e){
+        setCompetencyStatus(index, "memory-note-err", "It was not revoked: " + e.message);
+      }
+    }
+
+    // --- memories and preferences ------------------------------------------
+    //
+    // Read through /api/learning/memories rather than /api/memory, because
+    // that endpoint is the one that separates preferences from other memories
+    // and states each record's retention. It is read-only: correcting and
+    // forgetting stay on the ordinary view, which already owns them, and a
+    // second way to do the same governed thing would be a second place to get
+    // it wrong.
+    async function refreshSuperseded(){
+      const el = document.getElementById("learning-superseded");
+      if(!el) return;
+      try{
+        const r = await fetch(API + "/api/learning/superseded?limit=50");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load superseded versions"))}</div>`;
+          return;
+        }
+        const items = (await r.json()).superseded || [];
+        if(!items.length){
+          el.innerHTML = '<div class="empty-state">Nothing has been edited or corrected yet.</div>';
+          return;
+        }
+        el.innerHTML = items.map(x => `
+          <div class="nudge-item">
+            <div class="row" style="justify-content:space-between">
+              <span class="nudge-kind">${escapeHtml(x.supersedes)}</span>
+              <span class="memory-tag">revision ${escapeHtml(String(x.revision ?? '?'))}</span>
+            </div>
+            <div class="nudge-msg">${escapeHtml(x.text || '(no wording recorded)')}</div>
+            <div class="nudge-ts">
+              ${escapeHtml(x.what_it_is)} · archived ${escapeHtml(formatTimeAgo(x.archived_at) || x.archived_at || '')} ·
+              ${escapeHtml(x.retention || '')} · he cannot recall this
+            </div>
+          </div>`).join('');
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load superseded versions: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function refreshMemoryPicker(){
+      const el = document.getElementById("learning-memory-picker");
+      if(!el) return;
+      const search = (document.getElementById("learning-memory-search").value || "").trim();
+      const area = (document.getElementById("learning-memory-area") || {}).value || "all";
+      const params = new URLSearchParams({ limit: "100", area });
+      if(search) params.set("search", search);
+      try{
+        const r = await fetch(API + "/api/learning/memories?" + params.toString());
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load memories"))}</div>`;
+          return;
+        }
+        learningMemoryRows = (await r.json()).memories || [];
+        if(!learningMemoryRows.length){
+          el.innerHTML = '<div class="empty-state">Nothing stored matches that.</div>';
+          return;
+        }
+        el.innerHTML = learningMemoryRows.map((m, i) => `
+          <div class="memory-item" data-mindex="${i}">
+            <div class="memory-head">
+              <div>
+                <div class="memory-key">${escapeHtml(m.key)}</div>
+                <div class="memory-kind">${escapeHtml(m.area)} · ${escapeHtml(m.kind)}${m.privacy_class ? ' · ' + escapeHtml(m.privacy_class) : ''}</div>
+              </div>
+              <label class="row" style="gap:4px;font-size:12px"
+                     title="${m.exportable ? 'Can be exported.' : escapeHtml(m.export_blocked_reason || '')}">
+                <input type="checkbox" class="learn-check" data-mact="select"
+                       ${m.exportable ? '' : 'disabled'}
+                       aria-label="Select this memory for export"/> export
+              </label>
+            </div>
+            <div class="memory-value">${escapeHtml(m.readable === false ? (m.unreadable_reason || 'Stored encrypted; cannot be displayed.') : (m.value || ''))}</div>
+            <div class="nudge-ts" style="margin-top:6px">
+              How it is kept: ${escapeHtml(m.retention || 'not recorded')}${m.last_updated ? ' · last updated ' + escapeHtml(formatTimeAgo(m.last_updated) || m.last_updated) : ''}
+            </div>
+            ${m.exportable ? '' : `<div class="nudge-ts">Not exportable: ${escapeHtml(m.export_blocked_reason || '')}</div>`}
+          </div>`).join('');
+        document.querySelectorAll('#learning-memory-picker [data-mact="select"]').forEach(control => {
+          const index = Number(control.closest(".memory-item").dataset.mindex);
+          const m = learningMemoryRows[index];
+          if(!m) return;
+          control.checked = learningSelection.has(selKey(m.kind, m.key));
+          control.addEventListener("change", () => toggleLearningSelection(m.kind, m.key, control.checked));
+        });
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load memories: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function toggleLearningSelection(kind, key, on){
+      const id = selKey(kind, key);
+      if(on) learningSelection.set(id, { kind, key });
+      else learningSelection.delete(id);
+      renderLearningSelectionCount();
+    }
+
+    function renderLearningSelectionCount(){
+      const el = document.getElementById("learning-export-count");
+      if(!el) return;
+      const n = learningSelection.size;
+      el.textContent = n === 0 ? "nothing selected" : `${n} record${n === 1 ? '' : 's'} selected`;
+    }
+
+    function clearLearningSelection(){
+      learningSelection.clear();
+      renderLearningSelectionCount();
+      document.querySelectorAll('#view-learning .learn-check').forEach(c => { c.checked = false; });
+    }
+
+    async function exportSelectedLearning(){
+      const statusEl = document.getElementById("learning-export-status");
+      statusEl.style.display = "block";
+      if(learningSelection.size === 0){
+        statusEl.className = "memory-note memory-note-warn";
+        statusEl.textContent = "Tick the records you want first. There is no export-everything button.";
+        return;
+      }
+      statusEl.className = "memory-note";
+      statusEl.textContent = "Preparing the export…";
+      try{
+        const r = await fetch(API + "/api/learning/export", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ records: Array.from(learningSelection.values()), requested_by: "you" })
+        });
+        if(!r.ok){
+          statusEl.className = "memory-note memory-note-err";
+          statusEl.textContent = await describeHttpFailure(r, "The export could not be produced");
+          return;
+        }
+        const text = await r.text();
+        const payload = JSON.parse(text);
+        const blob = new Blob([text], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "bartholomew-learning-export.json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        // Every refusal is named. An export that quietly dropped a record the
+        // user ticked would misrepresent itself as complete.
+        const skipped = payload.skipped || [];
+        statusEl.className = skipped.length ? "memory-note memory-note-warn" : "memory-note memory-note-ok";
+        statusEl.textContent = skipped.length
+          ? `Exported ${payload.exported_count} of ${payload.selection_size}. Left out: ` +
+            skipped.map(s => `${s.kind}/${s.key} — ${s.reason}`).join(' | ')
+          : `Exported ${payload.exported_count} record${payload.exported_count === 1 ? '' : 's'}.`;
+      }catch(e){
+        statusEl.className = "memory-note memory-note-err";
+        statusEl.textContent = "The export could not be produced: " + e.message;
+      }
+    }
+
+    // --- the policy form ---------------------------------------------------
+    async function refreshPolicy(){
+      const el = document.getElementById("learning-policy-form");
+      if(!el) return;
+      try{
+        const r = await fetch(API + "/api/learning/policy");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load the preview policy"))}</div>`;
+          return;
+        }
+        const j = await r.json();
+        renderShadowBanner(j.shadow_mode);
+        learningPolicy = j.policy;
+        el.innerHTML = renderPolicyForm(j.policy, j.vocabulary);
+        el.querySelector('[data-policy="save"]').onclick = savePolicy;
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load the preview policy: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function renderPolicyForm(p, vocab){
+      const riskOptions = (vocab.risk_classes || []).map(rc =>
+        `<option value="${escapeHtml(rc)}"${rc === p.max_risk ? ' selected' : ''}>${escapeHtml(rc)}</option>`).join('');
+      const contradictionOptions = (vocab.contradiction_behaviours || []).map(cb =>
+        `<option value="${escapeHtml(cb)}"${cb === p.contradiction_behaviour ? ' selected' : ''}>${escapeHtml(cb)}</option>`).join('');
+      const categoryOptions = (vocab.lesson_categories || []).map(c =>
+        `<label class="row" style="gap:4px"><input type="checkbox" class="learn-check" data-cat="${escapeHtml(c)}"${(p.enabled_categories||[]).includes(c) ? ' checked' : ''}/> ${escapeHtml(c)}</label>`).join('');
+      const excludedCategoryOptions = (vocab.lesson_categories || []).map(c =>
+        `<label class="row" style="gap:4px"><input type="checkbox" class="learn-check" data-excat="${escapeHtml(c)}"${(p.excluded_categories||[]).includes(c) ? ' checked' : ''}/> ${escapeHtml(c)}</label>`).join('');
+      return `
+        <div class="policy-field">
+          <label>Kinds of lesson this could ever apply to</label>
+          <div class="row" id="policy-categories">${categoryOptions}</div>
+          <div class="hint">Nothing ticked means the policy would refuse everything.</div>
+        </div>
+        <div class="policy-field">
+          <label>Kinds of lesson to rule out entirely</label>
+          <div class="row" id="policy-excluded-categories">${excludedCategoryOptions}</div>
+          <div class="hint">
+            An exclusion wins over an inclusion, so a kind ticked in both is
+            ruled out. Omitting this control used to send an empty list on
+            every save, which silently deleted whatever you had excluded.
+          </div>
+        </div>
+        <div class="policy-field">
+          <label for="policy-max-risk">Most risk it could accept without asking</label>
+          <select id="policy-max-risk">${riskOptions}</select>
+        </div>
+        <div class="policy-field">
+          <label for="policy-reversible">Only accept lessons that can be undone</label>
+          <input id="policy-reversible" type="checkbox" class="learn-check"${p.require_reversible ? ' checked' : ''}/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-min-exp">Independent experiences it must rest on</label>
+          <input id="policy-min-exp" type="number" min="1" value="${escapeHtml(String(p.min_supporting_experiences))}"/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-min-conf">Least confidence it would accept</label>
+          <input id="policy-min-conf" type="number" min="0" max="1" step="0.05" value="${escapeHtml(String(p.min_confidence))}"/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-contradiction">If something contradicts the lesson</label>
+          <select id="policy-contradiction">${contradictionOptions}</select>
+          <div class="hint">There is deliberately no "ignore it" option.</div>
+        </div>
+        <div class="policy-field">
+          <label for="policy-max-caps">Most of his areas one lesson may touch</label>
+          <input id="policy-max-caps" type="number" min="0" value="${escapeHtml(String(p.max_affected_capabilities))}"/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-max-apps">Most applications one lesson may affect</label>
+          <input id="policy-max-apps" type="number" min="0" value="${escapeHtml(String(p.max_affected_applications))}"/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-privacy">Privacy classes to keep out of it</label>
+          <input id="policy-privacy" type="text" value="${escapeHtml((p.excluded_privacy_classes||[]).join(', '))}"/>
+          <div class="hint">Comma separated. Naming one means this change is held for your consent before it is stored — it mentions material Bartholomew asks about.</div>
+        </div>
+        <div class="policy-field">
+          <label for="policy-classifications">Classifications to keep out of it</label>
+          <input id="policy-classifications" type="text" value="${escapeHtml((p.excluded_classifications||[]).join(', '))}"/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-sharing">Keep out anything that could be shared</label>
+          <input id="policy-sharing" type="checkbox" class="learn-check"${p.exclude_sharing_eligible ? ' checked' : ''}/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-expiry">Treat the experience as stale after (days)</label>
+          <input id="policy-expiry" type="number" min="1" value="${escapeHtml(p.expires_after_days === null ? '' : String(p.expires_after_days))}"/>
+          <div class="hint">Blank means no expiry.</div>
+        </div>
+        <div class="policy-field">
+          <label for="policy-review">Ask you to review again after (days)</label>
+          <input id="policy-review" type="number" min="1" value="${escapeHtml(p.review_interval_days === null ? '' : String(p.review_interval_days))}"/>
+        </div>
+        <div class="policy-field">
+          <label for="policy-mode">What you would want a future version to do</label>
+          <select id="policy-mode">
+            <option value="shadow"${p.requested_execution_mode === 'shadow' ? ' selected' : ''}>Keep showing me previews</option>
+            <option value="auto"${p.requested_execution_mode === 'auto' ? ' selected' : ''}>Accept matching lessons automatically</option>
+          </select>
+          <div class="hint">
+            Recorded as a preference. This release cannot act on it: whatever
+            you choose here, accepting a lesson still needs your approval of
+            that exact lesson.
+          </div>
+        </div>
+        <div class="row">
+          <button class="primary" data-policy="save">Save preview policy</button>
+          <span class="nudge-ts">Currently revision ${escapeHtml(String(p.revision))}${p.updated_by ? ', last changed by ' + escapeHtml(p.updated_by) : ' (never configured)'}</span>
+        </div>`;
+    }
+
+    function policyNumber(id, fallback){
+      const raw = (document.getElementById(id).value || "").trim();
+      if(raw === "") return fallback;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : fallback;
+    }
+
+    async function savePolicy(){
+      const statusEl = document.getElementById("learning-policy-status");
+      statusEl.style.display = "block";
+      statusEl.className = "memory-note";
+      statusEl.textContent = "Saving…";
+      const categories = Array.from(document.querySelectorAll('#policy-categories [data-cat]'))
+        .filter(c => c.checked).map(c => c.dataset.cat);
+      const excludedCategories = Array.from(
+        document.querySelectorAll('#policy-excluded-categories [data-excat]'))
+        .filter(c => c.checked).map(c => c.dataset.excat);
+      const splitList = id => (document.getElementById(id).value || "")
+        .split(",").map(v => v.trim()).filter(Boolean);
+      const expiry = (document.getElementById("policy-expiry").value || "").trim();
+      const review = (document.getElementById("policy-review").value || "").trim();
+      const body = {
+        // Always sent, for the same reason the candidate editor sends it.
+        expected_revision: learningPolicy ? learningPolicy.revision : 0,
+        updated_by: "you",
+        enabled_categories: categories,
+        excluded_categories: excludedCategories,
+        max_risk: document.getElementById("policy-max-risk").value,
+        require_reversible: document.getElementById("policy-reversible").checked,
+        min_supporting_experiences: policyNumber("policy-min-exp", 2),
+        min_confidence: policyNumber("policy-min-conf", 0.8),
+        contradiction_behaviour: document.getElementById("policy-contradiction").value,
+        max_affected_capabilities: policyNumber("policy-max-caps", 1),
+        max_affected_applications: policyNumber("policy-max-apps", 0),
+        excluded_privacy_classes: splitList("policy-privacy"),
+        excluded_classifications: splitList("policy-classifications"),
+        exclude_sharing_eligible: document.getElementById("policy-sharing").checked,
+        expires_after_days: expiry === "" ? null : Number(expiry),
+        review_interval_days: review === "" ? null : Number(review),
+        requested_execution_mode: document.getElementById("policy-mode").value
+      };
+      try{
+        const r = await fetch(API + "/api/learning/policy", {
+          method: "PUT",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(body)
+        });
+        const j = await r.json().catch(() => ({}));
+        if(r.status === 409){
+          const d = j.detail || {};
+          statusEl.className = "memory-note memory-note-warn";
+          statusEl.textContent =
+            "The policy changed while you had this open (you were editing revision " +
+            d.your_expected_revision + ", revision " + (d.stored_policy||{}).revision +
+            " is stored now). Nothing was saved. Reloading the stored version — " +
+            "your changes are not applied.";
+          await refreshPolicy();
+          return;
+        }
+        if(!r.ok){
+          statusEl.className = "memory-note memory-note-err";
+          statusEl.textContent = (j.detail && j.detail.detail) || await describeHttpFailure(r, "The policy was not saved");
+          return;
+        }
+        statusEl.className = "memory-note memory-note-ok";
+        statusEl.textContent = j.detail;
+        await refreshPolicy();
+        await refreshLearningOverview();
+      }catch(e){
+        statusEl.className = "memory-note memory-note-err";
+        statusEl.textContent = "The policy was not saved: " + e.message;
+      }
+    }
+
+    async function refreshEvaluations(){
+      const el = document.getElementById("learning-evaluations");
+      if(!el) return;
+      try{
+        const r = await fetch(API + "/api/learning/evaluations?limit=50");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load previews"))}</div>`;
+          return;
+        }
+        const j = await r.json();
+        renderShadowBanner(j.shadow_mode);
+        const items = j.evaluations || [];
+        if(!items.length){
+          el.innerHTML = '<div class="empty-state">No previews recorded yet.</div>';
+          return;
+        }
+        el.innerHTML = items.map(e => `
+          <div class="nudge-item">
+            <div class="row" style="justify-content:space-between">
+              <span class="nudge-kind">${escapeHtml(e.candidate_key)}</span>
+              <span class="decision decision-${escapeHtml(e.decision)}">${escapeHtml(e.decision.replace(/_/g,' '))}</span>
+            </div>
+            <div class="nudge-msg">${escapeHtml((e.reasons || []).join(' '))}</div>
+            <div class="nudge-ts">policy revision ${escapeHtml(String(e.policy_revision))} · ${escapeHtml(e.evaluated_at || '')} · nothing was accepted</div>
+          </div>`).join('');
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load previews: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function refreshApprovals(){
+      const el = document.getElementById("learning-approvals");
+      if(!el) return;
+      try{
+        const r = await fetch(API + "/api/learning/approvals?limit=50");
+        if(!r.ok){
+          el.innerHTML = `<div class="empty-state">${escapeHtml(await describeHttpFailure(r, "Could not load approvals"))}</div>`;
+          return;
+        }
+        const items = (await r.json()).approvals || [];
+        if(!items.length){
+          el.innerHTML = '<div class="empty-state">You have not approved any lesson yet.</div>';
+          return;
+        }
+        el.innerHTML = items.map(a => `
+          <div class="nudge-item">
+            <div class="row" style="justify-content:space-between">
+              <span class="nudge-kind">${escapeHtml(a.candidate_key)}</span>
+              <span class="memory-tag ${a.valid_for_current_revision ? 'memory-tag-keep' : 'memory-tag-privacy'}">
+                ${a.valid_for_current_revision ? 'still applies' : 'no longer applies'}
+              </span>
+            </div>
+            <div class="nudge-msg">Approved by ${escapeHtml(a.approver)}${a.note ? ' — ' + escapeHtml(a.note) : ''}</div>
+            <div class="nudge-ts">granted ${escapeHtml(a.granted_at)} · candidate revision ${escapeHtml(String(a.candidate_revision))} · lesson is now ${escapeHtml(a.candidate_review_state || 'unknown')}</div>
+          </div>`).join('');
+      }catch(e){
+        el.innerHTML = `<div class="empty-state">Could not load approvals: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    // One entry point, called when the view is opened and on demand. Reloading
+    // the page re-reads every panel from the server, so nothing on this view
+    // survives as stale client state.
+    async function refreshLearningView(){
+      // A notice describes what just happened, not what is stored. Re-entering
+      // the view is a fresh look, so it starts without them.
+      learningNotices.clear();
+      renderLearningSelectionCount();
+      await refreshLearningOverview();
+      await refreshCandidates();
+      await refreshCompetencies();
+      await refreshPolicy();
+      await refreshEvaluations();
+      await refreshApprovals();
+      await refreshSuperseded();
+      await refreshMemoryPicker();
     }
 
     // === Presence ===

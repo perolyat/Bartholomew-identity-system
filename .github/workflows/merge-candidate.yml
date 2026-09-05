@@ -171,6 +171,55 @@ jobs:
         if: hashFiles('tests/integration/test_windows_action_real.py') != ''
         run: python -m pytest tests/integration/test_windows_action_real.py -p no:cacheprovider -m integration
 
+      # The Windows alpha installer: parsed, never installed. Carried here (and
+      # in the Integration tier) so the coverage the wave-two package B added to
+      # the old ci.yml windows job survives the move to staged tiers and still
+      # runs on the push-to-main / merge-candidate path.
+      - name: Windows companion script parses and stays inert
+        if: hashFiles('deploy/windows/bartholomew-action.ps1') != ''
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'deploy/windows/bartholomew-action.ps1'),
+            [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) {
+            $errors | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
+          Write-Host 'bartholomew-action.ps1 parses cleanly.'
+
+          & ./deploy/windows/bartholomew-action.ps1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::invoking the script with no verb did not exit 0'
+            exit 1
+          }
+
+          & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::`status` failed on a machine with nothing installed'
+            exit 1
+          }
+
+          $root = Join-Path $env:LOCALAPPDATA 'Bartholomew'
+          New-Item -ItemType Directory -Force -Path (Join-Path $root 'venv/Scripts') | Out-Null
+          Set-Content -Path (Join-Path $root 'venv/Scripts/python.exe') -Value ''
+          try {
+            & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+            Write-Host 'status reports on an installed-but-unconfigured machine.'
+          } catch {
+            Write-Host "::error::status threw on an installed-but-unconfigured machine: $_"
+            exit 1
+          } finally {
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path $root) {
+            Write-Host '::error::%LOCALAPPDATA%\Bartholomew exists after read-only verbs'
+            exit 1
+          }
+          Write-Host 'Inert: no verb, no changes.'
+
       # The whole default suite on Windows, in parallel. This is where a
       # Windows-only failure in an ordinary unit test surfaces before main.
       - name: Default test suite on Windows (parallel, no coverage)

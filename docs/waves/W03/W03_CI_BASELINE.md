@@ -101,8 +101,11 @@ Low-risk workflow/configuration changes only — no product code touched.
 6. Added the wave-manifest contract test (`tests/test_wave_manifest.py`) to PR
    Fast quality, guarded by `hashFiles` so the workflow is valid before it lands.
 7. Windows actuation steps (wave-two package B) are carried behind `hashFiles`
-   guards, so the tiers are valid on `main` today and pick those suites up when
-   the wave-two head merges.
+   guards, so the tiers were valid on `main` before the wave-two merge and pick
+   those suites up now that it has landed. The Windows companion installer-parse
+   step runs in **both** the Integration tier (PR review) and the Merge Candidate
+   tier (push-to-main / merge gate), so the coverage the old `ci.yml` windows job
+   ran on every push is retained across the staged tiers rather than lost.
 
 ## 5. Measured results (after)
 

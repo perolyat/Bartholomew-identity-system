@@ -7,7 +7,6 @@ import sys
 import traceback as traceback_module
 from datetime import datetime, time, timedelta, timezone
 from enum import Enum
-from pathlib import Path
 
 import yaml
 from dateutil import tz
@@ -493,6 +492,26 @@ class KernelDaemon:
             # abandon-not-cancel.
             await self.scheduler_store.ensure_schema()
             resources_started.append("scheduler_schema")
+
+            # Package A: the event backbone's durable processing state, on the
+            # same fail-closed footing and immediately after the scheduler's
+            # own schema. Placed here, after the integrity check rather than
+            # alongside the store constructions above, deliberately: an
+            # unclean prior shutdown is checked and repaired before this
+            # creates anything, so a possibly-damaged database is not written
+            # to first. The health surface, the frozen evidence report and the
+            # inbound backpressure check all read this table and any of them
+            # can be reached the instant the API starts serving, so it is a
+            # precondition of a started daemon rather than something the first
+            # scheduler tick gets round to.
+            from bartholomew.kernel.event_processing import store as event_processing_store
+
+            await run_off_loop(
+                event_processing_store.ensure_schema,
+                self.mem.db_path,
+                executor=self.blocking_executor,
+            )
+            resources_started.append("event_processing_schema")
 
             # Stage 3: Initialize experience kernel state
             await self._init_experience_kernel()
@@ -1337,19 +1356,19 @@ def _default_db_path() -> str:
     """
     Resolve default database path.
 
+    Delegates to `bartholomew.kernel.db_paths`, the one resolver every
+    surface shares (server, daemon, operator CLI), so that "the database"
+    means the same file everywhere. Kept under its private name because
+    `runtime_contract` and `identity_interpreter` call it by this name.
+
     Resolution order:
     1. BARTH_DB_PATH environment variable (used as-is)
     2. data/barth.db under project root (directory with pyproject.toml)
     3. data/barth.db under current working directory
     """
-    env = os.getenv("BARTH_DB_PATH")
-    if env:
-        return env
-    p = Path(__file__).resolve()
-    for parent in [p.parent, *p.parents]:
-        if (parent / "pyproject.toml").exists():
-            return str(parent / "data" / "barth.db")
-    return str(Path.cwd() / "data" / "barth.db")
+    from bartholomew.kernel.db_paths import resolve_kernel_db_path
+
+    return resolve_kernel_db_path(create_parent=False)
 
 
 async def run_kernel():

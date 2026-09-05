@@ -220,6 +220,19 @@ def ensure_cleanup():
 
 
 # pytest configuration
+@pytest.fixture(autouse=True)
+def _reset_device_consent_channel():
+    """The device consent handler is process-global. A real-app startup in one
+    test installs it; without this reset, a later test asserting that an
+    absent handler refuses a device start would instead sit waiting on an
+    ask nobody answers. Cleared before and after every test."""
+    from bartholomew.multimodal import device_consent
+
+    device_consent.reset_for_tests()
+    yield
+    device_consent.reset_for_tests()
+
+
 def pytest_configure(config):
     """Configure pytest with custom markers and settings."""
     config.addinivalue_line(

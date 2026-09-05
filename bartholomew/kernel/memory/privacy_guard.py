@@ -41,6 +41,7 @@ import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 
 SENSITIVE_KEYWORDS = [
     "name",
@@ -83,6 +84,65 @@ _SENSITIVE_PATTERN = re.compile(
 # of hanging headless/API deployments.
 ConsentHandler = Callable[[str], "bool | Awaitable[bool]"]
 _consent_handler: ConsentHandler | None = None
+
+
+# ---------------------------------------------------------------------------
+# Device consent: a second, richer channel -- deliberately not the first one
+# ---------------------------------------------------------------------------
+#
+# A device observation start (screen, microphone) asks a person before any
+# adapter is touched. On an interactive front-end the plain string handler
+# above serves that ask too. A headless server has nobody at a terminal, so
+# it needs a channel a human can reach from elsewhere -- and that channel must
+# know *what* it is asking about (which tenant, which machine, which
+# modality), which a bare prompt string cannot carry.
+#
+# It is a separate registry rather than a richer version of the one above for
+# one reason that matters: `MemoryStore.upsert_memory()` branches on whether
+# `get_consent_handler()` is None. With no handler, a sensitive memory write is
+# *queued* for later review; with any handler, it is asked interactively and
+# *discarded* if nobody answers. Registering a server-side device channel on
+# the shared global would silently turn every unanswered memory prompt from
+# "held for you" into "thrown away". Keeping the device channel here means only
+# the device seams consult it, and memory behaviour does not move.
+
+
+@dataclass(frozen=True)
+class DeviceConsentRequest:
+    """One ask to a human: may this device start observing, right now, once.
+
+    `prompt` is the modality-specific wording the Runtime Contract composes
+    (it names the single modality and what it does *not* permit). The other
+    fields are context so the person can tell whose machine is asking; they
+    are never a substitute for the prompt and a handler must show both.
+    """
+
+    prompt: str
+    tenant_id: str | None = None
+    principal_id: str | None = None
+    device_id: str | None = None
+    modality: str | None = None
+    correlation_id: str | None = None
+    session_id: str | None = None
+
+
+DeviceConsentHandler = Callable[[DeviceConsentRequest], "bool | Awaitable[bool]"]
+_device_consent_handler: DeviceConsentHandler | None = None
+
+
+def set_device_consent_handler(handler: DeviceConsentHandler | None) -> None:
+    """Register the channel that asks a person about a device start.
+
+    Consulted by the device seams only (`runtime_contract._resolve_device_consent`),
+    ahead of the plain handler. Grants authorise a single start attempt; a
+    handler that remembers answers would be a consent bypass, not a convenience.
+    """
+    global _device_consent_handler
+    _device_consent_handler = handler
+
+
+def get_device_consent_handler() -> DeviceConsentHandler | None:
+    return _device_consent_handler
 
 
 # ---------------------------------------------------------------------------

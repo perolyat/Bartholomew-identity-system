@@ -131,14 +131,14 @@ The provisional A–E survives assessment and is adopted, with boundaries sharpe
 
 ## 6. Blockers before builders start
 
-1. **Merge the wave-two baseline to main.** PR #89 (and #90) must land so builders
-   branch from a stable `main`. Until then, builders branch from
-   `claude/bartholomew-wave-two-integration-qjrxkr` and W03-F re-bases. This is the
-   one hard blocker and it is a merge decision for the maintainer, not code work.
+1. **Merge the wave-two baseline to main. DISCHARGED.** PR #89 merged as `68222a3`
+   and PR #90 as `99ee734`; `main` now carries the whole wave-two baseline.
+   Builders branch from `main` (>= `99ee734`) directly. This report's earlier
+   "one hard blocker" is resolved.
 2. **Confirm the #90 consent-channel and brake-DB repairs on a real desktop.**
-   `docs/H_LIVE_RETEST_HANDOFF.md` step 1 and the post-consent brake re-read were
-   never live-retested. Not a blocker to *start* A–E, but a blocker to *claim*
-   observation start and brake coverage; W03-F carries the live retest.
+   Still open. `docs/H_LIVE_RETEST_HANDOFF.md` step 1 and the post-consent brake
+   re-read were never live-retested. Not a blocker to *start* A–E, but a blocker
+   to *claim* observation start and brake coverage; W03-F carries the live retest.
 
-Neither blocks writing code against the W2G head today. With the baseline merged,
-W03-A, W03-C and W03-D can start immediately in parallel.
+With the baseline merged, W03-A, W03-C and W03-D can start immediately in
+parallel, W03-B alongside them against the published shared contracts.

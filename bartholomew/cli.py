@@ -15,6 +15,8 @@ except ImportError:
     sys.exit(1)
 
 
+from bartholomew.cli_trust import devices_app, groups_app, share_app
+
 app = typer.Typer(help="Bartholomew Admin CLI")
 console = Console()
 embeddings_app = typer.Typer(help="Embeddings management commands")
@@ -25,6 +27,27 @@ app.add_typer(embeddings_app, name="embeddings")
 app.add_typer(brake_app, name="brake")
 app.add_typer(accounts_app, name="accounts")
 app.add_typer(platform_brake_app, name="platform-brake")
+# Package E. The commands live in `bartholomew/cli_trust.py` rather than here:
+# this file is a shared integration hotspot, and three registration lines are
+# a smaller thing for every other stream to merge around than six hundred.
+app.add_typer(devices_app, name="devices")
+app.add_typer(groups_app, name="groups")
+app.add_typer(share_app, name="share")
+
+multimodal_app = typer.Typer(help="Multimodal presence (microphone, screen, speech)")
+app.add_typer(multimodal_app, name="multimodal")
+
+# The Windows companion's operator surface. Same reasoning as Package E's
+# commands above: the implementation lives in `bartholomew/cli_companion.py`
+# rather than here, because this file is a shared integration hotspot.
+from bartholomew.cli_companion import companion_app  # noqa: E402
+from bartholomew.cli_consent import consent_app  # noqa: E402
+
+app.add_typer(companion_app, name="companion")
+# The person's answer to a device's ask to observe. Separate from `companion`
+# on purpose: that group speaks with the device credential, and this one must
+# never carry it.
+app.add_typer(consent_app, name="consent")
 
 
 @embeddings_app.command("stats")
@@ -556,6 +579,23 @@ def embeddings_rebuild_vss(
 
 _CLI_BRAKE_REASON_PREFIX = "CLI"
 
+# The brake commands used to default `--db` to a literal "data/bartholomew.db"
+# -- a scratch file the running server never opened. On the live Windows test
+# that printed "ENGAGED" while the server carried on dispatching. They now
+# resolve through the same path the server and kernel daemon use, and say
+# which file they touched. An explicit --db still wins, unconditionally.
+_KERNEL_DB_HELP = (
+    "Kernel database. Default: BARTH_DB_PATH, else <project root>/data/barth.db "
+    "-- the same file the running server reads. Pass a path to address a "
+    "different one; the running server is then untouched."
+)
+
+
+def _kernel_db(explicit: str | None) -> str:
+    from bartholomew.kernel.db_paths import resolve_kernel_db_path
+
+    return resolve_kernel_db_path(explicit)
+
 
 @brake_app.command("on")
 def brake_on(
@@ -565,8 +605,9 @@ def brake_on(
         help="Scopes to block (global, skills, sight, voice, scheduler, training)",
     ),
     db: str = typer.Option(
-        default="data/bartholomew.db",
-        help="Path to database file",
+        None,
+        "--db",
+        help=_KERNEL_DB_HELP,
     ),
 ):
     """Engage parking brake (block specified scopes)"""
@@ -578,6 +619,7 @@ def brake_on(
     # Default to global if no scopes specified
     scopes = scope if scope else ["global"]
 
+    db = _kernel_db(db)
     store = GovernanceStore(db)
     try:
         store.engage(
@@ -590,13 +632,14 @@ def brake_on(
         raise typer.Exit(1) from e
 
     console.print(
-        f"\n[yellow]⚠ Parking brake ENGAGED[/yellow] - Scopes: {', '.join(sorted(scopes))}\n",
+        f"\n[yellow]⚠ Parking brake ENGAGED[/yellow] - Scopes: {', '.join(sorted(scopes))}",
     )
+    console.print(f"Database: {db}\n")
 
 
 @brake_app.command("off")
 def brake_off(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
 ):
     """Disengage parking brake (allow all components)"""
     from bartholomew.orchestrator.safety.governance_store import (
@@ -605,6 +648,7 @@ def brake_off(
         WriteFenceClosedError,
     )
 
+    db = _kernel_db(db)
     store = GovernanceStore(db)
     try:
         store.disengage(reason=f"{_CLI_BRAKE_REASON_PREFIX}: brake off", actor="cli")
@@ -618,21 +662,25 @@ def brake_off(
         )
         raise typer.Exit(1) from e
 
-    console.print("\n[green]✓ Parking brake DISENGAGED[/green] - All components allowed\n")
+    console.print("\n[green]✓ Parking brake DISENGAGED[/green] - All components allowed")
+    console.print(f"Database: {db}\n")
 
 
 @brake_app.command("status")
 def brake_status(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
 ):
     """Show parking brake status"""
+    from bartholomew.kernel.db_paths import describe_kernel_db_path
     from bartholomew.orchestrator.safety.governance_store import GovernanceStore
 
+    resolved = describe_kernel_db_path(db)
+    db = _kernel_db(db)
     store = GovernanceStore(db)
     state = store.state()
 
     console.print("\n[bold]Parking Brake Status[/bold]")
-    console.print(f"Database: {db}\n")
+    console.print(f"Database: {db}  (from {resolved['source']})\n")
 
     if state.engaged:
         console.print("[yellow]Status: ENGAGED (blocking)[/yellow]")
@@ -1092,6 +1140,61 @@ def unattended_report_command(
     colour = "green" if complete else ("yellow" if complete is None else "red")
     console.print(f"digest: {envelope['digest']}")
     console.print(f"[{colour}]{summary['verdict']}[/{colour}]")
+
+
+@multimodal_app.command("diagnose")
+def multimodal_diagnose(
+    json_output: bool = typer.Option(False, "--json", help="Emit the raw report as JSON"),
+):
+    """Report which multimodal capabilities work on this machine, and why not.
+
+    Package C's required diagnostic command (contract §7). It observes
+    nothing: it asks the operating system whether devices and optional
+    dependencies exist, without opening an audio stream, reading the
+    accessibility tree or capturing any image. Running it needs no session and
+    no consent because it collects nothing about the user.
+    """
+    import json as _json
+
+    from bartholomew.multimodal.diagnostics import diagnose, format_report
+
+    report = diagnose()
+    if json_output:
+        print(_json.dumps(report, indent=2, sort_keys=True, default=str))
+    else:
+        console.print(format_report(report))
+
+
+@multimodal_app.command("status")
+def multimodal_status_command():
+    """Show whether Bartholomew is listening, observing the screen or speaking.
+
+    Sessions live in the process that owns the device, so this reports on the
+    CLI's own process -- which owns none. It will therefore always report
+    nothing active, plus this machine's hardware availability. To see a running
+    daemon's sessions, read GET /api/multimodal/status on that process. That
+    distinction is deliberate: a status command that guessed about another
+    process's capture state would be exactly the kind of claim this package
+    must never make.
+    """
+    from bartholomew.multimodal.status import status_snapshot
+    from bartholomew.multimodal.store import SessionStore
+
+    snapshot = status_snapshot(SessionStore())
+    console.print(snapshot["summary"])
+    console.print(
+        "(This is the CLI process. For the running daemon's sessions, "
+        "GET /api/multimodal/status)",
+    )
+    hardware = snapshot["hardware"]
+    console.print(
+        f"microphone: {hardware['microphone']['availability']} -- "
+        f"{hardware['microphone']['detail']}",
+    )
+    console.print(
+        f"spoken output: {'available' if hardware['spoken_output']['available'] else 'unavailable'}"
+        f" -- {hardware['spoken_output']['detail']}",
+    )
 
 
 def main():

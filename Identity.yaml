@@ -469,6 +469,33 @@ tool_use:
     # exactly one kind here, not one per provider, so allowlisting capture
     # can never widen into allowlisting a domain.
     - "inbound_capture"
+    # Package A: the canonical event backbone (docs/EVENT_PROCESSING_BACKBONE.md).
+    # Two entries, and the split between them is the point.
+    #
+    # `inbound_event_processing` is the scheduler drive that runs one bounded
+    # processing pass. Deliberately NOT in _SELF_MAINTENANCE_DRIVES -- reading
+    # third-party events into a user's objectives is specific user content,
+    # not kernel housekeeping, and the same precedent awaiting_response_check
+    # and objective_continuity_check record applies. Without this entry the
+    # drive is denied outright and no event is ever processed.
+    #
+    # `inbound_event_process` is the Executive kind for the pass itself,
+    # evaluated before any event is claimed. Removing it stops processing
+    # while *preserving the backlog*: nothing is claimed, no attempt is spent
+    # and no event is discarded, so restoring it resumes exactly the queue
+    # that existed. That is why it is separate from the drive entry -- one
+    # switch stops the scheduler running the pass, the other stops the pass
+    # touching anything, and an operator may want either.
+    #
+    # What these authorise is narrow and additive to nothing. Processing
+    # sends no message, contacts nobody, reaches no external provider, and
+    # creates no objective. Its single durable effect is one `fact` row on an
+    # objective the user already opened, written through the existing
+    # governed objective seam -- so it is gated by "objective_record" above
+    # as well, and by the Parking Brake, exactly like every other objective
+    # write. Neither entry can make an event mean something it did not.
+    - "inbound_event_processing"
+    - "inbound_event_process"
     # Usable POC slice 2 (docs/POC_SLICE_2_PROACTIVE_REMINDERS.md): the
     # scheduler drive that notices stored date-bearing facts falling due and
     # sends one governed reminder for each. Follows the same recorded
@@ -498,6 +525,35 @@ tool_use:
     # bartholomew/kernel/task_intents.py), so this entry does not put a
     # destructive operation behind an ordinary sentence.
     - "tasks"
+    # Package C (Windows Capability Wave, contract §7): the three multimodal
+    # session kinds, from
+    # runtime_contract.run_multimodal_session_through_runtime_contract().
+    # Same recorded precedent as "notify", the awaiting_response_* entries and
+    # "inbound_capture" above -- a seam kind is unreachable without its own
+    # allowlist entry, because no multimodal kind is exempted the way
+    # self-maintenance drives are.
+    #
+    # THREE ENTRIES, NOT ONE, AND THAT IS THE POINT. Each authorises exactly
+    # one modality, so removing one leaves the other two working:
+    #
+    #   multimodal_spoken_output      -- may SPEAK aloud. Opens no microphone
+    #                                    and reads no screen.
+    #   multimodal_microphone_session -- may LISTEN for one bounded, explicit,
+    #                                    visible session. Grants no screen access.
+    #   multimodal_screen_capture     -- may OBSERVE one approved screen, window
+    #                                    or region. Grants no audio, and does
+    #                                    not by itself authorise the screenshot
+    #                                    fallback (a separate per-session
+    #                                    decision).
+    #
+    # There is deliberately no "multimodal" entry authorising all three:
+    # allowlisting speech must never read as allowlisting capture. None of
+    # these authorises continuous or ambient capture -- each covers a single
+    # session a human explicitly requested, consented to, can see and can
+    # stop, and which expires on its own.
+    - "multimodal_spoken_output"
+    - "multimodal_microphone_session"
+    - "multimodal_screen_capture"
     # Golden Path first slice: Bartholomew's first *external* capability
     # provider (bartholomew/skills/forecast.py, config/skills/forecast.yaml).
     # Same grain and same reason as every entry above -- execute_action()
@@ -578,6 +634,40 @@ tool_use:
     # standing permission can only ever reduce what Bartholomew retains.
     - "learning_propose"
     - "learning_reject"
+    # Session B: governed Windows actuation
+    # (docs/B_GOVERNED_WINDOWS_ACTUATION.md). Two of the three action kinds,
+    # and deliberately not the third -- the same shape as the learning entries
+    # immediately below, for the same reason.
+    #
+    # `windows_action_request` creates a *pending* action: a durable record
+    # that some named capability was asked for on some enrolled device. It
+    # runs nothing, reaches no operating system, and cannot be dispatched
+    # without a separate, explicitly bound approval. A standing grant is the
+    # right shape for it in the same way `objective_record` authorises
+    # recording without authorising acting.
+    #
+    # `windows_action_cancel` withdraws an action so it can never run. It is
+    # conservative by construction: allowing it standing permission can only
+    # ever reduce what Bartholomew is able to do.
+    #
+    # Scope note, and it is the important one: these two entries authorise
+    # *asking* and *withdrawing*. They authorise no keystroke, no click, no
+    # launched program and no opened file. An action existing authorises
+    # nothing, exactly as an objective existing authorises nothing.
+    - "windows_action_request"
+    - "windows_action_cancel"
+    # `windows_action_dispatch` is deliberately NOT listed here, and adding it
+    # would not make dispatch reachable.
+    #
+    # Dispatch is the moment a validated action's parameters leave Bartholomew
+    # for a real computer. It requires an `ActionApproval` bound to that exact
+    # action -- its id, tenant, device, capability, capability version and a
+    # fingerprint of its canonical parameters -- and
+    # bartholomew.actuation.seam.evaluate_dispatch_admission() requires that
+    # approval regardless of this allowlist, precisely so that no entry here
+    # can become a standing "actuation enabled" switch. See
+    # bartholomew/actuation/approval.py and the recorded precedent for
+    # `learning_accept` immediately below.
     # `learning_accept` is deliberately NOT listed here, and adding it would
     # not make acceptance reachable.
     #
@@ -590,6 +680,76 @@ tool_use:
     # requires that approval for learning_accept regardless of this
     # allowlist, precisely so no entry here can become a standing
     # "learning enabled" switch.
+    # Package E: trusted-group sharing, from the *recipient's* side. Three of
+    # the four share-adoption kinds, and deliberately not the fourth.
+    #
+    # `share_adopt` takes a package a trusted group published and turns it
+    # into a candidate stored under the `adopted_share_candidate` kind, which
+    # -- like `candidate_lesson` above -- is absent from
+    # competency.COMPETENCY_KINDS and therefore structurally invisible to the
+    # retrieval seam. Adopting asserts nothing and changes no future
+    # reasoning, so a standing grant is the right shape.
+    #
+    # `share_customise` edits the recipient's own local copy, making it a
+    # fork. It only ever narrows what a later acceptance would mean, and it
+    # invalidates any approval already granted for the old text.
+    #
+    # `share_reject` is the conservative half of review: it creates no
+    # accepted learning and forecloses consolidation permanently.
+    #
+    # None of the three authorises anything crossing a tenant boundary.
+    # Publishing is not a Bartholomew action at all -- it is an explicit act
+    # by a person against the control plane, gated by group membership -- and
+    # a group existing authorises nothing, in the same way an objective
+    # existing authorises nothing.
+    - "share_adopt"
+    - "share_customise"
+    - "share_reject"
+    # `share_accept` is deliberately NOT listed here, and adding it would not
+    # make acceptance reachable either. Accepting a share is governed by the
+    # *same* candidate-bound authorization `learning_accept` requires:
+    # runtime_contract.evaluate_share_admission() delegates the accept branch
+    # to evaluate_learning_admission(ctx, "learning_accept", lesson=...), so a
+    # LearningAcceptanceApproval bound by fingerprint to that exact adopted
+    # candidate is required regardless of this allowlist. Something a
+    # housemate shared becomes trusted knowledge on the same terms as
+    # something Bartholomew inferred for itself: never automatically, and
+    # never by a switch.
+
+    #
+    # Learning and Memory Control Centre (Package D). Four kinds, every one
+    # of them either inert or conservative, and not one of them a route to
+    # acceptance.
+    #
+    # `learning_shadow_evaluate` runs the shadow policy engine over one
+    # candidate and records what the policy *would* have decided. It writes
+    # exactly one row, under the `learning_shadow_evaluation` kind, which is
+    # absent from competency.COMPETENCY_KINDS and therefore invisible to the
+    # retrieval seam. It cannot write the candidate, the approval or any
+    # competency kind -- runtime_contract._assert_shadow_writable() refuses
+    # all seven by name. A "would_accept" result is a counterfactual, not a
+    # permission: evaluate_learning_admission() never reads one, so
+    # allowlisting this cannot widen into allowlisting acceptance.
+    - "learning_shadow_evaluate"
+    # `learning_policy_update` records a new revision of that policy. It
+    # cannot enable automatic acceptance either: learning_policy.LearningPolicy
+    # .execution_mode is a property returning a module constant fixed to
+    # "shadow", so a user who configures `requested_execution_mode: auto` has
+    # recorded a preference for a later wave and changed nothing about this
+    # one.
+    - "learning_policy_update"
+    # `learning_candidate_edit` lets a reviewer change what a proposed lesson
+    # says before deciding on it. Conservative by construction: a material
+    # edit produces a new fingerprint, which is exactly what stops a prior
+    # LearningAcceptanceApproval authorising the changed candidate. Editing
+    # can only ever require *more* review, never less.
+    - "learning_candidate_edit"
+    # `learning_competency_revoke` withdraws an already-accepted competency
+    # record from future retrieval, through MemoryStore.forget_memory(). Like
+    # learning_reject, standing permission here can only reduce what
+    # Bartholomew retains -- and the candidate row, the approval and every
+    # Reflection survive it, so "was this ever accepted?" stays answerable.
+    - "learning_competency_revoke"
   sandbox:
     filesystem:
       allowed_paths: ["./data", "./exports"]

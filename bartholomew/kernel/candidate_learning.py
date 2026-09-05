@@ -104,6 +104,30 @@ REVIEW_STATES: frozenset[str] = frozenset(
 
 TERMINAL_REVIEW_STATES: frozenset[str] = frozenset({REVIEW_ACCEPTED, REVIEW_REJECTED})
 
+#: Purely administrative presentation state, used by the Learning and Memory
+#: Control Centre to let someone triage a review queue.
+#:
+#: Deliberately excluded from `learning_authorization.fingerprint_for()`, and
+#: that exclusion is the whole reason this vocabulary is separate from
+#: `REVIEW_STATES`: pinning a candidate to look at later must not invalidate
+#: an approval someone already granted for it, because it does not change one
+#: word of what the lesson claims. Anything that *does* change the lesson's
+#: meaning belongs in the material set the fingerprint covers instead.
+DISPLAY_NORMAL = "normal"
+DISPLAY_PINNED = "pinned"
+DISPLAY_SET_ASIDE = "set_aside"
+
+DISPLAY_STATES: frozenset[str] = frozenset(
+    {DISPLAY_NORMAL, DISPLAY_PINNED, DISPLAY_SET_ASIDE},
+)
+
+#: Risk classes a reviewer may assign to a candidate, least to most severe.
+#: The single definition: `learning_policy.RISK_CLASSES` is this tuple, not a
+#: copy of it, so a reviewer's assignment and the policy that reads it cannot
+#: drift apart. Defined here rather than there because the dependency runs
+#: that way -- the policy engine reads candidates, not the reverse.
+RISK_CLASSES: tuple[str, ...] = ("low", "moderate", "high", "critical")
+
 #: The observation/inference distinction, as data rather than as convention.
 #: `EPISTEMIC_OBSERVATION` is never a legal value for a `CandidateLesson`; it
 #: exists so the distinction is expressible and so a future record type that
@@ -270,6 +294,42 @@ class CandidateLesson:
     consolidated_key: str | None = None
     revision: int = 1
     updated_at: str = field(default_factory=_utcnow_iso)
+    #: Administrative only. Changing it never changes what the lesson claims,
+    #: never changes the material fingerprint, and never invalidates an
+    #: approval -- see `DISPLAY_STATES` above.
+    display_state: str = DISPLAY_NORMAL
+
+    # -- control-centre material extensions ------------------------------
+    #
+    # Four dimensions the Learning and Memory Control Centre lets a reviewer
+    # record, and which the shadow policy engine reads. Every one of them is
+    # *material*: `learning_authorization.fingerprint_for()` covers each one
+    # that has been assigned, so editing any of them invalidates a prior
+    # approval exactly as editing the rule does.
+    #
+    # All four default to "not assessed" rather than to a value, and an
+    # unassessed field contributes nothing to the fingerprint. That is what
+    # keeps approvals granted before these fields existed valid: a candidate
+    # written by the S5.4 slice and the same candidate read back after this
+    # upgrade are the same lesson, and digest identically. It also means the
+    # policy engine's conservative defaults (unassessed risk is treated as
+    # `critical`, unassessed reversibility as irreversible) apply to exactly
+    # the candidates nobody has assessed.
+
+    #: Reviewer-assigned risk class, or None for "not assessed".
+    risk_class: str | None = None
+    #: Whether acting on this lesson could be undone, or None for
+    #: "not assessed".
+    reversible: bool | None = None
+    #: Applications this lesson would affect, beyond the competency
+    #: (`competency_id`) that is its affected capability. Empty means none
+    #: are named.
+    affected_applications: list[str] = field(default_factory=list)
+    #: Explicit household-sharing eligibility, or None to derive it from
+    #: `classification` (a `personal` lesson is not shareable). Session E
+    #: owns the transport; this field is only ever a statement about
+    #: *eligibility*, never a claim that a share occurred.
+    sharing_eligible: bool | None = None
 
     # -- invariants ------------------------------------------------------
 
@@ -318,7 +378,27 @@ class CandidateLesson:
             "consolidated_key": self.consolidated_key,
             "revision": self.revision,
             "updated_at": self.updated_at,
+            "display_state": self.display_state,
+            "risk_class": self.risk_class,
+            "reversible": self.reversible,
+            "affected_applications": list(self.affected_applications),
+            "sharing_eligible": self.sharing_eligible,
         }
+
+    @property
+    def effective_sharing_eligible(self) -> bool:
+        """Whether this lesson could be shared beyond its owner.
+
+        Explicit when a reviewer assigned it; otherwise derived from the
+        classification, where only `personal` is treated as not shareable.
+        Deriving in this direction is the conservative one: an unassessed
+        `potentially_generalisable` lesson counts as shareable and is
+        therefore excluded by the default policy, rather than slipping
+        through as "nobody said it was shareable".
+        """
+        if self.sharing_eligible is not None:
+            return bool(self.sharing_eligible)
+        return self.classification != "personal"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CandidateLesson:
@@ -346,6 +426,14 @@ class CandidateLesson:
             consolidated_key=data.get("consolidated_key"),
             revision=int(data.get("revision", 1)),
             updated_at=data.get("updated_at") or _utcnow_iso(),
+            # Absent on every candidate stored before the control centre
+            # existed. Defaulting rather than requiring it means no migration
+            # is needed to read one back.
+            display_state=data.get("display_state") or DISPLAY_NORMAL,
+            risk_class=data.get("risk_class"),
+            reversible=data.get("reversible"),
+            affected_applications=list(data.get("affected_applications") or []),
+            sharing_eligible=data.get("sharing_eligible"),
         )
 
     def to_summary_text(self) -> str:
@@ -393,6 +481,18 @@ class CandidateLesson:
                 f"review_state must be one of {sorted(REVIEW_STATES)}, "
                 f"got {self.review_state!r}",
             )
+        if self.display_state not in DISPLAY_STATES:
+            errors.append(
+                f"display_state must be one of {sorted(DISPLAY_STATES)}, "
+                f"got {self.display_state!r}",
+            )
+        if self.risk_class is not None and self.risk_class not in RISK_CLASSES:
+            errors.append(
+                f"risk_class must be one of {list(RISK_CLASSES)} or null "
+                f"(not assessed), got {self.risk_class!r}",
+            )
+        if any(not str(name).strip() for name in self.affected_applications):
+            errors.append("affected_applications must not contain blank entries")
         if not (0.0 <= self.confidence <= 1.0):
             errors.append(f"confidence must be between 0.0 and 1.0, got {self.confidence!r}")
 

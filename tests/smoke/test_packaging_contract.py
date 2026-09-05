@@ -67,6 +67,26 @@ GUARDED_OPTIONAL_IMPORTS = {
     # deployment that never enables it never needs the package -- deliberately
     # not a hard runtime dependency. See docs/VISION_AND_PERSONAL_DEPLOYMENT.md §6.
     "anthropic",
+    # Optional UI Automation adapter for the Windows action companion,
+    # installed via the `windows` extra (Windows-only, by environment marker).
+    # Absent, `windows_actuation/uia.py` fails CLOSED: `focused_field()`
+    # returns `is_password=None`, which the sensitive-field check treats as a
+    # reason to refuse, so `windows.type_text` and
+    # `windows.accessibility_action` refuse rather than degrade. A companion
+    # that cannot see where it is typing does not type. Every other capability
+    # works without it, and nothing server-side needs it at all.
+    # See docs/B_GOVERNED_WINDOWS_ACTUATION.md §6.
+    "comtypes",
+    # Package C's three optional multimodal backends. Each is imported inside a
+    # try/except in a `default_*()` factory that returns a Null adapter with the
+    # reason when the package is absent, so a machine without them reports the
+    # capability as truthfully `unavailable` rather than failing. Deliberately
+    # not hard runtime dependencies: a native audio/UI dependency tree must be
+    # an explicit operator choice, and CI must not need one.
+    # See docs/C_MULTIMODAL_WINDOWS_PRESENCE.md §7.3.
+    "sounddevice",
+    "uiautomation",
+    "mss",
 }
 
 # Modules whose import name differs from the distribution that provides them.
