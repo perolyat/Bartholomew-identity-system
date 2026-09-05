@@ -1,32 +1,57 @@
 name: CI
 
-# Continuous verification (Phase A). Runs automatically on every pull request
-# and every push to main, plus manual dispatch.
+# ---------------------------------------------------------------------------
+# Tier: PR FAST  (target: under 5 minutes wall-clock)
 #
-# Structure, cheapest-first so failures surface fast:
-#   1. quality  - format/lint + packaging contract (no DB, no server)
-#   2. tests    - Ubuntu default suite + coverage across all first-party packages
-#   3. critical - the integration/lifecycle tests the default marker expression
-#                 EXCLUDES, run explicitly (pyproject sets
-#                 addopts = -m 'not integration and not slow')
-#   4. windows  - lifecycle/compatibility on Windows (file-handle release, paths)
+# Ordinary development feedback on every pull-request push. A compact set of
+# high-value checks that catch the common regressions and contract violations:
+#
+#   quality       format/lint/hook set, dependency graph, security floor,
+#                 packaging contract (imports, console scripts, declared deps)
+#   fast-tests    the DEFAULT test suite (pyproject deselects `integration` and
+#                 `slow`) on one Python, parallelised with pytest-xdist, no
+#                 coverage instrumentation. Every governance suite that is not
+#                 integration-marked runs here: parking brake, consent-bypass
+#                 red team, runtime-contract seams, actuation governance and
+#                 prohibitions (when present), learning authorization, S8.
+#   windows-fast  packaging + lifecycle on a real Windows runner, plus the
+#                 Windows actuation suites when the tree carries them
+#   smoke         a real uvicorn server answering /healthz, /api/health, /docs
+#
+# What moved OUT of the PR tier and where (see docs/waves/W03/W03_CI_BASELINE.md):
+#   coverage gate, py3.10, integration/slow tests, clean-start lifecycle on
+#   Ubuntu   -> integration.yml  (Integration tier)
+#   both-Python matrix + Windows full suite      -> merge-candidate.yml
+#   serial (non-xdist) runs, py3.12, flake hunt  -> nightly.yml
+#
+# The former pre-commit.yml and smoke.yml workflows are folded in here: they
+# ran the same default suite a third and fourth time per PR.
+# ---------------------------------------------------------------------------
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-pr-fast-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # A wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output. Without it, xdist worker tmp paths (…/popen-gw0/…) push the DB-path
+  # the brake commands print past an 80-col default and split it mid-token, so
+  # a substring assertion like ".../barth.db" fails on ".../ba\nrth.db". The
+  # tests are correct; only the rendered width was environment-dependent.
+  COLUMNS: "200"
+  # The test session enables the deterministic-hash embedder explicitly (see
+  # conftest.py); nothing here provisions a real model.
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   quality:
     name: Quality (format, lint, packaging contract)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -65,29 +90,38 @@ jobs:
           print(f'starlette {installed} OK (>= {minimum})')
           "
 
-      - name: Ruff
-        run: python -m ruff check .
+      # The pinned hook set (black, ruff, end-of-file-fixer, trailing-whitespace,
+      # detect-private-key, check-yaml, check-added-large-files). requirements-dev
+      # pins the same ruff/black versions, so this is the one lint authority.
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      - name: Black (check only)
-        run: python -m black --check .
+      - name: pre-commit (black, ruff, hygiene hooks)
+        run: pre-commit run --all-files --show-diff-on-failure
 
       # Import/CLI/API/undeclared-dependency contract. Fails fast and with an
       # obvious cause before any DB or server work runs.
       - name: Packaging contract (imports, console scripts, declared deps)
         run: python -m pytest tests/smoke/test_packaging_contract.py -p no:cacheprovider
 
-  tests:
-    name: Tests + coverage (Ubuntu, py${{ matrix.python-version }})
+      # Wave coordination manifest stays machine-readable and self-consistent
+      # (immutable session ids, branch/PR/handoff naming, acyclic dependencies).
+      - name: Wave manifest contract
+        if: hashFiles('tests/test_wave_manifest.py') != ''
+        run: python -m pytest tests/test_wave_manifest.py -p no:cacheprovider
+
+  fast-tests:
+    name: PR Fast tests (Ubuntu, py3.11, parallel)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11"]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -100,93 +134,37 @@ jobs:
           python -m pip install -e .
           python -m pip install -r requirements-dev.txt
 
-      - name: pip check
-        run: python -m pip check
+      # The default suite (pyproject: -m 'not integration and not slow'),
+      # spread over the runner's cores. `--dist loadfile` keeps every test of
+      # one module on one worker: several suites share module-level state
+      # (the API app's process-wide kernel singleton, the permission-checker
+      # singleton) that is safe within a process and unsafe across an
+      # interleaving. No coverage instrumentation here: it costs ~30% and its
+      # gate is enforced in the Integration and Merge Candidate tiers.
+      - name: Default test suite (parallel, no coverage)
+        run: >-
+          python -m pytest -p no:cacheprovider
+          -n auto --dist loadfile
+          --junitxml=junit-pr-fast-py3.11.xml
 
-      - name: Smoke tests
-        run: python -m pytest -m smoke -p no:cacheprovider
-
-      # Coverage spans every first-party runtime package, not just
-      # `bartholomew`. Tests and scripts are excluded via .coveragerc's omit
-      # list so the number reflects runtime code only.
-      #
-      # The 70% gate is the project's pre-existing declared threshold
-      # (.coveragerc [report] fail_under). It was measured BEFORE being wired
-      # in here: with the widened scope the baseline is 73.52%, so the gate is
-      # enforced as-is. It was not lowered to make this job green.
-      - name: "Default test suite with coverage (gate: line >= 70%)"
-        run: |
-          python -m pytest -p no:cacheprovider \
-            --cov=bartholomew \
-            --cov=identity_interpreter \
-            --cov=bartholomew_api_bridge_v0_1 \
-            --cov-branch \
-            --cov-report=term-missing:skip-covered \
-            --cov-report=xml \
-            --cov-fail-under=70
-
-      - name: Upload coverage.xml
-        if: ${{ matrix.python-version == '3.11' }}
+      - name: Upload junit (test timings for tier tuning)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-xml-py${{ matrix.python-version }}
-          path: coverage.xml
-          if-no-files-found: error
+          name: junit-pr-fast-py3.11
+          path: junit-pr-fast-py3.11.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
-  critical:
-    name: Critical integration + lifecycle (Ubuntu, py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-            pyproject.toml
-
-      - name: Install package (editable) and dev dependencies
-        run: |
-          python -m pip install -U pip
-          python -m pip install -e .
-          python -m pip install -r requirements-dev.txt
-
-      # pyproject's addopts excludes `integration` and `slow`, so these tests
-      # never run under a plain `pytest`. Run them explicitly.
-      - name: Integration-marked tests (excluded by default addopts)
-        run: python -m pytest -m "integration or slow" -p no:cacheprovider
-
-      - name: Clean-start persistence + lifecycle
-        run: python -m pytest tests/test_clean_start_lifecycle.py -p no:cacheprovider
-
-      - name: Scheduler startup readiness (fresh DB schema before start returns)
-        run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
-
-      - name: Parking brake / governance integration
-        run: |
-          python -m pytest -p no:cacheprovider \
-            tests/integration/test_parking_brake_integration.py \
-            tests/test_parking_brake_scoped_blocks.py \
-            tests/unit/safety/test_parking_brake.py
-
-  windows:
-    name: Windows lifecycle + compatibility (py${{ matrix.python-version }})
+  windows-fast:
+    name: Windows fast (packaging, lifecycle, actuation suites)
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11"]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -213,21 +191,22 @@ jobs:
       - name: Scheduler startup readiness
         run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
 
-      # Governed Windows actuation (Session B). The unit and structural suites
-      # run on every platform in the `tests` job; these two steps exist because
-      # the actuation claims are Windows claims:
+      # Governed Windows actuation (wave-two package B). Present once the
+      # wave-two integration is on the tree; the steps are guarded so this
+      # workflow is valid both before and after that merge.
       #
       #   * the real suite uses the actual Win32 API with nothing substituted
       #     -- real CreateProcessW, real EnumWindows, real clipboard -- and is
       #     skipped everywhere else, so without this step it would never run;
       #   * the structural suite is re-run here because the path allowlist and
       #     the executable-extension refusals behave differently under
-      #     Windows path semantics, and a Linux-only pass would not have
-      #     exercised them.
+      #     Windows path semantics.
       - name: Governed Windows actuation (real Win32, nothing substituted)
+        if: hashFiles('tests/integration/test_windows_action_real.py') != ''
         run: python -m pytest tests/integration/test_windows_action_real.py -p no:cacheprovider -m integration
 
       - name: Governed Windows actuation (capabilities, governance, prohibitions)
+        if: hashFiles('tests/test_windows_action_governance.py') != ''
         run: >-
           python -m pytest
           tests/test_windows_action_capabilities.py
@@ -237,66 +216,55 @@ jobs:
           tests/test_windows_action_dispatch_results.py
           -p no:cacheprovider
 
-      # The Windows alpha installer. Parsed, never installed -- and the two
-      # things checked here are the two the script promises: that it is inert
-      # until given a verb, and that `status` reports rather than throwing.
-      #
-      # This runs on Windows because there is no PowerShell on the Ubuntu jobs,
-      # and a parse error in an install script otherwise surfaces only when a
-      # person runs it. A real one shipped: `if (Test-Installed -and (...))`
-      # parses as a command invocation, so `status` died on any machine where
-      # the companion was installed but not yet configured.
-      - name: Windows companion script parses and stays inert
-        shell: pwsh
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'deploy/windows/bartholomew-action.ps1'),
-            [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) {
-            $errors | ForEach-Object { Write-Host "::error::$_" }
-            exit 1
-          }
-          Write-Host 'bartholomew-action.ps1 parses cleanly.'
-
-          # No verb: prints help, changes nothing, exits 0.
-          & ./deploy/windows/bartholomew-action.ps1 | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host '::error::invoking the script with no verb did not exit 0'
-            exit 1
-          }
-
-          # `status` on a machine with nothing installed must report, not throw.
-          & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host '::error::`status` failed on a machine with nothing installed'
-            exit 1
-          }
-
-          # ...and, the case that actually shipped broken, on a machine that
-          # IS installed but has no configuration. A stub at the path
-          # `Test-Installed` probes is enough to reach the branch; nothing is
-          # really installed and it is removed again immediately.
-          $root = Join-Path $env:LOCALAPPDATA 'Bartholomew'
-          New-Item -ItemType Directory -Force -Path (Join-Path $root 'venv/Scripts') | Out-Null
-          Set-Content -Path (Join-Path $root 'venv/Scripts/python.exe') -Value ''
-          try {
-            & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
-            Write-Host 'status reports on an installed-but-unconfigured machine.'
-          } catch {
-            Write-Host "::error::status threw on an installed-but-unconfigured machine: $_"
-            exit 1
-          } finally {
-            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
-          }
-
-          # Nothing the script created survives. It is opt-in, and this proves
-          # it -- the stub above was removed in the `finally`.
-          if (Test-Path $root) {
-            Write-Host '::error::%LOCALAPPDATA%\Bartholomew exists after read-only verbs'
-            exit 1
-          }
-          Write-Host 'Inert: no verb, no changes.'
-
       - name: Smoke tests
         run: python -m pytest -m smoke -p no:cacheprovider
+
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # The only check that boots a real HTTP server process.
+      - name: Start uvicorn server
+        run: |
+          uvicorn app:app --host 127.0.0.1 --port 5173 &
+          echo "Server started in background"
+
+      - name: Wait for server to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5173/healthz; then
+              echo "Server is ready!"
+              break
+            fi
+            echo "Waiting for server... attempt $i/30"
+            sleep 1
+          done
+
+      - name: Test /healthz endpoint
+        run: |
+          response=$(curl -fsS http://127.0.0.1:5173/healthz)
+          echo "Response: $response"
+          echo "$response" | jq -e '.status == "ok"' || exit 1
+          echo "$response" | jq -e '.version == "0.1.0"' || exit 1
+
+      - name: Test /api/health endpoint
+        run: curl -fsS http://127.0.0.1:5173/api/health | jq .
+
+      - name: Test /docs endpoint
+        run: curl -fsS http://127.0.0.1:5173/docs > /dev/null

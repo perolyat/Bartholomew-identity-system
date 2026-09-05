@@ -1,0 +1,249 @@
+name: Integration
+
+# ---------------------------------------------------------------------------
+# Tier: INTEGRATION  (target: under 10-15 minutes wall-clock)
+#
+# Package-completion and cross-component verification. Runs when a pull
+# request is READY FOR REVIEW (not a draft), when it carries the label
+# `ci:integration`, in a merge queue, or by hand. Builder iterations on draft
+# PRs get the PR Fast tier only.
+#
+#   tests-coverage  the default suite WITH branch coverage and the 70% gate,
+#                   one Python, parallelised
+#   critical        the `integration`/`slow` tests the default marker
+#                   expression EXCLUDES, plus clean-start lifecycle, scheduler
+#                   readiness and parking-brake governance integration
+#   windows         Windows lifecycle + the Windows actuation suites when present
+# ---------------------------------------------------------------------------
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+  # Wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output under xdist worker tmp paths (see ci.yml for the full rationale).
+  COLUMNS: "200"
+
+# A draft PR without the opt-in label runs nothing here (the workflow still
+# registers, with every job skipped).
+jobs:
+  tests-coverage:
+    name: Tests + coverage (Ubuntu, py3.11)
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.draft == false
+      || contains(github.event.pull_request.labels.*.name, 'ci:integration')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      - name: pip check
+        run: python -m pip check
+
+      # Coverage spans every first-party runtime package (see .coveragerc).
+      # The 70% gate is the project's declared threshold; it was measured
+      # before being wired in (73.52% at the time) and is not lowered here.
+      - name: "Default test suite with coverage (gate: line >= 70%)"
+        run: >-
+          python -m pytest -p no:cacheprovider
+          -n auto --dist loadfile
+          --cov=bartholomew
+          --cov=identity_interpreter
+          --cov=bartholomew_api_bridge_v0_1
+          --cov-branch
+          --cov-report=term-missing:skip-covered
+          --cov-report=xml
+          --cov-fail-under=70
+          --junitxml=junit-integration-py3.11.xml
+
+      - name: Upload coverage.xml and junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-and-junit-integration-py3.11
+          path: |
+            coverage.xml
+            junit-integration-py3.11.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  critical:
+    name: Critical integration + lifecycle (Ubuntu, py3.11)
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.draft == false
+      || contains(github.event.pull_request.labels.*.name, 'ci:integration')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      # pyproject's addopts excludes `integration` and `slow`, so these tests
+      # never run under a plain `pytest`. Run them explicitly. They boot real
+      # servers on real sockets, so they stay serial: parallel workers would
+      # contend for ports and the scheduler's startup burst.
+      - name: Integration-marked tests (excluded by default addopts)
+        run: python -m pytest -m "integration or slow" -p no:cacheprovider --junitxml=junit-critical-py3.11.xml
+
+      - name: Clean-start persistence + lifecycle
+        run: python -m pytest tests/test_clean_start_lifecycle.py -p no:cacheprovider
+
+      - name: Scheduler startup readiness (fresh DB schema before start returns)
+        run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
+
+      - name: Parking brake / governance integration
+        run: |
+          python -m pytest -p no:cacheprovider \
+            tests/integration/test_parking_brake_integration.py \
+            tests/test_parking_brake_scoped_blocks.py \
+            tests/unit/safety/test_parking_brake.py
+
+      - name: Upload junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-critical-py3.11
+          path: junit-critical-py3.11.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows:
+    name: Windows lifecycle + compatibility (py3.11)
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.draft == false
+      || contains(github.event.pull_request.labels.*.name, 'ci:integration')
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+
+      - name: pip check
+        run: python -m pip check
+
+      - name: Packaging contract (imports, console scripts, declared deps)
+        run: python -m pytest tests/smoke/test_packaging_contract.py -p no:cacheprovider
+
+      - name: Clean-start persistence + lifecycle
+        run: python -m pytest tests/test_clean_start_lifecycle.py -p no:cacheprovider
+
+      - name: Scheduler startup readiness
+        run: python -m pytest tests/test_scheduler_startup_readiness.py -p no:cacheprovider
+
+      - name: Governed Windows actuation (real Win32, nothing substituted)
+        if: hashFiles('tests/integration/test_windows_action_real.py') != ''
+        run: python -m pytest tests/integration/test_windows_action_real.py -p no:cacheprovider -m integration
+
+      - name: Governed Windows actuation (capabilities, governance, prohibitions)
+        if: hashFiles('tests/test_windows_action_governance.py') != ''
+        run: >-
+          python -m pytest
+          tests/test_windows_action_capabilities.py
+          tests/test_windows_action_governance.py
+          tests/test_windows_action_prohibitions.py
+          tests/test_windows_action_channel_separation.py
+          tests/test_windows_action_dispatch_results.py
+          -p no:cacheprovider
+
+      # The Windows alpha installer: parsed, never installed. Checks the two
+      # things the script promises -- inert until given a verb, and `status`
+      # reports rather than throwing, including on an installed-but-
+      # unconfigured machine.
+      - name: Windows companion script parses and stays inert
+        if: hashFiles('deploy/windows/bartholomew-action.ps1') != ''
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'deploy/windows/bartholomew-action.ps1'),
+            [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) {
+            $errors | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
+          Write-Host 'bartholomew-action.ps1 parses cleanly.'
+
+          & ./deploy/windows/bartholomew-action.ps1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::invoking the script with no verb did not exit 0'
+            exit 1
+          }
+
+          & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::error::`status` failed on a machine with nothing installed'
+            exit 1
+          }
+
+          $root = Join-Path $env:LOCALAPPDATA 'Bartholomew'
+          New-Item -ItemType Directory -Force -Path (Join-Path $root 'venv/Scripts') | Out-Null
+          Set-Content -Path (Join-Path $root 'venv/Scripts/python.exe') -Value ''
+          try {
+            & ./deploy/windows/bartholomew-action.ps1 status | Out-Null
+            Write-Host 'status reports on an installed-but-unconfigured machine.'
+          } catch {
+            Write-Host "::error::status threw on an installed-but-unconfigured machine: $_"
+            exit 1
+          } finally {
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path $root) {
+            Write-Host '::error::%LOCALAPPDATA%\Bartholomew exists after read-only verbs'
+            exit 1
+          }
+          Write-Host 'Inert: no verb, no changes.'
+
+      - name: Smoke tests
+        run: python -m pytest -m smoke -p no:cacheprovider

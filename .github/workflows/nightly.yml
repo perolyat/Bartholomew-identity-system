@@ -1,0 +1,165 @@
+name: Nightly exhaustive
+
+# ---------------------------------------------------------------------------
+# Tier: NIGHTLY / DELIBERATE EXHAUSTIVE REGRESSION  (allowed to run long)
+#
+# Runs on a schedule and by hand, never on a builder's ordinary push. What it
+# adds over the Merge Candidate tier:
+#
+#   * SERIAL runs (no pytest-xdist) of the default suite on every supported
+#     Python, so an order- or timing-dependent failure that parallel
+#     scheduling hides (or causes) is still seen once a day;
+#   * Python 3.12 -- the version the live Windows test machine actually runs
+#     (docs/G_WINDOWS_COMPANION_COMPLETION.md section 9);
+#   * the full `-m ""` collection (every marker) on Windows;
+#   * a repeat run of the tests recorded as intermittent, so a flake rate is
+#     measured rather than guessed.
+# ---------------------------------------------------------------------------
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+  # Wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output (see ci.yml for the full rationale). The serial Nightly runs would
+  # not trip it, but keeping it consistent avoids a tier-dependent surprise.
+  COLUMNS: "200"
+
+jobs:
+  serial-full:
+    name: Serial default suite + coverage (Ubuntu, py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+      - name: pip check
+        run: python -m pip check
+      - name: Default test suite, serial, with coverage
+        run: >-
+          python -m pytest -p no:cacheprovider
+          --cov=bartholomew
+          --cov=identity_interpreter
+          --cov=bartholomew_api_bridge_v0_1
+          --cov-branch
+          --cov-report=term-missing:skip-covered
+          --cov-report=xml
+          --cov-fail-under=70
+          --durations=50
+          --junitxml=junit-nightly-serial-py${{ matrix.python-version }}.xml
+      - name: Integration-marked tests (serial)
+        run: python -m pytest -m "integration or slow" -p no:cacheprovider --durations=30 --junitxml=junit-nightly-intslow-py${{ matrix.python-version }}.xml
+      - name: Upload coverage.xml and junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-py${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            junit-nightly-*.xml
+          if-no-files-found: ignore
+          retention-days: 30
+
+  windows-everything:
+    name: Windows, every marker (py${{ matrix.python-version }})
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+      - name: Every collected test, serial (integration and slow included)
+        run: python -m pytest -p no:cacheprovider -m "" --durations=50 --junitxml=junit-nightly-windows-py${{ matrix.python-version }}.xml
+      - name: Upload junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-windows-py${{ matrix.python-version }}
+          path: junit-nightly-windows-*.xml
+          if-no-files-found: ignore
+          retention-days: 30
+
+  flake-hunt:
+    name: Repeat the recorded intermittent tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+      - name: Install package (editable) and dev dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install -r requirements-dev.txt
+      # Each file is run ten times in a fresh process. A failure here is a
+      # measured flake rate for RISKS.md, not a reason to retry the PR tiers.
+      - name: Repeat known-intermittent suites
+        shell: bash
+        run: |
+          set +e
+          fails=0
+          for f in \
+            tests/test_sqlite_wal_concurrent_processes.py \
+            tests/test_personal_memory_capture_recall.py \
+            tests/test_event_backbone_drive.py \
+            tests/test_notifications_api.py \
+          ; do
+            if [ ! -f "$f" ]; then echo "skip (absent): $f"; continue; fi
+            for i in $(seq 1 10); do
+              python -m pytest "$f" -p no:cacheprovider -q > "flake-$(basename "$f" .py)-$i.log" 2>&1
+              rc=$?
+              echo "$f run $i rc=$rc"
+              [ $rc -ne 0 ] && fails=$((fails+1))
+            done
+          done
+          echo "total failing runs: $fails"
+          exit $fails
+      - name: Upload flake logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-flake-logs
+          path: flake-*.log
+          if-no-files-found: ignore
+          retention-days: 30
