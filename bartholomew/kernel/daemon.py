@@ -7,7 +7,6 @@ import sys
 import traceback as traceback_module
 from datetime import datetime, time, timedelta, timezone
 from enum import Enum
-from pathlib import Path
 
 import yaml
 from dateutil import tz
@@ -1357,19 +1356,19 @@ def _default_db_path() -> str:
     """
     Resolve default database path.
 
+    Delegates to `bartholomew.kernel.db_paths`, the one resolver every
+    surface shares (server, daemon, operator CLI), so that "the database"
+    means the same file everywhere. Kept under its private name because
+    `runtime_contract` and `identity_interpreter` call it by this name.
+
     Resolution order:
     1. BARTH_DB_PATH environment variable (used as-is)
     2. data/barth.db under project root (directory with pyproject.toml)
     3. data/barth.db under current working directory
     """
-    env = os.getenv("BARTH_DB_PATH")
-    if env:
-        return env
-    p = Path(__file__).resolve()
-    for parent in [p.parent, *p.parents]:
-        if (parent / "pyproject.toml").exists():
-            return str(parent / "data" / "barth.db")
-    return str(Path.cwd() / "data" / "barth.db")
+    from bartholomew.kernel.db_paths import resolve_kernel_db_path
+
+    return resolve_kernel_db_path(create_parent=False)
 
 
 async def run_kernel():

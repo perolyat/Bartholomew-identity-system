@@ -63,6 +63,19 @@ class Capability(str, Enum):
     ACTION_APPROVE = "action:approve"
     ACTION_READ = "action:read"
     DEVICE_ACTION_CHANNEL = "device_action:channel"
+    # Arming the channel is its own power, separate from all four above and
+    # deliberately not implied by any of them. It authorises no action: it
+    # decides whether the machine may carry out anything at all right now,
+    # which is a coarser and differently-shaped question from "may this exact
+    # action run", and a surface that may approve should not thereby be able
+    # to open the channel. Disarming needs no capability of its own -- it is
+    # strictly tightening, and a control that removes authority must not be
+    # reachable only by whoever still holds it.
+    ACTION_ARM = "action:arm"
+    # Beginning an observation session. Separate from every read on the
+    # multimodal surface, because seeing what is being observed and deciding
+    # to observe are different powers.
+    MULTIMODAL_SESSION_START = "multimodal:session_start"
 
     # Learning and Memory Control Centre (Package D). Five capabilities, not
     # one, and the split follows the architecture rather than the screen: the
@@ -115,6 +128,12 @@ _USER_CAPABILITIES = frozenset(
         Capability.ACTION_APPROVE,
         Capability.ACTION_READ,
         Capability.DEVICE_ACTION_CHANNEL,
+        # A person may arm and may begin observing on their own Bartholomew.
+        # Both remain gated at the moment of use -- arming by the brake and by
+        # the device's own enrolment, observing by the interactive consent ask
+        # -- so holding these is permission to ask, not permission to proceed.
+        Capability.ACTION_ARM,
+        Capability.MULTIMODAL_SESSION_START,
         Capability.LEARNING_READ,
         Capability.LEARNING_REVIEW,
         # A person holds this over their own Bartholomew: reviewing what it

@@ -137,6 +137,7 @@ ignore = [
 "scripts/**" = ["PLC0415"]  # Allow lazy imports in scripts
 "**/cli.py" = ["PLC0415"]  # Allow lazy imports in CLI tools for fast startup
 "bartholomew/cli_trust.py" = ["PLC0415"]  # Same, for the device/group/share commands
+"bartholomew/cli_companion.py" = ["PLC0415"]  # Same, for the Windows companion commands
 "conftest.py" = ["PLC0415"]  # Lazy imports in test fixtures
 "test_*.py" = ["PLC0415"]  # Lazy imports in root-level tests
 "cleanup_*.py" = ["PLC0415"]  # Lazy imports in utility scripts

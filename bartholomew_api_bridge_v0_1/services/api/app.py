@@ -59,6 +59,7 @@ from .routes import (
     awaiting_response,
     consent,
     device_actions,
+    device_consent,
     governance,
     inbound,
     learning,
@@ -114,6 +115,9 @@ app.include_router(training.router)
 # bridge has no authentication and capture initiation must never be reachable
 # from an unauthenticated call (contract §7). See routes/multimodal.py.
 app.include_router(multimodal.router)
+# The person's answer to a device's ask to observe. Its routes refuse the
+# device credential; see routes/device_consent.py.
+app.include_router(device_consent.router)
 
 # Learning and Memory Control Centre (Package D). Deliberately NOT added to
 # `_ADMISSION_EXEMPT_PATHS`: every route here reads or mutates governed
@@ -544,6 +548,33 @@ async def startup():
 
     device_action_auth.maybe_install_test_resolver_from_env()
 
+    # The double-gated test resolver exists so the whole action path -- HTTP
+    # boundary, validation, governance, approval, lease, result -- is provable
+    # against a real server process. The arming window is now part of that
+    # path, so a deployment that has said twice that it is a test also gets its
+    # test device armed; otherwise the test resolver would open a channel that
+    # nothing could ever carry an action through.
+    #
+    # This is the only code path that arms anything without an explicit human
+    # request, it is unreachable without BOTH of the test resolver's gates
+    # (neither of which exists in any deployed configuration), and it announces
+    # itself on `/api/health` exactly as the test resolver does.
+    if device_action_auth.resolver_is_test_only():
+        from bartholomew.actuation import arming as _arming
+        from bartholomew.platform.runtime_registry import (
+            bound_runtime_user_id as _bound_user,
+        )
+
+        _test_device = (
+            os.getenv(device_action_auth.TEST_RESOLVER_DEVICE_ENV) or ""
+        ).strip() or "test-device"
+        _arming.arm(
+            tenant_id=_bound_user() or device_action_auth.LOCAL_TENANT,
+            device_id=_test_device,
+            armed_by=device_action_auth.TEST_RESOLVER_LABEL,
+            reason="test resolver installed (both gates set)",
+        )
+
     # Session F: put the cross-package seams in place before the kernel
     # starts, so no tick, drive or request is ever served by a stand-in that
     # a later line was about to replace. This installs Session E's registry
@@ -567,6 +598,23 @@ async def startup():
         _logging.getLogger(__name__).exception(
             "Session F seam installation failed; every package's fail-closed "
             "default remains in force",
+        )
+
+    # The operator-reachable consent channel for device observation starts.
+    # Without it a headless server has no way for a person to answer the
+    # Runtime Contract's fail-closed consent gate, and every observation
+    # start refuses. It registers only the *device* consent handler: the
+    # plain memory-write consent handler stays unset, so queued sensitive
+    # writes keep queueing. It opens nothing on its own -- every ask still
+    # needs a person to answer it, once, within its expiry.
+    try:
+        from bartholomew.multimodal import device_consent as _device_consent
+
+        _device_consent.install(db_path=resolve_db_path())
+    except Exception:
+        _logging.getLogger(__name__).exception(
+            "Device consent channel installation failed; every device "
+            "observation start will refuse (fail-closed)",
         )
 
     # Import here to avoid circular imports
@@ -641,6 +689,15 @@ async def startup():
 async def shutdown():
     if _kernel:
         await _kernel.stop()
+
+    # Take the device consent channel down with the process that installed
+    # it, so nothing outlives the server that could answer for it.
+    try:
+        from bartholomew.multimodal import device_consent as _device_consent
+
+        _device_consent.uninstall()
+    except Exception:
+        pass
 
     # Recorded after the kernel has actually stopped, never before: the whole
     # value of this row is that it distinguishes a process that completed its
@@ -965,6 +1022,10 @@ def _component_health(extra: dict[str, Any] | None = None) -> dict[str, Any]:
             "status": "ok",
             "open": open_for_actions,
             "test_resolver_active": device_action_auth.resolver_is_test_only(),
+            # Armed by the test resolver's own gates rather than by a person.
+            # Named separately so a running service can never be dispatching on
+            # a channel nobody deliberately opened without saying so.
+            "armed_by_test_resolver": device_action_auth.resolver_is_test_only(),
             "registry": (
                 registry.describe()
                 if hasattr(registry, "describe")

@@ -49,8 +49,8 @@ from pathlib import Path
 
 import pytest
 
+from bartholomew.actuation import arming, seam, store
 from bartholomew.actuation import devices as actuation_devices
-from bartholomew.actuation import seam, store
 from bartholomew.actuation.store import ActionState
 from bartholomew.platform import accounts, devices
 from bartholomew.platform.principal import PrincipalKind
@@ -288,6 +288,12 @@ async def test_stages_5_to_9_the_governed_action_path_end_to_end(
     """
     ctx = _Ctx(kernel_db)
 
+    # 5a. The channel starts DISARMED, and an approved action still will not
+    #     run while it is. Asserted before anything is armed, because "off by
+    #     default" is only meaningful if something checks it.
+    arming.reset_for_tests()
+    assert arming.describe(tenant_id=person)["armed"] is False
+
     # 5. A Windows action is proposed, caused by the observation above.
     requested = await seam.run_action_request_through_runtime_contract(
         ctx,
@@ -319,6 +325,18 @@ async def test_stages_5_to_9_the_governed_action_path_end_to_end(
     )
     assert premature.governance_allowed is False
 
+    # 6b. Approval alone is not enough: with the channel still disarmed, even
+    #     an approved action is refused. Arming and approval are two different
+    #     things and neither substitutes for the other.
+    unarmed = await seam.run_action_dispatch_through_runtime_contract(
+        ctx,
+        tenant_id=person,
+        device_id=enrolled_device,
+        action_id=action.action_id,
+        registry=registry,
+    )
+    assert unarmed.governance_allowed is False
+
     # 7. The approval is obtained, bound to this exact action.
     approved = await seam.grant_action_approval(
         ctx,
@@ -328,6 +346,16 @@ async def test_stages_5_to_9_the_governed_action_path_end_to_end(
         registry=registry,
     )
     assert approved.governance_allowed is True
+
+    # 7b. The person explicitly arms the channel for a bounded window. This
+    #     authorises no action; it opens the channel the approved one needs.
+    window = arming.arm(
+        tenant_id=person,
+        device_id=enrolled_device,
+        armed_by=person,
+        reason="golden path",
+    )
+    assert window.seconds_remaining() <= arming.DEFAULT_ARM_SECONDS
 
     # 8. Dispatch: the parameters leave the process for the device. This is
     #    the governed hand-off, not a keystroke on a real Windows machine.
@@ -362,6 +390,7 @@ async def test_the_parking_brake_stops_the_golden_path(
     from bartholomew.orchestrator.safety.governance_store import GovernanceStore
 
     ctx = _Ctx(kernel_db)
+    arming.arm(tenant_id=person, device_id=enrolled_device, armed_by=person)
     brake = GovernanceStore(kernel_db)
     brake.engage("actuation", reason="integration test", actor="test")
     try:
@@ -378,6 +407,7 @@ async def test_the_parking_brake_stops_the_golden_path(
         assert halted.governance_allowed is False
     finally:
         brake.disengage(reason="integration test", actor="test")
+        arming.reset_for_tests()
 
 
 # ===========================================================================
@@ -429,29 +459,29 @@ def test_stage_11_sharing_requires_an_opted_in_trusted_group(person):
 # ===========================================================================
 
 
-def test_stop_1_there_is_no_production_capture_start_surface():
-    """Stage 2 has no unattended trigger in this build, and that is deliberate.
+def test_stop_1_capture_start_now_exists_and_is_authenticated():
+    """Session F's first stop is closed: there is a production start surface.
 
-    Package C's HTTP surface is read-and-stop only: status, sessions, stop,
-    stop-all, diagnostics. There is no POST that starts a capture session,
-    because the API bridge has no authentication and capture initiation must
-    not be reachable from an unauthenticated call.
+    Session F recorded that nothing could begin an observation, and that adding
+    a start route was a governance decision rather than a convenience. That
+    decision was subsequently made and is implemented in the Windows companion
+    completion package: `POST /api/multimodal/sessions`, authenticated by an
+    enrolled device credential.
 
-    This test fails the moment someone adds one, which is the point: adding a
-    start route is a governance decision, not a convenience.
+    What this test now guards is the property the old assertion was standing in
+    for -- that the surface cannot be reached without a credential. The route's
+    absence was never the goal; an unauthenticated capture start was the risk.
     """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     from bartholomew_api_bridge_v0_1.services.api.routes import multimodal
 
-    paths = {
-        (method, route.path)
-        for route in multimodal.router.routes
-        for method in getattr(route, "methods", set())
-    }
-    starting = {(method, path) for method, path in paths if method == "POST" and "stop" not in path}
-    assert starting == set(), (
-        f"a capture-start surface appeared: {starting}. Package C deliberately "
-        "ships none; adding one is a governance decision."
-    )
+    app = FastAPI()
+    app.include_router(multimodal.router)
+    with TestClient(app) as client:
+        refused = client.post("/api/multimodal/sessions", json={"modality": "screen"})
+    assert refused.status_code == 401
 
 
 def test_stop_2_no_windows_hardware_is_exercised_by_this_suite():

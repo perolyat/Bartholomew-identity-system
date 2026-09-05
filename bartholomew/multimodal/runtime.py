@@ -186,7 +186,31 @@ async def start_session(
         capability_supported=capability.supported,
         capability_reason=capability.reason,
         blocking_executor=blocking_executor,
+        # So the person asked can tell whose machine is asking. Context for
+        # the consent channel; never a substitute for the modality prompt.
+        consent_context={
+            "tenant_id": request.tenant_id,
+            "principal_id": request.principal_id,
+            "device_id": request.device_id,
+            "modality": request.modality.value,
+            "correlation_id": request.correlation_id,
+            "session_id": session.session_id,
+        },
     )
+
+    if session.is_terminal:
+        # Stopped from the session surface while the person was being asked.
+        # The record already says so; nothing here may reopen it, and no
+        # device is touched whatever the seam concluded.
+        session.consent_decision = False
+        return SessionStartResult(
+            session=session,
+            allowed=False,
+            outcome="stopped",
+            reason=session.outcome_reason or "stopped before it started",
+            provenance_degraded=result.provenance_degraded,
+            provenance_error=result.provenance_error,
+        )
 
     session.governance_decision = bool(result.governance_allowed)
     session.consent_decision = result.outcome == "started" or None

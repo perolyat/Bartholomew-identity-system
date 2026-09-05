@@ -1,27 +1,37 @@
-import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+
+from bartholomew.kernel.db_paths import (
+    default_kernel_db_path,
+    find_project_root,
+    resolve_kernel_db_path,
+)
 
 from . import db_ctx
 
 
 def _find_project_root() -> Path:
-    """Locate project root by walking up for pyproject.toml."""
-    p = Path(__file__).resolve()
-    for parent in [p.parent, *p.parents]:
-        if (parent / "pyproject.toml").exists():
-            return parent
-    return Path.cwd()
+    """Locate project root by walking up for pyproject.toml.
+
+    Delegates to `bartholomew.kernel.db_paths`; kept under this name for the
+    call sites that import it.
+    """
+    return find_project_root()
 
 
-DEFAULT_DB_PATH = str(_find_project_root() / "data" / "barth.db")
+DEFAULT_DB_PATH = default_kernel_db_path()
 
 
 def resolve_db_path() -> str:
     """
     Resolve the database path from BARTH_DB_PATH (or DEFAULT_DB_PATH),
     read fresh on every call rather than cached once at import time.
+
+    Since the Windows companion completion this delegates to
+    `bartholomew.kernel.db_paths.resolve_kernel_db_path`, the same resolver
+    the kernel daemon and the operator CLI use, so that the brake an operator
+    engages from a shell is the brake this server reads.
 
     Found investigating a CI flake on PR #38 (S1.4/S1.6): DB_PATH used to
     be *only* a module-level constant, resolved once when this module was
@@ -46,9 +56,7 @@ def resolve_db_path() -> str:
     BARTH_DB_PATH is set once before the process starts and never
     changes afterward.
     """
-    path = os.getenv("BARTH_DB_PATH", DEFAULT_DB_PATH)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    return path
+    return resolve_kernel_db_path(create_parent=True)
 
 
 # Backward-compatible frozen constant, still resolved once at this

@@ -118,6 +118,21 @@ class SessionStore:
             stopper = self._stoppers.get(session_id)
             if session.state in (SessionState.ACTIVE, SessionState.APPROVED):
                 session.transition(SessionState.STOPPING, reason)
+            elif session.state in (SessionState.REQUESTED, SessionState.AWAITING_APPROVAL):
+                # Stopped before it ever started -- typically while a person
+                # was still being asked. There is nothing to signal and no
+                # STOPPED edge from here; the truthful end state is REFUSED,
+                # and the open ask, if any, is answered no so the waiting
+                # start returns promptly rather than at its expiry.
+                session.transition(SessionState.REFUSED, reason)
+                self._stoppers.pop(session_id, None)
+                try:
+                    from bartholomew.multimodal import device_consent
+
+                    device_consent.abandon_session(session_id, reason=reason)
+                except Exception:
+                    logger.exception("Could not abandon the consent ask for %s", session_id)
+                return True
 
         # Outside the lock: a stopper signals another thread and must not be
         # able to deadlock the registry.

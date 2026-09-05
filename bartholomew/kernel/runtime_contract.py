@@ -60,7 +60,11 @@ from .competency_reasoning import (
     render_for_prompt,
     select_relevant,
 )
-from .memory.privacy_guard import get_consent_handler
+from .memory.privacy_guard import (
+    DeviceConsentRequest,
+    get_consent_handler,
+    get_device_consent_handler,
+)
 from .reflection import ActionReflection, ReflectionWriteOutcome, record_action_reflection
 
 if TYPE_CHECKING:
@@ -1920,25 +1924,66 @@ async def _record_device_reflection(
     return await record_action_reflection(mem, reflection)
 
 
-async def _resolve_device_consent(device_label: str) -> tuple[bool, str, str | None]:
+async def _resolve_device_consent(
+    device_label: str,
+    *,
+    context: dict[str, Any] | None = None,
+) -> tuple[bool, str, str | None]:
     """Fail-closed device consent for a single voice/sight start attempt.
 
-    Returns (allowed, outcome, reason). Reuses the one interactive consent
-    channel (`privacy_guard.get_consent_handler()`) that skill "ask"
-    permissions also use -- not a second consent mechanism. An absent handler,
-    a declined request, or an unresolved (falsy) ask result all deny. Shared
-    by both device seams *only* for this fail-closed check itself; each seam
-    still runs its own brake/policy gates inline. Grants authorize a single
-    start attempt only -- never continuing access (see the module note above)."""
+    Returns (allowed, outcome, reason). Consults the device consent channel
+    (`privacy_guard.get_device_consent_handler()`) when one is registered --
+    the operator-reachable channel a headless server needs -- and otherwise
+    the one interactive consent channel (`privacy_guard.get_consent_handler()`)
+    that skill "ask" permissions also use. Neither is a second governance
+    authority: both only answer this one question. An absent handler, a
+    declined request, an unresolved (falsy) ask, or a channel that errors all
+    deny. Shared by the device seams *only* for this fail-closed check itself;
+    each seam still runs its own brake/policy gates inline. Grants authorize a
+    single start attempt only -- never continuing access (see the module note
+    above).
+
+    `context` carries tenant/principal/device/modality identifiers for the
+    device channel so a person can tell whose machine is asking. It never
+    replaces the prompt."""
+    prompt = f"Bartholomew requests to start {device_label} (single start attempt)"
+
+    device_handler = get_device_consent_handler()
+    if device_handler is not None:
+        fields = {
+            key: (str(value) if value is not None else None)
+            for key, value in (context or {}).items()
+            if key in _DEVICE_CONSENT_CONTEXT_KEYS
+        }
+        request = DeviceConsentRequest(prompt=prompt, **fields)
+        try:
+            approved = device_handler(request)
+            if inspect.isawaitable(approved):
+                approved = await approved
+        except Exception:
+            # The channel is internally total by contract; if it still
+            # raises, the answer is a denial, not a 500 that skips the
+            # reflection write.
+            logger.exception("Device consent channel failed; denying the start")
+            return False, "consent_denied", "Device consent channel failed (fail-closed)"
+        if not approved:
+            return False, "consent_denied", "Device consent declined or unresolved"
+        return True, "started", None
+
     handler = get_consent_handler()
     if handler is None:
         return False, "consent_denied", "No consent handler registered (fail-closed)"
-    approved = handler(f"Bartholomew requests to start {device_label} (single start attempt)")
+    approved = handler(prompt)
     if inspect.isawaitable(approved):
         approved = await approved
     if not approved:
         return False, "consent_denied", "Device consent declined or unresolved"
     return True, "started", None
+
+
+_DEVICE_CONSENT_CONTEXT_KEYS = frozenset(
+    {"tenant_id", "principal_id", "device_id", "modality", "correlation_id", "session_id"},
+)
 
 
 async def run_sight_through_runtime_contract(
@@ -2351,6 +2396,7 @@ async def run_multimodal_session_through_runtime_contract(
     capability_reason: str | None = None,
     consent_prompt: str | None = None,
     blocking_executor: Any | None = None,
+    consent_context: dict[str, Any] | None = None,
 ) -> DeviceRuntimeResult:
     """
     Trace one multimodal *session start* through the Runtime Contract seam --
@@ -2419,8 +2465,13 @@ async def run_multimodal_session_through_runtime_contract(
             f"device does not declare the {kind} capability (fail-closed)"
         )
 
-    # Governance gate 2: ParkingBrake, read through GovernanceStore.
-    if allowed:
+    async def _brake_denies() -> tuple[bool, str | None]:
+        """(denied, reason) for the brake as it stands right now.
+
+        Read through `GovernanceStore` -- the same authority every other gate
+        reads -- and fail-closed on any error: an unreadable safety gate
+        denies a device start.
+        """
         try:
             from bartholomew.orchestrator.safety.governance_store import (
                 is_blocked_fail_closed_off_loop,
@@ -2431,17 +2482,22 @@ async def run_multimodal_session_through_runtime_contract(
                 resolved_db_path,
                 executor=blocking_executor,
             ):
-                allowed = False
-                outcome = "parking_brake_denied"
-                reason = f"Blocked by parking brake (scope={brake_scope})"
+                return True, f"Blocked by parking brake (scope={brake_scope})"
+            return False, None
         except Exception:
             logger.exception(
                 "Brake check failed for scope=%s; failing closed",
                 brake_scope,
             )
+            return True, "Parking brake check errored"
+
+    # Governance gate 2: ParkingBrake, read through GovernanceStore.
+    if allowed:
+        denied, why = await _brake_denies()
+        if denied:
             allowed = False
             outcome = "parking_brake_denied"
-            reason = "Parking brake check errored"
+            reason = why
 
     # Governance gate 3: Identity Policy Decision (additive; see sight docstring).
     if allowed and identity_context is not None:
@@ -2455,7 +2511,19 @@ async def run_multimodal_session_through_runtime_contract(
     if allowed:
         allowed, outcome, reason = await _resolve_device_consent(
             consent_prompt or prompt_subject,
+            context=consent_context,
         )
+
+    # Gate 2 again, after the person answered. Consent can take minutes on an
+    # operator-reachable channel, and a brake engaged during that wait must
+    # stop the start: the gate is re-read at the moment of action, the same
+    # discipline an approved Windows action gets when its device leases it.
+    if allowed:
+        denied, why = await _brake_denies()
+        if denied:
+            allowed = False
+            outcome = "parking_brake_denied"
+            reason = why
 
     device_reflection = await _record_device_reflection(
         resolved_db_path,

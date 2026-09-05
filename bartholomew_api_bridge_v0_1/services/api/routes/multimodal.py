@@ -5,29 +5,42 @@ requires active capture and output state to be visible through an API/UI
 surface, and the visible-state requirement includes "how to stop it
 immediately" -- so a stop control belongs here.
 
-**There is deliberately no start endpoint.** A session is started through
-`bartholomew.multimodal.runtime.start_session()`, which requires an
-authenticated human principal, a resolved device and an explicit consent
-decision. Exposing a start over this API bridge -- which, as every other route
-here records, has no authentication today -- would put capture initiation
-behind an unauthenticated HTTP call. That is exactly the shape contract §7
-forbids ("no model response can start capture directly", "no autonomous
-capture initiation"), so the start path is not reachable from HTTP at all.
-Stopping needs no such protection: the worst an unauthenticated stop can do is
-end a session the user could have ended anyway, which fails safe.
+**The start endpoint is authenticated, and that is the only reason it
+exists.** Package C shipped no start route because this API bridge had no
+authentication, and putting capture initiation behind an unauthenticated HTTP
+call is exactly the shape contract §7 forbids. That premise changed when
+Session E's device credentials became reachable here: `POST /sessions` now
+requires an enrolled device credential, resolves the tenant server-side, and
+still runs every gate `start_session()` ran before.
 
-Auth note: same as every other route in this API bridge -- no authentication
-today; ROADMAP.md's Stage 1 section defers that to a separate future project.
-The absence of a start endpoint above is precisely because of it.
+What has *not* changed is who may decide to observe. The credential proves
+**which machine** is calling and nothing else. The `principal_id` on the
+resulting session is the human account the device's enrolment row names --
+never `companion:`, which `SessionRequest` refuses to build at all -- and the
+Runtime Contract's fourth gate still asks that person, interactively and
+fail-closed, for every single start. A companion holding a valid credential
+therefore cannot begin observing on its own: it can ask, and a person still
+answers. Contract §7's "no autonomous capture initiation" is preserved by that
+gate, not by the absence of a route.
+
+Stopping needs no such protection and deliberately has none: the worst an
+unauthenticated stop can do is end a session the user could have ended anyway,
+which fails safe. Stop stays reachable under a Parking Brake and during the
+admission window for the same reason.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import uuid
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from bartholomew.multimodal.status import status_snapshot
 from bartholomew.multimodal.store import SessionStore
+
+from ..db import resolve_db_path
 
 router = APIRouter(prefix="/api/multimodal", tags=["multimodal"])
 
@@ -45,6 +58,104 @@ def get_store() -> SessionStore:
 
 class StopRequest(BaseModel):
     reason: str | None = None
+
+
+class StartRequest(BaseModel):
+    """One explicit ask to begin observing.
+
+    No `tenant_id` and no `principal_id`: both are server-derived, from the
+    authenticated device's enrolment row. A body that could name either would
+    let a caller observe on somebody else's behalf, which is the one thing a
+    capture-start surface must never allow.
+    """
+
+    modality: str
+    #: Required for a screen session and refused for the others -- Package C's
+    #: rule, enforced by `SessionRequest`, not restated here.
+    scope: dict | None = None
+    correlation_id: str | None = None
+    max_duration_seconds: int | None = None
+    #: A separate decision from "may observe the screen at all". Approving
+    #: screen observation does not approve pixels.
+    allow_screenshot_fallback: bool = False
+
+
+@router.post("/sessions", status_code=201)
+async def start_multimodal_session(request: Request) -> dict:
+    """Begin one bounded observation session on the authenticated device.
+
+    Every gate is somebody else's and is reached unchanged: Session E answers
+    whether this device declares the capability, and
+    `run_multimodal_session_through_runtime_contract` runs the capability
+    check, the Parking Brake, the Identity policy decision and -- always,
+    fail-closed -- the interactive consent ask. A refusal at any of them
+    returns 403 with the outcome named, because a refused session is a normal,
+    inspectable state rather than an error to swallow.
+    """
+    from bartholomew.multimodal.modality import CaptureScope, Modality, ScopeKind
+    from bartholomew.multimodal.runtime import (
+        AutonomousStartRefusedError,
+        SessionRequest,
+        start_session,
+    )
+
+    from ..companion_auth import require_companion
+
+    payload = StartRequest(**(await request.json() if await request.body() else {}))
+    companion = require_companion(request)
+
+    try:
+        modality = Modality(payload.modality)
+    except ValueError:
+        raise HTTPException(400, f"unknown modality: {payload.modality!r}") from None
+
+    scope = None
+    if payload.scope is not None:
+        raw = dict(payload.scope)
+        try:
+            scope = CaptureScope(
+                kind=ScopeKind(str(raw.pop("kind", ""))),
+                display_id=raw.pop("display_id", None),
+                window_id=raw.pop("window_id", None),
+                window_title=raw.pop("window_title", None),
+                rect=tuple(raw["rect"]) if raw.get("rect") is not None else None,
+            )
+        except (ValueError, TypeError, KeyError) as e:
+            raise HTTPException(400, f"invalid capture scope: {e}") from None
+
+    try:
+        session_request = SessionRequest(
+            tenant_id=companion.owner_user_id,
+            # The human the device is enrolled to -- an account row, not the
+            # machine. `SessionRequest` refuses a companion principal outright.
+            principal_id=companion.owner_user_id,
+            device_id=companion.device_id,
+            modality=modality,
+            correlation_id=payload.correlation_id or f"multimodal-{uuid.uuid4().hex[:16]}",
+            scope=scope,
+            max_duration_seconds=payload.max_duration_seconds,
+            allow_screenshot_fallback=payload.allow_screenshot_fallback,
+        )
+    except AutonomousStartRefusedError as e:
+        raise HTTPException(403, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+    from ..app import _kernel
+
+    result = await start_session(
+        session_request,
+        store=get_store(),
+        db_path=resolve_db_path(),
+        identity_context=getattr(_kernel, "identity_context", None),
+    )
+
+    body = result.as_dict()
+    if not result.allowed:
+        # 403 with the governance outcome named. The session object is still
+        # returned: a refused start is part of what the status surface shows.
+        return JSONResponse(status_code=403, content=body)
+    return JSONResponse(status_code=201, content=body)
 
 
 @router.get("/status")
