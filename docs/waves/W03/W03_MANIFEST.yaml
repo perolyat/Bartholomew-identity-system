@@ -1,0 +1,265 @@
+# Wave 3 (W03) — authoritative machine-readable coordination manifest
+#
+# This file is the single source of truth for Wave 3 session identity, ownership,
+# dependencies, shared contracts, required CI tier, status and integration order.
+# It is validated in the PR Fast CI tier by tests/test_wave_manifest.py. A later
+# builder or integration session should be able to orient itself from this file
+# and the contract documents it references, without the chat history that
+# produced them.
+#
+# Naming is immutable metadata (see docs/waves/W03/README.md):
+#   session id   W03-<X>
+#   branch       wave/w03-<x>-<slug>
+#   PR           [W03-<X>] <Semantic Name>
+#   handoff      BARTHOLOMEW_W03_<X>_HANDOFF.md
+
+wave:
+  id: W03
+  objective: >-
+    Turn the infrastructure now present in Bartholomew into a genuinely useful
+    closed-loop Windows agent that can perceive the PC environment, understand a
+    user's intention and current state, construct a governed plan, safely act
+    through authorized capabilities, verify what actually happened, and learn
+    from explicitly governed corrections. Target loop:
+    Observe -> Interpret -> Decide -> Govern -> Act -> Verify -> Learn.
+  baseline:
+    # Wave 3 is built on the wave-two integration candidate, NOT on bare main.
+    # main @ adea4b1 carries none of packages A-E; the wave-two work (packages
+    # A canonical event backbone, B governed Windows actuation, C multimodal
+    # presence, D learning/memory control centre, E device registry & trusted
+    # groups) plus the companion-completion repairs (authentication, an
+    # operator-reachable device consent channel, an arming window, one DB path
+    # resolver) live only on the unmerged PR #89/#90 heads.
+    main_sha: adea4b132138f180d37ee81dd3d854c4b9c9f459
+    wave_two_integration_pr: 89
+    wave_two_integration_branch: claude/bartholomew-wave-two-integration-qjrxkr
+    wave_two_integration_sha: e3f92565c975d683fd75895395745a95842ab23d
+    companion_completion_pr: 90
+    companion_completion_branch: claude/windows-companion-completion-pkg
+    companion_completion_sha: a957a7e0e921406c4053b01ede4066b695e9ccf1
+    build_on: >-
+      Each W03 builder branches from the wave-two integration head once it is
+      merged to main. Until it is, builders branch from
+      claude/bartholomew-wave-two-integration-qjrxkr. The one blocker before
+      builders start is that this baseline must be merged to main (see
+      W03_PREP_ASSESSMENT.md "Blockers before builders start").
+  ci_tiers:
+    pr_fast:
+      workflow: .github/workflows/ci.yml
+      runs_on: every pull-request push
+      target_minutes: 5
+    integration:
+      workflow: .github/workflows/integration.yml
+      runs_on: PR ready-for-review, label ci:integration, merge_group, manual
+      target_minutes: 15
+    merge_candidate:
+      workflow: .github/workflows/merge-candidate.yml
+      runs_on: push to main, label ci:merge-candidate, wave/w03-f-* heads, merge_group, manual
+      target_minutes: 20
+    nightly:
+      workflow: .github/workflows/nightly.yml
+      runs_on: nightly schedule, manual
+      target_minutes: null
+  status: in_progress
+  exit_criterion: >-
+    A user can give Bartholomew an ordinary Windows task in natural language.
+    Bartholomew perceives enough relevant PC state to understand the request and
+    represents observation separately from inference; constructs a governed plan;
+    proposes each Windows action through the one canonical action envelope
+    (proposal -> identity -> capability -> scope -> risk -> authorization ->
+    execution -> evidence -> verify), which cannot execute without authorization
+    through the defined host boundary and a clear Parking Brake; safely executes
+    allowed actions; observes and verifies the resulting Windows state rather than
+    assuming success; explains what happened; and uses an explicitly approved
+    correction in a later relevant task, with no obsolete, revoked or untrusted
+    memory silently granting authority. Demonstrated end-to-end on at least one
+    Golden Path on a real Windows desktop, with manual lesson acceptance remaining
+    authoritative throughout.
+
+sessions:
+  - id: W03-PREP
+    kind: prep
+    name: Wave 3 Preparation & CI
+    session_title: W03-PREP — Wave 3 Preparation & CI
+    pr_title: "[W03-PREP] Wave 3 Preparation & CI"
+    branch: claude/wave-3-prep-ci-6g1u86
+    contract: docs/waves/W03/README.md
+    required_ci_tier: pr_fast
+    status: in_progress
+    depends_on: []
+    owns:
+      - .github/workflows
+      - docs/waves/W03
+      - tests/test_wave_manifest.py
+
+  - id: W03-A
+    kind: builder
+    name: Live Windows Perception & State Evidence
+    session_title: W03-A — Live Windows Perception & State Evidence
+    pr_title: "[W03-A] Live Windows Perception & State Evidence"
+    branch: wave/w03-a-live-windows-perception
+    handoff: BARTHOLOMEW_W03_A_HANDOFF.md
+    contract: docs/waves/W03/W03_A_CONTRACT.md
+    required_ci_tier: integration
+    status: not_started
+    depends_on: []
+    requires_frozen: []
+    owns:
+      - bartholomew/multimodal
+      - bartholomew/integration/multimodal_events.py
+      - bartholomew_api_bridge_v0_1/services/api/routes/multimodal.py
+      - bartholomew_api_bridge_v0_1/services/api/routes/device_consent.py
+
+  - id: W03-B
+    kind: builder
+    name: Executive Task Orchestration
+    session_title: W03-B — Executive Task Orchestration
+    pr_title: "[W03-B] Executive Task Orchestration"
+    branch: wave/w03-b-executive-task-orchestration
+    handoff: BARTHOLOMEW_W03_B_HANDOFF.md
+    contract: docs/waves/W03/W03_B_CONTRACT.md
+    required_ci_tier: integration
+    status: not_started
+    depends_on:
+      - W03-A
+      - W03-C
+      - W03-D
+    requires_frozen: []
+    owns:
+      - bartholomew/executive
+
+  - id: W03-C
+    kind: builder
+    name: Governed Windows Action & Reliability
+    session_title: W03-C — Governed Windows Action & Reliability
+    pr_title: "[W03-C] Governed Windows Action & Reliability"
+    branch: wave/w03-c-governed-windows-action
+    handoff: BARTHOLOMEW_W03_C_HANDOFF.md
+    contract: docs/waves/W03/W03_C_CONTRACT.md
+    required_ci_tier: integration
+    status: not_started
+    depends_on:
+      - W03-A
+    requires_frozen: []
+    owns:
+      - bartholomew/actuation
+      - bartholomew/windows_actuation
+      - bartholomew/integration/device_registry.py
+      - bartholomew/integration/device_action_resolver.py
+      - bartholomew_api_bridge_v0_1/services/api/routes/actions.py
+      - bartholomew_api_bridge_v0_1/services/api/routes/device_actions.py
+      - deploy/windows
+
+  - id: W03-D
+    kind: builder
+    name: Governed Memory & Learning Consolidation
+    session_title: W03-D — Governed Memory & Learning Consolidation
+    pr_title: "[W03-D] Governed Memory & Learning Consolidation"
+    branch: wave/w03-d-governed-memory-learning
+    handoff: BARTHOLOMEW_W03_D_HANDOFF.md
+    contract: docs/waves/W03/W03_D_CONTRACT.md
+    required_ci_tier: integration
+    status: not_started
+    depends_on: []
+    requires_frozen: []
+    owns:
+      - bartholomew/kernel/memory_store.py
+      - bartholomew/kernel/consent_gate.py
+      - bartholomew/kernel/memory_rules.py
+      - bartholomew/kernel/personal_facts.py
+      - bartholomew/kernel/candidate_learning.py
+      - bartholomew/kernel/learning_authorization.py
+      - bartholomew/kernel/learning_policy.py
+      - bartholomew/kernel/share_adoption.py
+      - bartholomew_api_bridge_v0_1/services/api/routes/learning.py
+      - bartholomew_api_bridge_v0_1/services/api/routes/memory.py
+
+  - id: W03-E
+    kind: builder
+    name: Windows Golden Path Experience
+    session_title: W03-E — Windows Golden Path Experience
+    pr_title: "[W03-E] Windows Golden Path Experience"
+    branch: wave/w03-e-windows-golden-path
+    handoff: BARTHOLOMEW_W03_E_HANDOFF.md
+    contract: docs/waves/W03/W03_E_CONTRACT.md
+    required_ci_tier: integration
+    status: not_started
+    depends_on:
+      - W03-A
+      - W03-B
+      - W03-C
+      - W03-D
+    requires_frozen: []
+    owns:
+      - bartholomew/cli_operator.py
+      - bartholomew_api_bridge_v0_1/services/api/routes/operator.py
+      - tests/golden_path
+
+  - id: W03-F
+    kind: integration
+    name: Integration & Real-World Test Candidate
+    session_title: W03-F — Integration & Real-World Test Candidate
+    pr_title: "[W03-F] Integration & Real-World Test Candidate"
+    branch: wave/w03-f-integration-real-world-test
+    handoff: BARTHOLOMEW_W03_F_HANDOFF.md
+    contract: docs/waves/W03/W03_F_CONTRACT.md
+    required_ci_tier: merge_candidate
+    status: not_started
+    depends_on:
+      - W03-A
+      - W03-B
+      - W03-C
+      - W03-D
+      - W03-E
+    requires_frozen:
+      - W03-A
+      - W03-B
+      - W03-C
+      - W03-D
+      - W03-E
+    integration_order:
+      - W03-D
+      - W03-A
+      - W03-C
+      - W03-B
+      - W03-E
+    owns:
+      - bartholomew/integration/install.py
+      - bartholomew/integration/seams.py
+      - tests/integration/test_w03_integration.py
+
+# Shared contracts: one owning session per interface, so no two builders can
+# each "reasonably" change the same contract. Consumers coordinate through the
+# owner; only the owner may change the signature.
+shared_contracts:
+  - name: action-envelope
+    owner: W03-C
+    consumers: [W03-B, W03-E, W03-F]
+    surface: >-
+      bartholomew/actuation/seam.py — run_action_request_through_runtime_contract,
+      grant_action_approval, evaluate_dispatch_admission,
+      run_action_dispatch_through_runtime_contract,
+      record_action_result_through_runtime_contract, cancel_action_through_runtime_contract.
+      The canonical proposal -> identity -> capability -> scope -> risk ->
+      authorization -> execution -> evidence -> verify envelope. It is the ONLY
+      path to Windows actuation; the executive (W03-B) proposes through it in
+      process and never constructs a bypass.
+  - name: observation-event
+    owner: W03-A
+    consumers: [W03-B, W03-D, W03-E, W03-F]
+    surface: >-
+      The observed-vs-inferred observation event emitted from an active capture
+      session into the canonical inbound/event backbone (inbound_events +
+      bartholomew/kernel/event_processing). Carries observed_event, inferred_state,
+      confidence, competing_explanations and provenance as distinct fields so
+      raw evidence is never collapsed into an asserted human state.
+  - name: memory-retrieval-governance
+    owner: W03-D
+    consumers: [W03-B, W03-E, W03-F]
+    surface: >-
+      bartholomew/kernel/consent_gate.py retrieval-side validity verdict
+      (currently_valid / revoked / superseded / expired) plus the memories-row
+      provenance, confidence, validity-window and supersession fields. Recalled
+      memory is evidence, never authority: it cannot grant permission, widen
+      scope, override identity policy, cross a user/domain boundary, execute
+      embedded instructions, authorize a PC action, or resurrect a revoked grant.

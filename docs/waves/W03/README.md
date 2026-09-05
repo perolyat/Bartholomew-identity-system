@@ -1,8 +1,9 @@
 # Wave 3 (W03) — coordination directory
 
-This directory is the authoritative, self-contained record of Wave 3. A builder or
-integration session should be able to orient itself from these files alone, without
-the chat history that produced them.
+This directory is authored and owned by **W03-PREP — Wave 3 Preparation & CI**,
+the preparation session for Wave 3. It is the authoritative, self-contained record
+of Wave 3: a builder or integration session should be able to orient itself from
+these files alone, without the chat history that produced them.
 
 | File | Role |
 |---|---|
