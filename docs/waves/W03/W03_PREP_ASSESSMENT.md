@@ -5,24 +5,35 @@ It records what the repository actually contains, distinguishing
 **implemented / partial / scaffolded / absent**, and never infers readiness from
 the existence of a class, interface or design document.
 
+> **Baseline update (post-merge).** The wave-two baseline is now **merged to
+> main**: PR #89 as `68222a3` and PR #90 as `99ee734`. **Builders branch from
+> `main` (>= `99ee734`); there is no unmerged-head or pre-merge blocker.** The
+> `W2G` label used throughout this section named the wave-two candidate head
+> *before* it merged; read every "W2G" / "unmerged PR head" reference below as
+> "the wave-two baseline, now on main". The findings themselves (what is
+> implemented / partial / scaffolded / absent) are unchanged by the merge — only
+> where that code lives changed. The manifest (`W03_MANIFEST.yaml`) and §6 are
+> authoritative for baseline and blocker status.
+
 ## 0. What "main" actually is, and what Wave 3 builds on
 
-`main @ adea4b1` carries **none** of the wave-two product packages. Everything
-Wave 3 needs — Windows actuation, multimodal presence, the event backbone, the
-learning/memory control centre, the device registry, companion authentication,
-the consent channel, the arming window — lives only on **unmerged** branches:
+The wave-two product packages — Windows actuation, multimodal presence, the
+event backbone, the learning/memory control centre, the device registry,
+companion authentication, the consent channel, the arming window — are **now on
+`main`** via:
 
-- PR #89 `claude/bartholomew-wave-two-integration-qjrxkr` @ `e3f9256` integrates
-  packages A–E; CI 9/9 green; **not merged**, auto-merge off.
-- PR #90 `claude/windows-companion-completion-pkg` @ `a957a7e` adds companion
-  authentication, an operator-reachable device consent channel, an arming window,
-  and one DB path resolver on top of #89; **not merged**.
+- PR #89 `claude/bartholomew-wave-two-integration-qjrxkr` (integrated packages
+  A–E), merged as `68222a3`.
+- PR #90 `claude/windows-companion-completion-pkg` (companion authentication, an
+  operator-reachable device consent channel, an arming window, and one DB path
+  resolver on top of #89), merged as `99ee734`.
 
-So the honest baseline for Wave 3 is the **PR #90 head**, referred to here as
-**W2G**. This assessment covers both `main` and W2G and says which is which. The
-single most important consequence is a blocker (§6): **the wave-two baseline must
-be merged to main before builders start**, or every builder branches from an
-unmerged PR head.
+This assessment was written against the wave-two candidate head **before** that
+merge and refers to it as **W2G**; that head is now the merged `main`. The
+subsystem findings are what Wave 3 builds on. The pre-merge framing that
+followed here — "the honest baseline is the unmerged PR #90 head" and "the
+wave-two baseline must be merged before builders start" — is **historical**:
+that blocker is discharged (§6), and builders branch from `main`.
 
 Evidence method: three subsystems (Windows perception, Parking Brake, memory)
 were assessed by independent code-reading agents with per-file/line citations;

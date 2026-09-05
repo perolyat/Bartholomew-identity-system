@@ -75,7 +75,7 @@ once, in the right tier.
 |---|---|---|---|---|
 | **PR Fast** | `ci.yml` | every PR push | **< 5 min** | quality (pre-commit hook set, pip check, security floor, packaging contract, wave-manifest contract); default suite **once** on py3.11 under `xdist -n auto --dist loadfile`, no coverage; a compact Windows job; live-server smoke |
 | **Integration** | `integration.yml` | PR ready-for-review, label `ci:integration`, merge queue, manual | < 10–15 min | default suite **with coverage + 70% gate** (py3.11, parallel); integration/slow tests; clean-start lifecycle; scheduler readiness; parking-brake governance; Windows lifecycle + actuation |
-| **Merge Candidate** | `merge-candidate.yml` | push to `main`, label `ci:merge-candidate`, `wave/w03-f-*` heads, merge queue, manual | < 15–20 min | everything in Integration on **both** Pythons, plus the **full default suite on Windows** |
+| **Merge Candidate** | `merge-candidate.yml` | push to `main`, label `ci:merge-candidate`, `wave/w03-f-*` heads, merge queue, manual | < 15–20 min | the **quality** job (pre-commit hooks, packaging, wave-manifest — so a push to `main` keeps the lint/format/manifest signal the folded-in `pre-commit.yml` gave), everything in Integration on **both** Pythons, plus the **full default suite on Windows** |
 | **Nightly** | `nightly.yml` | nightly schedule, manual | unbounded | **serial** (non-xdist) suite on 3.10/3.11/**3.12**; every marker on Windows; a **flake-hunt** repeating the recorded intermittent tests ten times each |
 
 Draft PRs get PR Fast only; the Integration and Merge Candidate jobs are guarded
