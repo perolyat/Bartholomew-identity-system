@@ -59,6 +59,14 @@ PROVENANCE_SOURCE_TYPES: frozenset[str] = frozenset(
         "correction",
         "experience",
         "system_observation",
+        # Package E: a record adopted from a trusted group and then accepted
+        # locally. Its own source type because neither neighbour is true --
+        # `user_instruction` would claim the recipient said it, `experience`
+        # would claim Bartholomew observed it, and provenance that is nearly
+        # true is the kind that misleads a later reader. Reserved from the
+        # ordinary training seam exactly as `experience` is; see
+        # `training.SHARE_ADOPTION_SOURCE_TYPES`.
+        "trusted_share",
     },
 )
 

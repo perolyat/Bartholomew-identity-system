@@ -337,6 +337,14 @@ def _make_all_sources_readable(db: str) -> None:
                 UNIQUE (source_id, event_id));
             """,
         )
+        # The event backbone's own source (Package A). Created through its own
+        # authority rather than a copy of its DDL here, so this helper cannot
+        # drift from the schema the report actually reads.
+        from bartholomew.kernel.event_processing.store import SCHEMA as EVENT_PROCESSING_SCHEMA
+
+        conn.executescript(
+            EVENT_PROCESSING_SCHEMA,
+        )
         conn.commit()
     finally:
         conn.close()

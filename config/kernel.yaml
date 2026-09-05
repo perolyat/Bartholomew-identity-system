@@ -121,3 +121,55 @@ proactive:
 # speech binary is used and cannot turn speaking on.
 voice:
   spoken_output: false
+
+# The canonical event backbone (Package A --
+# docs/EVENT_PROCESSING_BACKBONE.md).
+#
+# enabled: DEFAULT ON, and deliberately unlike the `proactive:` flags above.
+# Those decide whether Bartholomew may contact you unprompted, which is a
+# consent question with exactly one deliberate authority. This decides whether
+# Bartholomew looks at events a verified source already delivered to it. It
+# sends nothing, contacts nobody and reaches no external provider; its only
+# durable effect is one `fact` row on an objective you already opened, written
+# through the same governed seam, behind the same Parking Brake and the same
+# Identity policy as every other objective write. Capturing events and never
+# reading them is the surprising behaviour, not the safe one.
+#
+# Turning it off:
+#   - set `enabled: false` here, or
+#   - set BARTH_EVENT_PROCESSING_ENABLED=0 in the environment.
+# The environment variable can ONLY turn processing off. Turning it back on
+# requires this file, so the kill switch is not a second authority over
+# whether the backbone runs -- it is a way to stop it without an edit.
+#
+# When off, the drive is not registered at all: zero ticks, and captured
+# events accumulate in `inbound_events` exactly as they did before this
+# feature existed. Nothing is lost; the first pass after re-enabling sweeps
+# the whole backlog.
+#
+# batch_limit: events claimed per tick. One tick runs inside the scheduler's
+# BARTH_DRIVE_TIMEOUT budget (5s by default), so raising this meaningfully
+# means raising that timeout too. deadline_seconds bounds the batch from the
+# inside: anything still held when it passes goes back to the queue with its
+# attempt refunded, so a slow pass costs latency and never a retry.
+#
+# max_attempts: failed attempts before an event is quarantined and stops
+# consuming the batch. Quarantined events are held for inspection, never
+# discarded; see the doc for `python -m bartholomew.kernel.event_processing
+# requeue`.
+#
+# backlog_max: unprocessed events allowed to exist before inbound capture
+# starts refusing new ones with a retryable 503. Backpressure, so a queue
+# nothing is draining cannot fill the disk silently.
+#
+# Every numeric setting below also takes an environment override
+# (BARTH_EVENT_PROCESSING_BATCH, _SWEEP, _LEASE_S, _MAX_ATTEMPTS,
+# _BACKLOG_MAX, _DEADLINE_S) -- those are operational tuning, not consent.
+event_processing:
+  enabled: true
+  batch_limit: 5
+  sweep_limit: 200
+  lease_seconds: 120
+  max_attempts: 3
+  backlog_max: 1000
+  deadline_seconds: 3.0

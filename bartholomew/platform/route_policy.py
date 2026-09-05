@@ -108,6 +108,56 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # exfiltrating an entire personal memory are different powers, and a
     # future read-only role should be able to hold one without the other.
     ("GET", "/api/memory/export"): Capability.MEMORY_EXPORT,
+    # --- learning and memory control centre (Package D) -------------------
+    # Read, review, approve, configure, export: five capabilities, mapped so
+    # that the rows which can change what Bartholomew *knows* -- granting an
+    # acceptance approval, accepting, and correcting accepted knowledge -- are
+    # the only ones behind LEARNING_APPROVE.
+    ("GET", "/api/learning/overview"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/candidates"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/candidates/{competency_id}/{slug}"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/competencies"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/approvals"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/evaluations"): Capability.LEARNING_READ,
+    ("GET", "/api/learning/superseded"): Capability.LEARNING_READ,
+    # Reading personal memories and preferences through the control centre is
+    # the same power `GET /api/memory` grants, so it takes the same capability
+    # rather than letting learning:read become a way around memory:read.
+    ("GET", "/api/learning/memories"): _MEMORY,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/edit"): Capability.LEARNING_REVIEW,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/reject"): Capability.LEARNING_REVIEW,
+    (
+        "POST",
+        "/api/learning/candidates/{competency_id}/{slug}/shadow-evaluate",
+    ): Capability.LEARNING_REVIEW,
+    # Revoking is conservative in the same way `learning_reject` is: it can
+    # only ever reduce what Bartholomew recalls, and the audit of what was
+    # once accepted survives it. Review-level is the right grain.
+    ("POST", "/api/learning/competencies/{kind}/{key}/revoke"): Capability.LEARNING_REVIEW,
+    # The three that change what Bartholomew knows.
+    #
+    # Correcting is here rather than with the review operations above because
+    # it rewrites a record the retrieval seam will serve: it changes what he
+    # believes, not just what is proposed to him. A delegated reviewer who may
+    # triage a queue must not thereby be able to rewrite accepted knowledge.
+    ("POST", "/api/learning/competencies/{kind}/{key}/correct"): Capability.LEARNING_APPROVE,
+    (
+        "POST",
+        "/api/learning/candidates/{competency_id}/{slug}/approve",
+    ): Capability.LEARNING_APPROVE,
+    ("POST", "/api/learning/candidates/{competency_id}/{slug}/accept"): Capability.LEARNING_APPROVE,
+    ("GET", "/api/learning/policy"): Capability.LEARNING_POLICY,
+    ("PUT", "/api/learning/policy"): Capability.LEARNING_POLICY,
+    ("GET", "/api/learning/policy/history"): Capability.LEARNING_POLICY,
+    # Deliberately covers whatever the user ticked, including personal
+    # memories: the control centre exists so a lesson can be exported together
+    # with the memories that explain it, and an export that could not carry
+    # them would send people back to /api/memory/export for half of it.
+    # LEARNING_EXPORT is therefore as strong as MEMORY_EXPORT for selected
+    # records, and both sit in the same user capability set -- so this widens
+    # nothing today. A future role that should hold one without the other
+    # needs this route split first.
+    ("POST", "/api/learning/export"): Capability.LEARNING_EXPORT,
     # --- consent ---------------------------------------------------------
     ("GET", "/api/consent/pending-writes"): Capability.CONSENT_DECIDE,
     ("POST", "/api/consent/pending-writes/{pending_id}/approve"): Capability.CONSENT_DECIDE,
@@ -150,6 +200,53 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/inbound/events"): Capability.INBOUND_SUBMIT,
     ("GET", "/api/inbound/events"): Capability.INBOUND_READ,
     ("GET", "/api/inbound/events/{event_id}"): Capability.INBOUND_READ,
+    # --- governed Windows actuation (Session B) ------------------------------
+    # Four capabilities across two routers, because they are two trust
+    # channels. `/api/actions` is the person's surface: ask for an action,
+    # look at what is pending, approve exactly one, withdraw one. Nothing on
+    # it reaches an operating system.
+    #
+    # `/api/device-actions` is the enrolled device's surface, and it is the
+    # only place a validated action's parameters leave this process. It is
+    # separately authenticated by `device_action_auth`, whose resolver is a
+    # different module global from the inbound observation resolver's --
+    # opening observation capture does not open actuation.
+    ("POST", "/api/actions"): Capability.ACTION_REQUEST,
+    ("GET", "/api/actions"): Capability.ACTION_READ,
+    ("GET", "/api/actions/{action_id}"): Capability.ACTION_READ,
+    # Approving is its own capability, not action:request. Asking for an
+    # action and authorising one are different powers, and a surface that may
+    # do the first must not thereby be able to do the second.
+    ("POST", "/api/actions/{action_id}/approve"): Capability.ACTION_APPROVE,
+    ("POST", "/api/actions/{action_id}/cancel"): Capability.ACTION_REQUEST,
+    ("POST", "/api/device-actions/lease"): Capability.DEVICE_ACTION_CHANNEL,
+    ("POST", "/api/device-actions/{action_id}/result"): Capability.DEVICE_ACTION_CHANNEL,
+    # --- multimodal presence (Package C) -------------------------------------
+    # Reads and stops only; there is no start route to classify, deliberately
+    # (see bartholomew_api_bridge_v0_1/.../routes/multimodal.py).
+    #
+    # Reads are SELF_READ rather than LIVENESS. Health probes are LIVENESS
+    # because they hold no personal data, but "which window is Bartholomew
+    # observing" carries a window title -- it is a statement about what the
+    # person is doing, not about whether the process is up, and it belongs with
+    # the other reads of Bartholomew's current state.
+    #
+    # Stops are BRAKE_ENGAGE. Ending a capture session is a strictly-tightening
+    # safety act, the same class as engaging the brake, and it grants no power
+    # that capability does not already carry: anyone who can engage the voice
+    # or sight brake can already stop every one of these sessions. Reusing it
+    # keeps stopping available to exactly the people who can already halt the
+    # system, without minting a capability whose only holder would be the same
+    # set.
+    ("GET", "/api/multimodal/status"): Capability.SELF_READ,
+    ("GET", "/api/multimodal/sessions"): Capability.SELF_READ,
+    ("POST", "/api/multimodal/sessions/{session_id}/stop"): Capability.BRAKE_ENGAGE,
+    ("POST", "/api/multimodal/sessions/stop-all"): Capability.BRAKE_ENGAGE,
+    # Diagnostics is LIVENESS: unlike the reads above it reports only whether
+    # this machine has a microphone, speaker, accessibility provider and
+    # capture backend. It observes nothing and names nothing the person is
+    # doing.
+    ("GET", "/api/multimodal/diagnostics"): Capability.LIVENESS,
     # --- kernel command -----------------------------------------------------
     ("POST", "/kernel/command/{cmd}"): Capability.KERNEL_COMMAND,
     # --- metrics -------------------------------------------------------------

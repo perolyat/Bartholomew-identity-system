@@ -61,6 +61,20 @@ embeddings = [
     "sentence-transformers>=2.2.0",
 ]
 
+# The Windows action companion's accessibility adapter (Session B). Deliberately
+# an extra, and deliberately Windows-only: `comtypes` is what reaches UI
+# Automation, which two capabilities need -- `windows.type_text`, to see whether
+# the caret is in a password field before it types, and
+# `windows.accessibility_action`, whose whole surface is the tree.
+#
+# Without it those two capabilities **refuse** rather than degrade. A companion
+# that cannot see where it is typing does not type; see
+# `bartholomew/windows_actuation/uia.py`. Every other capability works without
+# it, and nothing about the server side needs it at all.
+windows = [
+    "comtypes>=1.4; sys_platform == 'win32'",
+]
+
 [project.scripts]
 bartholomew = "bartholomew.cli:main"
 bartholomew-backfill-fts = "scripts.backfill_fts:main"
@@ -122,11 +136,14 @@ ignore = [
 "tests/**" = ["PLC0415", "E402", "B017", "E722", "C401", "PLR0912", "PLR0915"]  # pragmatic test rules
 "scripts/**" = ["PLC0415"]  # Allow lazy imports in scripts
 "**/cli.py" = ["PLC0415"]  # Allow lazy imports in CLI tools for fast startup
+"bartholomew/cli_trust.py" = ["PLC0415"]  # Same, for the device/group/share commands
 "conftest.py" = ["PLC0415"]  # Lazy imports in test fixtures
 "test_*.py" = ["PLC0415"]  # Lazy imports in root-level tests
 "cleanup_*.py" = ["PLC0415"]  # Lazy imports in utility scripts
 "bartholomew/kernel/**" = ["PLC0415", "PLR0912", "PLR0915", "PLW0603"]  # Lazy imports for optional deps + temp complexity
+"bartholomew/multimodal/**" = ["PLC0415"]  # Lazy imports for optional audio/UIA/capture deps; importing the package must not pull a native dependency tree
 "bartholomew/runtime/**" = ["PLC0415"]  # Lazy imports: serve must not import the API app at CLI load time
+"bartholomew/integration/**" = ["PLC0415"]  # Session F adapters: deferred imports break the cycle between the seams and the API bridge that installs them
 "bartholomew_api_bridge_v0_1/**" = ["PLC0415", "PLW0603"]  # Lazy imports + global metrics
 "identity_interpreter/orchestrator/**" = ["PLC0415"]  # Lazy imports for optional dependencies
 "identity_interpreter/adapters/sight/**" = ["PLC0415"]  # Lazy imports for optional vision deps

@@ -15,6 +15,8 @@ except ImportError:
     sys.exit(1)
 
 
+from bartholomew.cli_trust import devices_app, groups_app, share_app
+
 app = typer.Typer(help="Bartholomew Admin CLI")
 console = Console()
 embeddings_app = typer.Typer(help="Embeddings management commands")
@@ -25,6 +27,15 @@ app.add_typer(embeddings_app, name="embeddings")
 app.add_typer(brake_app, name="brake")
 app.add_typer(accounts_app, name="accounts")
 app.add_typer(platform_brake_app, name="platform-brake")
+# Package E. The commands live in `bartholomew/cli_trust.py` rather than here:
+# this file is a shared integration hotspot, and three registration lines are
+# a smaller thing for every other stream to merge around than six hundred.
+app.add_typer(devices_app, name="devices")
+app.add_typer(groups_app, name="groups")
+app.add_typer(share_app, name="share")
+
+multimodal_app = typer.Typer(help="Multimodal presence (microphone, screen, speech)")
+app.add_typer(multimodal_app, name="multimodal")
 
 
 @embeddings_app.command("stats")
@@ -1092,6 +1103,61 @@ def unattended_report_command(
     colour = "green" if complete else ("yellow" if complete is None else "red")
     console.print(f"digest: {envelope['digest']}")
     console.print(f"[{colour}]{summary['verdict']}[/{colour}]")
+
+
+@multimodal_app.command("diagnose")
+def multimodal_diagnose(
+    json_output: bool = typer.Option(False, "--json", help="Emit the raw report as JSON"),
+):
+    """Report which multimodal capabilities work on this machine, and why not.
+
+    Package C's required diagnostic command (contract §7). It observes
+    nothing: it asks the operating system whether devices and optional
+    dependencies exist, without opening an audio stream, reading the
+    accessibility tree or capturing any image. Running it needs no session and
+    no consent because it collects nothing about the user.
+    """
+    import json as _json
+
+    from bartholomew.multimodal.diagnostics import diagnose, format_report
+
+    report = diagnose()
+    if json_output:
+        print(_json.dumps(report, indent=2, sort_keys=True, default=str))
+    else:
+        console.print(format_report(report))
+
+
+@multimodal_app.command("status")
+def multimodal_status_command():
+    """Show whether Bartholomew is listening, observing the screen or speaking.
+
+    Sessions live in the process that owns the device, so this reports on the
+    CLI's own process -- which owns none. It will therefore always report
+    nothing active, plus this machine's hardware availability. To see a running
+    daemon's sessions, read GET /api/multimodal/status on that process. That
+    distinction is deliberate: a status command that guessed about another
+    process's capture state would be exactly the kind of claim this package
+    must never make.
+    """
+    from bartholomew.multimodal.status import status_snapshot
+    from bartholomew.multimodal.store import SessionStore
+
+    snapshot = status_snapshot(SessionStore())
+    console.print(snapshot["summary"])
+    console.print(
+        "(This is the CLI process. For the running daemon's sessions, "
+        "GET /api/multimodal/status)",
+    )
+    hardware = snapshot["hardware"]
+    console.print(
+        f"microphone: {hardware['microphone']['availability']} -- "
+        f"{hardware['microphone']['detail']}",
+    )
+    console.print(
+        f"spoken output: {'available' if hardware['spoken_output']['available'] else 'unavailable'}"
+        f" -- {hardware['spoken_output']['detail']}",
+    )
 
 
 def main():

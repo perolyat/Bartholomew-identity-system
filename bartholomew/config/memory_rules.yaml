@@ -129,6 +129,49 @@ always_keep:
       privacy_class: user.competency
       recall_policy: context_only
 
+  # Learning and Memory Control Centre (Package D). Three kinds, classified
+  # exactly like the candidate above and for the same reason.
+  #
+  # `candidate_lesson_revision` is a superseded revision of a candidate --
+  # the same content, one edit ago. Classifying it any more loosely than the
+  # live candidate would mean an archive of a lesson was governed less
+  # strictly than the lesson, which is the sort of gap an archive quietly
+  # becomes if nobody writes the rule down.
+  - match:
+      kind: candidate_lesson_revision
+    metadata:
+      privacy_class: user.competency
+      recall_policy: context_only
+
+  # The learning policy and its previews are governance configuration about
+  # this person's competencies rather than personal content, but they name
+  # and describe those competencies, so they take the same class. As with the
+  # candidate, `recall_policy` is not what makes the guarantee: all three
+  # kinds are absent from COMPETENCY_KINDS, so runtime_contract's retrieval
+  # filter cannot see them at all.
+  - match:
+      kind: learning_policy
+    metadata:
+      privacy_class: user.competency
+      recall_policy: context_only
+
+  - match:
+      kind: learning_shadow_evaluation
+    metadata:
+      privacy_class: user.competency
+      recall_policy: context_only
+
+  # A superseded competency record: what Bartholomew believed before a
+  # correction. Same class as the live record it replaced -- an old belief is
+  # not less personal for being old -- and `context_only`, because it must
+  # never be recalled as a current one. Structurally it cannot be: the kind is
+  # absent from COMPETENCY_KINDS.
+  - match:
+      kind: competency_revision
+    metadata:
+      privacy_class: user.competency
+      recall_policy: context_only
+
 ask_before_store:
   - match:
       content: "(?i)(password|bank|account number|two-factor|auth code)"

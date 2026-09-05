@@ -48,6 +48,40 @@ class Capability(str, Enum):
     # should not be able to read the capture history back out.
     INBOUND_SUBMIT = "inbound:submit"
     INBOUND_READ = "inbound:read"
+    # Governed Windows actuation (Session B). Four capabilities, not one, and
+    # the split is the point: asking for an action, approving one, reading the
+    # audit, and being the device that carries actions out are four different
+    # powers. In particular ACTION_APPROVE is separate from ACTION_REQUEST so
+    # that a future surface which may request work cannot also authorise it,
+    # and DEVICE_ACTION_CHANNEL is separate from all three so that holding it
+    # lets a device collect work without letting it request or approve any.
+    #
+    # None of these is Governance. Holding ACTION_APPROVE means the request is
+    # allowed to ask; whether the action then runs is still the Parking Brake,
+    # the Identity policy and the action-bound approval's decision.
+    ACTION_REQUEST = "action:request"
+    ACTION_APPROVE = "action:approve"
+    ACTION_READ = "action:read"
+    DEVICE_ACTION_CHANNEL = "device_action:channel"
+
+    # Learning and Memory Control Centre (Package D). Five capabilities, not
+    # one, and the split follows the architecture rather than the screen: the
+    # thing that must stay hardest to hold is `LEARNING_APPROVE`, because
+    # granting a candidate-bound acceptance approval is the one act that can
+    # turn "I may have learned something" into retrievable knowledge.
+    #
+    # A future read-only reviewer holds LEARNING_READ alone and can inspect
+    # every candidate, its provenance and every shadow evaluation without
+    # being able to change a word of it. LEARNING_REVIEW adds editing,
+    # rejecting and previewing. LEARNING_APPROVE is the deliberate step up.
+    LEARNING_READ = "learning:read"
+    LEARNING_REVIEW = "learning:review"
+    LEARNING_APPROVE = "learning:approve"
+    LEARNING_POLICY = "learning:policy"
+    # Exporting selected learning records is its own power for the same
+    # reason MEMORY_EXPORT is: reading one candidate and taking a copy of a
+    # selection out of the runtime are different things.
+    LEARNING_EXPORT = "learning:export"
     NOTIFICATIONS = "notifications"
     AWAITING_RESPONSE = "awaiting_response"
     REFLECTION = "reflection"
@@ -77,6 +111,21 @@ _USER_CAPABILITIES = frozenset(
         Capability.KERNEL_COMMAND,
         Capability.INBOUND_SUBMIT,
         Capability.INBOUND_READ,
+        Capability.ACTION_REQUEST,
+        Capability.ACTION_APPROVE,
+        Capability.ACTION_READ,
+        Capability.DEVICE_ACTION_CHANNEL,
+        Capability.LEARNING_READ,
+        Capability.LEARNING_REVIEW,
+        # A person holds this over their own Bartholomew: reviewing what it
+        # believes it learned about *their* life is theirs to do, and there
+        # is nobody else to delegate it to at Alpha scale. It is separate
+        # from LEARNING_REVIEW so that a future delegated reviewer -- a
+        # household member, a support session -- can be given the review
+        # surface without being given the power to make a lesson trusted.
+        Capability.LEARNING_APPROVE,
+        Capability.LEARNING_POLICY,
+        Capability.LEARNING_EXPORT,
         Capability.NOTIFICATIONS,
         Capability.AWAITING_RESPONSE,
         Capability.REFLECTION,
