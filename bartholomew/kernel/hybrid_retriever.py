@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from bartholomew.kernel.consent_gate import VERDICT_CURRENTLY_VALID
 from bartholomew.kernel.db_ctx import set_wal_pragmas
 from bartholomew.kernel.embedding_engine import EmbeddingEngine, get_embedding_engine
 from bartholomew.kernel.fts_client import FTSClient
@@ -405,6 +406,19 @@ class HybridRetriever:
                 mid for mid in filtered_ids if rules_data.get(mid, {}).get("include", True)
             }
 
+        # W03-D: the retrieval-side validity verdict, applied whether or not a
+        # rules engine was supplied -- see FTSOnlyRetriever.retrieve() for why
+        # that asymmetry with the consent block above is deliberate. Applied
+        # before scoring and fusion, so relevance ranking is untouched: an
+        # invalid memory never enters the ranking rather than being ranked and
+        # then dropped, which would silently change what the top_k contains.
+        validity = self._validity_verdicts(sorted(filtered_ids))
+        filtered_ids = {
+            mid
+            for mid in filtered_ids
+            if validity.get(mid) is None or validity[mid].currently_valid
+        }
+
         if not filtered_ids:
             return []
 
@@ -571,6 +585,7 @@ class HybridRetriever:
                 if recall_policy == "context_only":
                     policy_flags.add("context_only")
 
+                verdict = validity.get(memory_id)
                 item = RetrievedItem(
                     memory_id=memory_id,
                     score=score,
@@ -579,6 +594,8 @@ class HybridRetriever:
                     kind=metadata.get("kind"),
                     context_only=(recall_policy == "context_only"),
                     policy_flags=policy_flags,
+                    verdict=verdict.verdict if verdict else VERDICT_CURRENTLY_VALID,
+                    provenance=dict(verdict.provenance or {}) if verdict else {},
                 )
                 results.append(item)
 
@@ -633,6 +650,17 @@ class HybridRetriever:
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
             return []
+
+    def _validity_verdicts(self, memory_ids: list[int]) -> dict[int, Any]:
+        """W03-D validity verdicts for these ids, from the consent gate.
+
+        The gate is the single retrieval-governance authority; this retriever
+        owns fusion and relevance and asks it, rather than deciding for
+        itself what "still true" means.
+        """
+        from bartholomew.kernel.consent_gate import ConsentGate
+
+        return ConsentGate(self.db_path).validity_verdicts(memory_ids)
 
     def _load_metadata(self, memory_ids: list[int]) -> dict[int, dict[str, Any]]:
         """

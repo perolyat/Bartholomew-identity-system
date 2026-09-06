@@ -17,7 +17,11 @@ from bartholomew.kernel.memory.privacy_guard import (
     is_sensitive,
     request_permission_to_store,
 )
-from bartholomew.kernel.memory_rules import _rules_engine
+from bartholomew.kernel.memory_rules import (
+    _parse_iso,
+    _rules_engine,
+    expiry_from_rules,
+)
 from bartholomew.kernel.policy import can_index
 from bartholomew.kernel.redaction_engine import apply_redaction
 from bartholomew.kernel.summarization_engine import _summarization_engine
@@ -196,6 +200,172 @@ def _get_embedding_components(db_path: str):
         return None, None
 
 
+# ---------------------------------------------------------------------------
+# W03-D: provenance, confidence, validity window, supersession, revocation
+#
+# The shared contract `memory-retrieval-governance` (docs/waves/W03/
+# W03_MANIFEST.yaml) has two halves. This module owns the write half: the
+# fields themselves and the single path that may set them. `consent_gate.py`
+# owns the read half: the validity verdict computed from them.
+#
+# The gap this closes, stated plainly: before it, a `memories` row said what
+# it claimed and when it was written, and nothing else. Nothing recorded where
+# a claim came from, who asserted it, how confident anyone was, when it stopped
+# being true, or that it had been withdrawn. Once recalled memory can influence
+# a decision that moves a mouse on someone's PC, that is not a missing nicety
+# -- it is the difference between evidence and authority.
+# ---------------------------------------------------------------------------
+
+#: The governance columns added to `memories`, as `{name: column DDL}`.
+#: Consulted by `init()`'s ALTER migration and by the read paths that must
+#: cope with a database that predates them. Order is the declaration order.
+MEMORY_GOVERNANCE_COLUMNS: dict[str, str] = {
+    "source": "TEXT",
+    "source_type": "TEXT",
+    "asserted_by": "TEXT",
+    "confidence": "REAL",
+    "valid_from": "TEXT",
+    "valid_to": "TEXT",
+    "superseded_by": "INTEGER",
+    "revoked_at": "TEXT",
+}
+
+#: The recognised `source_type` vocabulary.
+#:
+#: Deliberately the same distinction `candidate_learning` draws between an
+#: observation and an inference, extended to the memory row: a record of what
+#: was *seen* must never be indistinguishable from a record of what was
+#: *concluded*. `W03-A`'s observation event carries the same separation on the
+#: event backbone; this is its memory-side counterpart, so an observation that
+#: becomes a memory does not lose the distinction on the way in.
+MEMORY_SOURCE_TYPES: frozenset[str] = frozenset(
+    {
+        "user_instruction",  # the user said it, in so many words
+        "observation",  # observed evidence (a Windows probe, a capture)
+        "inference",  # concluded from evidence, not itself evidence
+        "correction",  # replaces an earlier claim the user corrected
+        "adoption",  # adopted from a sanitized, content-bound share
+        "system",  # the runtime's own bookkeeping
+    },
+)
+
+#: The `MemoryStore` kind a superseded *ordinary* memory revision is archived
+#: under -- the personal-fact / preference / routine / temporary-exception
+#: counterpart of `learning_policy.COMPETENCY_REVISION_KIND`, which already
+#: does this for competency records.
+#:
+#: Absent from `competency.COMPETENCY_KINDS` and from
+#: `personal_facts.PERSONAL_FACT_KINDS`, deliberately and importantly: the
+#: retrieval seam's kind filter therefore cannot see an archived revision at
+#: all, so a superseded belief can never come back as a current one. It exists
+#: so "what did he think before I corrected this?" stays answerable.
+MEMORY_REVISION_KIND: str = "memory_revision"
+
+
+@dataclass(frozen=True)
+class MemoryProvenance:
+    """
+    Where one memory came from, how much it is trusted, and how long it holds.
+
+    Passed to `upsert_memory()`, which is the *only* thing that may write these
+    columns. Nothing else in the codebase issues an UPDATE against them, and
+    the retrieval-side verdict in `consent_gate.py` reads them without ever
+    writing. That is the whole reason this is a value object handed to the one
+    governed write path rather than a set of setters: provenance a caller can
+    edit after the fact is provenance nobody can rely on.
+
+    Every field is optional. Omitting the argument entirely leaves the columns
+    NULL, which is exactly what an existing caller's write already produced --
+    so no existing call site changes behaviour, and "not recorded" stays
+    distinguishable from "recorded as unknown".
+
+    `confidence` is `None` for *unknown*, never 0.0 for "low". Inventing a
+    number for a fact somebody simply stated is a fabricated measurement, and
+    the selection gate (`competency_reasoning.select_relevant`) already treats
+    unknown and low differently on purpose.
+    """
+
+    source: str | None = None
+    source_type: str | None = None
+    asserted_by: str | None = None
+    confidence: float | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.source_type is not None and self.source_type not in MEMORY_SOURCE_TYPES:
+            raise ValueError(
+                f"unknown memory source_type {self.source_type!r}; "
+                f"expected one of {sorted(MEMORY_SOURCE_TYPES)}",
+            )
+        if self.confidence is not None and not (0.0 <= float(self.confidence) <= 1.0):
+            raise ValueError(
+                f"confidence must be between 0.0 and 1.0, or None for unknown; "
+                f"got {self.confidence!r}",
+            )
+
+    def as_columns(self, *, ts: str, rule_valid_to: str | None) -> dict[str, Any]:
+        """
+        Resolve this provenance into the concrete column values for one write.
+
+        `valid_from` defaults to the write's own timestamp -- a claim with no
+        stated start is valid from when it was made. `valid_to` takes the
+        *earlier* of what the caller stated and what an `auto_expire` rule
+        implies, so a caller can shorten a retention window but never extend
+        one past what governance declared.
+        """
+        valid_to = self.valid_to
+        if rule_valid_to is not None:
+            caller_end = _parse_iso(valid_to)
+            rule_end = _parse_iso(rule_valid_to)
+            if caller_end is None or (rule_end is not None and rule_end < caller_end):
+                valid_to = rule_valid_to
+        return {
+            "source": self.source,
+            "source_type": self.source_type,
+            "asserted_by": self.asserted_by,
+            "confidence": None if self.confidence is None else float(self.confidence),
+            "valid_from": self.valid_from or ts,
+            "valid_to": valid_to,
+        }
+
+
+@dataclass
+class RevocationOutcome:
+    """What happened to an attempt to withdraw or reinstate a `(kind, key)`."""
+
+    kind: str
+    key: str
+    revoked: bool = False
+    reinstated: bool = False
+    tombstoned: bool = False
+    was_present: bool = False
+    revoked_at: str | None = None
+
+
+@dataclass
+class SupersessionOutcome:
+    """
+    What happened to one attempt to supersede a stored claim with a newer one.
+
+    `archived_key` names the `MEMORY_REVISION_KIND` row holding what the record
+    said before. When `stored` is False nothing was written *and* nothing was
+    archived: a supersession that loses the claim it replaced is worse than one
+    that does not happen.
+    """
+
+    kind: str
+    key: str
+    stored: bool = False
+    memory_id: int | None = None
+    archived_key: str | None = None
+    superseded_revision: int | None = None
+    outcome: str = "stored"
+    queued_for_consent: bool = False
+    target_changed: bool = False
+    revoked: bool = False
+
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -207,9 +377,44 @@ CREATE TABLE IF NOT EXISTS memories (
   key TEXT NOT NULL,
   value TEXT NOT NULL,
   summary TEXT,            -- Optional summary of value content
-  ts TEXT NOT NULL
+  ts TEXT NOT NULL,
+  -- W03-D: provenance, confidence, validity window and supersession.
+  -- Declared here for a fresh database; an existing one picks the same
+  -- columns up through the ALTER migration in init(). Written ONLY by
+  -- upsert_memory() -- see MemoryProvenance's docstring for why a caller
+  -- cannot set them any other way.
+  source TEXT,             -- free-text origin ("chat", "objective:12", ...)
+  source_type TEXT,        -- MEMORY_SOURCE_TYPES vocabulary
+  asserted_by TEXT,        -- who asserted it; never anonymous when known
+  confidence REAL,         -- 0.0-1.0, or NULL for "unknown" (never "low")
+  valid_from TEXT,         -- ISO8601; defaults to the write's ts
+  valid_to TEXT,           -- ISO8601 end of the validity window, or NULL
+  superseded_by INTEGER,   -- memories.id that replaced this claim, or NULL
+  revoked_at TEXT          -- ISO8601 when withdrawn, or NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_kind_key ON memories(kind, key);
+
+-- W03-D: the revocation tombstone.
+--
+-- Revocation used to be a hard DELETE, which left no trace -- so the very
+-- next re-learning, re-training or personal-fact capture could silently
+-- recreate exactly the record a person had withdrawn, and nothing anywhere
+-- would show that it had ever been revoked. This table is the trace. It
+-- records the *identity* that was withdrawn and nothing about its content,
+-- so it is compatible with "deletion is permanent": what survives is the
+-- refusal, not the memory.
+--
+-- upsert_memory() consults it before every write. Lifting one is a
+-- deliberate, named, audited act (`reinstate_memory()`), never a side
+-- effect of storing something.
+CREATE TABLE IF NOT EXISTS memory_revocations (
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL,
+  revoked_at TEXT NOT NULL,
+  revoked_by TEXT,
+  reason TEXT,
+  PRIMARY KEY (kind, key)
+);
 
 -- Phase 2f: Memory chunks for long content
 CREATE TABLE IF NOT EXISTS memory_chunks (
@@ -360,6 +565,19 @@ class MemoryStore:
                     "ALTER TABLE pending_sensitive_writes ADD COLUMN privacy_class TEXT",
                 )
                 logger.info("Migrated pending_sensitive_writes table: added privacy_class column")
+
+            # W03-D: provenance / confidence / validity-window / supersession
+            # columns, via the same additive ALTER pattern the `summary` and
+            # `reason` migrations above use. Additive only -- every column is
+            # nullable with no default, so an existing row keeps exactly the
+            # meaning it had (NULL == "not recorded"), no backfill runs, and a
+            # database written by an older build stays readable by it.
+            for column, ddl in MEMORY_GOVERNANCE_COLUMNS.items():
+                if column not in column_names:
+                    await db.execute(
+                        f"ALTER TABLE memories ADD COLUMN {column} {ddl}",
+                    )  # noqa: S608 - column/ddl come from a module constant, never from input
+                    logger.info("Migrated memories table: added %s column", column)
 
             # Seed parking_brake flag if not exists
             cursor = await db.execute("SELECT 1 FROM system_flags WHERE key = 'parking_brake'")
@@ -524,8 +742,22 @@ class MemoryStore:
         skip_rule_consent: bool = False,
         summary: str | None = None,
         expected_memory_id: int | None = None,
+        provenance: MemoryProvenance | None = None,
     ) -> StoreResult:
         """
+        `provenance` records where this claim came from, who asserted it, how
+        confident anyone is, and how long it holds (W03-D). This method is the
+        only writer of those columns anywhere in the codebase, which is what
+        lets the retrieval-side verdict in `consent_gate.py` trust them.
+        Omitted (the default) they are left NULL and the write behaves exactly
+        as it did before the columns existed.
+
+        A `(kind, key)` carrying a revocation tombstone is refused outright
+        with `outcome="refused_revoked"`, before any rule evaluation, so
+        re-learning, re-training or personal-fact capture cannot silently
+        recreate a record a person withdrew. Lifting a tombstone is a separate,
+        named, audited act (`reinstate_memory()`).
+
         `expected_memory_id` makes this a conditional write (compare-and-swap).
 
         When supplied, the row currently at `(kind, key)` must still have that
@@ -543,6 +775,22 @@ class MemoryStore:
         that evidence destroys real data. Refusing the write up front does
         not. Omitted (the default) this parameter changes nothing.
         """
+        # W03-D: the revocation tombstone is checked FIRST, before rules,
+        # redaction, summarisation, encryption or the consent gates. A
+        # withdrawn identity is not "content that needs governing" -- it is an
+        # identity that must not be written at all, and evaluating it further
+        # would mean a refused write still ran the value through
+        # summarisation and could still queue it into the consent inbox for a
+        # human to be asked about something they already said no to.
+        if await self.is_revoked(kind, key):
+            logger.info(
+                "Refusing write to revoked memory %s/%s: a revocation tombstone "
+                "is in force. Reinstate it explicitly to store here again.",
+                kind,
+                key,
+            )
+            return StoreResult(stored=False, outcome="refused_revoked")
+
         # Rule evaluation: check governance rules first
         memory_dict = {
             "kind": kind,
@@ -765,13 +1013,43 @@ class MemoryStore:
                     await db.rollback()
                     return StoreResult(stored=False, outcome="precondition_failed")
 
+            # W03-D: provenance / validity columns travel with the row in the
+            # same statement, so a row can never exist in a state where its
+            # content has been replaced but its provenance still describes the
+            # claim it replaced. `superseded_by` and `revoked_at` are
+            # deliberately NOT set here -- a fresh write is a live claim by
+            # definition, and an upsert over a superseded or revoked row must
+            # clear those markers rather than inherit them.
+            governance = (provenance or MemoryProvenance()).as_columns(
+                ts=ts,
+                rule_valid_to=expiry_from_rules(evaluated, ts),
+            )
             await db.execute(
-                "INSERT INTO memories(kind,key,value,summary,ts) "
-                "VALUES(?,?,?,?,?) "
+                "INSERT INTO memories("
+                "kind,key,value,summary,ts,"
+                "source,source_type,asserted_by,confidence,valid_from,valid_to,"
+                "superseded_by,revoked_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,NULL) "
                 "ON CONFLICT(kind,key) DO UPDATE SET "
                 "value=excluded.value, summary=excluded.summary, "
-                "ts=excluded.ts",
-                (kind, key, value_to_store, summary, ts),
+                "ts=excluded.ts, "
+                "source=excluded.source, source_type=excluded.source_type, "
+                "asserted_by=excluded.asserted_by, confidence=excluded.confidence, "
+                "valid_from=excluded.valid_from, valid_to=excluded.valid_to, "
+                "superseded_by=NULL, revoked_at=NULL",
+                (
+                    kind,
+                    key,
+                    value_to_store,
+                    summary,
+                    ts,
+                    governance["source"],
+                    governance["source_type"],
+                    governance["asserted_by"],
+                    governance["confidence"],
+                    governance["valid_from"],
+                    governance["valid_to"],
+                ),
             )
 
             # Get memory_id for result
@@ -1389,7 +1667,9 @@ class MemoryStore:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT id, kind, key, value, summary, ts FROM memories WHERE kind = ? AND key = ?",
+                "SELECT id, kind, key, value, summary, ts, source, source_type, "
+                "asserted_by, confidence, valid_from, valid_to, superseded_by, "
+                "revoked_at FROM memories WHERE kind = ? AND key = ?",
                 (kind, key),
             )
             row = await cursor.fetchone()
@@ -1433,7 +1713,9 @@ class MemoryStore:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                f"SELECT id, kind, key, value, summary, ts FROM memories WHERE id IN ({placeholders})",  # noqa: S608 - placeholders are generated, not interpolated user input
+                f"SELECT id, kind, key, value, summary, ts, source, source_type, "  # noqa: S608 - placeholders are generated, not interpolated user input
+                f"asserted_by, confidence, valid_from, valid_to, superseded_by, "
+                f"revoked_at FROM memories WHERE id IN ({placeholders})",
                 tuple(memory_ids),
             )
             rows = await cursor.fetchall()
@@ -1562,6 +1844,10 @@ class MemoryStore:
 
         select_sql = (
             "SELECT m.id, m.kind, m.key, m.value, m.summary, m.ts, "
+            "m.source AS source, m.source_type AS source_type, "
+            "m.asserted_by AS asserted_by, m.confidence AS confidence, "
+            "m.valid_from AS valid_from, m.valid_to AS valid_to, "
+            "m.superseded_by AS superseded_by, m.revoked_at AS revoked_at, "
             "c.consent_at AS consent_at, c.source AS consent_source "
             f"FROM memories m LEFT JOIN memory_consent c ON c.memory_id = m.id {clause} "  # noqa: S608 - clause is fixed fragments; values are bound
             "ORDER BY m.ts DESC, m.id DESC LIMIT ? OFFSET ?"
@@ -1671,12 +1957,25 @@ class MemoryStore:
         if existing is None:
             raise KeyError(f"no memory {kind}/{key}")
 
-        result = await self.upsert_memory(
+        # W03-D: a correction is a supersession, not an overwrite. It goes
+        # through `supersede_memory()`, which archives what the record said
+        # before under `MEMORY_REVISION_KIND` and only then writes the
+        # replacement through this same `upsert_memory()` conditional write.
+        # The conditional-write semantics this docstring describes are
+        # unchanged -- `supersede_memory()` passes the same
+        # `expected_memory_id` -- and the outcomes below map one-to-one onto
+        # what it reports. What is new is that "what did he believe before I
+        # corrected this?" is now answerable for an ordinary memory, as it
+        # has been for a competency record since S5.2.
+        result = await self.supersede_memory(
             kind,
             key,
             value,
-            datetime.now(timezone.utc).isoformat(),
             expected_memory_id=existing["id"],
+            provenance=MemoryProvenance(
+                source_type="correction",
+                source=f"correction of {kind}/{key}",
+            ),
         )
 
         if result.stored:
@@ -1711,12 +2010,419 @@ class MemoryStore:
         There is no undo, and no soft-delete tier exists in this schema to
         route to. Callers must therefore make the action explicit and
         confirmed at the point of use rather than inferring it.
+
+        W03-D: a tombstone is laid before the content goes. The content is
+        still erased -- that is the promise this method makes and it is kept
+        -- but the *identity* is remembered as withdrawn, so the very next
+        personal-fact capture, lesson consolidation or training write cannot
+        silently recreate the record the user just deleted. Nothing about the
+        deleted value is retained: `memory_revocations` stores `(kind, key)`,
+        a timestamp and who asked, and no content at all. A user who changes
+        their mind uses `reinstate_memory()`.
+
+        The tombstone is written first for the same reason `revoke_memory()`
+        writes it first: a failure between the two steps must leave the safe
+        state (nothing storable at this identity) rather than the dangerous
+        one (content gone, recreation unguarded).
         """
         await self._refuse_mutation_if_braked(
             "Parking brake engaged: cannot forget a memory while Bartholomew "
             "is halted. Release the brake and try again.",
         )
+        forgotten_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO memory_revocations(kind,key,revoked_at,revoked_by,reason) "
+                "VALUES(?,?,?,?,?) "
+                "ON CONFLICT(kind,key) DO UPDATE SET "
+                "revoked_at=excluded.revoked_at, revoked_by=excluded.revoked_by, "
+                "reason=excluded.reason",
+                (kind, key, forgotten_at, "user", "forgotten on the user's instruction"),
+            )
+            await db.commit()
         return await self.delete_memory(kind, key)
+
+    # ------------------------------------------------------------------
+    # W03-D: revocation tombstones
+    #
+    # Revocation used to be `forget_memory()` -- a hard DELETE that left the
+    # store in exactly the state it was in before the record ever existed.
+    # Nothing distinguished "never known" from "deliberately withdrawn", so
+    # the next capture, lesson or training write recreated it in silence.
+    # These three methods are the whole of the fix: one predicate the write
+    # path consults, one act that withdraws, one act that lifts.
+    # ------------------------------------------------------------------
+
+    async def is_revoked(self, kind: str, key: str) -> bool:
+        """
+        Whether a revocation tombstone is in force for this `(kind, key)`.
+
+        Fail-closed on a missing table only in the direction that is safe:
+        a database that predates the tombstone table has no revocations, so
+        there is nothing to enforce and this returns False. Any *other*
+        failure is propagated to the caller rather than swallowed -- a write
+        path that cannot tell whether an identity was revoked must not
+        proceed as if it were not.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT 1 FROM memory_revocations WHERE kind = ? AND key = ?",
+                    (kind, key),
+                )
+                return await cursor.fetchone() is not None
+        except aiosqlite.OperationalError as exc:
+            if "no such table" in str(exc):
+                return False
+            raise
+
+    async def list_revocations(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Every revocation tombstone in force, most recent first. Read-only."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    "SELECT kind, key, revoked_at, revoked_by, reason "
+                    "FROM memory_revocations ORDER BY revoked_at DESC, kind, key LIMIT ?",
+                    (int(limit),),
+                )
+                return [dict(row) for row in await cursor.fetchall()]
+        except aiosqlite.OperationalError as exc:
+            if "no such table" in str(exc):
+                return []
+            raise
+
+    async def revoke_memory(
+        self,
+        kind: str,
+        key: str,
+        *,
+        revoked_by: str,
+        reason: str | None = None,
+    ) -> RevocationOutcome:
+        """
+        Withdraw a `(kind, key)` from retrieval and refuse its recreation.
+
+        Two distinct effects, in this order, so a crash between them leaves
+        the safer state (tombstone present, row still marked live) rather
+        than the dangerous one (row gone, nothing recording why):
+
+        1. A tombstone is written to `memory_revocations`. From that moment
+           `upsert_memory()` refuses this identity outright.
+        2. The live row, if any, is marked `revoked_at` and dropped from the
+           FTS index, so the retrieval-side verdict reads `revoked` and no
+           retriever can surface it.
+
+        The row itself is *kept*, not deleted. "Was this ever known, and who
+        withdrew it?" has to stay answerable -- that is precisely the
+        question a hard delete destroyed. A user exercising their Memory
+        Agency right to erase content uses `forget_memory()`, which removes
+        the content and leaves only this identity-level tombstone behind.
+
+        Refused while the Parking Brake is engaged: withdrawing knowledge is
+        a mutation, and "inspect, but do not mutate" applies to it exactly as
+        it does to correcting and forgetting.
+        """
+        await self._refuse_mutation_if_braked(
+            "Parking brake engaged: cannot revoke a memory while Bartholomew "
+            "is halted. Release the brake and try again.",
+        )
+        if not revoked_by:
+            raise ValueError(
+                "revoking a memory requires a named person or subsystem -- "
+                "a withdrawal is never anonymous",
+            )
+
+        revoked_at = datetime.now(timezone.utc).isoformat()
+        outcome = RevocationOutcome(kind=kind, key=key, revoked_at=revoked_at)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "INSERT INTO memory_revocations(kind,key,revoked_at,revoked_by,reason) "
+                "VALUES(?,?,?,?,?) "
+                "ON CONFLICT(kind,key) DO UPDATE SET "
+                "revoked_at=excluded.revoked_at, revoked_by=excluded.revoked_by, "
+                "reason=excluded.reason",
+                (kind, key, revoked_at, revoked_by, reason),
+            )
+            outcome.tombstoned = True
+
+            cursor = await db.execute(
+                "SELECT id FROM memories WHERE kind=? AND key=?",
+                (kind, key),
+            )
+            row = await cursor.fetchone()
+            if row is not None:
+                memory_id = row[0]
+                outcome.was_present = True
+                await db.execute(
+                    "UPDATE memories SET revoked_at=? WHERE id=?",
+                    (revoked_at, memory_id),
+                )
+                # Same transaction as the row change -- the single-writer
+                # FTS discipline upsert_memory() and delete_memory() both
+                # hold to. A revoked row that stayed in the index would
+                # still be a retrieval candidate even though the verdict
+                # excludes it, which is a second place to get this right.
+                await remove_memory_fts_async(db, memory_id)
+                outcome.revoked = True
+
+            await db.commit()
+
+        logger.info(
+            "Revoked memory %s/%s by=%s (row present: %s)",
+            kind,
+            key,
+            revoked_by,
+            outcome.was_present,
+        )
+        return outcome
+
+    async def reinstate_memory(
+        self,
+        kind: str,
+        key: str,
+        *,
+        reinstated_by: str,
+        reason: str | None = None,
+    ) -> RevocationOutcome:
+        """
+        Lift a revocation tombstone so this identity may be stored again.
+
+        Deliberately its own named act with its own named actor, not a flag
+        on `upsert_memory()`. A bypass parameter on the write path would mean
+        every future caller that found the refusal inconvenient could set it;
+        a separate method means reinstating is something a person does on
+        purpose and that shows up as itself in an audit trail.
+
+        Lifting the tombstone does not restore content. If the row was
+        revoked (kept, marked) its `revoked_at` is cleared and it becomes a
+        live claim again; if it was forgotten (content erased) there is
+        nothing to restore and the identity is merely writable once more.
+        """
+        await self._refuse_mutation_if_braked(
+            "Parking brake engaged: cannot reinstate a memory while "
+            "Bartholomew is halted. Release the brake and try again.",
+        )
+        if not reinstated_by:
+            raise ValueError(
+                "reinstating a memory requires a named person or subsystem -- "
+                "lifting a withdrawal is never anonymous",
+            )
+
+        outcome = RevocationOutcome(kind=kind, key=key)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "DELETE FROM memory_revocations WHERE kind=? AND key=?",
+                (kind, key),
+            )
+            outcome.reinstated = cursor.rowcount > 0
+
+            cursor = await db.execute(
+                "SELECT id, kind, key, value, summary, ts FROM memories "
+                "WHERE kind=? AND key=? AND revoked_at IS NOT NULL",
+                (kind, key),
+            )
+            row = await cursor.fetchone()
+            if row is not None:
+                outcome.was_present = True
+                await db.execute(
+                    "UPDATE memories SET revoked_at=NULL WHERE id=?",
+                    (row[0],),
+                )
+            await db.commit()
+
+        # Re-index outside the revocation transaction, through the same
+        # governance-aware helper the FTS self-heal uses, so a reinstated
+        # record is indexed with real rule evaluation, redaction and policy
+        # gating rather than being pushed back into FTS verbatim.
+        if outcome.was_present:
+            try:
+                async with aiosqlite.connect(self.db_path) as db:
+                    await self._heal_unindexed_memories(db)
+            except Exception:
+                logger.warning(
+                    "Reinstated %s/%s but could not re-index it; the FTS "
+                    "self-heal will pick it up on next start",
+                    kind,
+                    key,
+                    exc_info=True,
+                )
+
+        logger.info(
+            "Reinstated memory %s/%s by=%s (tombstone lifted: %s)",
+            kind,
+            key,
+            reinstated_by,
+            outcome.reinstated,
+        )
+        return outcome
+
+    # ------------------------------------------------------------------
+    # W03-D: first-class supersession for ordinary memories
+    # ------------------------------------------------------------------
+
+    async def _next_revision(self, kind: str, key: str) -> int:
+        """
+        The revision number the *current* value of `(kind, key)` should be
+        archived under: 1 for a record never superseded before, N+1 after N
+        archived revisions.
+
+        Derived by counting the archive rows rather than stored on the live
+        row, because `memories` has no revision column and adding one would
+        mean every existing row silently claiming revision 1 whether or not
+        anybody had ever corrected it.
+        """
+        prefix = f"{kind}/{key}@r"
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM memories WHERE kind=? AND key LIKE ? ESCAPE '\\'",
+                (
+                    MEMORY_REVISION_KIND,
+                    prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
+                ),
+            )
+            row = await cursor.fetchone()
+        return int(row[0] or 0) + 1
+
+    async def supersede_memory(
+        self,
+        kind: str,
+        key: str,
+        value: str,
+        *,
+        provenance: MemoryProvenance | None = None,
+        summary: str | None = None,
+        expected_memory_id: int | None = None,
+    ) -> SupersessionOutcome:
+        """
+        Replace a stored claim with a newer one, keeping the old one readable.
+
+        This is the ordinary-memory half of a mechanism the codebase already
+        had for competency records only: S5.2's training seam archives a
+        superseded competency under `learning_policy.COMPETENCY_REVISION_KIND`
+        as `key@rN` before the correction overwrites it. Personal facts,
+        preferences, routines and temporary exceptions -- the record kinds a
+        Windows task loop corrects most often -- had no equivalent, so a
+        changed preference simply obliterated the previous one.
+
+        The order is deliberate and is the same one the training seam uses:
+
+        1. Archive the current value under `MEMORY_REVISION_KIND` at
+           `"<kind>/<key>@rN"`, with `valid_to` closed at now.
+        2. Only if that landed, write the replacement through
+           `upsert_memory()` -- the single governed write path, so the new
+           value faces exactly the governance any other write faces.
+        3. Point the archived revision's `superseded_by` at the live row, so
+           the history is navigable forwards as well as backwards.
+
+        If the archive does not land, nothing is written. Losing a correction
+        is recoverable; losing the belief it replaced is not.
+
+        Note what this does *not* do: it does not decide that the new value is
+        better, truer or permitted. `upsert_memory()` still refuses a
+        `never_store` value, still queues an `ask_before_store` one, and still
+        refuses a revoked identity outright. A supersession that is refused
+        leaves the prior claim standing, which is the correct outcome -- the
+        alternative is a store with neither the old claim nor the new one.
+        """
+        await self._refuse_mutation_if_braked(
+            "Parking brake engaged: cannot supersede a memory while "
+            "Bartholomew is halted. Release the brake and try again.",
+        )
+
+        outcome = SupersessionOutcome(kind=kind, key=key)
+        existing = await self.get_memory(kind, key)
+        if existing is None:
+            raise KeyError(f"no memory {kind}/{key}")
+        if expected_memory_id is None:
+            expected_memory_id = existing["id"]
+
+        if await self.is_revoked(kind, key):
+            outcome.outcome = "refused_revoked"
+            outcome.revoked = True
+            return outcome
+
+        now = datetime.now(timezone.utc).isoformat()
+        revision = await self._next_revision(kind, key)
+        archived_key = f"{kind}/{key}@r{revision}"
+
+        archive = await self.upsert_memory(
+            MEMORY_REVISION_KIND,
+            archived_key,
+            existing["value"],
+            now,
+            summary=f"Superseded {kind}/{key} revision {revision}",
+            provenance=MemoryProvenance(
+                source=f"{kind}/{key}",
+                source_type="system",
+                asserted_by=existing.get("asserted_by"),
+                confidence=existing.get("confidence"),
+                valid_from=existing.get("valid_from") or existing.get("ts"),
+                # The archived claim stopped holding the moment it was
+                # replaced. Closing the window here is what makes the
+                # retrieval verdict read `expired`/`superseded` rather than
+                # relying on the kind filter alone to hide it.
+                valid_to=now,
+            ),
+        )
+        if not archive.stored:
+            outcome.outcome = "archive_failed"
+            logger.warning(
+                "Refusing to supersede %s/%s: what it said before could not be "
+                "archived (%s), and the correction would have discarded it",
+                kind,
+                key,
+                archive.outcome,
+            )
+            return outcome
+
+        outcome.archived_key = archived_key
+        outcome.superseded_revision = revision
+
+        result = await self.upsert_memory(
+            kind,
+            key,
+            value,
+            now,
+            summary=summary,
+            expected_memory_id=expected_memory_id,
+            provenance=provenance or MemoryProvenance(source_type="correction", valid_from=now),
+        )
+        outcome.outcome = result.outcome
+        outcome.queued_for_consent = result.outcome == "queued_for_consent"
+        outcome.target_changed = result.outcome == "precondition_failed"
+        outcome.revoked = result.outcome == "refused_revoked"
+
+        if not result.stored:
+            return outcome
+
+        outcome.stored = True
+        outcome.memory_id = result.memory_id
+
+        # Link the archive forwards to what replaced it. Best-effort by
+        # design: the archive and the replacement are both already durable,
+        # and a missing forward pointer costs navigability, not correctness
+        # -- the archived row's closed `valid_to` already keeps it out of
+        # retrieval on its own.
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "UPDATE memories SET superseded_by=? WHERE kind=? AND key=?",
+                    (result.memory_id, MEMORY_REVISION_KIND, archived_key),
+                )
+                await db.commit()
+        except Exception:
+            logger.warning(
+                "Superseded %s/%s but could not link revision %s forwards",
+                kind,
+                key,
+                revision,
+                exc_info=True,
+            )
+        return outcome
 
     async def list_memories_by_kind(
         self,
@@ -1751,7 +2457,9 @@ class MemoryStore:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                f"SELECT id, kind, key, value, summary, ts FROM memories "  # noqa: S608 - placeholders are generated, not interpolated user input
+                f"SELECT id, kind, key, value, summary, ts, source, source_type, "  # noqa: S608 - placeholders are generated, not interpolated user input
+                f"asserted_by, confidence, valid_from, valid_to, superseded_by, "
+                f"revoked_at FROM memories "
                 f"WHERE kind IN ({placeholders}) ORDER BY id DESC LIMIT ?",
                 (*kinds, limit),
             )

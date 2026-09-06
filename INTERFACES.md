@@ -117,12 +117,94 @@ implemented"; a fresh database actually contains 37.)*
   `VectorRetrieverAdapter`) even exposes a parameter capable of disabling the gate. See
   `tests/test_consent_bypass_redteam.py` and `RISKS.md` R1.
 
+### Validity gate — added 2026-09-06 (W03-D)
+
+Consent answers *may this caller see it*. The validity gate answers *is it still true*, and both
+are decided in `ConsentGate.filter_memory_ids()` so no retrieval path can honour one and forget
+the other.
+
+- `ConsentGate.validity_verdicts(ids) -> {memory_id: ValidityVerdict}` (batched) and
+  `validity_verdict(id)`. Verdict vocabulary: `currently_valid`, `revoked`, `superseded`,
+  `expired`. Only `currently_valid` may be surfaced.
+- Every retriever (`Retriever`, `FTSOnlyRetriever`, `HybridRetriever`) drops non-valid candidates
+  **before** scoring, so ranking is unchanged and `top_k` is not silently altered by a
+  post-filter. The gate is asked; no retriever decides validity for itself.
+- The verdict applies whether or not a `rules_engine` was supplied — governance that only applies
+  when the caller opted in is not governance.
+- Fail-closed: an unreadable row is excluded; an `expires_in` that cannot be parsed is treated as
+  already expired; a database predating the W03-D columns falls back to the rule-derived expiry
+  (plus any tombstone) rather than excluding everything.
+
 **Output contract:**
 - Returns ordered results with:
   - `memory_id`
   - score fields (vector/fts/fused)
   - `context_only` flag where relevant
   - snippet/preview if safe
+  - `verdict` and `provenance` (W03-D) — always `currently_valid`, carried so a consumer can state
+    honestly what it applied and where it came from, not as something to re-filter on
+
+---
+
+## Governed memory: provenance, validity, supersession, revocation — implemented 2026-09-06 (W03-D)
+
+**Purpose:** make recalled memory *evidence* rather than authority. This is the
+`memory-retrieval-governance` shared contract named in `docs/waves/W03/W03_MANIFEST.yaml`, owned
+by W03-D and consumed by W03-B, W03-E and W03-F. Only W03-D changes its shape.
+
+### Write half — `bartholomew/kernel/memory_store.py`
+
+`memories` carries eight governance columns, added by the additive `ALTER` migration in `init()`
+and nullable throughout (NULL means *not recorded*, never a fabricated value):
+`source`, `source_type`, `asserted_by`, `confidence`, `valid_from`, `valid_to`, `superseded_by`,
+`revoked_at`.
+
+- `upsert_memory(..., provenance: MemoryProvenance | None = None)` is the **only** writer of those
+  columns. `MemoryProvenance` validates `source_type` against `MEMORY_SOURCE_TYPES`
+  (`user_instruction`, `observation`, `inference`, `correction`, `adoption`, `system` — the
+  observed-vs-inferred distinction W03-A carries on the event backbone, preserved into memory) and
+  `confidence` against `[0.0, 1.0]`; `None` confidence means *unknown*, never *low*.
+- `valid_from` defaults to the write's `ts`. `valid_to` is the earlier of what the caller stated
+  and what `memory_rules.yaml`'s `auto_expire`/`expires_in` implies, so a caller can shorten a
+  retention window and never extend one. `expires_in` was declared since rules v1.0 and read by
+  nothing until now; `memory_rules.expiry_from_rules()` is the single interpretation.
+- `supersede_memory(kind, key, value, ...) -> SupersessionOutcome` archives the current value
+  under `MEMORY_REVISION_KIND` at `"<kind>/<key>@rN"` with its window closed, then writes the
+  replacement through the same conditional `upsert_memory`. If the archive does not land, nothing
+  is written. `correct_memory()` (the Memory Agency edit path) routes through it, so an ordinary
+  memory now keeps the history a competency record has kept since S5.2.
+- `revoke_memory(kind, key, *, revoked_by, reason=None)` writes a `memory_revocations` tombstone
+  (identity + timestamp + who, **no content**) and marks the row `revoked_at`, keeping it readable
+  as audit. `forget_memory()` also lays a tombstone but still erases the content.
+  `reinstate_memory(kind, key, *, reinstated_by, reason=None)` is the only way to lift one — a
+  named, attributed act, deliberately not a flag on the write path.
+- `upsert_memory` refuses a tombstoned identity with `outcome="refused_revoked"`, checked **before**
+  rules, redaction, summarisation and the consent queue, so a withdrawn record is never re-queued
+  for a human to re-approve.
+
+### Read half — `bartholomew/kernel/consent_gate.py`
+
+See "Validity gate" under §4 above, plus the instruction/data boundary:
+
+- `frame_recalled_memory(blocks) -> str` wraps recalled material in
+  `RECALLED_MEMORY_OPEN` / `RECALLED_MEMORY_CLOSE` under `RECALLED_MEMORY_NOTICE`, and strips those
+  delimiters from the content itself so recalled text cannot close or forge its own fence. Returns
+  `""` when nothing was recalled, so a turn with no memory is byte-for-byte unchanged.
+- `runtime_contract._build_interpretation()` frames the competency and personal-fact blocks.
+  Goals, persona, working-memory context and objectives stay outside deliberately: they are the
+  runtime's own live state, and labelling an objective "must not be acted on" would be untrue.
+
+### HTTP surface — `routes/memory.py`
+
+- `GET /api/memory/revocations` (capability `memory:read`) — what is withheld, and since when.
+- `POST /api/memory/{kind}/{key}/reinstate` (capability `memory:write`) — lift one tombstone.
+- `DELETE /api/memory/{kind}/{key}` now reports `tombstoned: true`.
+
+### What this does NOT do
+
+No automatic lesson acceptance (`SHIPPED_EXECUTION_MODE` stays `shadow`), no cross-user or
+cross-instance promotion, and no second memory authority: one governed write path, one retrieval
+governance point.
 
 ---
 

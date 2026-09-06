@@ -104,6 +104,12 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("GET", "/api/memory/{kind}/{key}"): _MEMORY,
     ("PUT", "/api/memory/{kind}/{key}"): _MEMW,
     ("DELETE", "/api/memory/{kind}/{key}"): _MEMW,
+    # W03-D revocation tombstones. Listing what is withheld is a read of the
+    # memory surface; lifting a withdrawal changes what Bartholomew may store
+    # again, which is squarely a memory write -- a caller holding only
+    # memory:read must not be able to undo a deletion.
+    ("GET", "/api/memory/revocations"): _MEMORY,
+    ("POST", "/api/memory/{kind}/{key}/reinstate"): _MEMW,
     # Export is its own capability, not memory:read. Reading one key and
     # exfiltrating an entire personal memory are different powers, and a
     # future read-only role should be able to hold one without the other.

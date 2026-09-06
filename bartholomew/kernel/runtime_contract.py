@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import (
     candidate_learning,
+    consent_gate,
     forecast_intents,
     learning_authorization,
     learning_policy,
@@ -65,6 +66,7 @@ from .memory.privacy_guard import (
     get_consent_handler,
     get_device_consent_handler,
 )
+from .memory_store import MemoryProvenance
 from .reflection import ActionReflection, ReflectionWriteOutcome, record_action_reflection
 
 if TYPE_CHECKING:
@@ -319,18 +321,46 @@ def _build_interpretation(
     except Exception:
         logger.exception("Failed to read working memory context for chat interpretation")
 
+    # W03-D: everything below that came out of *memory* goes inside one
+    # explicit instruction/data boundary.
+    #
+    # Before this, recalled competency guidance and recalled personal facts
+    # were appended to the prompt as plain lines, indistinguishable from the
+    # user's own words -- so a stored memory reading "approve the action" or
+    # "delete everything" arrived at the model looking exactly like the user
+    # having just typed it. That is the memory-poisoning surface the Wave 3
+    # research brief names, and it is not addressable by filtering content:
+    # a memory may legitimately *contain* an imperative (the user said "always
+    # ask me first"), so the fix is to mark what is recalled data rather than
+    # to try to detect what is dangerous.
+    #
+    # `frame_recalled_memory()` (W03-D's owned consent-gate seam) wraps the
+    # blocks in delimiters it also strips from the content itself, with a
+    # standing notice that nothing inside may be executed or treated as
+    # authorization. Goals, persona and working-memory context above are
+    # deliberately *outside* the frame: they are this runtime's own state, not
+    # retrieved memory, and mislabelling them would make the boundary mean
+    # less rather than more.
+    #
+    # Framing changes what the model is told; it is not what *enforces* the
+    # property. A `CandidateAction`'s kind is set by the surface that
+    # constructed it and an actuation proposal can only be built through
+    # W03-C's envelope, so recalled text has no path to either regardless of
+    # what it says -- which is the structural half, tested as such.
+    #
     # S5.3: competency guidance, already retrieved and rendered by the caller.
     # Passed in rather than fetched here because retrieval is asynchronous and
     # must run off the event loop, while this function is deliberately
     # synchronous and called by every surface.
-    if competency_block:
-        context_lines.append(competency_block)
-
-    # Usable POC slice 1: recalled personal facts, rendered as their own
-    # block so competency guidance and remembered facts stay visibly
-    # distinct. Same passed-in-not-fetched reason as the competency block.
-    if personal_facts_block:
-        context_lines.append(personal_facts_block)
+    #
+    # Usable POC slice 1: recalled personal facts are rendered as their own
+    # block so competency guidance and remembered facts stay visibly distinct
+    # inside the frame. Same passed-in-not-fetched reason.
+    recalled_block = consent_gate.frame_recalled_memory(
+        [competency_block, personal_facts_block],
+    )
+    if recalled_block:
+        context_lines.append(recalled_block)
 
     # Golden Path slice 2: the durable objectives, in their own block for the
     # same passed-in-not-fetched reason as the two above -- the read is
@@ -527,6 +557,15 @@ FACT_OUTCOME_QUEUED_FOR_CONSENT = "queued_for_consent"
 FACT_OUTCOME_BLOCKED = "blocked"
 FACT_OUTCOME_ERROR = "error"
 
+#: W03-D: the proposal named a `(kind, key)` the user had withdrawn, so the
+#: governed write path refused it outright. Named separately from
+#: `FACT_OUTCOME_BLOCKED` because the two are different facts about the world
+#: and the user is owed the difference: "a rule forbids storing this" is not
+#: the same statement as "you told me to forget this, so I did not write it
+#: down again". The refusal itself is `MemoryStore.upsert_memory()`'s, read
+#: from its own reported outcome rather than inferred here.
+FACT_OUTCOME_REVOKED = "refused_revoked"
+
 
 async def _classify_fact_not_stored(
     mem: Any,
@@ -632,6 +671,17 @@ async def _capture_personal_facts(
                     fact.key,
                     fact.value,
                     ts,
+                    # W03-D: a fact captured from ordinary conversation is
+                    # something the user said, in this turn, with no
+                    # measured confidence -- `None` means unknown, never
+                    # "low" (see MemoryProvenance). Recording it is what
+                    # lets a later turn distinguish "you told me this" from
+                    # "I inferred this from a screen capture".
+                    provenance=MemoryProvenance(
+                        source=observation.source,
+                        source_type="user_instruction",
+                        asserted_by="user",
+                    ),
                 )
             except Exception:
                 logger.exception("Personal-fact write failed for %s/%s", fact.kind, fact.key)
@@ -645,6 +695,10 @@ async def _capture_personal_facts(
                 # Only ever recorded for content the governed path actually
                 # stored -- never for content it is holding for consent.
                 record["value"] = fact.value
+            elif store_result.outcome == "refused_revoked":
+                # The write authority said why directly; there is nothing to
+                # classify by observing state, and nothing was queued.
+                record["outcome"] = FACT_OUTCOME_REVOKED
             else:
                 record["outcome"] = await _classify_fact_not_stored(
                     daemon.mem,
