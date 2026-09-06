@@ -74,6 +74,10 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, MultimodalSession] = {}
         self._stoppers: dict[str, Callable[[], None]] = {}
+        #: The observation loop (W03-A) driving a live screen session, so the
+        #: status surface can report what it has emitted and the read-back
+        #: primitive can observe through the same governed backends.
+        self._observers: dict[str, Any] = {}
         self._lock = threading.RLock()
 
     # -- membership ----------------------------------------------------------
@@ -88,6 +92,17 @@ class SessionStore:
     def get(self, session_id: str) -> MultimodalSession | None:
         with self._lock:
             return self._sessions.get(session_id)
+
+    def attach_observer(self, session_id: str, observer: Any) -> None:
+        """Record the observation loop that drives `session_id`."""
+        with self._lock:
+            if session_id not in self._sessions:
+                raise KeyError(f"no such session: {session_id}")
+            self._observers[session_id] = observer
+
+    def observer(self, session_id: str) -> Any | None:
+        with self._lock:
+            return self._observers.get(session_id)
 
     def all(self) -> list[MultimodalSession]:
         with self._lock:
@@ -259,6 +274,29 @@ class SessionStore:
                 record["reconciled_after_restart"] = True
             reconciled.append(record)
         return reconciled
+
+
+# ---------------------------------------------------------------------------
+# The process-wide registry
+# ---------------------------------------------------------------------------
+# One registry per process, because a session is only real in the process
+# that owns the device (module docstring). The API routes read it, and the
+# read-back primitive (`readback.read_back`) defaults to it so an in-process
+# consumer -- W03-C's Verify step -- reads the same sessions the status
+# surface shows. A holder rather than a bare global so a test can swap it.
+
+_DEFAULT: dict[str, SessionStore] = {"store": SessionStore()}
+
+
+def default_store() -> SessionStore:
+    """The one registry this process's sessions live in."""
+    return _DEFAULT["store"]
+
+
+def _set_default_store_for_tests(store: SessionStore | None) -> SessionStore:
+    """Swap the registry. Tests only; None installs a fresh, empty one."""
+    _DEFAULT["store"] = store if store is not None else SessionStore()
+    return _DEFAULT["store"]
 
 
 def write_status_file(path: str | Path, sessions: list[MultimodalSession]) -> None:

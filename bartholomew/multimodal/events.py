@@ -34,6 +34,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from .accessibility import AccessibilityObservation
 from .microphone import MicrophoneObservation
+from .observation import ObservationEvent
 from .privacy import Classification
 from .screen import ScreenObservation
 from .session import MultimodalSession
@@ -121,12 +122,17 @@ def build_envelope(
     event_type: str,
     payload: dict[str, Any],
     classification: Classification,
+    *,
+    occurred_at: str | None = None,
 ) -> dict[str, Any]:
     """One §3.1-shaped envelope. Bounded, classified, provenance-complete.
 
     Every field a derived observation must carry per §7 gate 6 -- source,
     device, session, time, privacy and retention -- is present and comes from
     the session record rather than from the observation's own content.
+
+    `occurred_at` defaults to now; an observation event passes its own
+    provenance `occurred_at` so the envelope and the record agree.
     """
     if event_type not in EVENT_TYPES:
         raise ValueError(f"unregistered multimodal event type: {event_type!r}")
@@ -158,7 +164,7 @@ def build_envelope(
             # on its own authority -- never here.
             "verification": "claimed",
         },
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "occurred_at": occurred_at or datetime.now(timezone.utc).isoformat(),
         # §3.1: ingress assigns captured_at from trusted server-side context.
         # Emitting None is the truthful "not yet captured by ingress".
         "captured_at": None,
@@ -240,6 +246,46 @@ def serialize_screen(
             "omitted_secret_fields": observation.accessibility.omitted_secret_fields,
         },
         observation.classification,
+    )
+
+
+def serialize_observation_event(
+    session: MultimodalSession,
+    event: ObservationEvent,
+    *,
+    event_type: str | None = None,
+) -> dict[str, Any]:
+    """The `observation-event` shared contract, on the wire.
+
+    The payload *is* `ObservationEvent.as_dict()`: `observed_event`,
+    `inferred_state`, `confidence`, `competing_explanations`, `provenance`
+    and `classification` as distinct top-level keys, plus the `session_id`
+    and `modality` every multimodal payload carries. It rides the existing
+    accessibility/screen event types, so the registry, the sink and the
+    backbone's handler are unchanged: there is no new event type and no
+    second bus.
+
+    `event_id` is content-derived from the whole payload, so a retry of the
+    same tick collapses to one row while two ticks (whose `captured_at`
+    differ) are two events.
+    """
+    if event_type is None:
+        event_type = (
+            EVENT_TYPE_SCREEN
+            if event.observed_event.facts.get("used_screenshot")
+            else EVENT_TYPE_ACCESSIBILITY
+        )
+    if event_type not in (EVENT_TYPE_ACCESSIBILITY, EVENT_TYPE_SCREEN):
+        raise ValueError(
+            f"an observation event travels under the accessibility or screen "
+            f"observation type, not {event_type!r}",
+        )
+    return build_envelope(
+        session,
+        event_type,
+        event.as_dict(),
+        event.classification,
+        occurred_at=event.provenance.occurred_at,
     )
 
 
