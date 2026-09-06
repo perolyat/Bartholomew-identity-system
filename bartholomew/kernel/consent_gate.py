@@ -95,6 +95,29 @@ VALIDITY_VERDICTS: frozenset[str] = frozenset(
 
 
 @dataclass(frozen=True)
+class _GateState:
+    """Everything one gating decision needs, read in a single connection.
+
+    W03-D added a second governance question (is this still true?) alongside
+    the existing one (may this be seen?). Answered naively that cost a third
+    SQLite connection per gating call -- consent, then metadata, then rows
+    again for the verdict -- on a path that already runs per retrieval, and
+    re-read the very rows the metadata load had just fetched.
+
+    That is worth avoiding on its own merits. It matters more here because
+    this repository has two *recorded* intermittent failures whose measured
+    cause is losing the SQLite writer lock under contention (see
+    `docs/SESSION_HANDOFF.md` and `RISKS.md`), and adding avoidable
+    connections to a hot path is the wrong direction to push a system with
+    that known weakness, whether or not it is what tips any given run.
+    """
+
+    rows: dict[int, Any]
+    revoked_identities: set[tuple[str, str]]
+    consented_ids: set[int]
+
+
+@dataclass(frozen=True)
 class ValidityVerdict:
     """
     Whether one stored memory still holds, and why.
@@ -286,6 +309,96 @@ class ConsentGate:
                 return set()
             raise
 
+    @staticmethod
+    def _load_consented_ids(conn: sqlite3.Connection) -> set[int]:
+        """Consent records on an already-open connection, tolerant of absence.
+
+        Mirrors `get_consented_memory_ids()`'s own error posture exactly, and
+        that exactness matters: a database with no `memory_consent` table at
+        all is an ordinary shape here (minimal fixtures, a store built before
+        the table existed), and `get_consented_memory_ids()` has always
+        answered "nobody has consented to anything" rather than failing.
+
+        Folding this read into `_load_gate_state()` without that tolerance
+        turned a missing table into a failed *gate state*, which excluded
+        every memory instead of just the ones requiring consent -- caught by
+        nine retrieval tests before it reached CI. Returning an empty set is
+        the conservative direction on its own terms: with no consent records,
+        every `requires_consent` memory is excluded anyway.
+        """
+        try:
+            return {row[0] for row in conn.execute("SELECT memory_id FROM memory_consent")}
+        except Exception as e:
+            logger.error(f"Failed to load consented memory IDs: {e}")
+            return set()
+
+    @staticmethod
+    def _metadata_from_rows(rows: dict[int, Any]) -> dict[int, dict[str, Any]]:
+        """The six base fields the rules engine evaluates, per memory id."""
+        return {
+            row_id: {
+                "id": row["id"],
+                "kind": row["kind"],
+                "key": row["key"],
+                "value": row["value"],
+                "summary": row["summary"],
+                "ts": row["ts"],
+            }
+            for row_id, row in rows.items()
+        }
+
+    def _load_gate_state(
+        self,
+        memory_ids: list[int],
+        *,
+        need_consent: bool = False,
+    ) -> _GateState | None:
+        """
+        Read rows, revocation tombstones and (optionally) consent records for
+        these ids on **one** connection, or None if the read failed.
+
+        None means "could not determine", and every caller turns that into
+        exclusion -- fail-closed, exactly as the per-call error handling it
+        replaced did.
+        """
+        conn = None
+        try:
+            conn = connect(self.db_path)
+            set_wal_pragmas(conn)
+            conn.row_factory = sqlite3.Row
+
+            has_governance = self._governance_columns_present(conn)
+            columns = "id, kind, key, value, summary, ts"
+            if has_governance:
+                columns += (
+                    ", source, source_type, asserted_by, confidence, "
+                    "valid_from, valid_to, superseded_by, revoked_at"
+                )
+            placeholders = ",".join("?" * len(memory_ids))
+            cursor = conn.execute(
+                f"SELECT {columns} FROM memories WHERE id IN ({placeholders})",  # noqa: S608 - column list is a module-local literal; ids are bound
+                memory_ids,
+            )
+            rows = {row["id"]: row for row in cursor.fetchall()}
+
+            revoked_identities = self._load_revoked_identities(conn)
+
+            consented_ids: set[int] = set()
+            if need_consent:
+                consented_ids = self._load_consented_ids(conn)
+
+            return _GateState(
+                rows=rows,
+                revoked_identities=revoked_identities,
+                consented_ids=consented_ids,
+            )
+        except Exception:
+            logger.exception("Failed to read memory gate state; failing closed")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
     def validity_verdicts(self, memory_ids: list[int]) -> dict[int, ValidityVerdict]:
         """
         The `ValidityVerdict` for each of these memories, in one pass.
@@ -302,30 +415,8 @@ class ConsentGate:
         if not memory_ids:
             return {}
 
-        now = datetime.now(timezone.utc)
-        verdicts: dict[int, ValidityVerdict] = {}
-        conn = None
-        try:
-            conn = connect(self.db_path)
-            set_wal_pragmas(conn)
-            conn.row_factory = sqlite3.Row
-            has_governance = self._governance_columns_present(conn)
-            revoked_identities = self._load_revoked_identities(conn)
-
-            columns = "id, kind, key, value, summary, ts"
-            if has_governance:
-                columns += (
-                    ", source, source_type, asserted_by, confidence, "
-                    "valid_from, valid_to, superseded_by, revoked_at"
-                )
-            placeholders = ",".join("?" * len(memory_ids))
-            cursor = conn.execute(
-                f"SELECT {columns} FROM memories WHERE id IN ({placeholders})",  # noqa: S608 - column list is a module-local literal; ids are bound
-                memory_ids,
-            )
-            rows = {row["id"]: row for row in cursor.fetchall()}
-        except Exception:
-            logger.exception("Failed to compute memory validity verdicts; failing closed")
+        state = self._load_gate_state(memory_ids)
+        if state is None:
             return {
                 memory_id: ValidityVerdict(
                     memory_id=memory_id,
@@ -334,10 +425,23 @@ class ConsentGate:
                 )
                 for memory_id in memory_ids
             }
-        finally:
-            if conn:
-                conn.close()
 
+        return self._verdicts_from_rows(memory_ids, state.rows, state.revoked_identities)
+
+    def _verdicts_from_rows(
+        self,
+        memory_ids: list[int],
+        rows: dict[int, Any],
+        revoked_identities: set[tuple[str, str]],
+    ) -> dict[int, ValidityVerdict]:
+        """Turn already-loaded rows into verdicts, opening no connection.
+
+        Split out from `validity_verdicts()` so `filter_memory_ids()` can
+        reuse rows it has already read rather than reading them again. See
+        `_load_gate_state()` for why that mattered enough to restructure.
+        """
+        now = datetime.now(timezone.utc)
+        verdicts: dict[int, ValidityVerdict] = {}
         for memory_id in memory_ids:
             row = rows.get(memory_id)
             if row is None:
@@ -488,6 +592,13 @@ class ConsentGate:
         """
         Load memory metadata for rule evaluation
 
+        Delegates to `_load_gate_state()` so there is one implementation of
+        "read these memory rows", not two that can drift. It carried its own
+        SELECT until W03-D gave the gate a second reason to read the same
+        rows; keeping both would have been the duplicated-concept shape this
+        codebase avoids by policy. Returns `{}` on a read failure, exactly as
+        it always has -- every caller treats an empty result as "exclude".
+
         Args:
             memory_ids: List of memory IDs to load
 
@@ -497,41 +608,10 @@ class ConsentGate:
         if not memory_ids:
             return {}
 
-        placeholders = ",".join("?" * len(memory_ids))
-        query = f"""
-            SELECT id, kind, key, value, summary, ts
-            FROM memories
-            WHERE id IN ({placeholders})
-        """
-
-        conn = None
-        try:
-            # WP-A2: kernel connection authority (WAL/busy_timeout), not a
-            # bare connect -- see bartholomew/kernel/db_ctx.py.
-            conn = connect(self.db_path)
-            set_wal_pragmas(conn)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(query, memory_ids)
-            rows = cursor.fetchall()
-
-            metadata = {}
-            for row in rows:
-                metadata[row["id"]] = {
-                    "id": row["id"],
-                    "kind": row["kind"],
-                    "key": row["key"],
-                    "value": row["value"],
-                    "summary": row["summary"],
-                    "ts": row["ts"],
-                }
-
-            return metadata
-        except Exception as e:
-            logger.error(f"Failed to load memory metadata: {e}")
+        state = self._load_gate_state(list(memory_ids))
+        if state is None:
             return {}
-        finally:
-            if conn:
-                conn.close()
+        return self._metadata_from_rows(state.rows)
 
     def filter_memory_ids(
         self,
@@ -573,13 +653,35 @@ class ConsentGate:
         if not memory_ids:
             return {}
 
-        # Load consented IDs if not provided
-        if consented_ids is None:
-            consented_ids = self.get_consented_memory_ids()
+        # One connection for rows, tombstones and (when not supplied) consent
+        # records -- see `_GateState`. This used to be three: consent,
+        # metadata, then the same rows again for the verdict.
+        state = self._load_gate_state(list(memory_ids), need_consent=consented_ids is None)
+        if state is None:
+            # Fail closed, and say why: a gate that cannot read its own
+            # inputs excludes everything rather than admitting everything.
+            return {
+                memory_id: {
+                    "include": False,
+                    "context_only": False,
+                    "recall_policy": None,
+                    "privacy_class": None,
+                    "verdict": VERDICT_REVOKED,
+                    "verdict_reason": "gate state could not be read",
+                    "provenance": {},
+                }
+                for memory_id in memory_ids
+            }
 
-        # Load memory metadata
-        metadata = self.load_memory_metadata(memory_ids)
-        verdicts = self.validity_verdicts(list(memory_ids))
+        if consented_ids is None:
+            consented_ids = state.consented_ids
+
+        metadata = self._metadata_from_rows(state.rows)
+        verdicts = self._verdicts_from_rows(
+            list(memory_ids),
+            state.rows,
+            state.revoked_identities,
+        )
 
         # Evaluate rules for each memory
         results = {}
