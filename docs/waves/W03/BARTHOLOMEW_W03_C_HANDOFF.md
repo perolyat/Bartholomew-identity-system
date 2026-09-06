@@ -370,6 +370,25 @@ No governance test was skipped, quarantined, disabled or deleted.
 
 ## 6. Verification run
 
+### CI, measured on this branch's head (PR #95)
+
+| Tier | Job | Result |
+|---|---|---|
+| **PR Fast** (`ci.yml`) | Quality (format, lint, packaging contract) | **success** |
+| | PR Fast tests (Ubuntu, py3.11, parallel) | **success** |
+| | Windows fast (packaging, lifecycle, actuation suites) | **success** |
+| | smoke (live uvicorn) | **success** |
+| **Integration** (`integration.yml`) — W03-C's required tier | Tests + coverage (Ubuntu, py3.11) | **success** |
+| | Critical integration + lifecycle (Ubuntu, py3.11) | **success** |
+| | Windows lifecycle + compatibility (py3.11) | **success** |
+| **Merge Candidate** | — | correctly skipped; that tier is W03-F's |
+
+The Integration tier is opted into on this draft with the `ci:integration`
+label, which is the mechanism `W03_CI_BASELINE.md` §3 describes for exactly
+this.
+
+### Local
+
 | Tier / suite | Result |
 |---|---|
 | Full default suite (`pytest -n auto --dist loadfile`, the PR Fast tier's invocation) | see §6.1 |
@@ -388,7 +407,7 @@ No governance test was skipped, quarantined, disabled or deleted.
 | `tests/test_windows_action_recovery.py` | 60 passed |
 | `tests/test_windows_action_envelope_integrity.py` | 24 passed |
 | The four together | **153 passed** |
-| Full default suite (`pytest -n auto --dist loadfile`) | recorded in §8 |
+| Full default suite (`pytest -n auto --dist loadfile`, the PR Fast tier's own invocation) | **exit 0, no failures**; 4,315 tests collected (161 integration/slow deselected, of 4,476 total). The wave-two baseline collected 4,151, so W03-C adds ~164 to the default suite plus the integration-marked ones. |
 
 **One known local-only failure, documented before this session.** Two
 `tests/smoke/test_packaging_contract.py::test_declared_console_script_runs_help`
@@ -480,9 +499,15 @@ with `pip install -e .` into the job's own Python, where the scripts are on
 | | |
 |---|---|
 | Branch | `wave/w03-c-governed-windows-action` |
-| Final commit | recorded below on freeze |
-| Pull request | recorded below on freeze |
+| Pull request | **#95** — `[W03-C] Governed Windows Action & Reliability` (draft, labelled `ci:integration`) |
+| Final commit | the head of this branch, which is the commit that added this line |
+| Required tier | Integration — **green** (see §6) |
 | Manifest status | `frozen` |
+
+**Not merged, deliberately.** The Wave 3 workflow gives merging to W03-F, which
+integrates the frozen builder heads in the order `D → A → C → B → E`. The PR is
+left as a draft with a green Integration tier so W03-F can take the head as it
+stands.
 
 W03-C is frozen. Per the inherited rules, nothing further is pushed to this
 branch without telling W03-F.
