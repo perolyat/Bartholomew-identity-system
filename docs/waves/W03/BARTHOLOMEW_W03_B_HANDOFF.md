@@ -5,7 +5,7 @@
 | Session | **W03-B — Executive Task Orchestration** |
 | Immutable id | `W03-B` |
 | Branch | `wave/w03-b-executive-task-orchestration` |
-| Pull request | `[W03-B] Executive Task Orchestration` — **#PR** |
+| Pull request | `[W03-B] Executive Task Orchestration` — **#96** |
 | Baseline | `main @ e96e6a6dfc3f71a68d44010c9954bb4e7a0c5195` (W03-PREP closeout; carries `99ee734`) |
 | Consumed frozen dependency | W03-A `56bf995` (PR #93) — **by published signature, not by merge** (§5.1) |
 | Frozen head | the PR head carrying this handoff (recorded on the PR) |
