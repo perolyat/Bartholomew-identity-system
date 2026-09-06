@@ -220,8 +220,54 @@ the local artifact `W03_CI_BASELINE.md` §6 already records; they pass with
 
 ## Status
 
-- **W03-D status:** recorded in `W03_MANIFEST.yaml` (`sessions[].status`).
-- **Frozen head SHA:** recorded in the pull request and in the manifest update
-  commit message.
-- **Freeze means freeze:** nothing is pushed to this branch after the head is
-  declared frozen without telling W03-F.
+- **W03-D status:** `frozen` in `W03_MANIFEST.yaml` (`sessions[].status`).
+- **Frozen head SHA:** `833ed2f`, on both `claude/w03-d-urzyeg` and
+  `wave/w03-d-governed-memory-learning`.
+- **Freeze means freeze.** The head moved once after being declared frozen,
+  from `32123e4` to `833ed2f`, and W03-F was told on the PR (the only channel
+  available while W03-F is `not_started`). The move was a contention fix in
+  W03-D's own new code plus the regression that fix caught: no acceptance
+  criterion, shared-contract surface or public behaviour changed. Nothing
+  further is pushed without telling W03-F the same way.
+
+## Post-freeze note: the CI failures on the first head, and what they were
+
+The first pushed head (`32123e4`) went red on two CI jobs. Recorded here
+because W03-F will see the same tests and should not re-investigate from
+scratch.
+
+Both jobs failed on tests from the recorded-intermittent list in
+`W03_CI_BASELINE.md` §2.6 — `test_notifications_api` quiet-hours and
+`test_event_backbone_drive` — whose measured root cause is in
+`docs/SESSION_HANDOFF.md`: the notification skill's own state write loses the
+SQLite writer lock during the scheduler's startup burst.
+
+That diagnosis was **measured, not assumed**, because one failure read
+`400 detail='database is locked'` and W03-D does add SQLite work. A worktree
+at `origin/main` (`e96e6a6` — this branch's base, containing no W03-D code)
+running the same full-suite-with-coverage job reproduced the failure verbatim
+on its first run. The failure is red on the base branch too. Separately, the
+`PR Fast tests` job passed on re-run of the identical commit, and the
+Integration coverage gate passed at 79.22%.
+
+Two things came out of that investigation and are in `833ed2f`:
+
+1. **A contention fix.** `filter_memory_ids()` was opening three SQLite
+   connections per call (consent, metadata, then the same rows again for the
+   verdict) where it opened two before W03-D. `_load_gate_state()` now reads
+   all of it once; a hybrid retrieve opens fewer connections than it did
+   before this package existed. Not a fix for the flake — the baseline
+   reproduction shows it is not W03-D's — but the right direction on a system
+   with a known writer-lock weakness.
+2. **A regression that fix caused, caught before it shipped.** Folding the
+   consent read into the shared loader dropped `get_consented_memory_ids()`'s
+   tolerance of a missing `memory_consent` table, turning an ordinary fixture
+   shape into a failed gate state that excluded *every* memory rather than
+   only those requiring consent. Nine retrieval tests failed on the full
+   suite; the 176 targeted tests run beforehand had all passed.
+   `_load_consented_ids()` restores the original posture exactly.
+
+The lesson worth carrying into W03-F: the gate's error posture is
+load-bearing in a way that is easy to lose in a refactor. A missing optional
+table must degrade to "nothing is consented", never to "nothing is
+retrievable".
