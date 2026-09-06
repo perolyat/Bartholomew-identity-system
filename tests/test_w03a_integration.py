@@ -333,7 +333,9 @@ async def test_a_brake_engaged_mid_session_ends_the_running_loop_within_bound(
 
 
 async def test_a_brake_engaged_before_start_refuses_at_the_seam(
-    db_path, resolver, granting_consent,
+    db_path,
+    resolver,
+    granting_consent,
 ):
     GovernanceStore(db_path).engage("sight", reason="w03a integration", actor="test")
     store = SessionStore()

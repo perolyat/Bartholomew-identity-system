@@ -71,7 +71,12 @@ class GoodProvider:
     """A controlled accessibility provider; optionally reports idle time."""
 
     def __init__(
-        self, elements=None, *, complete=True, idle_seconds=None, title="Q3 report - Notepad",
+        self,
+        elements=None,
+        *,
+        complete=True,
+        idle_seconds=None,
+        title="Q3 report - Notepad",
     ):
         self.elements = (
             elements
@@ -248,7 +253,8 @@ class TestTickShape:
 
     def test_a_null_inferencer_yields_a_complete_record_with_no_inference(self):
         loop, _s, _e, sink = _loop(
-            provider=GoodProvider(idle_seconds=20 * 60), inferencer=NullInferencer(),
+            provider=GoodProvider(idle_seconds=20 * 60),
+            inferencer=NullInferencer(),
         )
         loop.tick()
         payload = sink.events[0]["payload"]
