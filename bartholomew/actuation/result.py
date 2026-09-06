@@ -1,6 +1,6 @@
 """What happened, said truthfully -- including when the honest answer is "I don't know".
 
-Seven statuses, and the distinctions between them are the point. The one that
+Eight statuses, and the distinctions between them are the point. The one that
 matters most is `UNKNOWN`: when the device cannot observe whether an action
 took effect, that is what it must report. A companion that reported `SUCCEEDED`
 because a Win32 call returned without error would be reporting the absence of
@@ -11,9 +11,16 @@ fiction.
 So each handler in `bartholomew/windows_actuation/handlers.py` is required to
 *observe* its own effect before it may claim one: a launched application is
 looked for by process image, a focused window is read back from
-`GetForegroundWindow`, a clipboard write is read back and compared. Where the
-observation cannot be made, the result is `UNKNOWN` and says which observation
-was missing.
+`GetForegroundWindow`, a clipboard write is read back and compared, and typed
+text is read back out of the field it was typed into. Where the observation
+cannot be made, the result is `UNKNOWN` and says which observation was missing.
+
+The eighth status, `ABORTED_BY_BRAKE`, is the one W03-C added, and it is a
+status rather than an error category on `CANCELLED` for an audit reason: "how
+many actions did a halt stop after they had been leased" is a question an
+operator asks about a safety control, and it should be one query over one
+column rather than a join on a reason string. A person withdrawing an action
+and a brake stopping one are different events with different follow-ups.
 
 Evidence
 --------
@@ -85,6 +92,19 @@ PERMITTED_EVIDENCE_KEYS: frozenset[str] = frozenset(
         "events_sent",
         "field_readable",
         "control_type",
+        # what the Verify step observed. Facts about an observation, never any
+        # part of what was observed: whether a read-back happened, whether it
+        # agreed, how the read was made, and how long the field was before and
+        # after. `verify_method` is a fixed vocabulary
+        # (`VERIFY_METHODS`), not free text a device chooses.
+        "verified",
+        "verify_method",
+        "text_length_before",
+        "text_length_after",
+        "server_verified",
+        # how far a multi-step handler got before an abort. 0 means nothing
+        # ran, which is what makes an abort-before-the-handler legible.
+        "steps_completed",
         "sensitive",
         "sensitive_categories",
         "content_returned",
@@ -96,6 +116,24 @@ PERMITTED_EVIDENCE_KEYS: frozenset[str] = frozenset(
         # set by `bounded_evidence` itself when it drops something
         "dropped_keys",
     },
+)
+
+
+#: The complete vocabulary for the `verify_method` evidence key. A closed set
+#: for the same reason the capability kinds are one: an audit counting how
+#: effects were confirmed cannot do it over free text a device invented, and a
+#: device that could name its own method could name a flattering one.
+#:
+#: * `uia_value_read_back` -- the device read the field's value back through UI
+#:   Automation and compared it against what it had been asked to type.
+#: * `os_state_read_back`  -- the device read the operating system's own state
+#:   back (a foreground window handle, a running process image, the clipboard).
+#: * `unavailable`         -- no read-back provider existed, so the effect was
+#:   not observed and the status is `unknown`. Recorded rather than omitted,
+#:   because "nobody looked" and "somebody looked and saw nothing" are
+#:   different facts and an absent key conflates them.
+VERIFY_METHODS: frozenset[str] = frozenset(
+    {"uia_value_read_back", "os_state_read_back", "unavailable"},
 )
 
 
@@ -117,6 +155,13 @@ class ActionResultStatus(str, Enum):
     #: It may or may not have taken effect and the device cannot tell. Never a
     #: synonym for failure, and never rounded up to success.
     UNKNOWN = "unknown"
+    #: The Parking Brake stopped it after it had been leased and before its
+    #: handler completed. Distinct from `CANCELLED`, which is a person
+    #: withdrawing an action, and distinct from `UNKNOWN`, which is nobody
+    #: knowing: here it is known *why* it did not complete, and the answer is
+    #: that a halt was engaged. `steps_completed` in the evidence says whether
+    #: anything ran at all before the abort.
+    ABORTED_BY_BRAKE = "aborted_by_brake"
 
 
 #: Statuses after which nothing further happens to an action.
@@ -127,6 +172,7 @@ TERMINAL_STATUSES: frozenset[ActionResultStatus] = frozenset(
         ActionResultStatus.FAILED,
         ActionResultStatus.CANCELLED,
         ActionResultStatus.UNKNOWN,
+        ActionResultStatus.ABORTED_BY_BRAKE,
     },
 )
 
@@ -140,6 +186,12 @@ DEVICE_REPORTABLE_STATUSES: frozenset[ActionResultStatus] = frozenset(
         ActionResultStatus.FAILED,
         ActionResultStatus.CANCELLED,
         ActionResultStatus.UNKNOWN,
+        # The device is the party that stops: it polls the abort signal
+        # between its lease and its handler, and between the steps of a
+        # multi-step one. Reporting the abort is therefore an observation it
+        # made, not a governance word it is borrowing -- and the server still
+        # refuses the report if the row says the action already ended.
+        ActionResultStatus.ABORTED_BY_BRAKE,
     },
 )
 
@@ -342,6 +394,30 @@ class HandlerOutcome:
             ErrorCategory.EFFECT_UNVERIFIABLE,
             detail,
             evidence,
+        )
+
+    @classmethod
+    def aborted_by_brake(
+        cls,
+        detail: str,
+        *,
+        steps_completed: int = 0,
+        **evidence: Any,
+    ) -> HandlerOutcome:
+        """A halt stopped this action after it was leased. Never a success.
+
+        `steps_completed` is the honest part: `0` means the abort signal was
+        read before the handler was entered and nothing at all happened, which
+        is the case the abort poll exists to produce. A non-zero count means a
+        multi-step handler stopped part-way and some of its steps did take
+        effect -- still an abort, but not an untouched machine, and an operator
+        reading the row needs to be able to tell those apart.
+        """
+        return cls(
+            ActionResultStatus.ABORTED_BY_BRAKE,
+            ErrorCategory.PARKING_BRAKE,
+            detail,
+            {**evidence, "steps_completed": int(steps_completed)},
         )
 
     @classmethod

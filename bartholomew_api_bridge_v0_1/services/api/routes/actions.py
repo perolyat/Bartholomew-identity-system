@@ -568,6 +568,30 @@ async def list_actions(request: Request, limit: int = 50, offset: int = 0) -> An
         raise HTTPException(503, str(e)) from e
 
 
+def _recovery_for(action: Any) -> Any:
+    """The recovery plan for one stored action, from its terminal category.
+
+    The stored row keeps the outcome's category in `state_reason` -- that is
+    what `store.record_result` writes there -- so the plan can be recomputed
+    from the row alone, without re-reading the results history. An unreadable
+    or absent reason yields `None` for the category, which `plan_recovery`
+    treats as "not a refusal", and the repeatability then decides.
+    """
+    from bartholomew.actuation.recovery import plan_recovery
+
+    category = None
+    if action.state_reason:
+        try:
+            category = ErrorCategory(action.state_reason)
+        except ValueError:
+            category = None
+    return plan_recovery(
+        status=action.status,
+        error_category=category,
+        repeatability=action.repeatability,
+    )
+
+
 @router.get("/{action_id}")
 async def read_action(action_id: str, request: Request) -> Any:
     """One action, its state, its results -- and what it would actually do.
@@ -594,10 +618,17 @@ async def read_action(action_id: str, request: Request) -> Any:
         action = store.get_action(db_path, tenant_id=tenant, action_id=action_id)
         if action is None:
             raise HTTPException(404, "No such action in this tenant.")
+        results = store.results_for(db_path, tenant_id=tenant, action_id=action_id)
         return {
             "action": action.as_dict(include_parameters=True),
-            "results": store.results_for(db_path, tenant_id=tenant, action_id=action_id),
+            "results": results,
             "approval_summary": _approval_summary(action),
+            # What follows from where this action ended up. The same policy the
+            # result endpoint applies, asked here so an operator reading a
+            # finished action sees the recorded outcome and the defined next
+            # step together rather than having to decide whether an `unknown`
+            # is worth another go.
+            "recovery": _recovery_for(action).as_dict(),
         }
     except ActionPersistenceError as e:
         raise HTTPException(503, str(e)) from e

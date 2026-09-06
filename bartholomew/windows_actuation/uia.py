@@ -24,6 +24,7 @@ Confirm, Purchase and Delete are pressed.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import sys
 from dataclasses import dataclass
@@ -37,6 +38,12 @@ UIA_AUTOMATION_ID_PROPERTY_ID = 30011
 UIA_CONTROL_TYPE_PROPERTY_ID = 30003
 UIA_IS_PASSWORD_PROPERTY_ID = 30019
 UIA_HELP_TEXT_PROPERTY_ID = 30013
+#: `ValueValue`. The current contents of an editable control, and the one
+#: property this module reads that is *content* rather than a label. It is read
+#: only by `focused_field_text()`, only between the two halves of a
+#: `windows.type_text` the person already approved, and it never leaves that
+#: function as anything but a length and a digest -- see its docstring.
+UIA_VALUE_VALUE_PROPERTY_ID = 30045
 
 #: Control types a caret may legitimately be in for `windows.type_text`.
 #: Anything else -- a button, a menu item, a slider -- is refused, because
@@ -201,6 +208,182 @@ def focused_field() -> FocusedField:
             is_password=None,
             unavailable_reason=f"the focused element could not be read: {type(e).__name__}",
         )
+
+
+@dataclass(frozen=True)
+class FieldText:
+    """What is in the focused field, as a fingerprint rather than as the text.
+
+    The Verify half of `windows.type_text` has an obvious tension: confirming
+    that typed characters landed means looking at what is now in the field, and
+    what is now in the field is a person's writing. This type is where that
+    tension is resolved. `focused_field_text()` reads the value, measures it,
+    digests it, and lets the string go; a `FieldText` carries a length and a
+    SHA-256 and there is no attribute on it that holds the content.
+
+    So the strongest thing any caller of this module -- including a compromised
+    one -- can learn about a field's contents is how long they are and whether
+    they hash to something it already knows. That is enough to verify an effect
+    and not enough to exfiltrate one, which is exactly the trade the
+    digest-only evidence rule makes everywhere else in this package.
+
+    `readable is False` is the honest unavailable state: no provider, no
+    `ValuePattern` on this control, or a COM call that failed. The caller
+    reports `unknown`, never a verdict.
+    """
+
+    readable: bool
+    length: int | None = None
+    digest: str | None = None
+    unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class TypedTextVerification:
+    """Whether the characters that were sent are now in the field they were sent to.
+
+    `observed` and `matched` are separate on purpose, and collapsing them is
+    the bug this type exists to prevent: `observed=False` means nobody could
+    look, which must become `unknown`, while `observed=True, matched=False`
+    means somebody looked and the text is not there, which must become
+    `failed`. One boolean cannot say both.
+    """
+
+    observed: bool
+    matched: bool
+    before_length: int | None = None
+    after_length: int | None = None
+    reason: str = ""
+
+
+def focused_field_text() -> FieldText:
+    """Measure and digest the focused element's value. Never returns the value.
+
+    Reads `ValueValue`, which is the documented, read-only way to ask an
+    editable control what it currently contains -- the same property-read
+    mechanism `focused_field()` already uses for the field's name and its
+    password flag, asking a different question of the same element.
+
+    Never raises: unavailability is a value here for the reason it is a value
+    in `focused_field()`. A control with no value property, an element that
+    went away, a COM failure and an absent adapter all come back as
+    `readable=False` with a reason, and every one of them makes the caller
+    report `unknown`.
+    """
+    try:
+        automation = _automation()
+    except AccessibilityUnavailableError as e:
+        return FieldText(readable=False, unavailable_reason=str(e))
+
+    try:  # pragma: no cover - Windows + comtypes only
+        element = automation.GetFocusedElement()
+        if element is None:
+            return FieldText(
+                readable=False,
+                unavailable_reason="no element currently has keyboard focus",
+            )
+        raw = element.GetCurrentPropertyValue(UIA_VALUE_VALUE_PROPERTY_ID)
+    except Exception as e:  # noqa: BLE001 - any COM failure is unreadable, not empty
+        logger.warning("Could not read the focused field's value: %s", type(e).__name__)
+        return FieldText(
+            readable=False,
+            unavailable_reason=f"the field's value could not be read: {type(e).__name__}",
+        )
+    if raw is None:  # pragma: no cover - Windows only
+        # An element with no `ValuePattern` -- a plain document surface, for
+        # instance -- answers `None`. That is "this control does not expose its
+        # contents", not "this control is empty", and reporting it as an empty
+        # string would manufacture a length of zero to compare against.
+        return FieldText(
+            readable=False,
+            unavailable_reason=(
+                "the focused control does not expose its contents through UI "
+                "Automation, so what it now holds cannot be read back"
+            ),
+        )
+    return _measure(str(raw))  # pragma: no cover - Windows only
+
+
+def _measure(value: str) -> FieldText:
+    """Reduce a field's contents to a length and a digest, and drop the string.
+
+    Split out from `focused_field_text()` so the reduction is testable off
+    Windows: the platform-specific half is the COM read, and this half -- the
+    half that must not leak -- is ordinary Python that a test can call.
+    """
+    text = str(value or "")
+    return FieldText(
+        readable=True,
+        length=len(text),
+        digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    )
+
+
+def verify_typed_text(
+    *,
+    expected: str,
+    before: FieldText,
+    after: FieldText,
+) -> TypedTextVerification:
+    """Decide whether `expected` landed, from two measurements of one field.
+
+    The comparison is on **length**, because a length is all a `FieldText`
+    carries, and that is deliberate rather than a limitation worked around: an
+    equality test on the contents would need the contents.
+
+    The rule is that the field grew by exactly the number of characters that
+    were sent. It is a real observation -- a keystroke swallowed by a focus
+    change makes the field grow by less, and the common failure this whole step
+    exists to catch is the field not growing at all -- and it is honest about
+    what it does not establish: a field that gained the right number of
+    *different* characters would pass, so this confirms that the typing reached
+    the field, not that Windows composed every glyph the way the caller
+    imagined.
+
+    A digest equality is reported when the field was empty beforehand, which is
+    the strong case: then the whole field is the typed text and the digests can
+    be compared outright.
+    """
+    if not before.readable or not after.readable:
+        unreadable = before if not before.readable else after
+        return TypedTextVerification(
+            observed=False,
+            matched=False,
+            before_length=before.length,
+            after_length=after.length,
+            reason=(
+                unreadable.unavailable_reason
+                or "the field could not be read back, so whether the text landed is not known"
+            ),
+        )
+
+    sent = len(expected)
+    grew_by = (after.length or 0) - (before.length or 0)
+    if before.length == 0:
+        exact = after.digest == hashlib.sha256(expected.encode("utf-8")).hexdigest()
+        return TypedTextVerification(
+            observed=True,
+            matched=exact,
+            before_length=before.length,
+            after_length=after.length,
+            reason=(
+                "the field was empty and now holds exactly the text that was sent"
+                if exact
+                else ("the field was empty and what it now holds is not the text that was sent")
+            ),
+        )
+    matched = grew_by == sent
+    return TypedTextVerification(
+        observed=True,
+        matched=matched,
+        before_length=before.length,
+        after_length=after.length,
+        reason=(
+            f"the field grew by exactly the {sent} characters that were sent"
+            if matched
+            else f"{sent} characters were sent and the field grew by {grew_by}"
+        ),
+    )
 
 
 def _string(element: Any, property_id: int) -> str | None:  # pragma: no cover - Windows only

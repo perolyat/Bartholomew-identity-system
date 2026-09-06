@@ -153,8 +153,15 @@ def test_the_observation_vocabulary_still_names_no_action():
         assert key not in {"command", "execute", "action", "operation", "capability"}
 
 
-def test_the_action_channel_client_has_exactly_two_verbs():
-    """An `execute` or a generic `post` would be a third, wider surface."""
+def test_the_action_channel_client_has_exactly_three_verbs():
+    """`lease`, `report`, `abort_check`, and nothing wider.
+
+    W03-C added the third. The set is still pinned exactly -- a closed surface
+    is the property, not the number -- and the second assertion says what the
+    pin is *for*: a generic sender under any of its usual names would be a
+    surface through which a server could drive this client, and `abort_check`
+    is the opposite of that. Its response can only make the companion act less.
+    """
     from bartholomew.windows_actuation.channel import ActionChannelClient
 
     public = {
@@ -162,7 +169,64 @@ def test_the_action_channel_client_has_exactly_two_verbs():
         for n in dir(ActionChannelClient)
         if not n.startswith("_") and callable(getattr(ActionChannelClient, n))
     }
-    assert public == {"lease", "report"}
+    assert public == {"lease", "report", "abort_check"}
+    for wider in ("execute", "run", "post", "send", "call", "do", "request", "invoke", "get"):
+        assert wider not in public, f"the action channel grew a {wider!r} verb"
+
+
+def test_the_abort_response_cannot_start_anything():
+    """The third verb narrows and never widens.
+
+    A hostile answer to `abort_check` gets to stop a companion that would have
+    acted. It does not get to start one: `AbortSignal` has no field naming a
+    capability, a program, a path or a parameter, and `may_run` is affirmative
+    only -- an id has to appear in `running` for anything to proceed.
+    """
+    import dataclasses
+
+    from bartholomew.windows_actuation.dispatch import AbortSignal
+
+    fields = {f.name for f in dataclasses.fields(AbortSignal)}
+    assert fields == {
+        "readable",
+        "halted",
+        "aborted",
+        "running",
+        "reason",
+        # A server-stamped timestamp saying when this clearance goes stale. It
+        # is the one field that is not a set of ids the caller already holds,
+        # and it is still only ever a narrowing: a deadline can bring a stop
+        # forward, and a device that read a generous one still has to appear in
+        # `running` before anything proceeds.
+        "clearance_deadline",
+    }
+    for forbidden in ("capability", "parameters", "command", "action", "path", "app_id"):
+        assert forbidden not in fields
+
+    hostile = AbortSignal.from_wire(
+        {
+            "halted": False,
+            "running": [],
+            "aborted": [],
+            "capability": "windows.launch_app",
+            "parameters": {"app_id": "notepad"},
+        },
+    )
+    assert hostile.may_run("anything") is False
+    assert not hasattr(hostile, "capability")
+
+    # And a clearance far in the future does not become permission either: the
+    # id still has to be in `running`, so the deadline can only ever bring a
+    # stop forward.
+    generous = AbortSignal.from_wire(
+        {
+            "halted": False,
+            "running": [],
+            "aborted": ["act-1"],
+            "clearance_deadline": "2999-01-01T00:00:00Z",
+        },
+    )
+    assert generous.may_run("act-1") is False
 
 
 # --- 3. a hostile server, against the real companion --------------------------

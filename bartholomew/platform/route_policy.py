@@ -200,7 +200,7 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/inbound/events"): Capability.INBOUND_SUBMIT,
     ("GET", "/api/inbound/events"): Capability.INBOUND_READ,
     ("GET", "/api/inbound/events/{event_id}"): Capability.INBOUND_READ,
-    # --- governed Windows actuation (Session B) ------------------------------
+    # --- governed Windows actuation (Session B; abort-check added by W03-C) ---
     # Four capabilities across two routers, because they are two trust
     # channels. `/api/actions` is the person's surface: ask for an action,
     # look at what is pending, approve exactly one, withdraw one. Nothing on
@@ -230,6 +230,14 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/actions/channel/disarm"): Capability.BRAKE_ENGAGE,
     ("POST", "/api/device-actions/lease"): Capability.DEVICE_ACTION_CHANNEL,
     ("POST", "/api/device-actions/{action_id}/result"): Capability.DEVICE_ACTION_CHANNEL,
+    # The abort read (W03-C), deliberately on the SAME capability as the other
+    # two rather than a new one. A device that may be handed work is exactly
+    # the party that has to be able to ask whether to stop; a separate
+    # capability would make it configurable to have a device that can act and
+    # cannot be told to stop, which is not a configuration anybody should be
+    # able to reach. It is also the narrowest verb on the channel -- its
+    # response can only ever make a device do less.
+    ("POST", "/api/device-actions/abort-check"): Capability.DEVICE_ACTION_CHANNEL,
     # --- multimodal presence (Package C) -------------------------------------
     # Reads and stops only; there is no start route to classify, deliberately
     # (see bartholomew_api_bridge_v0_1/.../routes/multimodal.py).

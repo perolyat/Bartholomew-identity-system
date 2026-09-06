@@ -133,7 +133,10 @@ sessions:
     handoff: BARTHOLOMEW_W03_C_HANDOFF.md
     contract: docs/waves/W03/W03_C_CONTRACT.md
     required_ci_tier: integration
-    status: ready_to_start
+    # Frozen: acceptance criteria 1-6 met, Integration tier green, handoff written
+    # (docs/waves/W03/BARTHOLOMEW_W03_C_HANDOFF.md). Nothing further is pushed to
+    # this branch without telling W03-F.
+    status: frozen
     depends_on:
       - W03-A
     requires_frozen: []
@@ -235,11 +238,20 @@ shared_contracts:
       bartholomew/actuation/seam.py — run_action_request_through_runtime_contract,
       grant_action_approval, evaluate_dispatch_admission,
       run_action_dispatch_through_runtime_contract,
-      record_action_result_through_runtime_contract, cancel_action_through_runtime_contract.
+      record_action_result_through_runtime_contract, cancel_action_through_runtime_contract,
+      evaluate_action_abort_through_runtime_contract.
       The canonical proposal -> identity -> capability -> scope -> risk ->
       authorization -> execution -> evidence -> verify envelope. It is the ONLY
       path to Windows actuation; the executive (W03-B) proposes through it in
       process and never constructs a bypass.
+      W03-C added the seventh callable (the stop-after-lease abort read, backing
+      POST /api/device-actions/abort-check) and one defaulted field,
+      ActionSeamResult.recovery. Both are additive: the six original signatures
+      are unchanged, so W03-B and W03-E build against them exactly as before.
+      Two W03-C additions consumers should know about: a result may now be
+      ActionResultStatus.ABORTED_BY_BRAKE (terminal, never a success, never a
+      reason to re-propose), and ActionSeamResult.recovery carries the defined
+      next step for a failed or unknown outcome.
   - name: observation-event
     owner: W03-A
     consumers: [W03-B, W03-D, W03-E, W03-F]

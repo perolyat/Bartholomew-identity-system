@@ -52,8 +52,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from bartholomew.kernel import policy_engine
@@ -69,7 +70,7 @@ from bartholomew.orchestrator.safety.governance_store import (
     is_blocked_fail_closed_off_loop,
 )
 
-from . import arming, store
+from . import arming, store, verification
 from .approval import KIND as APPROVAL_KIND
 from .approval import ActionApproval, ApprovalError, build_approval
 from .capabilities import UnsupportedCapabilityError
@@ -81,6 +82,7 @@ from .devices import (
     get_registry,
 )
 from .parameters import ParameterError, SensitiveContentError
+from .recovery import RecoveryPlan, plan_recovery
 from .request import (
     ActionRequest,
     RequestError,
@@ -103,6 +105,19 @@ logger = logging.getLogger(__name__)
 #: and in the governance route's, so an operator can halt actuation alone
 #: without halting Bartholomew's ability to think.
 ACTUATION_BRAKE_SCOPE = "actuation"
+
+#: How long a leased action's abort clearance is good for. The bounded interval
+#: the W03-C contract requires: a device that has not re-read the abort signal
+#: within this many seconds has not established that its action may still run.
+#:
+#: Short, because the whole value of the number is the width of the window in
+#: which an engaged brake is not yet being honoured on the device. Not *zero*,
+#: because a check that had to happen in the same instant as the act is a check
+#: no real handler can satisfy. Five seconds is roughly one poll interval and
+#: two SQLite reads, and it is the figure `deploy/windows/README.md` documents
+#: to an operator as "how long after you pull the brake before an action that
+#: has already been handed out stops".
+ABORT_CLEARANCE_SECONDS = 5
 
 #: The Identity policy kinds. `windows_action_request` and
 #: `windows_action_cancel` are allowlisted in `Identity.yaml`; requesting
@@ -160,7 +175,7 @@ class ActionAdmission:
 class ActionSeamResult:
     """The outcome of one trip through this seam.
 
-    `status` is always one of the contract's seven values, and `action` is the
+    `status` is always one of the contract's eight values, and `action` is the
     durable row as it stands afterwards. `provenance_degraded` mirrors the
     posture the device and inbound seams already take: the governed decision
     happened and the row exists, but its Reflection did not persist, so the
@@ -181,6 +196,12 @@ class ActionSeamResult:
     existing: bool = False
     provenance_degraded: bool = False
     provenance_error: str | None = None
+    #: What follows from this outcome, for a caller deciding what to do next.
+    #: Populated when an action reaches an outcome; `None` where the question
+    #: does not arise. Advice only -- `recovery.plan_recovery`'s docstring says
+    #: why a retry-eligible plan can never be acted on without a fresh trip
+    #: through this seam.
+    recovery: RecoveryPlan | None = None
 
 
 def _observation(kind: str, request_like: Any) -> tuple[Observation, CandidateAction]:
@@ -1553,6 +1574,17 @@ async def record_action_result_through_runtime_contract(
             action=stored,
         )
 
+    merged_evidence = dict(evidence) if isinstance(evidence, dict) else {}
+    merged_evidence.update(
+        _server_side_verification(
+            tenant_id=tenant_id,
+            device_id=device_id,
+            stored=stored,
+            reported=reported,
+            category=category,
+        ),
+    )
+
     result = ActionResult(
         action_id=action_id,
         tenant_id=tenant_id,
@@ -1560,7 +1592,7 @@ async def record_action_result_through_runtime_contract(
         status=reported,
         error_category=category,
         detail=str(detail or ""),
-        evidence=evidence if isinstance(evidence, dict) else {},
+        evidence=merged_evidence,
         observed_at=str(observed_at or ""),
     )
     updated, recorded = await run_off_loop(store.record_result, db_path, result=result)
@@ -1624,6 +1656,256 @@ async def record_action_result_through_runtime_contract(
         action=updated,
         provenance_degraded=not persisted,
         provenance_error=error,
+        recovery=plan_recovery(
+            status=reported,
+            error_category=category,
+            repeatability=(updated.repeatability if updated else stored.repeatability),
+        ),
+    )
+
+
+def _server_side_verification(
+    *,
+    tenant_id: str,
+    device_id: str,
+    stored: StoredAction,
+    reported: ActionResultStatus,
+    category: ErrorCategory | None,
+) -> dict[str, Any]:
+    """Ask the governed read-back whether an unverifiable effect is visible now.
+
+    Consulted in exactly one situation: the device reported `unknown` because
+    it could not observe its own effect. Anywhere else there is nothing to add
+    -- a device that saw its effect has made the stronger observation, and a
+    device that saw a failure has made a definite one.
+
+    **The verdict never becomes the status.** The device is the party that was
+    on the machine, and `record_action_result_through_runtime_contract` keeps
+    taking the status from it; what comes back from here is one boolean in the
+    evidence. A server that could rewrite a device's honest `unknown` into a
+    `succeeded` would be exactly the fiction the whole result vocabulary exists
+    to refuse, relocated one process away.
+
+    Returns an empty map when there is nothing to say, so an ordinary result is
+    not padded with a key that means nothing. When the provider is absent the
+    verdict is `UNVERIFIABLE` and `server_verified` is recorded as `False`,
+    which reads as "the server looked and could not confirm" -- true, and
+    different from the key being absent because nobody asked.
+    """
+    if reported is not ActionResultStatus.UNKNOWN:
+        return {}
+    if category is not None and category is not ErrorCategory.EFFECT_UNVERIFIABLE:
+        return {}
+    if verification.get_read_back_provider() is None:
+        return {}
+    parameters = stored.parameters or {}
+    expected = parameters.get("text") if isinstance(parameters, dict) else None
+    verdict = verification.verify_effect(
+        tenant_id=tenant_id,
+        device_id=device_id,
+        target=stored.capability,
+        expected_text=str(expected) if isinstance(expected, str) else None,
+    )
+    logger.info(
+        "Server-side verification for %s: %s (%s)",
+        stored.action_id,
+        verdict.verdict.value,
+        verdict.method,
+    )
+    return verdict.as_evidence()
+
+
+# ---------------------------------------------------------------------------
+# Stop after lease
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ActionAbortSignal:
+    """Whether the actions a device holds may still run. The abort poll's answer.
+
+    Three fields carry the whole meaning and they are deliberately not one:
+
+    * `halted` is about the **channel**. A brake is engaged, so nothing this
+      device holds may run and nothing new will be leased either. A device that
+      sees this stops asking as well as stops acting.
+    * `aborted` is about **individual actions**. An action can stop being
+      runnable without any brake at all -- somebody cancelled it, it expired
+      and was swept, a result was already recorded. Those are not halts and
+      must not be reported as one.
+    * `running` is the only affirmative field, and it is a **narrowing**: an id
+      appears here only if the row was read and says `leased`. An id that could
+      not be read appears in neither list and is treated by the caller as
+      aborted, because "we could not establish that this may still run" is not
+      "this may still run".
+    """
+
+    halted: bool
+    reason: str
+    aborted: tuple[str, ...]
+    running: tuple[str, ...]
+    checked_at: str
+    valid_for_seconds: int
+    #: When *this* clearance goes stale, stamped here by the server exactly as
+    #: the lease's deadline is. It is the answer to the question the deadline
+    #: is actually asking -- "how long may a halt go unhonoured on that device"
+    #: -- and it has to be re-stamped on every read, because the clock the
+    #: lease's stamp started has been running ever since.
+    #:
+    #: Measured on the server's clock on purpose: a device that computed its
+    #: own clearance would be choosing how long it may act without asking
+    #: again, which is precisely the number that must not be the device's.
+    clearance_deadline: str = ""
+
+    def must_stop(self, action_id: str) -> bool:
+        """Whether one action must not be run. Fail-closed on anything unknown."""
+        return self.halted or action_id not in self.running
+
+
+def abort_deadline(*, now: datetime | None = None) -> str:
+    """When a leased action's abort clearance goes stale, as an RFC3339 string.
+
+    Handed to the device with its lease so the bound is the *server's*, not a
+    number a companion chose for itself. A device that has not re-read the
+    abort signal by then has not established that its action may still run, and
+    the contract it is holding says to stop rather than to carry on.
+    """
+    moment = (now or utc_now()) + timedelta(seconds=ABORT_CLEARANCE_SECONDS)
+    return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+async def evaluate_action_abort_through_runtime_contract(
+    ctx: Any,
+    *,
+    tenant_id: str,
+    device_id: str,
+    action_ids: Sequence[str],
+) -> ActionAbortSignal:
+    """Answer a device asking whether the actions it holds may still run.
+
+    This is the gap the W03-C contract names: once `try_lease` succeeded,
+    nothing -- server or companion -- could abort the action, and a cancel
+    written onto a leased row never reached the device. Both are closed by the
+    same read, because both have the same shape: *the row no longer says this
+    may run, and the device is the only party that can stop*.
+
+    **In-process, not an out-of-process emergency stop.** A companion that has
+    stopped polling, or whose process is wedged, is not stopped by this, and
+    pretending otherwise would be the worst shape a safety control can take.
+    The independent OS-level stop (D11 / S9) is a named, deferred package --
+    see `docs/waves/W03/W03_DEFERRALS.md` #8 -- and this is deliberately the
+    weaker, honest thing: a cooperative device that checks before it acts.
+
+    Fail-closed throughout. An unreadable brake halts; an unreadable row is
+    absent from `running` and therefore aborts.
+
+    The server marks each halted lease `aborted_by_brake` itself rather than
+    waiting for the device to report it, so an operator who engaged a brake and
+    then pulled the network cable still sees the action recorded as stopped
+    rather than sitting at `leased` until the sweep calls it `unknown`.
+    """
+    db_path = _ctx_db_path(ctx)
+    wanted = [str(a) for a in action_ids if str(a or "").strip()][: store.MAX_ABORT_POLL_IDS]
+    checked_at = utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    brake = await evaluate_actuation_brake(ctx, ACTION_KIND_DISPATCH)
+    if not brake.allowed:
+        reason = brake.reason or "a parking brake is engaged"
+        for action_id in wanted:
+            await _abort_leased_row(ctx, tenant_id=tenant_id, action_id=action_id, reason=reason)
+        return ActionAbortSignal(
+            halted=True,
+            reason=reason,
+            aborted=tuple(wanted),
+            running=(),
+            checked_at=checked_at,
+            valid_for_seconds=ABORT_CLEARANCE_SECONDS,
+            clearance_deadline=abort_deadline(),
+        )
+
+    if not wanted:
+        return ActionAbortSignal(
+            halted=False,
+            reason="",
+            aborted=(),
+            running=(),
+            checked_at=checked_at,
+            valid_for_seconds=ABORT_CLEARANCE_SECONDS,
+            clearance_deadline=abort_deadline(),
+        )
+
+    try:
+        states = await run_off_loop(
+            store.states_for,
+            db_path,
+            tenant_id=tenant_id,
+            device_id=device_id,
+            action_ids=wanted,
+        )
+    except ActionPersistenceError:
+        logger.exception("Action states could not be read; every lease is treated as aborted")
+        return ActionAbortSignal(
+            halted=False,
+            reason=(
+                "the action state could not be read, so nothing this device holds is "
+                "established as still runnable"
+            ),
+            aborted=tuple(wanted),
+            running=(),
+            checked_at=checked_at,
+            valid_for_seconds=ABORT_CLEARANCE_SECONDS,
+            clearance_deadline=abort_deadline(),
+        )
+
+    running = tuple(a for a in wanted if states.get(a) == ActionState.LEASED.value)
+    aborted = tuple(a for a in wanted if a not in running)
+    return ActionAbortSignal(
+        halted=False,
+        reason=(
+            "one or more of these actions is no longer leased to this device" if aborted else ""
+        ),
+        aborted=aborted,
+        running=running,
+        checked_at=checked_at,
+        valid_for_seconds=ABORT_CLEARANCE_SECONDS,
+        clearance_deadline=abort_deadline(),
+    )
+
+
+async def _abort_leased_row(
+    ctx: Any,
+    *,
+    tenant_id: str,
+    action_id: str,
+    reason: str,
+) -> None:
+    """Move one leased row to `aborted_by_brake` and record it. Never raises.
+
+    A row that is not `leased` is left alone: it either never got that far, or
+    it already ended, and neither is something an abort should overwrite.
+    """
+    try:
+        moved = await run_off_loop(
+            store.mark_aborted_by_brake,
+            _ctx_db_path(ctx),
+            tenant_id=tenant_id,
+            action_id=action_id,
+            reason=reason,
+        )
+    except ActionPersistenceError:
+        logger.exception("Action %s could not be recorded as aborted", action_id)
+        return
+    if moved is None:
+        return
+    await _record_reflection(
+        ctx,
+        kind=ACTION_KIND_DISPATCH,
+        outcome=ActionResultStatus.ABORTED_BY_BRAKE.value,
+        request=None,
+        action=moved,
+        reason=reason,
+        category=ErrorCategory.PARKING_BRAKE,
+        extra={"aborted_after_lease": "true"},
     )
 
 

@@ -20,11 +20,17 @@ and nothing is deleted.
 the clipboard genuinely work there. `open_url` is deliberately asserted only to
 the honest degree -- it reports `unknown`, and this test asserts that it
 reports `unknown`, because whether a browser rendered a page is exactly what
-the companion cannot observe. Interactive typing into a focused field cannot be
-verified without reading a field's contents back, which this build does not do,
-so `windows.type_text` is exercised for its *refusals* here and its accepted
-path is verified manually (see `docs/B_GOVERNED_WINDOWS_ACTUATION.md`, "Actual
-versus simulated verification").
+the companion cannot observe.
+
+**`windows.type_text` changed in W03-C and this file changed with it.** It used
+to be exercised only for its refusals, because verifying that typed characters
+landed meant reading a field's contents back and the build did not do that.
+It does now -- reduced to a length and a digest inside
+`uia.focused_field_text()`, so the contents never leave that function -- and
+the accepted path is asserted here against a real Notepad edit control. Where
+the runner has no accessibility adapter, or the focused control does not expose
+its contents, that test skips and the honest-`unknown` path is asserted
+instead; the two together are the whole of acceptance criterion 1.
 """
 
 from __future__ import annotations
@@ -319,6 +325,110 @@ def test_typing_a_newline_is_impossible_on_a_real_machine(ctx):
     outcome = handlers_module.type_text({"text": "submit\nthis"}, ctx)
     assert outcome.status is ActionResultStatus.FAILED
     assert outcome.error_category is ErrorCategory.PARAMETERS_INVALID
+
+
+# --- typing, and what it now verifies (W03-C acceptance criterion 1) ----------------
+
+
+def test_the_real_read_back_primitive_answers_without_raising():
+    """`focused_field_text()` returns a value on a real machine, never an exception.
+
+    The contract the handler depends on: unavailability is a value, so a build
+    without `comtypes`, a control with no `ValuePattern`, and a COM failure all
+    reach the caller as `readable=False` with a reason rather than as an
+    exception it might catch too broadly.
+    """
+    from bartholomew.windows_actuation import uia
+
+    measured = uia.focused_field_text()
+    assert isinstance(measured, uia.FieldText)
+    if measured.readable:
+        assert measured.length is not None and measured.length >= 0
+        assert measured.digest and len(measured.digest) == 64
+    else:
+        assert measured.unavailable_reason
+
+
+def test_the_real_read_back_never_returns_the_field_contents():
+    """On a real desktop, with a real focused element, still only a fingerprint."""
+    import dataclasses
+
+    from bartholomew.windows_actuation import uia
+
+    measured = uia.focused_field_text()
+    assert {f.name for f in dataclasses.fields(uia.FieldText)} == {
+        "readable",
+        "length",
+        "digest",
+        "unavailable_reason",
+    }
+    assert "text" not in repr(measured).lower() or not measured.readable
+
+
+def test_typing_into_a_real_notepad_is_verified_by_reading_the_field_back(ctx, notepad):
+    """The live proof of Act -> Verify, on a real desktop with a real edit control.
+
+    Before W03-C this was the one capability that could never report anything
+    but `unknown`. Here Notepad's edit control is focused, ordinary text is
+    typed into it, and the handler reads the field back and says whether the
+    characters landed.
+
+    Skipped -- not failed -- where the runner has no accessibility adapter or
+    the focused control does not expose its contents, because "no provider
+    exists" is a real deployment and the honest `unknown` it produces is
+    asserted in `test_a_type_without_a_provider_is_still_honestly_unknown`
+    below rather than being conflated with a broken verification.
+    """
+    from bartholomew.windows_actuation import uia
+
+    if not uia.available():
+        pytest.skip("the accessibility adapter is not installed on this runner")
+
+    focused = handlers_module.focus_window({"app_id": "notepad"}, ctx)
+    if focused.status is not ActionResultStatus.SUCCEEDED:
+        pytest.skip(f"the window could not be focused on this runner: {focused.detail}")
+    time.sleep(0.5)
+
+    if not uia.focused_field_text().readable:
+        pytest.skip("the focused control does not expose its contents on this runner")
+
+    text = "bartholomew w03c verify"
+    outcome = handlers_module.type_text({"text": text}, ctx)
+
+    assert outcome.status is not ActionResultStatus.UNKNOWN, (
+        "a readable field must produce a verdict, not an unknown: " + outcome.detail
+    )
+    assert outcome.evidence["verify_method"] == "uia_value_read_back"
+    assert outcome.evidence["verified"] is (outcome.status is ActionResultStatus.SUCCEEDED)
+    assert text not in repr(outcome.evidence), "the typed text is stored as a digest only"
+
+
+def test_a_type_without_a_provider_is_still_honestly_unknown(ctx, monkeypatch):
+    """The other half: no read-back, no verdict, and it says so on a real machine."""
+    from bartholomew.windows_actuation import uia
+
+    monkeypatch.setattr(
+        uia,
+        "focused_field",
+        lambda: uia.FocusedField(
+            is_password=False,
+            name="Text Editor",
+            automation_id="edit",
+            help_text=None,
+            control_type=uia.UIA_EDIT_CONTROL_TYPE,
+        ),
+    )
+    monkeypatch.setattr(
+        uia,
+        "focused_field_text",
+        lambda: uia.FieldText(readable=False, unavailable_reason="no value pattern here"),
+    )
+
+    outcome = handlers_module.type_text({"text": "hello"}, ctx)
+
+    assert outcome.status is ActionResultStatus.UNKNOWN
+    assert outcome.error_category is ErrorCategory.EFFECT_UNVERIFIABLE
+    assert outcome.evidence["verify_method"] == "unavailable"
 
 
 # --- the platform guard, from the other side ------------------------------------

@@ -31,7 +31,7 @@ requested, admitted through eleven governance checks, and approved:
 | `windows.open_path` | Open one document or folder inside an allowlisted root. |
 | `windows.clipboard_read` | Read the clipboard once. Content stays local by default. |
 | `windows.clipboard_write` | Replace the clipboard with bounded ordinary text. |
-| `windows.type_text` | Type bounded ordinary text. Cannot press Enter or Tab. |
+| `windows.type_text` | Type bounded ordinary text, then read the field back to check it landed. Cannot press Enter or Tab. |
 | `windows.accessibility_action` | Expand, collapse, scroll or focus an element. |
 
 It **cannot** run a command, a script, PowerShell, Python or any interpreter;
@@ -40,6 +40,51 @@ cannot install anything; cannot send a message, submit a form, publish, buy
 anything, or change an account or security setting; cannot type a password; and
 cannot touch any machine but this one. Those are structural, not policy — see
 `docs/B_GOVERNED_WINDOWS_ACTUATION.md`.
+
+---
+
+## Stopping something that has already started
+
+Engaging a Parking Brake — any scope — stops actuation. Since W03-C that
+includes an action this companion has **already been handed**, which it did
+not before: a lease used to be the last word, so a brake pulled a second after
+one was granted refused the *next* action and reached the one already in
+flight not at all.
+
+How it works now, and how long it takes:
+
+1. Every lease arrives stamped with an **abort deadline** the server chose
+   (about 5 seconds; the lease response also names it as `abort_check_seconds`).
+2. Between leasing and running anything, the companion re-reads
+   `POST /api/device-actions/abort-check`. If a brake is engaged, or the action
+   has been cancelled underneath it, or the answer cannot be read at all, it
+   does not run the action.
+3. Inside a long step — `launch_app` waiting for a window to appear — it checks
+   again, so a brake engaged mid-wait stops it there.
+4. Past the deadline with no fresh check, it refuses the action outright. A
+   missing or unreadable deadline counts as expired, never as unbounded.
+
+So **an action already handed out stops within roughly five seconds** of the
+brake being engaged, and the server records it as `aborted_by_brake` — a
+status of its own, deliberately not folded into `cancelled`, so an audit can
+count "a halt stopped this" separately from "a person withdrew this". The
+server writes that row itself, so an action is recorded as stopped even if this
+machine loses the network immediately afterwards.
+
+```powershell
+# On the Bartholomew side, from an operator shell:
+bartholomew brake on --scope actuation      # prints the database file it touched
+bartholomew brake status
+bartholomew brake off
+```
+
+**This is a cooperative stop, and that is a real limitation.** It works because
+this companion asks before it acts. A companion that has crashed, wedged, or
+been prevented from reaching the server is not stopped by it — it is simply not
+doing anything either, but nothing here can guarantee that. An independent,
+out-of-process emergency stop is a separate piece of work that has been named
+and deliberately not built yet (`docs/waves/W03/W03_DEFERRALS.md`, #8). If you
+need to be certain right now, stop the companion process or the machine.
 
 ---
 
@@ -197,6 +242,9 @@ outside it needs cleaning up.
 | Every action is refused `capability_not_declared` | The capability is not in `BARTH_ACTION_CAPABILITIES` here, or not in the device's enrolment there. Both must list it. |
 | Every action is refused `parking_brake` | A Parking Brake is engaged — any scope stops actuation. Check `GET /api/governance/brake`. |
 | `windows.type_text` always refuses | The accessibility adapter is unavailable, so the companion cannot see what field the caret is in. Re-run `install`, which installs the `windows` extra. |
+| `windows.type_text` succeeds but always reports `unknown` | It typed, and the focused control does not expose its contents through UI Automation, so whether the characters landed could not be read back. That is the honest answer, not a fault. The evidence row says `verify_method: unavailable`. |
+| Everything is refused `parking_brake` moments after being leased | Working as intended: a brake was engaged after the lease. `GET /api/governance/brake` says by whom and why; the actions are recorded as `aborted_by_brake`. |
+| Every abort check fails and nothing runs | The companion cannot reach the server. It fails closed on purpose — an unreadable abort signal is treated as "stop", because a control that only works when nothing is wrong is not a control. |
 | The companion will not start, mentioning the ledger | The ledger is unreadable. Delete `action-state.json` deliberately — and understand that doing so lets a previously-executed action run again if it is redelivered. |
 | Nothing is ever leased, but the channel is open | Nothing has been approved. A request alone dispatches nothing. |
 
@@ -209,3 +257,9 @@ enrolment registry is a file a human wrote; and a compromised *server* that
 holds a valid approval can direct this companion within its allowlists. The
 allowlists are the bound on that, which is why they are required and why empty
 means nothing.
+
+And the stop is cooperative (see above). The abort check makes a brake reach an
+action that has already been leased, which it could not do before; it does not
+make a brake reach a process that has stopped listening. That is the deferred
+out-of-process emergency stop, and until it exists the honest answer to "can I
+be certain this machine will stop?" is "stop the process".
