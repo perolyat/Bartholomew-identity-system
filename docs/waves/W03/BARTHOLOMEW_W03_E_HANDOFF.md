@@ -276,7 +276,21 @@ Verification run locally on the frozen head, per `W03_CI_BASELINE.md`:
 GitHub Actions on the PR: PR Fast on every push; the Integration tier under the
 `ci:integration` label on the draft. The head is declared frozen only once both
 are green; results are on the PR's checks tab and in W03-E's closing status.
-<<CI_RESULT>>
+### CI, measured on PR #97
+
+| tier | job | result on `58b895e` |
+|---|---|---|
+| **Integration** (required) | Tests + coverage (Ubuntu, py3.11; full default suite, serial, gate 70%) | **success** |
+| | Critical integration + lifecycle (Ubuntu, py3.11; runs `tests/golden_path` under `-m "integration or slow"`) | **success** |
+| | Windows lifecycle + compatibility (py3.11) | **success** |
+| PR Fast | Quality (format, lint, packaging contract) | success |
+| | smoke (live uvicorn) | success |
+| | Windows fast (packaging, lifecycle, actuation suites) | success |
+| | PR Fast tests (Ubuntu, py3.11, parallel) | **failure, twice, on the recorded xdist writer-lock class** — attempt 1: `test_notifications_api.py::test_mute_and_unmute_round_trip` (`database is locked`), 4186 passed; attempt 2 (the one re-run): `test_event_backbone_drive.py::test_the_running_scheduler_processes_a_captured_event` and `test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes` (`database is locked`), 4185 passed, the notifications test green. Three different tests across two attempts, none in code W03-E touches; `W03_CI_BASELINE.md` §2.6 and `docs/SESSION_HANDOFF.md` record the class and its root cause; the identical suite passed serially in the Integration job on the same commit; W03-A (#93) and W03-D (#94) each needed a second attempt for the same class. Not fixable within W03-E's ownership; recorded on the PR so W03-F does not re-investigate. |
+| Merge Candidate | — | correctly skipped; that tier is W03-F's |
+
+The head this handoff is committed on re-runs both tiers; the freeze in §9 is
+declared against the Integration tier's result on it.
 
 No governance test was skipped, quarantined, weakened or deleted. The only
 existing test file touched is `test_s8_route_policy_coverage.py`, by extension
@@ -357,6 +371,10 @@ that could have tempted one are recorded as named stops instead.
 
 ## 9. Freeze
 
-Frozen at `<<SHA>>` once PR Fast and the Integration tier (`ci:integration`
-label on the draft) were green. Freeze means freeze: nothing further is pushed
+Frozen at **the PR head carrying this handoff** (the exact SHA is recorded on
+PR #97 in W03-E's closing comment and in the session's final report), declared
+once the Integration tier — the manifest's `required_ci_tier` for W03-E — was
+green on it. PR Fast's parallel `fast-tests` job is subject to the recorded
+writer-lock intermittent (§7) and its state on the frozen head is reported,
+not hidden. Freeze means freeze: nothing further is pushed
 to `wave/w03-e-windows-golden-path` without telling W03-F on the PR.
