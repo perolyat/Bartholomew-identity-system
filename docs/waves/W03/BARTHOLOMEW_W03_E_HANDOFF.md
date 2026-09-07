@@ -5,10 +5,10 @@
 | Session | **W03-E — Windows Golden Path Experience** |
 | Immutable id | `W03-E` |
 | Branch | `wave/w03-e-windows-golden-path` |
-| Pull request | `[W03-E] Windows Golden Path Experience` — **#<<PR>>** |
+| Pull request | `[W03-E] Windows Golden Path Experience` — **#97** (https://github.com/perolyat/Bartholomew-identity-system/pull/97) |
 | Baseline | `main @ e96e6a6dfc3f71a68d44010c9954bb4e7a0c5195` (W03-PREP closeout; carries `99ee734`) |
 | Consumed frozen dependencies | W03-A `56bf995c` (PR #93) · W03-B `fead4b39` (PR #96) · W03-C `e904cd18` (PR #95) · W03-D `111c72d3` (PR #94) — **by published surface, not by merge** (§5) |
-| Frozen head | `<<SHA>>` (recorded on the PR) |
+| Frozen head | the PR head carrying this handoff (exact SHA recorded on PR #97 and in §9) |
 | Required CI tier | Integration |
 | Status | **frozen** — head declared final for W03-F integration; nothing further is pushed to this branch without telling W03-F |
 
