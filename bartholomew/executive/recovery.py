@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .verification import FAILED, UNKNOWN
+from .verification import _ABORTED_BY_BRAKE, FAILED, UNKNOWN
 
 STOP_AND_REPORT = "stop_and_report"
 ASK_FOR_CLARIFICATION = "ask_for_clarification"
@@ -82,13 +82,42 @@ def decide_recovery(
     attempts: int,
     cautions: tuple[str, ...] | list[str] = (),
     read_back_code: str | None = None,
+    device_status: str | None = None,
 ) -> RecoveryDecision:
     """The defined next move for a step that did not verify.
 
     `verdict` is `verification.FAILED` or `verification.UNKNOWN`. A verified
     step never reaches here.
+
+    `device_status` is W03-C's terminal status for the step, when there is one.
+    Additive and defaulted, so every existing caller is unchanged; it exists
+    because one status --- the Parking Brake abort --- has a recovery rule that
+    the verdict alone cannot express.
     """
     approval = (approval_requirement or "").strip().lower()
+
+    # W03-F integration repair. W03-C's handoff records ABORTED_BY_BRAKE as
+    # "terminal, never a success, **never a reason to re-propose**". Mapping it
+    # to FAILED (which the verification repair does, because the effect did not
+    # happen) would otherwise let it reach the RE_PROPOSE branch below and have
+    # the executive propose the action again on its own --- the exact thing
+    # W03-C forbids. Checked before every other branch so no later condition can
+    # route around it.
+    #
+    # STOP_AND_REPORT rather than ABANDON_STEP: the person stopped this, and the
+    # step is theirs to resume by asking again. `requires_new_authorization`
+    # because a fresh proposal must be approved afresh.
+    if (device_status or "").strip().lower() == _ABORTED_BY_BRAKE:
+        return RecoveryDecision(
+            decision=STOP_AND_REPORT,
+            reason=(
+                f"{described_as} was stopped by the Parking Brake after it was leased. "
+                "The plan stops here. Nothing is re-proposed on the strength of a halt: "
+                "release the brake and ask again, and it will be proposed afresh for "
+                "your approval."
+            ),
+            requires_new_authorization=True,
+        )
 
     if verdict == UNKNOWN:
         # The honest case, and the one a retry loop gets wrong. Something may

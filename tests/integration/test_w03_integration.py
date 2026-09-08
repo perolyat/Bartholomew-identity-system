@@ -1045,3 +1045,151 @@ class TestTheActionChannelIsInertByDefault:
                 f"{deferred!r} is in the capability vocabulary; it is a Wave 3 "
                 "named stop (deferral #7) and must not have been added"
             )
+
+
+# ===========================================================================
+# 12. The composition blocker W03-F found and repaired
+# ===========================================================================
+
+
+class TestABrakeAbortIsNeverASuccess:
+    """The defect that only a composed tree could have.
+
+    W03-C added `ActionResultStatus.ABORTED_BY_BRAKE` as its eighth member and
+    its handoff §7.5 warned: "Anything in W03-B or W03-E that exhausts either
+    enum needs the new member." W03-B was written against the six-member
+    vocabulary and never saw the addition, because no tree carried both packages
+    until this head.
+
+    Before the repair, `verify_step("aborted_by_brake", …)` matched no branch,
+    fell through to the read-back, and a read-back showing the expected state
+    returned VERIFIED --- so a Parking-Brake-aborted action reported success,
+    advanced the plan, and had its successor proposed while the brake was still
+    engaged. Two invariants at once: Parking Brake superiority, and
+    unknown/unverified never becoming confirmed success.
+    """
+
+    class _ShowsExpectedState:
+        """A read-back that reports the state the action wanted.
+
+        The point of the test: even when the machine looks right, an action that
+        was stopped did not do it.
+        """
+
+        available = True
+        text = "active window 'Untitled - Notepad' (notepad): 4 controls"
+        code = None
+        reason = None
+        event_id = 7
+
+        def __call__(self, **_kwargs):
+            return self
+
+    def test_a_brake_aborted_action_is_never_verified(self):
+        from bartholomew.executive.verification import FAILED, VERIFIED, verify_step
+
+        result = verify_step(
+            capability="windows.focus_window",
+            parameters={"app_id": "notepad"},
+            device_status="aborted_by_brake",
+            tenant_id="t-1",
+            device_id=DEVICE,
+            requested_by="user:alice",
+            read_back_port=self._ShowsExpectedState(),
+        )
+        assert result.verdict != VERIFIED
+        assert result.verified is False
+        assert result.verdict == FAILED
+        assert "Parking Brake" in result.detail
+
+    def test_a_brake_aborted_action_is_never_re_proposed(self):
+        """W03-C: "terminal, never a success, never a reason to re-propose"."""
+        from bartholomew.executive.recovery import RE_PROPOSE, STOP_AND_REPORT, decide_recovery
+        from bartholomew.executive.verification import FAILED
+
+        decision = decide_recovery(
+            verdict=FAILED,
+            capability="windows.focus_window",
+            described_as="focus notepad",
+            approval_requirement=None,
+            attempts=0,
+            device_status="aborted_by_brake",
+        )
+        assert decision.decision != RE_PROPOSE
+        assert decision.decision == STOP_AND_REPORT
+        assert decision.requires_new_authorization is True
+
+    def test_a_refused_action_is_never_verified_either(self):
+        """The same shape, and the same repair covers it.
+
+        An action the envelope refused was never dispatched, so nothing about
+        the machine's state is attributable to it --- however right that state
+        happens to look.
+        """
+        from bartholomew.executive.verification import VERIFIED, verify_step
+
+        result = verify_step(
+            capability="windows.focus_window",
+            parameters={"app_id": "notepad"},
+            device_status="refused",
+            tenant_id="t-1",
+            device_id=DEVICE,
+            requested_by="user:alice",
+            read_back_port=self._ShowsExpectedState(),
+        )
+        assert result.verdict != VERIFIED
+        assert result.verified is False
+
+    def test_every_w03c_result_status_is_handled_and_only_two_may_verify(self):
+        """The generalisation, so a NINTH member cannot reintroduce this.
+
+        Rather than a list of terminal statuses that must keep up with W03-C,
+        the repair names the only two statuses that may consult a read-back and
+        fails closed on everything else. This asserts that every member of
+        W03-C's real enum is accounted for, and that only `succeeded` and
+        `unknown` can ever reach VERIFIED.
+        """
+        from bartholomew.actuation.result import ActionResultStatus
+        from bartholomew.executive.verification import (
+            _MAY_CONSULT_READ_BACK,
+            _TERMINAL_NOT_SUCCESS,
+            VERIFIED,
+            verify_step,
+        )
+
+        assert _MAY_CONSULT_READ_BACK == {"succeeded", "unknown"}, _MAY_CONSULT_READ_BACK
+
+        for member in ActionResultStatus:
+            result = verify_step(
+                capability="windows.focus_window",
+                parameters={"app_id": "notepad"},
+                device_status=member.value,
+                tenant_id="t-1",
+                device_id=DEVICE,
+                requested_by="user:alice",
+                read_back_port=self._ShowsExpectedState(),
+            )
+            if member.value in _MAY_CONSULT_READ_BACK:
+                continue
+            assert result.verdict != VERIFIED, (
+                f"{member.name} reached VERIFIED; only succeeded and unknown may. "
+                f"Either it belongs in _TERMINAL_NOT_SUCCESS ({sorted(_TERMINAL_NOT_SUCCESS)}) "
+                "or the fail-closed guard has been weakened."
+            )
+            assert result.verified is False
+
+    def test_an_unrecognised_status_fails_closed(self):
+        """A status from a future W03-C reports unknown, never a success."""
+        from bartholomew.executive.verification import UNKNOWN, verify_step
+
+        result = verify_step(
+            capability="windows.focus_window",
+            parameters={"app_id": "notepad"},
+            device_status="some_ninth_member_nobody_has_written_yet",
+            tenant_id="t-1",
+            device_id=DEVICE,
+            requested_by="user:alice",
+            read_back_port=self._ShowsExpectedState(),
+        )
+        assert result.verdict == UNKNOWN
+        assert result.verified is False

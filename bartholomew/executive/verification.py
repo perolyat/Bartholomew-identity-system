@@ -45,6 +45,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+# W03-C's result vocabulary, imported rather than restated. The defect this
+# import prevents is exactly the one that restating it caused.
+from bartholomew.actuation.result import ActionResultStatus
+
 logger = logging.getLogger(__name__)
 
 #: The verdicts. Three, and the third is not a soft second.
@@ -56,6 +60,58 @@ UNKNOWN = "unknown"
 SOURCE_READ_BACK = "read_back"
 SOURCE_DEVICE_RESULT = "device_result"
 SOURCE_ABSENT = "absent"
+
+# ---------------------------------------------------------------------------
+# W03-F integration repair: which device statuses may reach a read-back
+# ---------------------------------------------------------------------------
+#
+# W03-C added `ActionResultStatus.ABORTED_BY_BRAKE` as its eighth member, and
+# its handoff §7.5 recorded the consequence: "Anything in W03-B or W03-E that
+# exhausts either enum needs the new member." W03-B was written against W03-C's
+# six-member vocabulary and never saw the addition, because no tree carried
+# both packages until the W03-F integration head.
+#
+# The result was a governance defect, reproduced before this repair: a
+# `aborted_by_brake` status matched none of the branches below, fell through to
+# the read-back, and a read-back that happened to show the expected state
+# returned VERIFIED --- so a Parking-Brake-aborted action reported success,
+# advanced the plan, and had the next Windows action proposed for it while the
+# brake was still engaged. `refused` had the same shape: an action the envelope
+# never dispatched could verify because some other cause had left the machine in
+# the expected state.
+#
+# So the rule is inverted. Rather than listing the statuses that are terminal
+# and hoping the list keeps up with W03-C, this names the only two that may
+# consult a read-back at all, and everything else fails closed. A ninth member
+# added later reports `unknown` --- never a success --- without this file
+# changing.
+_ABORTED_BY_BRAKE = ActionResultStatus.ABORTED_BY_BRAKE.value
+_REFUSED = ActionResultStatus.REFUSED.value
+
+#: Statuses that settle the step from the device's own report. Mapping to the
+#: detail each one contributes, so an explanation says which it was.
+_TERMINAL_NOT_SUCCESS: dict[str, str] = {
+    ActionResultStatus.FAILED.value: (
+        "the device reported 'failed'; nothing is assumed beyond that"
+    ),
+    ActionResultStatus.CANCELLED.value: (
+        "the device reported 'cancelled'; nothing is assumed beyond that"
+    ),
+    _REFUSED: (
+        "the action was refused and never dispatched, so nothing was done and "
+        "nothing about the machine's current state is attributable to it"
+    ),
+    _ABORTED_BY_BRAKE: (
+        "the Parking Brake stopped this action after it was leased. That is "
+        "terminal: it is not a success, and it is not a reason to propose it again"
+    ),
+}
+
+#: The only two statuses a read-back may be consulted for. `succeeded` so the
+#: machine's state can contradict the claim, and `unknown` so it can settle it.
+_MAY_CONSULT_READ_BACK: frozenset[str] = frozenset(
+    {ActionResultStatus.SUCCEEDED.value, ActionResultStatus.UNKNOWN.value},
+)
 
 #: The module path of W03-A's read-back primitive, resolved by name so this
 #: package builds and runs on a tree where W03-A is not yet integrated.
@@ -172,25 +228,46 @@ def verify_step(
 ) -> Verification:
     """Establish what actually happened. Never optimistic, never fabricated.
 
-    `device_status` is the action row's terminal status from W03-C's result
-    path (`succeeded`, `failed`, `cancelled`, `unknown`, or `None` when nothing
-    has been reported yet).
+    `device_status` is the action row's status from W03-C's result path --- one
+    of `ActionResultStatus`'s values, or `None` when nothing has been reported
+    yet.
+
+    **Only `succeeded` and `unknown` are allowed to consult a read-back.** Every
+    other status is settled here, from the device's own report, and can never
+    become `VERIFIED`. See `_TERMINAL_NOT_SUCCESS` for why that is a
+    fail-closed default rather than a list to keep up to date.
     """
     status = (device_status or "").strip().lower() or None
 
-    if status in ("failed", "cancelled"):
-        return Verification(
-            verdict=FAILED,
-            source=SOURCE_DEVICE_RESULT,
-            detail=f"the device reported {status!r}; nothing is assumed beyond that",
-            device_status=status,
-        )
     if status is None:
         return Verification(
             verdict=UNKNOWN,
             source=SOURCE_ABSENT,
             detail="no device result has been recorded for this action yet",
             device_status=None,
+        )
+    if status in _TERMINAL_NOT_SUCCESS:
+        return Verification(
+            verdict=FAILED,
+            source=SOURCE_DEVICE_RESULT,
+            detail=_TERMINAL_NOT_SUCCESS[status],
+            device_status=status,
+        )
+    if status not in _MAY_CONSULT_READ_BACK:
+        # Fail closed on a status this build does not recognise --- including a
+        # ninth `ActionResultStatus` member added after this line was written.
+        # The alternative is what this repair exists to remove: an unrecognised
+        # status falling through to the read-back, where a read-back that
+        # happened to show the expected state returned VERIFIED for an action
+        # that never ran.
+        return Verification(
+            verdict=UNKNOWN,
+            source=SOURCE_DEVICE_RESULT,
+            detail=(
+                f"the device reported {status!r}, which this build does not recognise as "
+                "a settled outcome; nothing is claimed about what happened"
+            ),
+            device_status=status,
         )
     if status == "unknown":
         # The envelope's honest "we cannot tell". A read-back may still settle

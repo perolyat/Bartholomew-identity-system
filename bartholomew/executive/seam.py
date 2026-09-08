@@ -731,6 +731,8 @@ async def _recover(
         attempts=step.attempts,
         cautions=tuple(plan.cautions),
         read_back_code=verification.read_back_code,
+        # W03-F: so a Parking Brake abort cannot be re-proposed (see recovery.py).
+        device_status=verification.device_status,
     )
     step.recoveries.append(decision.as_dict())
 
