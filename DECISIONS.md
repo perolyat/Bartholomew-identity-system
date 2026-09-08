@@ -2924,4 +2924,3 @@
     Executive Dark* — with its promotion threshold is recorded in `ROADMAP.md`'s "What we will not
     do yet". Documenting it does **not** make it Wave 4 scope; wave selection is separate.
 - **Date:** 2026-09-08
-

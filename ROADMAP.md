@@ -1589,4 +1589,3 @@ pass inserts ahead of them.
   experience, but safety, consent, system state and user agency must remain appropriately visible.
   The direction is subordinate to usability, accessibility, truthful system-state representation,
   governance visibility and actual capability requirements.
-
