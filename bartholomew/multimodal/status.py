@@ -32,7 +32,7 @@ from .speech import output_available
 from .store import SessionStore
 
 
-def _describe(session: MultimodalSession) -> dict[str, Any]:
+def _describe(session: MultimodalSession, store: SessionStore | None = None) -> dict[str, Any]:
     """One live session, in words rather than state names."""
     verb = {
         Modality.MICROPHONE: "listening on the microphone",
@@ -40,8 +40,19 @@ def _describe(session: MultimodalSession) -> dict[str, Any]:
         Modality.SPOKEN_OUTPUT: "speaking aloud",
     }[session.modality]
     remaining = session.seconds_remaining()
+    observation: dict[str, Any] | None = None
+    observer = store.observer(session.session_id) if store is not None else None
+    stats = getattr(observer, "stats", None)
+    if callable(stats):
+        try:
+            observation = stats()
+        except Exception:  # pragma: no cover - a stats() that raises is a bug
+            observation = None
     return {
         "session_id": session.session_id,
+        # W03-A: what the observation loop has done so far -- counts, ids and
+        # timestamps only, never content.
+        "observation": observation,
         "modality": session.modality.value,
         "summary": (
             f"Bartholomew is {verb}" + (f" ({session.scope.describe()})" if session.scope else "")
@@ -91,7 +102,7 @@ def status_snapshot(
         "listening": bool(by_modality[Modality.MICROPHONE]),
         "observing_screen": bool(by_modality[Modality.SCREEN]),
         "speaking": bool(by_modality[Modality.SPOKEN_OUTPUT]),
-        "active_sessions": [_describe(s) for s in live],
+        "active_sessions": [_describe(s, store) for s in live],
         "active_session_count": len(live),
     }
     snapshot["summary"] = (
