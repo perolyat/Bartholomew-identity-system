@@ -280,8 +280,30 @@ jobs:
 
       # The whole default suite on Windows, in parallel. This is where a
       # Windows-only failure in an ordinary unit test surfaces before main.
-      - name: Default test suite on Windows (parallel, no coverage)
-        run: python -m pytest -p no:cacheprovider -n auto --dist loadfile --junitxml=junit-windows-full.xml
+      #
+      # >>> TEMPORARY DIAGNOSTIC PROBE -- W03 merge-candidate readiness. <<<
+      # Reverted in the commit that follows the evidence it collects; the
+      # parallel invocation it replaces is the line kept below, verbatim.
+      #
+      #   run: python -m pytest -p no:cacheprovider -n auto --dist loadfile --junitxml=junit-windows-full.xml
+      #
+      # This job reports 0 failures and then dies on a `KeyboardInterrupt` at
+      # `threading.py:331` -- the same interrupt, at the same line, that
+      # `main @ e96e6a6` shows, so it predates Wave 3 and is not diagnosable
+      # from the parallel run's interleaved output. Four changes, all
+      # observational: nothing is skipped, deselected, marked or loosened, and
+      # the same tests run.
+      #
+      #   * no `-n auto`: serial, so the last nodeid printed is the test that
+      #     hung rather than one of four interleaved streams;
+      #   * `-v`: pytest writes the nodeid BEFORE running it and the outcome
+      #     after, so an unterminated line names the culprit exactly;
+      #   * `--full-trace`: the KeyboardInterrupt prints its whole frame stack
+      #     instead of one library line;
+      #   * `faulthandler_timeout=90`, below pytest-timeout's 120: every
+      #     thread's stack is dumped while the process is still wedged.
+      - name: Default test suite on Windows (DIAGNOSTIC PROBE -- serial, verbose, full trace)
+        run: python -m pytest -p no:cacheprovider -v -ra --full-trace -o faulthandler_timeout=90 --junitxml=junit-windows-full.xml
 
       - name: Upload junit
         if: always()
