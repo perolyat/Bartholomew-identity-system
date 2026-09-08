@@ -1425,3 +1425,69 @@ class TestTheUnboundDeploymentSaysWhatItCannotDo:
 
         report = install_seams(db_path=str(tmp_path / "unbound2.db"), tenant_id=None).to_dict()
         assert report["w03_seams"]["read_back_provider"].startswith("multimodal"), report
+
+
+class TestADeviceCannotNameItsOwnVerifyMethod:
+    """A C-to-E seam: a rule W03-C declared and W03-E was the first to depend on.
+
+    `PERMITTED_EVIDENCE_KEYS` says `verify_method` "is a fixed vocabulary
+    (`VERIFY_METHODS`), not free text a device chooses", and `VERIFY_METHODS`
+    says "a device that could name its own method could name a flattering one".
+    Nothing enforced either sentence --- the allowlist admitted the key and the
+    value passed through untouched.
+
+    W03-E's console is the first consumer that depends on the closure: it
+    renders a confirmed-success sentence when the method is not one it
+    recognises as unverified, so an *invented* method read as a confirmation on
+    the operator surface. Neither package could see that alone.
+
+    Repaired at ingestion, in `bounded_evidence`, which already describes itself
+    as "the enforcement boundary and not a convenience for well-behaved
+    callers" and runs on the server over whatever a device POSTed. W03-E's
+    console is unchanged --- a first attempt that tightened it there was
+    correctly rejected by W03-E's own invariant that the console never imports a
+    seam.
+    """
+
+    def test_an_invented_verify_method_is_not_stored(self):
+        from bartholomew.actuation.result import bounded_evidence
+
+        stored = bounded_evidence({"verified": True, "verify_method": "totally_legit"})
+        assert stored["verify_method"] == "unavailable", stored
+        # And it leaves a trace of having tried, like every other dropped key.
+        assert "verify_method" in str(stored.get("dropped_keys", "")), stored
+
+    def test_a_real_read_back_method_survives(self):
+        from bartholomew.actuation.result import VERIFY_METHODS, bounded_evidence
+
+        for method in sorted(VERIFY_METHODS):
+            stored = bounded_evidence({"verify_method": method})
+            assert stored["verify_method"] == method, (method, stored)
+
+    def test_an_invented_method_cannot_reach_a_confirmation_on_the_console(self):
+        """The seam end to end: what a device POSTs, through the boundary, to
+        the sentence a person reads."""
+        from bartholomew.actuation.result import bounded_evidence
+        from bartholomew.cli_operator import explain_outcome
+
+        stored = bounded_evidence({"verified": True, "verify_method": "totally_legit"})
+        sentence = explain_outcome(
+            "succeeded",
+            verified=stored.get("verified"),
+            verify_method=stored.get("verify_method"),
+        )
+        assert "NOT confirmed success" in sentence, sentence
+
+    def test_a_genuine_device_read_back_still_confirms(self):
+        """The repair must not have removed the confirmation W03-C designed for."""
+        from bartholomew.actuation.result import bounded_evidence
+        from bartholomew.cli_operator import explain_outcome
+
+        stored = bounded_evidence({"verified": True, "verify_method": "uia_value_read_back"})
+        sentence = explain_outcome(
+            "succeeded",
+            verified=stored.get("verified"),
+            verify_method=stored.get("verify_method"),
+        )
+        assert "NOT confirmed" not in sentence, sentence
+        assert "confirmed by reading the machine back" in sentence, sentence

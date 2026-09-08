@@ -288,6 +288,28 @@ def bounded_evidence(raw: Any) -> dict[str, Any]:
         while len(out) >= MAX_EVIDENCE_KEYS:
             out.pop(next(reversed(out)))
         out["dropped_keys"] = ",".join(sorted(dropped))[:MAX_EVIDENCE_VALUE_CHARS]
+    # W03-F integration repair: make the closure this module DECLARES real.
+    #
+    # `PERMITTED_EVIDENCE_KEYS` says `verify_method` "is a fixed vocabulary
+    # (`VERIFY_METHODS`), not free text a device chooses", and `VERIFY_METHODS`
+    # says "a device that could name its own method could name a flattering
+    # one". Nothing enforced either sentence: the allowlist admits the KEY, and
+    # the value went through untouched.
+    #
+    # W03-E is the first consumer that depends on the closure --- its console
+    # renders a confirmed-success sentence for a device's `succeeded` when the
+    # method is not one it recognises as unverified --- so an invented method
+    # read as confirmation on the operator surface. Neither package could see
+    # that alone. This function already calls itself "the enforcement boundary
+    # and not a convenience for well-behaved callers", so the enforcement
+    # belongs here, over whatever a device POSTed.
+    method = out.get("verify_method")
+    if method is not None and method not in VERIFY_METHODS:
+        out["verify_method"] = "unavailable"
+        dropped = out.get("dropped_keys")
+        marker = "verify_method:not_in_vocabulary"
+        out["dropped_keys"] = f"{dropped},{marker}" if dropped else marker
+
     return out
 
 
