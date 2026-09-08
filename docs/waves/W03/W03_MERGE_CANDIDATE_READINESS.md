@@ -148,6 +148,51 @@ Local, on the changed tree:
 CI on this head is the authoritative record; see the pull request for the tier
 results, and §6 for the standard this candidate is held to.
 
+## 5a. Measured result, and the one thing that remains
+
+### The ten failures are resolved
+
+`Windows full default suite + actuation (py3.11)`, on a real Windows runner:
+
+| Head | Result |
+|---|---|
+| `main @ e96e6a6` (no W03 code) | **10 failed**, 2035 passed, 6 skipped |
+| W03-F frozen head `7af5fe7` | **10 failed**, 2211 passed, 6 skipped |
+| this branch | **0 failed**, 2242 passed, 6 skipped |
+
+Every one of the ten passed. The skip count is **unchanged at 6**, which is the
+check that nothing was bought by skipping.
+
+### The job is still red, for a condition that predates Wave 3
+
+After reporting its results the run takes a `KeyboardInterrupt` and cannot exit
+cleanly, so the job is red on an *incomplete run* rather than on a *result*:
+
+```
+!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!
+C:\...\Lib\threading.py:331: KeyboardInterrupt
+```
+
+**The same interrupt, at the same line, appears on `main @ e96e6a6`** — this
+candidate's own baseline, carrying no W03 code — immediately after its ten
+failures. It was invisible there only because the job was already red on those.
+Two commits on this branch (`f4e7ebb`, `eea3cd7`) were pushed on the mistaken
+theory that the interrupt was the Windows wedged-engine stub's; the base-branch
+evidence disproves that. `eea3cd7` is kept on its own merits — it is the
+`WinError 193` repair, and wedging a Python process rather than a shell script
+runs the same assertion identically on both platforms.
+
+Diagnosing it further needs what this session does not have: a Windows machine,
+or the job's junit artifact (artifact download is not authorised for this
+session). It is therefore recorded, not guessed at. **It is not this candidate's
+and no fix for it exists to port**, so the stand-down rule applies — and it does
+mean the Merge Candidate tier still cannot show green, now for a different and
+much narrower reason than when `W03-F` closed.
+
+**This is a decision for the user**, in the same class as the one `W03-F`
+escalated: the acceptance criterion is not weakened to accommodate it, and no
+test is skipped or quarantined to get the tick.
+
 ## 6. The merge gate
 
 Unchanged, and it is the user's alone:
