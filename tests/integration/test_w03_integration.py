@@ -971,3 +971,77 @@ class TestTheComposedSurfaceIsGoverned:
         combined = proc.stdout + proc.stderr
         assert "does not carry the executive package" not in combined, combined
         assert "404" not in combined, combined
+
+
+# ===========================================================================
+# 11. The deferral register's one W03-F verification obligation
+# ===========================================================================
+
+
+class TestTheActionChannelIsInertByDefault:
+    """`W03_DEFERRALS.md` #16, whose "nearest Wave 3 touchpoint" column reads
+    "W03-F verifies inert-by-default". This is that verification.
+
+    Enabling a real deployment's action channel is a deployment/director
+    decision, not a wave deliverable. The wave must therefore ship with the
+    channel closed, and closed **because nothing enabled it** rather than
+    because nothing got round to it.
+    """
+
+    def test_no_resolver_is_installed_without_the_explicit_environment_gate(
+        self,
+        monkeypatch,
+    ):
+        from bartholomew.integration.device_action_resolver import (
+            DEVICE_ACTION_AUTH_ENV,
+            maybe_install_action_resolver_from_env,
+        )
+
+        monkeypatch.delenv(DEVICE_ACTION_AUTH_ENV, raising=False)
+        assert maybe_install_action_resolver_from_env() is False, (
+            "the device action channel installed a resolver with no deployment "
+            "having asked for one; deferral #16 requires it inert by default"
+        )
+
+    def test_installing_the_seams_leaves_the_action_channel_closed(self, tmp_path, monkeypatch):
+        """Composition must not open the channel as a side effect.
+
+        This is the W03-F-specific risk: `install_seams()` now installs more
+        than it did, and a composition step that quietly opened actuation would
+        be exactly the "installing the seams makes the system permissive"
+        failure `install.py` says in its own docstring that it must not be.
+        """
+        from bartholomew.integration.device_action_resolver import DEVICE_ACTION_AUTH_ENV
+        from bartholomew.integration.install import install_seams
+
+        monkeypatch.delenv(DEVICE_ACTION_AUTH_ENV, raising=False)
+        report = install_seams(
+            db_path=str(tmp_path / "inert.db"),
+            tenant_id="tenant-w03f",
+        ).to_dict()
+
+        assert report["action_resolver"].startswith("closed"), report
+        # And the W03 seams still installed: closed is the channel, not the wiring.
+        assert report["w03_seams"]["read_back_provider"].startswith("multimodal"), report
+
+    def test_the_wave_ships_no_capability_outside_the_frozen_vocabulary(self):
+        """The typed vocabulary is the boundary; named stops stay stops.
+
+        Asserted against `ALL_CAPABILITIES` so that adding one is a visible,
+        deliberate change to a frozen contract rather than something that
+        arrives with a feature.
+        """
+        from bartholomew.actuation.capabilities import ALL_CAPABILITIES
+
+        names = {getattr(c, "value", str(c)) for c in ALL_CAPABILITIES}
+        for deferred in (
+            "windows.move_file",
+            "windows.delete_file",
+            "windows.run_shell",
+            "windows.run_powershell",
+            "windows.install",
+        ):
+            assert deferred not in names, (
+                f"{deferred!r} is in the capability vocabulary; it is a Wave 3 "
+                "named stop (deferral #7) and must not have been added"
+            )
