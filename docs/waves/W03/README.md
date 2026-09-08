@@ -15,6 +15,7 @@ these files alone, without the chat history that produced them.
 | `W03_CI_BASELINE.md` | Measured CI baseline, the tier model, changes made, before/after results, unresolved bottlenecks. |
 | `W03_DEFERRALS.md` | The deferral register: important things deliberately not in this wave. |
 | `BARTHOLOMEW_W03_<X>_HANDOFF.md` | Written by each session at completion (this directory is their home). |
+| `W03_MERGE_CANDIDATE_READINESS.md` | The single Wave 3 integration candidate, the Merge Candidate acceptance evidence that was outstanding when `W03-F` closed, how it was resolved, and the merge gate. Read this before acting on any W03 pull request. |
 
 ## Immutable session identity
 

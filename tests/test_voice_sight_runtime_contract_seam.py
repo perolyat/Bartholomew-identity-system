@@ -603,7 +603,7 @@ class TestStructuralNoBypass:
         fails the moment one is introduced."""
         offenders = []
         for py_file in self._production_py_files():
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
             for node in ast.walk(tree):
                 if (
                     isinstance(node, ast.Call)
@@ -630,7 +630,7 @@ class TestStructuralNoBypass:
             ),
         ]
         for path, func_name, seam_name in checks:
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             func = next(
                 n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == func_name
             )

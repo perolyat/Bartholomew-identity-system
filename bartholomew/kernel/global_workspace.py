@@ -182,6 +182,24 @@ class Subscription:
 # =============================================================================
 
 
+def _most_recent_first(events: list[WorkspaceEvent]) -> list[WorkspaceEvent]:
+    """Order events newest first, breaking ties by publication order.
+
+    Sorting on `timestamp` alone is not enough on a platform whose clock is
+    coarse relative to how fast events are published: the ties it produces are
+    resolved by the sort's stability, which preserves *ascending* publication
+    order and so puts the oldest of a tied group first. The caller passes the
+    events in publication order, so enumerating them supplies the missing
+    monotonic sequence number.
+    """
+    ordered = sorted(
+        enumerate(events),
+        key=lambda pair: (pair[1].timestamp, pair[0]),
+        reverse=True,
+    )
+    return [event for _position, event in ordered]
+
+
 class GlobalWorkspace:
     """
     Channel-based broadcast system for inter-module communication.
@@ -489,8 +507,14 @@ class GlobalWorkspace:
         if since:
             events = [e for e in events if e.timestamp >= since]
 
-        # Sort by timestamp descending (most recent first)
-        events.sort(key=lambda e: e.timestamp, reverse=True)
+        # Most recent first. Publication order is the tiebreaker: a coarse
+        # system clock (Windows resolves to ~15.6 ms, against microseconds on
+        # Linux) gives events published in a tight loop the *same* timestamp,
+        # and a stable sort on timestamp alone then returns the oldest of them
+        # first -- the exact opposite of what this method promises. `events`
+        # is still in publication order here, so its position is a monotonic
+        # sequence number that settles the tie truthfully.
+        events = _most_recent_first(events)
 
         # Apply limit
         if limit:
@@ -523,8 +547,14 @@ class GlobalWorkspace:
         if since:
             events = [e for e in events if e.timestamp >= since]
 
-        # Sort by timestamp descending
-        events.sort(key=lambda e: e.timestamp, reverse=True)
+        # Most recent first. Publication order is the tiebreaker: a coarse
+        # system clock (Windows resolves to ~15.6 ms, against microseconds on
+        # Linux) gives events published in a tight loop the *same* timestamp,
+        # and a stable sort on timestamp alone then returns the oldest of them
+        # first -- the exact opposite of what this method promises. `events`
+        # is still in publication order here, so its position is a monotonic
+        # sequence number that settles the tie truthfully.
+        events = _most_recent_first(events)
 
         # Apply limit
         if limit:

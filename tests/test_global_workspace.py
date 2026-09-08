@@ -572,6 +572,64 @@ class TestGlobalWorkspaceHistory:
         assert history[0].payload == {"i": 9}
 
 
+class TestHistoryOrderingUnderACoarseClock:
+    """A clock too coarse to separate two publications must not silently
+    reverse "most recent first".
+
+    Windows resolves the system clock to roughly 15.6 ms against microseconds
+    on Linux, so events published in a tight loop genuinely share a timestamp
+    there. Sorting on the timestamp alone leaves those ties to the sort's
+    stability, which preserves *ascending* publication order -- so the oldest
+    of a tied group is returned as the newest. These tests reproduce that
+    platform condition explicitly rather than waiting for a Windows runner to
+    stumble into it.
+    """
+
+    def _tied_events(self, count: int) -> list[WorkspaceEvent]:
+        frozen = datetime.now(timezone.utc)
+        return [
+            WorkspaceEvent(
+                event_id=f"event-{i}",
+                event_type=EventType.AFFECT_CHANGED,
+                channel="affect",
+                timestamp=frozen,
+                source="test",
+                payload={"i": i},
+            )
+            for i in range(count)
+        ]
+
+    def test_get_history_returns_the_last_published_of_a_tied_group_first(self):
+        ws = GlobalWorkspace()
+
+        for event in self._tied_events(5):
+            ws.publish_event(event)
+
+        history = ws.get_history("affect")
+
+        assert [e.payload["i"] for e in history] == [4, 3, 2, 1, 0]
+
+    def test_get_all_history_returns_the_last_published_of_a_tied_group_first(self):
+        ws = GlobalWorkspace()
+
+        for event in self._tied_events(5):
+            ws.publish_event(event)
+
+        history = ws.get_all_history()
+
+        assert [e.payload["i"] for e in history] == [4, 3, 2, 1, 0]
+
+    def test_a_limit_over_tied_events_keeps_the_newest_not_the_oldest(self):
+        ws = GlobalWorkspace()
+
+        for event in self._tied_events(10):
+            ws.publish_event(event)
+
+        history = ws.get_history("affect", limit=3)
+
+        assert [e.payload["i"] for e in history] == [9, 8, 7]
+
+
 # =============================================================================
 # Test GlobalWorkspace - Convenience Publishers
 # =============================================================================

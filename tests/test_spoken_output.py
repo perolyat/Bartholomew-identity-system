@@ -190,9 +190,20 @@ class TestSpeakText:
         assert not log.exists(), "an engine was run for nothing"
 
     def test_a_wedged_engine_is_abandoned_not_waited_on(self, tmp_path, monkeypatch):
-        script = tmp_path / "hanging-tts"
-        script.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
-        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        # A genuinely wedged executable on either platform. The POSIX stub is a
+        # `#!/bin/sh` script, which Windows cannot execute at all (`WinError
+        # 193`), so there it is a batch file that waits instead -- the timeout
+        # is the thing under test and it must be under test on both.
+        if sys.platform.startswith("win"):
+            script = tmp_path / "hanging-tts.cmd"
+            script.write_text(
+                "@echo off\r\nping -n 60 127.0.0.1 >nul\r\n",
+                encoding="utf-8",
+            )
+        else:
+            script = tmp_path / "hanging-tts"
+            script.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
         monkeypatch.setenv(spoken_output.ENGINE_COMMAND_ENV, str(script))
 
         result = spoken_output.speak_text("hello", timeout=0.5)

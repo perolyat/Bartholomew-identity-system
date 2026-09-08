@@ -464,6 +464,20 @@ discharged, but criterion 1 is blocked by a pre-existing condition of the tier
 itself. That is a decision for the user, not something W03-F should paper over or
 quietly widen its scope to fix.
 
+### Addendum — resolved after W03-F closed
+
+**This section records W03-F's own position and is left standing as written.** The
+ten failures it diagnosed here were subsequently repaired by the Wave 3
+merge-candidate readiness session, which continued this candidate on
+`claude/wave3-merge-candidate-readiness-bop01v` (first commit `7af5fe7`, so every
+commit above is preserved). W03-F's four root causes were correct and were fixed at
+the root: the clock-granularity ordering defect is repaired in `narrator.py`,
+`persona_pack.py` and `global_workspace.py` as a **product** defect with regression
+tests that reproduce it on any platform; the three `WinError 32` unlinks, the cp1252
+`read_text` and the `#!/bin/sh` stub are repaired in the tests. Nothing was skipped,
+quarantined or weakened, and two assertions now run on Windows that previously could
+not. See `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md`.
+
 ## 5. What this does **not** establish
 
 **No Windows hardware was involved in any result in this document.** Separated
