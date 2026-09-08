@@ -69,6 +69,7 @@ from .routes import (
     multimodal,
     notifications,
     onboarding,
+    operator,
     self_state,
     training,
 )
@@ -147,6 +148,24 @@ app.include_router(inbound.router)
 # shutdown windows like every other real ingress point.
 app.include_router(actions.router)
 app.include_router(device_actions.router)
+
+# The operator console's own routes (W03-E). Registration is W03-F's step by
+# the W03 manifest, and this is it: W03-E built the routes and deliberately
+# left this line to integration, so the console's `task run` reached an
+# unserved route on every head before this one.
+#
+# Registered LAST of the governed routers, and deliberately not added to
+# `_ADMISSION_EXEMPT_PATHS`. `/api/operator/overview` reads the brake, the
+# channel and what is pending; the task routes call the executive seam, which
+# reaches Windows only through the one action envelope. All of it is governed
+# state needing a live kernel, so it is refused during the startup and
+# shutdown windows like every other real ingress point.
+#
+# The routes are already classified in `bartholomew/platform/route_policy.py`
+# (W03-E pre-classified them precisely so this registration could not open an
+# unclassified surface); registering them here is what makes that
+# classification load-bearing rather than dormant.
+app.include_router(operator.router)
 
 # Metrics: mount under /internal in production mode (METRICS_INTERNAL_ONLY=1)
 # to restrict access; default (dev/test) leaves it at /metrics (unauthenticated)

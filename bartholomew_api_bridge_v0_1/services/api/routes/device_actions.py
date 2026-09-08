@@ -273,10 +273,22 @@ async def lease_actions(request: Request) -> Any:
     kernel = _kernel_or_503()
     db_path = getattr(getattr(kernel, "mem", None), "db_path", None) or resolve_db_path()
 
+    # W03-F integration repair (W03-C handoff §8, flagged as W03-F's call).
+    # These were the only two synchronous SQLite calls left on this file's
+    # event loop -- every other persistence call here goes through an
+    # `await seam.*`, which runs its own work off-loop. Under lease load from
+    # several enrolled devices the two of them blocked the loop that also
+    # serves the brake and abort-check reads, which is the one thing that must
+    # stay responsive while a device is acting. `routes/actions.py:565` already
+    # expires overdue actions exactly this way; this is that pattern, applied
+    # to the sibling channel.
+    from bartholomew.kernel.blocking_executor import run_off_loop
+
     try:
         # Housekeeping first, so an expired action is never even a candidate.
-        store.expire_overdue(db_path, tenant_id=tenant)
-        candidates = store.dispatchable_action_ids(
+        await run_off_loop(store.expire_overdue, db_path, tenant_id=tenant)
+        candidates = await run_off_loop(
+            store.dispatchable_action_ids,
             db_path,
             tenant_id=tenant,
             device_id=device.device_id,

@@ -35,6 +35,10 @@ class SeamReport:
     multimodal_sink: str = "not installed"
     action_resolver: str = "closed"
     event_types: tuple[str, ...] = ()
+    #: The Wave 3 cross-package adapters (`integration/seams.py`), keyed by
+    #: seam name. Reported alongside the wave-two seams so "is this deployment
+    #: actually integrated" still has ONE answer rather than two.
+    w03_seams: dict[str, str] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,6 +48,7 @@ class SeamReport:
             "multimodal_sink": self.multimodal_sink,
             "action_resolver": self.action_resolver,
             "event_types": list(self.event_types),
+            "w03_seams": dict(self.w03_seams),
             "errors": list(self.errors),
             "integrated": not self.errors,
         }
@@ -165,6 +170,23 @@ def install_seams(
         report.errors.append(f"action resolver: {type(e).__name__}: {e}")
         report.action_resolver = "closed (installation failed)"
         logger.exception("Could not install the device action resolver")
+
+    # -- W03: the Wave 3 cross-package adapters ---------------------------
+    #
+    # Last, because they plug packages into each other rather than into the
+    # platform: the read-back provider is only useful once the device truth and
+    # the event sink above are in place. `install_w03_seams` reports rather
+    # than raises, on the same reasoning as every seam above -- a deployment
+    # that cannot verify is worse than one that cannot start only if it also
+    # claims to have verified, and W03-C's `verify_effect()` answers
+    # UNVERIFIABLE with no provider installed.
+    try:
+        from bartholomew.integration.seams import install_w03_seams
+
+        report.w03_seams = install_w03_seams(db_path=db_path)
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"w03 seams: {type(e).__name__}: {e}")
+        logger.exception("Could not install the Wave 3 cross-package seams")
 
     _LAST_REPORT["report"] = report
     if report.errors:

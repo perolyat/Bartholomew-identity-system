@@ -106,15 +106,6 @@ def test_the_policy_table_has_no_entries_for_routes_that_do_not_exist():
         # route that arrives unclassified is refused, and pre-classifying is
         # what stops that becoming a reason to reach for a bypass.
         ("GET", "/api/inbound/events/{event_id}"),
-        # W03-E's operator console. Classified ahead of its handlers on the
-        # same reasoning as the inbound routes above: `app.py` registration is
-        # W03-F's by the W03 manifest, and default-deny would 403 these the
-        # moment they were registered. Remove these three once W03-F has
-        # registered `routes/operator.py`.
-        ("GET", "/api/operator/overview"),
-        ("POST", "/api/operator/tasks"),
-        ("POST", "/api/operator/tasks/{task_id}/advance"),
-        ("GET", "/api/operator/tasks/{task_id}"),
     }
     stale = [
         f"{m} {p}"

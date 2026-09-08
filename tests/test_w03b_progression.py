@@ -164,10 +164,29 @@ class TestIssuedIsNotSucceeded:
             read_back_port=None,
             db_path=None,
         )
-        # No port was injected and none is resolvable in a tree without W03-A.
-        assert result.verdict in (UNKNOWN, VERIFIED)
-        if result.verdict is UNKNOWN:
-            assert result.source == SOURCE_ABSENT
+        # Integration-only correction (W03-F). W03-B wrote this on a tree with
+        # no `bartholomew/multimodal/`, where `resolve_read_back_port()` could
+        # only answer `None` and the source could only be `absent`. On the
+        # composed head W03-A IS present, the port resolves, the real read-back
+        # runs and reports `no_consented_session` -- so the source is
+        # `read_back` and carries a published unavailability code.
+        #
+        # The composition makes the answer MORE honest, not less: "we looked
+        # and there is no consented session" rather than "we have nothing to
+        # look with". So the load-bearing assertion is tightened rather than
+        # relaxed. With no consented session nothing can be observed, so
+        # VERIFIED is now impossible and is no longer accepted; the hedge W03-B
+        # needed while it could not know what the integrated tree would carry
+        # is exactly what composition resolves.
+        assert result.verdict == UNKNOWN
+        assert result.verified is False
+        if result.source == SOURCE_ABSENT:
+            # No perception package in this tree: nothing was read.
+            assert result.read_back_code is None
+        else:
+            # W03-A present: the read was attempted and honestly refused.
+            assert result.source == SOURCE_READ_BACK
+            assert result.read_back_code == "no_consented_session"
 
     def test_an_unavailable_read_back_leaves_the_step_unknown_with_its_code(self):
         port = _ReadBack(available=False, code="no_consented_session", reason="none live")

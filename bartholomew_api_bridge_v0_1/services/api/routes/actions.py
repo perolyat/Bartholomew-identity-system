@@ -370,10 +370,27 @@ def _arm_brake_engaged() -> bool:
     from bartholomew.orchestrator.safety.governance_store import GovernanceStore
 
     try:
-        return bool(GovernanceStore(resolve_db_path()).is_blocked("actuation"))
+        state = GovernanceStore(resolve_db_path()).state()
     except Exception:
         logger.exception("Brake state unreadable while arming; refusing")
         return True
+    # ANY engagement, which is what this function's name and docstring have
+    # always said and what `seam.evaluate_actuation_brake()` has always done.
+    #
+    # W03-F integration repair, flagged by W03-C's handoff §8 as W03-F's call
+    # and left to "where the whole integrated brake story is being verified".
+    # This read used to be `is_blocked("actuation")`, a SCOPED check, while the
+    # seam that actually gates dispatch denies on any engagement at all. With
+    # only the `voice` scope engaged the two disagreed: the seam refused every
+    # dispatch, and this said the channel was clear -- so `GET /api/actions/channel`
+    # reported `armed: true` during a halt under which nothing could run.
+    #
+    # It was never a hole (arming authorises nothing, and dispatch still fails
+    # closed), but it is the misleading-safety-signal class the wave exists to
+    # remove, and composition is what made it reach a person: W03-E's operator
+    # overview renders this channel state on the console, so before the wave was
+    # composed the disagreement was invisible and afterwards it is on screen.
+    return bool(state.engaged)
 
 
 @router.post("/channel/arm")
