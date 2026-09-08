@@ -2888,3 +2888,108 @@
   `tests/test_learning_control_centre_api.py` (the HTTP boundary, stale state, export and the
   privacy-class drift guard), and `tests/test_ui_learning_control_centre.py` (the page).
 - **Date:** 2026-09-01
+
+## Decision: Violoop research is integrated as principle, reconciliation and candidates — not as scope, and never as evidence
+- **Decision:** External research into **Violoop** (an early / pre-launch AI-agent product; see
+  `docs/research/RESEARCH_REGISTER.md`, RSCH-01) is integrated into Bartholomew's planning in
+  exactly four forms, and no others:
+
+  **(a) Principles**, recorded in `CONSTITUTION.md`'s new "Preparation and Commitment; Ambient
+  Executive Assistance" section: ambient executive assistance over the prompt-construct-transfer
+  chat loop; the **Preparation Plane / Commitment Plane** distinction; routing actuation to the most
+  deterministic, least destructive, most verifiable and most recoverable available mechanism (with
+  hybrid execution over ideological purity); proactivity that is evidence-based, useful, governed and
+  interruption-aware; **central brain, distributed nervous system** as a framing for the existing
+  server-centric architecture; learning that is legible to the person it is about; and the durable
+  value residing in the governed model of the individual rather than in whichever foundation model
+  is currently strongest. **Each is recorded because it follows from this project's own Primary
+  Goal, Burden Reduction Principle, cognitive-accessibility invariant and Sovereign Principle** —
+  they survive the external claims that prompted them turning out to be false.
+
+  **(b) Runtime reconciliation**, in `COGNITIVE_RUNTIME.md`: workflow and policy/boundary content
+  named as kinds within the **existing** memory substrate; the correction → lesson-candidate →
+  validation → promotion lifecycle placed **inside** the existing learning machinery; and the
+  preparation/commitment distinction read as a property of the `CandidateAction` Governance admits,
+  adding no stage and no second path.
+
+  **(c) Candidates**, in the new `docs/waves/W04/W04_CANDIDATE_REGISTER.md` (W04-C01…C14), each with
+  a problem, benefit, dependencies, governance implications, implementation layer, a promotion
+  evidence threshold and the evidence that would defer or reject it.
+
+  **(d) Risks**, as `RISKS.md` R7 and R8.
+
+  Five clauses are binding:
+
+  **(1) Nothing here is scope.** Wave 3's contracts, manifest, deferral register and sequencing are
+  unchanged; `docs/TILT.md` and the Post-Test #1 readiness bands continue to govern what is worked
+  on next. **Wave 4 is not selected**, and the candidate register confers no priority or approval.
+
+  **(2) Vendor claims are never evidence.** Violoop is pre-launch and no independent hands-on
+  evaluation has been performed. Its performance, reliability, security and user-research statements
+  are graded **E3 (company claim)** in the research register and **may not close any candidate's
+  evidence threshold**. Promotion requires **E1** — evidence this project verified itself.
+
+  **(3) Governance is not extended by any of it.** The preparation/commitment distinction is a
+  distinction Governance can act on, not a bypass: consent, privacy classification, Identity policy,
+  audit and the **Parking Brake** apply to preparation unchanged, prepared work never self-promotes
+  into a commitment, and preparation itself may be restricted. The maturity progression recorded in
+  `CONSTITUTION.md` is product maturity, **not an autonomy entitlement ladder**; "autonomy is earned,
+  not enabled" and the Baby Mode ladder are unaffected.
+
+  **(4) Two directions are explicitly held back.** **Model-weight personalization** is long-range
+  research only (W04-C13), behind memory → lessons → workflow models → versioned competencies →
+  policy adaptation, because weight-level change is materially harder to explain, audit, attribute,
+  test, revoke, roll back and diff — the exact properties Bartholomew's learning governance depends
+  on. **Dedicated hardware** is research only (W04-C14); the Personal Executive System is to be
+  proven through server + companion software first. Neither is in near-term scope, and this entry
+  is not a step toward either.
+
+  **(5) Violoop is a reference for one layer, not a blueprint.** It is useful for Bartholomew's PC
+  presence, actuation and delegation layer. Bartholomew's target is broader — an executive
+  intelligence across the user's life (PC, phone, communications, files, calendar, web/services,
+  household, cameras, voice, speakers, relationships, personal memory, physical environment,
+  multiple devices). The objective is not to make Bartholomew more like Violoop.
+
+- **Alternatives:** (a) **Record the findings in a new standalone strategy document** — rejected:
+  it would create a second authority on autonomy, learning and deployment topology beside
+  `CONSTITUTION.md`, `COGNITIVE_RUNTIME.md` and this file, which is exactly what "Canonical SSOT
+  docs (no doc sprawl)" and "One authority per architectural concept" exist to prevent. The two new
+  files created instead are deliberately **non-authoritative**: an evidence *location* and a
+  *candidate* register, neither of which decides anything. (b) **Freeze the preparation/commitment
+  split as a new contract now** — rejected: no wave is building it, and a frozen contract with no
+  implementation and no real-world evidence is a commitment made at the point of least information.
+  (c) **Fold the candidates into `W03_DEFERRALS.md`** — rejected: that register is owned by W03-PREP
+  and scoped to what Wave 3 deliberately excludes; these are forward candidates for a wave not yet
+  scoped, and writing them there would both violate its ownership and imply Wave 3 relevance.
+  (d) **Do nothing until Violoop launches and can be evaluated** — rejected: the load-bearing
+  conclusions are Bartholomew's own and do not depend on Violoop being real, useful or honest;
+  deferring would lose them while gaining no evidence. (e) **Adopt the maturity progression as an
+  autonomy ladder** — rejected outright: it would convert a description of product maturity into an
+  entitlement, which contradicts "autonomy is earned, not enabled" and the Sovereign Principle.
+
+- **Why:** Test #1's central finding was a **burden** failure, not a capability gap — the system's
+  net effect on its tester was negative. The strongest thing this research offers is a structural
+  answer to that: the reason an assistant feels like a chore is that it can prepare almost nothing
+  ahead of the person, so every outcome is paid for in prompting, supervision and manual transfer.
+  Separating preparation from commitment is what makes "do more, ask less" expressible without
+  weakening a single governance control, because the acts being unblocked are the reversible ones.
+  The remaining principles are the supporting conditions: preparation is only useful if proactivity
+  is governed and interruption-aware, only trustworthy if learning is legible and reversible, and
+  only reliable if actuation prefers routes whose outcomes can actually be verified.
+
+- **Consequences:**
+  - Two new **non-canonical** files: `docs/research/RESEARCH_REGISTER.md` (an evidence location with
+    an E1–E5 grading scheme, in the same sense `docs/evidence/test-1/` is a location) and
+    `docs/waves/W04/W04_CANDIDATE_REGISTER.md`. **The canonical-doc count stays at 14.**
+  - `CONSTITUTION.md` and `COGNITIVE_RUNTIME.md` gain the sections described above;
+    `ROADMAP.md`, `RISKS.md` and `MASTER_PLAN.md` take pointer/consequential amendments only. The
+    decision is not restated in any of them.
+  - **W04-C07 (learning-quality and burden metrics) is the gating candidate.** `DECISIONS.md`'s
+    Burden Reduction Principle already records that ABR stays conceptual until burden measurement is
+    defined, and Band C already requires burden instrumentation. Every other candidate's promotion
+    threshold is stated in those terms, so none can be honestly promoted before some of them can be
+    computed. The measure to protect is **user-performed steps per successful outcome** — the one
+    that distinguishes reducing burden from moving it.
+  - **No stage's exit criteria, sequencing or status changed. No implementation is authorised. No
+    production behaviour is altered, and no source code is changed by this pass.**
+- **Date:** 2026-09-08

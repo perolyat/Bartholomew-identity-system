@@ -159,6 +159,16 @@ Register v2.2, SHA-256 checksums, the Test #1 commit-provenance record, and an e
 the raw artifacts that are **absent**. **It is a location, not an authority**: the count above stays
 at 14, the decisions live in `DECISIONS.md`, and the readiness bands live in `ROADMAP.md`.
 
+**Also not canonical, and deliberately non-authoritative (added 2026-09-08):**
+`docs/research/RESEARCH_REGISTER.md` is the **evidence location** for externally sourced product/
+architecture research, carrying an E1–E5 grading (independently verified → company claim →
+Bartholomew design conclusion) so external claims cannot harden into assumed fact (`RISKS.md` R8).
+`docs/waves/W04/W04_CANDIDATE_REGISTER.md` holds forward **candidates** with per-candidate evidence
+thresholds; it selects nothing — **Wave 4 is not chosen**, and Wave 3's scope, contracts and
+deferral register are unchanged by it. Like `docs/evidence/test-1/`, these are locations and
+registers, **not authorities**: the count above stays at 14, principles live in `CONSTITUTION.md`,
+runtime semantics in `COGNITIVE_RUNTIME.md`, and decisions in `DECISIONS.md`.
+
 Every other `*.md` in the repository (implementation notes, the rest of `docs/*`, `STATUS_*`,
 `README`s) is a **reference**, not an authority on project status. Where one contradicts a
 canonical doc, the canonical doc wins. Two locations are explicitly and permanently

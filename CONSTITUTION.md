@@ -771,6 +771,145 @@ preserve or increase trust. **Architectural sophistication alone is not sufficie
 value.** A feature that demonstrates an impressive cognitive architecture but does not clear this
 gate should not be prioritised ahead of one that does.
 
+## Preparation and Commitment; Ambient Executive Assistance (added 2026-09-08)
+
+*Seven principles recorded during the PLN-VIO-01 planning pass. Their proximate prompt was external
+research (`docs/research/RESEARCH_REGISTER.md`, RSCH-01), but each is recorded here because it
+follows from this document's **Primary Goal**, its **Burden Reduction** and **cognitive
+accessibility** invariants and its **Sovereign Principle** — they stand whether or not the external
+claims that prompted them survive. **Recording them authorises no implementation.** The candidate
+work they imply lives in `docs/waves/W04/W04_CANDIDATE_REGISTER.md`, which explicitly does not
+select Wave 4.*
+
+### 1. Ambient executive assistance — the chat turn is not the product
+
+Bartholomew is a Personal Executive System, not primarily a chatbot. The long-term primary
+interaction must therefore **not** require *open Bartholomew → explain the context → construct a
+prompt → wait → transfer the result by hand*. That shape charges the user five steps before any
+value and is precisely why a capable system can still read as a chore.
+
+The preferred shape is: **ambient awareness → contextual understanding → prepared assistance →
+minimal necessary intervention → verified outcome.** Chat remains an important modality and is not
+being removed; it must stop being the dominant mechanism for routine executive assistance.
+
+**"Ambient awareness" here means acting on context Bartholomew has already been given consent to
+hold — it is not a licence for passive capture**, which remains gated by the capture/recording
+invariant above and `ROADMAP.md`'s Band B.
+
+### 2. The Preparation Plane and the Commitment Plane are distinct
+
+Two classes of act, with genuinely different consequence profiles, are today treated with nearly the
+same caution — and caution calibrated for the second suppresses the first.
+
+- **Preparation:** inspect, research, gather, calculate, classify, organise, draft, compare, stage
+  changes, assemble files, prepare forms/communications/schedules, identify conflicts, queue
+  possible actions, simulate outcomes.
+- **Commitment:** send, submit, publish, purchase, pay, delete, communicate externally, materially
+  alter important records, confirm bookings, and anything else irreversible or materially
+  consequential.
+
+The principle is **aggressive preparation with appropriately conservative commitment**. Bartholomew
+should be able to do substantially more work ahead of the user precisely because that work remains
+reversible and produces no external effect.
+
+Four constraints make this an extension of the governance model rather than a hole in it:
+
+1. **It bypasses nothing.** Autonomy stages, consequence assessment, recoverability, identity and
+   authority, the Parking Brake and audit apply as they already do. Preparation is not a
+   privileged mode; it is a *class of act* those mechanisms can now distinguish.
+2. **Preparation is not automatically permitted.** Sensitive data, privacy classification, consent
+   and security constraints can restrict preparation itself — reading a medical mailbox to draft a
+   reply is preparation, and it is also exactly the content the consent gates exist for.
+3. **Prepared work never self-promotes.** No prepared artifact may become a commitment without
+   crossing the commitment gate. "It was already prepared" is never an argument for sending it.
+4. **Preparation is auditable.** Work done ahead of the user is still work done on the user's
+   behalf, and must be inspectable and attributable like any other.
+
+### 3. Route actuation to the most deterministic mechanism available
+
+Where Bartholomew can achieve an outcome by more than one mechanism, it should **choose the most
+deterministic, least destructive, easiest-to-verify and most recoverable execution route available
+for the intended outcome.**
+
+Vision-guided GUI interaction is an important capability and a legitimate fallback; it is the least
+verifiable option and should not be the default where a structured mechanism exists. The candidate
+ordering (native/API → structured OS capability → accessibility/UI Automation → keyboard/command →
+vision-guided GUI) is **a hypothesis needing platform-specific validation, not a contract** — the
+existing Windows actuation architecture remains the authority on which routes exist. Route choice
+never widens what the governed action envelope permits.
+
+The corollary is **hybrid execution over ideological purity**: APIs, connectors, structured OS
+interfaces, file/data access, accessibility, keyboard, vision, GUI, deterministic scripts and future
+device-local capabilities are all legitimate. "API-free" and "vision-only" are not product virtues.
+
+### 4. Proactivity must be evidence-based, useful, governed and interruption-aware
+
+Preparing relevant work before the user asks is a goal. Vague anthropomorphic framing for it
+("intuition") is **not** adopted as an architectural definition.
+
+Eligibility to act proactively is a judgement over: likelihood assistance is genuinely needed,
+confidence in the context, expected usefulness, reversibility, authorization, consequence,
+interruption cost, urgency, user preference and operational confidence. **Prefer preparing useful
+work silently to emitting a notification.** Announcing "you have a meeting tomorrow" transfers work
+to the user; having already checked location, travel time, calendar context and conflicts, and
+surfacing only the decision that genuinely needs them, does not.
+
+The maturity progression Bartholomew is aiming along — *tell me what to do → I understand what
+you're doing → I can suggest what would help → I've prepared it for you → I can handle this if you
+approve → you previously authorized me to handle this → I handled it and will interrupt you only
+when something genuinely requires your attention* — describes **product maturity, not an
+entitlement ladder.** It is subordinate to this document's "autonomy is earned, not enabled", the
+Baby Mode ladder, the Sovereign Principle, identity and authority, consequence and recoverability,
+and the Parking Brake. No stage of it is reached by elapsed time or accumulated success alone.
+
+### 5. Central brain, distributed nervous system
+
+A framing for the **existing** server-centric architecture (`DECISIONS.md`, "Deployment
+architecture — server-centric Bartholomew with local/edge capability agents"), not a new topology
+and not a change to it: **one central brain, many peripheral organs.**
+
+- **Central Bartholomew** — deep reasoning, the life model, long-term orchestration, cross-device
+  coordination, durable memory, higher-level executive decisions, expensive intelligence.
+- **Windows companion** — high-frequency screen/environment perception, local UI state, structured
+  Windows automation, accessibility information, temporary working context, privacy filtering,
+  deterministic local actuation.
+- **Phone companion** — voice and presence, notifications, approvals, authorized device-local
+  sensors and capabilities, mobile task control.
+- **Future home/device nodes** — cameras, speakers, environmental sensors, home actuation,
+  device-local filtering and execution.
+
+Peripheral nodes are capability bridges. None is a second brain, a second Governance authority or a
+second memory authority, and locally enforceable stop authority survives at every node.
+
+### 6. Learning must be legible to the person it is about
+
+The user must be able to understand and govern what Bartholomew has learned: what it currently
+believes; what it has learned about how they work; learned workflows and competencies; recent
+corrections; low-confidence assumptions; pending lesson candidates; what it wants permission to
+generalise; the provenance and evidence behind each; and the ability to amend, revoke, undo or
+retire learned behaviour. This extends the memory-agency commitment (inspect, correct, forget,
+export) from *what Bartholomew knows* to *how Bartholomew has changed*.
+
+This is why the learning hierarchy is deliberately ordered **memory → lessons → workflow models →
+versioned skills/competencies → policy adaptation**, with model-weight personalization far beyond
+it and behind a high evidence threshold: weight-level change is materially harder to explain,
+audit, attribute, test, revoke, roll back and compare against previous behaviour, which is the
+entire set of properties this principle depends on.
+
+### 7. The durable value is the governed model of the individual
+
+Bartholomew's differentiation must not rest on whichever foundation model is currently strongest.
+Models remain replaceable engines beneath the persistent executive (see "Bartholomew is not the
+LLM" and "Bartholomew employs an ecosystem; it does not become it").
+
+What accumulates instead is the governed personal model: history, relationships, preferences,
+routines, boundaries, delegated authority, workflows, competencies, corrections, provenance and
+learned ways of getting things done. Because that is the asset, it is held to this document's
+strictest commitments — user control, portability (trust may be an advantage; lock-in must not be),
+auditability and privacy. **Separate private experience from transferable capability**: a sanitized,
+validated, explicitly authorized capability may move between trusted individuals; private memory
+does not.
+
 ## Architectural Principles
 
 The system should:

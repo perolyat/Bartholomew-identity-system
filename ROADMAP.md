@@ -651,7 +651,12 @@ Everything applicable from Band A, plus:
 
 Everything applicable from Bands A and B, plus:
 
-- **D1** burden instrumentation;
+- **D1** burden instrumentation. *(Pointer added 2026-09-08, no change to the gate: candidate
+  measures — including **user-performed steps per successful outcome**, prompt burden, manual
+  context-restatement, corrections per workflow, prepared-work acceptance and false-positive
+  proactive interventions — are collected as W04-C07 in
+  `docs/waves/W04/W04_CANDIDATE_REGISTER.md`. They are candidate measures, not an approved metric
+  set, and none of them changes what this band requires.)*;
 - **D3** ordinary-user / admin separation;
 - **D5 / P5 memory agency — required.** There is no "if durable memory participates" loophole;
 - product gates **P1–P6** and **P8–P9**;
@@ -1557,3 +1562,25 @@ pass inserts ahead of them.
   and **not** scheduled: Bartholomew has no structured representation of a long-lived objective
   today (`ExperienceKernel`'s active goals are free-text strings), which is a conceptual gap for a
   future separately-approved proposal, not work authorised here.
+- **Build ambient/proactive assistance, a persistent delegation runtime, workflow-memory capture, a
+  learned-behaviour inspection surface, dedicated hardware, or personalized model weights (added
+  2026-09-08).** `CONSTITUTION.md`'s "Preparation and Commitment; Ambient Executive Assistance"
+  section and `DECISIONS.md`'s "Violoop research is integrated as principle, reconciliation and
+  candidates — not as scope, and never as evidence" record a direction and a set of **candidates**.
+  None of it is scope, and **none of it exists**. The candidates live in
+  `docs/waves/W04/W04_CANDIDATE_REGISTER.md` (W04-C01…C14) with per-candidate evidence thresholds;
+  the external research and its E1–E5 evidence grading live in `docs/research/RESEARCH_REGISTER.md`.
+  **Wave 4 is not selected by any of that**, and per `docs/waves/W03/README.md` it must still emerge
+  from Wave 3 evidence and real-world acceptance testing.
+  **Explicitly unchanged:** the Usable POC / time-to-real-use prioritisation and `docs/TILT.md`
+  continue to govern what is worked on next; **no stage's exit criteria, sequencing or status
+  changed**; Wave 3's contracts, manifest and deferral register are untouched; and the Post-Test #1
+  readiness bands are unaffected. Two of those candidates are held back harder than the rest and are
+  named here so they are not quietly assumed: **dedicated local hardware** (W04-C14) and
+  **model-weight personalization** (W04-C13) are **research directions only**, behind high evidence
+  thresholds — the Personal Executive System is to be proven through server + companion software
+  first, and learning is to stay in the memory → lessons → workflow models → versioned competencies
+  → policy adaptation layers where it remains explainable, auditable and reversible. Three of the
+  candidates additionally sit behind gates that already exist and are already unmet: the mobile
+  approval surface behind Stage 6 authentication and the threat model, any *actuating* delegated job
+  behind the independent out-of-process emergency stop, and anything ambient behind Band B.

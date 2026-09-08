@@ -280,6 +280,59 @@
   fixed 2026-07-20. Label allowlist enforcement and a dedicated perf budget check aren't
   independently confirmed this pass — see `PERF_BUDGETS.md`.
 
+### R7 — Proactive preparation becomes unwanted work, or leaks into commitment
+- **Category:** Safety, Product/burden
+- **Added:** 2026-09-08, alongside `CONSTITUTION.md`'s "Preparation and Commitment; Ambient
+  Executive Assistance" section. **Nothing described here is implemented** — this is a risk recorded
+  against a recorded direction, so that it is not discovered after something is built.
+- **What could go wrong:** Three distinct failures, easy to conflate. **(a) Preparation that
+  self-promotes** — a prepared draft, staged change or queued action reaches an external effect
+  without crossing the commitment gate, which would be an unapproved consequential action wearing
+  the label "preparation". **(b) Preparation that ignores its own gates** — treating preparation as
+  a privileged mode and reading sensitive content, or continuing while the Parking Brake is engaged,
+  because "nothing was sent". **(c) Preparation nobody wanted** — silent work the user consistently
+  discards, which is cost and noise rather than help, and a burden regression under
+  `DECISIONS.md`'s Burden Reduction Principle even though every test passes. A fourth, related:
+  proactive surfacing that raises interruption volume, producing the message blindness
+  `CONSTITUTION.md` classes as a trust failure.
+- **Current controls:** None specific — the risk is prospective. What already applies: Governance is
+  the single admission authority; the Parking Brake is fail-closed and scoped; consent and privacy
+  classification apply at the lowest retrieval layer (R1); `DECISIONS.md`'s "Internal triage does not
+  justify interruption" already forbids interrupting merely because something happened internally.
+- **Mitigation:** Make the constitutional constraints testable before any implementation: a
+  structural guard that a prepared artifact has no path to an external effect; brake-engaged tests
+  that cover preparation, not only commitment; consent-gate coverage on preparation reads; and
+  prepared-work acceptance plus false-positive intervention rate measured (W04-C07) rather than
+  assumed. **The acceptance test to protect is user-performed steps per successful outcome:** a
+  slice that prepares more while that number rises has moved burden, not reduced it.
+- **Status:** Open, prospective. Tracked as governance implications on candidates W04-C01, W04-C03
+  and W04-C11 in `docs/waves/W04/W04_CANDIDATE_REGISTER.md`; each names this failure mode in its
+  deferral/rejection evidence.
+
+### R8 — External vendor claims hardening into assumed fact
+- **Category:** Process / evidence integrity
+- **Added:** 2026-09-08.
+- **What could go wrong:** A competitor's or vendor's marketing claim — an action success rate, a
+  reliability figure, a user-research finding, a security-architecture description — is quoted into
+  a planning document, then read two passes later as an established fact about what is achievable,
+  and eventually used to justify promoting work or to set a target. This is the same failure class
+  `DECISIONS.md`'s "Formal evidence standard for findings" addresses for our own findings, applied
+  to material we did not produce and cannot inspect. Violoop (RSCH-01) is the live instance: a
+  pre-launch product, no independent hands-on evaluation, and press coverage that largely restates
+  vendor material.
+- **Current controls:** `docs/research/RESEARCH_REGISTER.md` grades every externally sourced
+  statement **E1 (independently verified) → E5 (Bartholomew design conclusion)** and states the
+  load-bearing rule: a principle or candidate must be justifiable at **E5**, surviving the external
+  claim being false. `docs/waves/W04/W04_CANDIDATE_REGISTER.md` requires **E1** to close any
+  promotion threshold, making E2/E3 material structurally unable to promote anything.
+- **Mitigation:** Keep the grade attached to the claim, never the conclusion alone; re-grade on new
+  evidence rather than quietly upgrading prose; and when a claim is independently evaluated later,
+  record the outcome against the original claim number so a weakened or refuted claim is visible
+  where it was used.
+- **Status:** Controlled by process, not by code. The residual exposure is ordinary human drift —
+  a future session paraphrasing a graded claim into ungraded prose — which is why the grading lives
+  in a register with claim numbers rather than in footnotes.
+
 ## Tech debt watchlist
 
 - **(2026-08-18) Repeated SQLite contention/timing failures in the full-suite CI job — a known
