@@ -2888,3 +2888,40 @@
   `tests/test_learning_control_centre_api.py` (the HTTP boundary, stale state, export and the
   privacy-class drift guard), and `tests/test_ui_learning_control_centre.py` (the page).
 - **Date:** 2026-09-01
+
+## Decision: Customer-facing visual direction — "Bartholomew Executive Dark" (visual language only)
+- **Decision:** Record an agreed **future** visual direction for Bartholomew's customer-facing
+  interfaces — deep charcoal/near-black grounds, muted slate panels, warm off-white type,
+  restrained blue/green/amber accents for state, action and status, compact typography, controlled
+  spacing, rounded cards, subtle borders and shadows rather than glowing sci-fi styling, and a
+  calm, mature, premium executive-assistant feel with information-dense but visually quiet screens;
+  understated **B / BARTHOLOMEW** branding is a promising direction. The full statement lives in
+  `CONSTITUTION.md`'s "UX Principles" section; this entry records the decision, not a second copy
+  of the authority. **What is decided is the visual language only.** No redesign, implementation,
+  frontend framework, mock-up or information architecture is authorised, and no current wave's
+  scope changes.
+- **Alternatives:** Leave the direction unrecorded and risk losing it; create a separate UI/design
+  planning document (rejected — it would compete with `CONSTITUTION.md`'s UX Principles, against
+  the "one authority per architectural concept" decision); treat the reference image wholesale as a
+  product specification (rejected, see below).
+- **Why:** The direction was agreed and is worth preserving, but the functional UI is not yet
+  mature enough for a cohesive customer-facing design pass, and pulling one in now would displace
+  capability and reliability work. Writing it down where UX principles already live lets a future
+  Wave Prep session rediscover it without it acting as scope.
+- **Consequences:**
+  - Binding on nothing today. Explicitly non-binding on Wave 3 and on every existing surface.
+  - Subordinate to usability, accessibility, truthful system-state representation, governance
+    visibility and actual capability requirements; where it conflicts, they win.
+  - **The reference image's information architecture is not approved** — Projects, Analytics,
+    Reports, market/customer analysis and its dashboard structure are invented content and must
+    never be cited as Bartholomew requirements. Bartholomew's UI architecture continues to emerge
+    from its real responsibilities; the capability domains named in `CONSTITUTION.md` are a
+    distinction from that invented content, not a navigation model.
+  - **Capability-preservation invariant:** visual simplification must not hide or delete useful
+    capability. Engineering instrumentation may be separated from the ordinary experience, but
+    safety, consent, system state and user agency must remain appropriately visible.
+  - A bounded future-work candidate — *Customer-facing UI visual consolidation toward Bartholomew
+    Executive Dark* — with its promotion threshold is recorded in `ROADMAP.md`'s "What we will not
+    do yet". Documenting it does **not** make it Wave 4 scope; wave selection is separate.
+- **Date:** 2026-09-08
+
