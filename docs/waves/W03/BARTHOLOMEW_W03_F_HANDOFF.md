@@ -210,6 +210,120 @@ would carry is exactly what composition resolves.
 
 **Files:** `tests/test_w03b_progression.py` (30 passed).
 
+### 3.6 A Parking-Brake-aborted action could verify as success — **blocker**
+
+*Found by an adversarial audit of the composed head, not by any builder suite.
+Two independent auditors reported it; reproduced before repair.*
+
+W03-C added `ActionResultStatus.ABORTED_BY_BRAKE` as its eighth member and its
+handoff §7.5 warned: *"Anything in W03-B or W03-E that exhausts either enum needs
+the new member."* W03-B's `verify_step` docstring enumerated exactly W03-C's
+**pre-abort** vocabulary, and was never updated, because no tree carried both
+packages until this head.
+
+```
+verify_step(device_status="aborted_by_brake", read_back_port=<shows expected state>)
+  -> verdict: verified,  verified: True
+```
+
+`aborted_by_brake` matched no branch, fell through to the read-back, and a
+read-back that happened to show the expected state returned `VERIFIED`. In
+`seam.py` the `VERIFIED` branch **proposes the next step** — so a brake abort
+advanced the plan and had the next Windows action proposed *while the brake was
+engaged*. Two non-negotiable invariants at once. `refused` had the identical
+shape.
+
+The repair **inverts the rule** rather than extending a list: `verification.py`
+now names the only two statuses that may consult a read-back at all (`succeeded`,
+so the machine can contradict the claim; `unknown`, so it can settle it) and
+fails closed on everything else. A ninth member added later reports `unknown`
+with no change to this file. W03-C's enum is imported rather than restated,
+because restating it is what caused this. `decide_recovery` additionally returns
+`STOP_AND_REPORT` for a brake abort, honouring W03-C's other rule for it —
+"never a reason to re-propose".
+
+### 3.7 Blocking I/O that W03-F itself made blocking
+
+Seam 3.2 broke the "no blocking I/O regressions in asynchronous runtime paths"
+invariant in two places, and the repair is W03-F's because the regression is.
+
+* `actuation/seam.py`: `_server_side_verification()` was called inline from
+  `async def record_action_result_through_runtime_contract`. That was free while
+  no read-back provider existed. Installing one turned it into a governed UIA
+  read plus a backbone write, on the loop that also serves the brake read and the
+  abort check, inside the handler a device posts its result to.
+* `executive/seam.py`: `verify_step` likewise — `resolve_read_back_port()`
+  returned `None` on W03-B's branch.
+* `routes/operator.py`: the overview's channel, actions and consent sections each
+  open SQLite; only the brake section went off-loop. This read is what a console
+  polls.
+
+### 3.8 The read-back seam's over-claims
+
+All inert on every builder branch, all live the moment W03-A's read-back
+resolves. Every repair **narrows a claim**; none invents a better check.
+
+| Defect | Repair |
+|---|---|
+| A foreground claim was settled by a substring match against the **whole** observed block — summary plus every element's `role: name = value`. An app id in a taskbar button or a shortcut name proved "X is in the foreground". | Foreground claims match the read-back's own summary line; content claims (typed text) still match anywhere, because a control's value is exactly where that belongs. |
+| `_expectation()` returned the app id for **every** `manage_window` operation, ignoring `operation`. For `minimize` the check was **inverted**: a minimize that worked read as `failed`, one that did nothing read as `verified`. | Only operations whose success is consistent with the app being described keep a token; `minimize`, `move`, `resize` report `unknown` — what the function's own docstring prescribes for a capability it has no check for. |
+| A screenshot-fallback read reports `available=True` with prose about pixels and no control text, so a truthful `succeeded` was turned into `failed`, "the state wins". | `unknown`. A manufactured contradiction is the same untruth as a manufactured confirmation. |
+| `provenance_degraded` was dropped, so a confirmation whose observation was never recorded looked identical to one that can be reconstructed. | The read stands and so does the verdict, but the evidence now says so. |
+
+### 3.9 The operator surface W03-F made reachable
+
+* **`GET /api/operator/overview` refuses a companion credential.**
+  `_consent_section` re-implemented the read behind
+  `GET /api/device-consent/pending` faithfully — `include_nonce=False` and all —
+  but omitted `_refuse_device_credential`, the guard whose whole purpose is *"this
+  surface is for the person, not the machine"*. An enrolled companion could read
+  the tenant's pending observation asks, through a route **only W03-F's
+  registration made reachable**.
+* **The overview no longer reports an armed channel under a halt.** It read
+  `arming.current()` with no brake cross-check while `GET /api/actions/channel`
+  deliberately reports `armed: false, brake_engaged: true` — so the overview was a
+  second and *less truthful* answer to exactly the question W03-C built that
+  surface for, and the less truthful one is what a person reads. The brake comes
+  from the section's single read, so the two cannot disagree.
+
+### 3.10 A device cannot name its own `verify_method`
+
+`verify_method` is documented as a closed vocabulary in two places, and was
+enforced in none: the allowlist admitted the key and the value passed through.
+W03-E's console renders confirmed success for a method merely *absent from* its
+unverified list, so a device POSTing `verify_method: "totally_legit"` got *"the
+effect was confirmed by reading the machine back"* with nothing having read
+anything back.
+
+Repaired at ingestion in `bounded_evidence`, which already calls itself *"the
+enforcement boundary and not a convenience for well-behaved callers"*. An
+out-of-vocabulary method is stored as `unavailable` and leaves
+`verify_method:not_in_vocabulary` in `dropped_keys`.
+
+**W03-E's console is deliberately unchanged.** A first attempt tightened it there
+and was rejected by W03-E's own invariant test — the console must never import a
+seam it should reach over HTTP. The test was right and the fix was in the wrong
+place.
+
+### 3.11 The unbound-deployment rule (W03-A §5.1's open question)
+
+W03-A left this to W03-F: *"the live retest should run bound, or W03-F should
+decide the unbound rule in `install.py`."*
+
+**Decision: the rule is unchanged; what changed is that it now says what it
+costs.** `bound_runtime_user_id()` returns `None` on the single-runtime local
+deployment, so no capability resolver is installed, so **no observation session
+can start and the server-side verdict is therefore always `unverifiable`** — the
+Observe and Verify halves of the loop are inert while Act works. Installing a
+resolver anyway would be W03-F deciding on its own authority that an unbound
+process may resolve a device's capability to observe a screen, which
+`install.py`'s own docstring forbids: *"Installing the seams makes the system
+coherent; it does not make it permissive."*
+
+Silence was the defect, not the rule. The seam report now names the consequence
+and the one-line fix (`BARTH_RUNTIME_USER_ID`, which the recorded live procedure
+in `docs/G` §8 already sets). **This is a real-world-test prerequisite.**
+
 ### 3.6 Manifest
 
 A–E flipped to `integrated` with their frozen SHAs and PR numbers; W03-F set to
@@ -255,7 +369,7 @@ function.
 |---|---|
 | **Full default suite** (`pytest`, i.e. `-m 'not integration and not slow'`, xdist) | **4627 passed, 2 skipped, 0 failed** |
 | Golden Path (`tests/golden_path`, all markers) | **80 passed, 0 skipped, 0 failed** |
-| W03-F integration suite | **35 passed** |
+| W03-F integration suite | **53 passed** |
 | W03-A/B/D package suites + consent red-team + memory agency | **355 passed** |
 | Windows actuation + brake + route policy + manifest + W03-B progression | **286 passed** |
 | Actuation channel suites incl. HTTP integration | **111 passed** |
@@ -273,6 +387,82 @@ own disposable-worktree prediction (§3.2) exactly, and it is the first time the
 result has been reproducible from version control.
 
 ---
+
+## 4a. CI — and the acceptance criterion W03-F cannot meet
+
+The W03-F contract's acceptance criterion 1 is *"Merge Candidate tier green on
+the integrated head"*. **That criterion is not met, and it is not met because
+the tier has never been green in this repository.**
+
+The Merge Candidate tier has run exactly twice on `main`, both times on
+`W03-PREP` commits that carry **no W03 product code at all** (the second is
+`e96e6a6`, this candidate's own baseline, whose commit message reads *"No product
+code; no W03-A..E implementation"*). Both failed. Evidence:
+
+| `Windows full default suite + actuation (py3.11)` | `main @ e96e6a6` | W03-F head |
+|---|---|---|
+| `test_narrator.py::TestNarratorConfig::test_config_from_identity_with_valid_file` | FAIL `WinError 32` | identical |
+| `test_narrator.py::TestNarratorEngineInit::test_init_with_custom_db_path` | FAIL `WinError 32` | identical |
+| `test_narrator.py::TestPersistence::test_get_recent_episodes` | FAIL ordering | identical |
+| `test_narrator.py::TestPersistence::test_get_recent_episodes_with_since_filter` | FAIL `2 == 1` | identical |
+| `test_narrator.py::TestEpisodeFTSSearch::test_search_episodes_with_since_filter` | FAIL `2 == 1` | identical |
+| `test_narrator.py::TestFullIntegration::test_persistence_across_narrator_instances` | FAIL `WinError 32` | identical |
+| `test_persona_pack.py::…::test_get_switch_history` | FAIL `'tactical' == 'default'` | identical |
+| `test_global_workspace.py::…::test_history_bounded_size` | FAIL `{'i': 5} == {'i': 9}` | identical |
+| `test_voice_sight_runtime_contract_seam.py::…::test_placeholder_capabilities_are_never_called_directly` | FAIL `UnicodeDecodeError` | identical |
+| `test_spoken_output.py::…::test_a_wedged_engine_is_abandoned_not_waited_on` | FAIL `WinError 193` | identical |
+| **Total** | **10 failed, 2035 passed** | **10 failed, 2211 passed** |
+
+Same ten tests, same failure modes. The 176-test difference is W03's own added
+tests. **None of the ten is in a file any W03 package touches** — they are
+wave-1/wave-2 modules (narrator, persona pack, global workspace, spoken output,
+the voice/sight seam).
+
+### Root causes, and a proposed patch
+
+W03-F did **not** fix these: they are provably not this candidate's, they lie
+across five unrelated modules no W03 session owns, and fixing them would widen
+the PR substantially for no integration benefit. They are recorded here with
+enough analysis to be actionable.
+
+1. **Windows clock granularity + no stable tiebreaker (4 tests).**
+   `persona_pack.get_switch_history` and the narrator's four `ORDER BY timestamp
+   DESC` sites have no secondary sort key, and `global_workspace.get_history`
+   sorts on `timestamp` alone with a *stable* `list.sort`. Windows' system clock
+   granularity is ~15.6 ms against Linux's microseconds, so events written in a
+   tight loop share a timestamp and "most recent first" becomes arbitrary — in
+   practice *oldest* first, which is exactly what the failures show
+   (`{'i': 5}` where `{'i': 9}` was expected).
+   **Patch:** `ORDER BY timestamp DESC, id DESC` at each SQL site; a monotonic
+   sequence tiebreaker in `global_workspace`. This is a latent product defect that
+   only a coarse clock exposes, not merely a test bug.
+2. **`WinError 32` — cannot unlink an open file (3 tests).** `test_narrator.py`
+   creates a `NamedTemporaryFile(delete=False)` and `Path(db_path).unlink()`s it
+   while SQLite still holds the handle. POSIX permits this; Windows does not.
+   **Patch:** close the connection first, or use the `tmp_path` fixture.
+3. **`UnicodeDecodeError` (1 test).** `test_voice_sight_runtime_contract_seam.py`
+   lines 606 and 633 call `py_file.read_text()` with no encoding, so Windows
+   decodes UTF-8 sources as cp1252. **This one matters beyond the red tick:** it
+   is a *governance* structural no-bypass assertion, and it does not run on
+   Windows at all. **Patch:** `read_text(encoding="utf-8")` — two words.
+   (Every `read_text` in W03-F's own new suite already passes `encoding="utf-8"`;
+   this was checked deliberately.)
+4. **`WinError 193` (1 test).** `test_spoken_output.py` writes a `#!/bin/sh` stub
+   and expects to execute it. **Patch:** skip on Windows, or use a `.cmd`/Python
+   stub.
+
+### The other tiers
+
+`Quality`, `smoke`, `PR Fast tests`, `Windows lifecycle + compatibility` and
+`Tests + coverage (Ubuntu, py3.11)` all passed on the integrated head. The known
+xdist writer-lock class (`database is locked`), which `W03_CI_BASELINE.md` §2.6
+records and which W03-A, W03-D and W03-E each hit once, is the documented
+environmental flake; the same suites pass serially.
+
+**Consequence for the recommendation:** every criterion W03-F can discharge is
+discharged, but criterion 1 is blocked by a pre-existing condition of the tier
+itself. That is a decision for the user, not something W03-F should paper over or
+quietly widen its scope to fix.
 
 ## 5. What this does **not** establish
 
@@ -310,6 +500,68 @@ Preserved, not fixed. None is an integration defect.
 | 10 | Real deployment action channel stays inert (`BARTH_DEVICE_ACTION_AUTH` unset). Now asserted by test. | deferral #16 |
 
 ---
+
+## 6a. Escalations — found by W03-F, **not** repaired by W03-F
+
+Per the W03-F contract's escalation boundary: a defect inside a builder's own
+package, which composition did not cause and which cannot be reconciled without
+a feature change, *"goes back to the builder, not fixed by widening F"*.
+
+### 6a.1 An engaged Parking Brake does not stop a live microphone session — **W03-A**
+
+`stop_all_for_brake(scope)` stops a session only when `scope == "global"` or
+`BRAKE_SCOPE[modality] == scope`. The **only** brake poller in W03-A is the screen
+`ObservationLoop`, whose `brake_scope` is `BRAKE_SCOPE[SCREEN] == "sight"`, so its
+sweep can never reach a microphone session (`BRAKE_SCOPE[MICROPHONE] == "voice"`).
+A microphone session runs on a bare thread (`runtime.py::_run`) with no brake
+check of its own.
+
+**Not repaired, for three reasons.** It is equally true on W03-A's own branch —
+composition did not cause it. It is inside a package W03-A owns exclusively.
+And adding a brake poller to the microphone path is a feature addition in another
+session's package.
+
+**Exposure in the shipped configuration is nil**: the default audio backend is
+`NullAudioBackend`, which reports `NO_BACKEND`, so a microphone session never
+reaches `ACTIVE`. Deferral #14 confirms Wave 3 ships no STT. An operator who
+supplies a backend would reach the gap. Spoken output is unaffected —
+`speech.py` delegates to the existing voice brake and creates no long-lived
+session.
+
+**Recommendation:** a W03-A follow-up giving every modality a brake poller, or a
+brake sweep that stops every live session on any engagement.
+
+### 6a.2 Recalled memory does not reach the executive, and the shapes do not fit — declared
+
+Two separate facts, both real:
+
+1. `POST /api/operator/tasks` — the executive's **only** production caller —
+   passes no `evidence=`, so `admit_evidence(None)` admits nothing and no
+   recalled memory ever reaches a plan.
+2. W03-D's published `RetrievedItem` carries the text as `snippet`, the
+   confidence inside `provenance`, and **no** `cautionary` field; W03-B's
+   `evidence_from_row()` reads `content`/`text`, `confidence` and `cautionary`.
+   So even if wired, a recalled row would be admitted with empty content.
+
+**Not repaired.** The verdict pairing itself is correct and asserted (§4.1), and
+W03-D *excludes* non-valid rows from retrieval anyway, so nothing unsafe reaches
+anywhere. Wiring recall into the executive's planning input would change what the
+system does rather than reconcile how two packages talk — a behaviour addition,
+outside the integration scope boundary. Golden Path 4 (correction changes a later
+task) passes through the correction seam without it.
+
+**Recommendation:** a scoped follow-up that decides whether the executive should
+plan on recalled memory at all, and if so adds the one-line field adapter in
+`evidence_from_row()` that W03-B's handoff §5.4 already anticipated.
+
+### 6a.3 Lower-severity findings recorded, not repaired
+
+| Finding | Why not W03-F's |
+|---|---|
+| `bartholomew operator brake on --offline` cannot engage the brake after a clean shutdown: the governance write fence is closed and refuses even a tightening write. | Pre-existing platform behaviour; the auditor itself classified it as not an integration defect. Worth a follow-up — a *tightening* write arguably should be allowed through a closed fence. |
+| `load_task_reflections()` selects the whole shared `reflections` table with no tenant filter and no `LIMIT`, then filters in Python. | Inside W03-B's package; a performance and scoping concern, not a composition defect. |
+| An action cancelled by server-side expiry or by the person's own withdrawal is reported as *"the device reported 'cancelled'"* — false provenance in the account a person reads. | Inside W03-B; a wording/attribution fix that needs W03-C's state-to-cause mapping to be published first. |
+| `_brake_section` reports the local `GovernanceStore` state, while the actuation and executive gates additionally compose the registered Platform/Admin halt. | The local read is the same one the repaired arming check uses; composing the platform tier on the overview is a small follow-up. |
 
 ## 7. Declared limitations of W03-F's own work
 
@@ -433,20 +685,42 @@ The candidate is a set of merge commits plus three W03-F commits on top of
 
 ## 11. Recommendation
 
-**READY FOR USER MERGE APPROVAL — with the real-world Windows acceptance test
-explicitly outstanding.**
+**PASS WITH DECLARED LIMITATIONS — ready for user merge approval, with two
+things the user must decide rather than W03-F.**
 
 Everything the contract asks of W03-F that can be discharged without Windows
-hardware is discharged: the wave is composed from the five frozen heads in the
-prescribed order, every seam a builder named as W03-F's is repaired, every
-governance invariant is asserted on the composed head by a test rather than by
-inspection, and the Golden Path suite runs with no named stop firing for a
-missing package for the first time in the wave's history.
+hardware is discharged. The wave is composed from the five frozen heads in the
+prescribed order. Eleven seams are repaired, every one traceable to a builder
+handoff that named it as W03-F's or to a defect composition itself created —
+including one **blocker** (a Parking-Brake-aborted action verifying as success
+and advancing the plan) that no builder suite could have caught, because no tree
+carried both packages. Every governance invariant is asserted on the composed
+head by a test rather than by inspection, and the Golden Path suite runs with no
+named stop firing for a missing package for the first time in the wave's history.
 
-What cannot be discharged here is Responsibility 7 and the manifest's exit
-criterion: *"Demonstrated end-to-end on at least one Golden Path on a real
-Windows desktop."* That is the Post-Test #1 real-world acceptance test, which the
-project workflow runs after this candidate is approved and merged.
+The composition also **strengthened** governance rather than merely preserving
+it: four over-claims in the verify path were narrowed, a device can no longer
+name its own `verify_method`, a companion credential can no longer read the
+person's consent asks, and the operator console can no longer report an armed
+channel during a halt.
+
+**The two open decisions:**
+
+1. **Acceptance criterion 1 cannot be met by W03-F.** The Merge Candidate tier
+   has never been green in this repository: the same ten Windows tests fail on
+   `main @ e96e6a6`, this candidate's own baseline with no W03 code in it (§4a).
+   They are pre-existing wave-1/wave-2 platform defects across five modules no
+   W03 session owns. §4a gives the root causes and a proposed patch. Fixing them
+   here would widen this PR substantially for no integration benefit; W03-F
+   judged that the user's call, not its own.
+2. **Responsibility 7 and the manifest's exit criterion are outstanding by
+   design.** *"Demonstrated end-to-end on at least one Golden Path on a real
+   Windows desktop"* is the Post-Test #1 real-world acceptance test, which the
+   project workflow runs **after** this candidate is approved and merged. No
+   Windows hardware was reachable from this session, and nothing here claims
+   otherwise (§5). Note the §3.11 prerequisite: the live run must set
+   `BARTH_RUNTIME_USER_ID`, or the Observe and Verify halves of the loop are
+   inert.
 
 **Do not merge without explicit user authorization.** Auto-merge is not enabled.
 
