@@ -2986,10 +2986,15 @@
     decision is not restated in any of them.
   - **W04-C07 (learning-quality and burden metrics) is the gating candidate.** `DECISIONS.md`'s
     Burden Reduction Principle already records that ABR stays conceptual until burden measurement is
-    defined, and Band C already requires burden instrumentation. Every other candidate's promotion
-    threshold is stated in those terms, so none can be honestly promoted before some of them can be
-    computed. The measure to protect is **user-performed steps per successful outcome** — the one
-    that distinguishes reducing burden from moving it.
+    defined, and Band C already requires burden instrumentation. **Six candidates state their
+    promotion thresholds in those terms — C01, C03, C04, C05, C06 and C11 — and none of those six
+    can be honestly promoted before some of the measures can be computed.** The gate is that
+    enumerated set, not the register as a whole: C08 gates on C04 plus the Stage 6 authentication
+    and threat model, C09 on measured privacy filtering and decision quality, C10 on new
+    learned-content classes reaching the shipped Control Centre, C12 on sanitization shown
+    adversarially sound, and C13/C14 are research-only and not promotable in Wave 4 at all. The
+    measure to protect is **user-performed steps per successful outcome** — the one that
+    distinguishes reducing burden from moving it.
   - **No stage's exit criteria, sequencing or status changed. No implementation is authorised. No
     production behaviour is altered, and no source code is changed by this pass.**
 - **Date:** 2026-09-08

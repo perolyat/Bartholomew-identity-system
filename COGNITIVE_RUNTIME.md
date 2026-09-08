@@ -338,9 +338,15 @@ not automatic learning.** Specifically, and without weakening any of them:
   row. This is where learning meets recovery/undo: an unretireable lesson is uncontrolled
   behavioural drift wearing a provenance record.
 
-**Status: conceptual.** No such pipeline exists; none is authorised here. See
-`docs/waves/W04/W04_CANDIDATE_REGISTER.md` (W04-C05, W04-C06, W04-C10) for the candidate framing and
-its evidence thresholds.
+**Status: being built as Wave 3 scope, not authorised here.** The loop above —
+`experience -> correction -> candidate lesson -> governance -> memory/competency`, with
+first-class supersession — is **W03-D's contracted deliverable**
+(`docs/waves/W03/W03_D_CONTRACT.md`), whose Wave 3 exit criteria include an approved correction
+changing a later turn. This section describes that loop's runtime semantics; it does not authorise
+it, schedule it, or add to it. What is genuinely *beyond* W03-D — generalising a validated lesson
+to situations nobody corrected, and retiring an already-promoted lesson — is candidate work only,
+framed with its evidence thresholds in `docs/waves/W04/W04_CANDIDATE_REGISTER.md` (W04-C05,
+W04-C06, W04-C10).
 
 ### Preparation and commitment within the loop (added 2026-09-08)
 

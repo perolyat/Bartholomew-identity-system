@@ -53,11 +53,11 @@ These are not restated per candidate; they bind all of them.
 | W04-C03 | Ambient contextual assistance / reduced prompting | Interpretation + Experience | candidate |
 | W04-C04 | Persistent background delegation runtime | Executive + scheduler/runtime | candidate |
 | W04-C05 | Explicit Workflow Memory | Memory | candidate |
-| W04-C06 | Correction → validated lesson pipeline | Reflection + Memory + Governance | candidate |
+| W04-C06 | Generalising a correction beyond the record it superseded | Reflection + Memory + Governance | candidate |
 | W04-C07 | Learning-quality and burden metrics | Metrics / product measurement | candidate |
 | W04-C08 | Mobile task / approval / status surface | Client (companion) | candidate |
 | W04-C09 | Local companion perception + privacy filtering | Observation (edge) | candidate |
-| W04-C10 | Inspectable "what Bartholomew has learned" surface | Experience + Memory agency | candidate |
+| W04-C10 | Extend the shipped Learning Control Centre to new learned-content classes | Experience + Memory agency | candidate |
 | W04-C11 | Governed proactivity (Proactivity Eligibility Model) | Executive + Governance | candidate |
 | W04-C12 | Sanitized transferable competencies (cross-user) | Memory + Governance | candidate |
 | W04-C13 | Long-term model personalization | research only | **research-only; not promotable in W04** |
@@ -185,27 +185,39 @@ These are not restated per candidate; they bind all of them.
 - **Deferral / rejection evidence.** Captured workflows too brittle or too situation-specific to
   reuse; users unwilling to accept them once shown.
 
-### W04-C06 — Correction → validated lesson pipeline
+### W04-C06 — Generalising a correction beyond the record it superseded
 
-- **Problem.** A correction currently fixes one task and then evaporates. The same correction gets
-  made again, which is the most visible form of "this system is a chore".
-- **Direction.** Observation → attempt → outcome → correction → **lesson candidate** → validation →
-  promotion → reusable competency/workflow. This is a lifecycle **within** the frozen Learning &
-  Self-Correction machinery (`DECISIONS.md`: "Learning acceptance requires candidate-bound
-  authorization…"; "The learning policy is built in full and shipped structurally unable to
-  accept") — it is emphatically **not** a second, automatic learning mechanism, and it does not
-  weaken manual acceptance.
-- **Dependencies.** Reflection's candidate-learning output; the classification (personal /
-  potentially generalisable / system-level); C05; recovery/undo for retiring a bad lesson.
-- **Governance / safety.** Every lesson stays attributable, inspectable, confidence-scored,
-  versionable, **reversible**, auditable, bounded by authority, separable from execution, and
-  subject to promotion thresholds. Retiring a promoted lesson must be as available as promoting it
-  — the connection to undo/recovery is a requirement, not a nicety.
-- **Layer.** Reflection + Memory + Governance.
-- **Promotion evidence (E1).** Real corrections that, once promoted, measurably reduced repeat
-  corrections — plus a demonstrated clean retirement of a promoted lesson.
-- **Deferral / rejection evidence.** Lesson quality too low to accept; any promotion path that
-  cannot be reversed cleanly; drift observed in behaviour that the audit trail cannot explain.
+- **Not the base loop — that is Wave 3's.** `docs/waves/W03/W03_D_CONTRACT.md` already owns
+  `experience -> correction -> candidate lesson -> governance -> memory/competency`, with
+  first-class supersession and a Wave 3 exit criterion that an approved correction changes a later
+  turn. **That loop is active Wave 3 scope and this candidate does not restate, defer or
+  re-litigate it.** `COGNITIVE_RUNTIME.md`'s correction → lesson lifecycle describes W03-D's loop,
+  not a candidate.
+- **The genuinely post-W03 problem.** W03-D makes a correction change *the record it superseded*.
+  It does not make a correction change *situations it never saw*. A user who corrects the same
+  judgement in five neighbouring contexts still pays five corrections, because nothing proposes
+  "this looks like the same lesson" across them.
+- **Expected benefit.** A validated lesson that generalises across situations — one correction
+  improving future behaviour in cases structurally like it, rather than only where it was made.
+  Two further extensions W03-D does not cover: **retirement** of an already-promoted lesson
+  (including learning derived from it), and **promotion thresholds** for that generalisation step.
+- **Dependencies.** W03-D complete and its real-world evidence in hand — this candidate is
+  unassessable before then; C05 (a generalised lesson needs the operational structure to attach
+  to); the personal / potentially-generalisable / system-level classification; recovery/undo.
+- **Governance / safety.** Generalisation is the step where learning stops being auditable if
+  done carelessly: a lesson applied to a situation nobody corrected must carry the provenance of
+  the correction it came from, and must be rejectable there without unpicking the original.
+  Manual acceptance remains authoritative (`W03_DEFERRALS.md` #4); nothing here proposes automatic
+  acceptance, and the shadow-only policy stays shadow-only. Retiring a promoted lesson must be as
+  available and auditable as promoting it was.
+- **Layer.** Reflection + Memory + Governance — as an extension of W03-D's machinery, never a
+  second pipeline beside it.
+- **Promotion evidence (E1).** Wave 3 evidence that corrections *recur across similar situations*
+  (without which there is nothing to generalise), plus a demonstrated clean retirement of a
+  promoted lesson.
+- **Deferral / rejection evidence.** W03-D's loop proves sufficient in real use — corrections do
+  not recur across contexts, in which case this candidate is unnecessary and should be rejected;
+  or generalisation cannot be made reversible cleanly.
 
 ### W04-C07 — Learning-quality and burden metrics
 
@@ -269,20 +281,30 @@ These are not restated per candidate; they bind all of them.
 
 ### W04-C10 — Inspectable "what Bartholomew has learned" surface
 
-- **Problem.** Learning the user cannot see is learning the user cannot govern — and
-  `CONSTITUTION.md` already requires memory agency (inspect, correct, forget, export).
-- **Expected benefit.** A surface covering: what Bartholomew currently believes; what it has
-  learned about how the user works; learned workflows; learned competencies; recent corrections;
-  low-confidence assumptions; pending lesson candidates; things it wants permission to generalise;
-  provenance and evidence; and the ability to amend, revoke, undo or retire learned behaviour.
-- **Scope note.** This records the product/architecture requirement. **No UI is designed here.**
-- **Dependencies.** C05, C06; existing memory-agency and provenance machinery.
+- **This extends a surface that already exists.** The **Learning and Memory Control Centre**
+  (Package D, `docs/D_LEARNING_MEMORY_CONTROL_CENTRE.md`; the `#/learning` view in
+  `bartholomew_api_bridge_v0_1/ui/minimal/index.html`) already ships candidate inspection,
+  provenance, shadow-policy preview, competency correction and revocation, and export — see
+  `DECISIONS.md`'s "The learning policy is built in full and shipped structurally unable to
+  accept". **This candidate is not that surface and must not be read as proposing it from zero.**
+- **The remaining gap.** That surface shows what Bartholomew has learned in the kinds that exist
+  today. It has nothing to show for the content this register's other candidates would create:
+  learned workflows (C05), generalised lessons and what Bartholomew wants permission to
+  generalise (C06), and the low-confidence assumptions behind prepared work (C01).
+- **Expected benefit.** The existing Control Centre extended to cover those, so that new classes
+  of learned behaviour arrive already inspectable, amendable and revocable rather than acquiring
+  governance later.
+- **Scope note.** This records the product/architecture requirement. **No UI is designed here**,
+  and the existing view is the thing to extend, not to replace.
+- **Dependencies.** C05, C06 — this candidate is empty without them; the existing Control Centre,
+  memory-agency and provenance machinery.
 - **Governance / safety.** Revocation must be real: retiring a competency must actually change
   behaviour and be auditable, not merely hide a row.
 - **Layer.** Experience + Memory agency.
-- **Promotion evidence (E1).** Enough learned content exists in real use that inspection is
-  meaningful, and a real revocation demonstrably changes subsequent behaviour.
-- **Deferral / rejection evidence.** Learned state too sparse for the surface to be worth building.
+- **Promotion evidence (E1).** C05 or C06 promoted and producing content the existing Control
+  Centre cannot show, plus a real revocation of that new content demonstrably changing behaviour.
+- **Deferral / rejection evidence.** No new learned-content class materialises — in which case the
+  shipped Control Centre is already sufficient and this candidate is unnecessary.
 
 ### W04-C11 — Governed proactivity (Proactivity Eligibility Model)
 

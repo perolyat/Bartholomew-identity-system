@@ -56,7 +56,7 @@ industry fact, a benchmark, or a reason a Bartholomew candidate should be promot
 | 7 | Eventual personalized model adaptation / fine-tuning as a direction. | E3 | Recorded as long-range research only, explicitly **not** promoted (see the candidate register). |
 | 8 | "Artificial intuition" — preparing relevant work before the user asks. | E3 (vendor language) | The anthropomorphic term is **not** adopted as an architectural definition. The governed-proactivity concept is E5. |
 | 9 | Tasks continue after the user leaves the immediate interaction. | E3 | Motivates the persistent-delegation candidate. |
-| 10 | Dedicated hardware as the delivery vehicle. | E1 (that the device exists, per launch coverage) / E4 (that hardware is *necessary*) | Explicitly **not** adopted as a near-term dependency. |
+| 10 | Dedicated hardware as the delivery vehicle. | E3/E2 (that the device exists — launch coverage, no hands-on evaluation by this project) / E4 (that hardware is *necessary*) | Explicitly **not** adopted as a near-term dependency. |
 | 11 | Funding/valuation and user-research claims in press coverage. | E2 at best, largely E3 restated | Context only. No planning consequence. |
 
 ### Bartholomew design conclusions drawn (all E5)

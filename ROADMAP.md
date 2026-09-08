@@ -1562,12 +1562,17 @@ pass inserts ahead of them.
   and **not** scheduled: Bartholomew has no structured representation of a long-lived objective
   today (`ExperienceKernel`'s active goals are free-text strings), which is a conceptual gap for a
   future separately-approved proposal, not work authorised here.
-- **Build ambient/proactive assistance, a persistent delegation runtime, workflow-memory capture, a
-  learned-behaviour inspection surface, dedicated hardware, or personalized model weights (added
-  2026-09-08).** `CONSTITUTION.md`'s "Preparation and Commitment; Ambient Executive Assistance"
+- **Build ambient/proactive assistance, a persistent delegation runtime, workflow-memory capture,
+  generalisation of corrections beyond the records they supersede, dedicated hardware, or
+  personalized model weights (added 2026-09-08).** `CONSTITUTION.md`'s "Preparation and Commitment; Ambient Executive Assistance"
   section and `DECISIONS.md`'s "Violoop research is integrated as principle, reconciliation and
   candidates — not as scope, and never as evidence" record a direction and a set of **candidates**.
-  None of it is scope, and **none of it exists**. The candidates live in
+  None of it is scope, and none of it is built. **Two clarifications, so this line is not misread
+  as a status claim:** the correction → candidate → consolidation loop itself is **active Wave 3
+  scope** under `docs/waves/W03/W03_D_CONTRACT.md` (W04-C06 is only the later generalisation step),
+  and a learned-behaviour inspection surface **already exists** — the Learning and Memory Control
+  Centre shipped in Package D (`docs/D_LEARNING_MEMORY_CONTROL_CENTRE.md`), which W04-C10 would
+  extend rather than replace. The candidates live in
   `docs/waves/W04/W04_CANDIDATE_REGISTER.md` (W04-C01…C14) with per-candidate evidence thresholds;
   the external research and its E1–E5 evidence grading live in `docs/research/RESEARCH_REGISTER.md`.
   **Wave 4 is not selected by any of that**, and per `docs/waves/W03/README.md` it must still emerge
