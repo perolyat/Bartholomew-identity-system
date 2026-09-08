@@ -1491,3 +1491,125 @@ class TestADeviceCannotNameItsOwnVerifyMethod:
         )
         assert "NOT confirmed" not in sentence, sentence
         assert "confirmed by reading the machine back" in sentence, sentence
+
+
+class TestAForegroundClaimIsAboutTheActionsTarget:
+    """The last truthfulness hole, found by an adversarial audit of this head.
+
+    The earlier `MATCH_IN_SUMMARY` narrowing confined a foreground claim to the
+    read-back's summary line --- but `loop.py` builds that line as
+    `active window '<title>' (<app>): N readable control(s)`, so the observed
+    window's TITLE is inside it. An unrelated window whose title merely mentions
+    the app therefore still satisfied the claim.
+
+    Reproduced against the real W03-A read-back before the repair: a device
+    honestly reporting `unknown`, with the live consented session observing
+    Firefox titled "How to use Notepad on Windows 11 - Mozilla Firefox",
+    returned VERIFIED for "notepad is in the foreground". That is the wave's
+    central rule inverted --- `effect_unverifiable` becoming confirmed success
+    on evidence about a different window.
+
+    Root cause: nothing ties the read-back's scope to the action's target. The
+    executive supplies no `read_back_target`, so W03-A reads "whatever the live
+    session is consented to observe", which need not be what the action touched.
+    A foreground claim is therefore settled by the observed APPLICATION.
+    """
+
+    @staticmethod
+    def _port(text, *, application=None, window_title=None):
+        class Port:
+            available = True
+            code = None
+            reason = None
+            event_id = 9
+            provenance_degraded = False
+
+            def __init__(self):
+                self.text = text
+                if application is not None or window_title is not None:
+                    facts = {
+                        "available": True,
+                        "used_screenshot": False,
+                        "application": application,
+                        "window_title": window_title,
+                    }
+                    self.event = type(
+                        "Ev",
+                        (),
+                        {"observed_event": type("OE", (), {"facts": facts})()},
+                    )()
+
+            def __call__(self, **_kwargs):
+                return self
+
+        return Port()
+
+    def _verify(self, port, status):
+        from bartholomew.executive.verification import verify_step
+
+        return verify_step(
+            capability="windows.focus_window",
+            parameters={"app_id": "notepad"},
+            device_status=status,
+            tenant_id="t-1",
+            device_id=DEVICE,
+            requested_by="user:alice",
+            read_back_port=port,
+        )
+
+    def test_an_unrelated_window_whose_title_mentions_the_app_does_not_verify(self):
+        """The exact reproduction, with W03-A's published facts."""
+        from bartholomew.executive.verification import VERIFIED
+
+        result = self._verify(
+            self._port(
+                "active window 'How to use Notepad on Windows 11 - Mozilla Firefox' "
+                "(firefox.exe): 1 readable control(s)",
+                application="firefox.exe",
+                window_title="How to use Notepad on Windows 11 - Mozilla Firefox",
+            ),
+            status="unknown",
+        )
+        assert result.verdict != VERIFIED, (
+            "an honest 'unknown' was upgraded to verified by a read-back of a "
+            f"different application -- {result.detail}"
+        )
+        assert result.verified is False
+
+    def test_the_same_holds_when_only_the_rendered_summary_is_available(self):
+        """A port supplying no facts is still read for the `(app)` group."""
+        from bartholomew.executive.verification import VERIFIED
+
+        result = self._verify(
+            self._port(
+                "active window 'How to use Notepad on Windows 11 - Mozilla Firefox' "
+                "(firefox.exe): 1 readable control(s)",
+            ),
+            status="unknown",
+        )
+        assert result.verdict != VERIFIED
+        assert result.verified is False
+
+    def test_a_device_reported_success_on_the_wrong_window_still_contradicts(self):
+        """The state wins, in the direction that costs the claim."""
+        from bartholomew.executive.verification import FAILED
+
+        result = self._verify(
+            self._port("active window 'Calculator' (calc): 9 readable control(s)"),
+            status="succeeded",
+        )
+        assert result.verdict == FAILED
+
+    def test_the_real_target_in_the_foreground_still_verifies(self):
+        """The repair must not have removed the verification it narrowed."""
+        from bartholomew.executive.verification import VERIFIED
+
+        for application in ("notepad", "Notepad.exe"):
+            result = self._verify(
+                self._port(
+                    f"active window 'Untitled - Notepad' ({application}): 4 readable control(s)",
+                    application=application,
+                ),
+                status="succeeded",
+            )
+            assert result.verdict == VERIFIED, (application, result.detail)

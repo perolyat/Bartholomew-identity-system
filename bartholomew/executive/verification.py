@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -199,6 +200,66 @@ def _used_screenshot_fallback(result: Any) -> bool:
     # Only a fallback when the accessibility read did NOT succeed: a read that
     # got both is real UI text.
     return bool(facts.get("used_screenshot")) and not bool(facts.get("available"))
+
+
+def _observed_application(result: Any, summary: str) -> str | None:
+    """Which application the read-back actually observed, if it says.
+
+    W03-A publishes it two ways, and both are read here because a port may
+    supply either: `observed_event.facts["application"]`, and --- when only the
+    rendered text is available --- the `(app)` group of the summary line
+    `loop.py` builds, `active window '<title>' (<app>): N readable control(s)`.
+
+    `None` means the observation did not identify an application at all.
+    """
+    event = getattr(result, "event", None)
+    observed = getattr(event, "observed_event", None)
+    facts = getattr(observed, "facts", None)
+    if isinstance(facts, dict):
+        application = facts.get("application")
+        if application:
+            return str(application)
+    match = re.search(r"active window .*?\(([^)]+)\)", summary)
+    return match.group(1) if match else None
+
+
+def _foreground_claim_holds(token: str, summary: str, result: Any) -> bool:
+    """Whether the read-back shows the ACTION'S TARGET in the foreground.
+
+    W03-F integration repair, and the one an adversarial audit of the composed
+    head caught after the earlier `MATCH_IN_SUMMARY` narrowing. That narrowing
+    confined a foreground claim to the summary line --- but the summary line
+    embeds the observed window's TITLE, so an entirely unrelated window whose
+    title merely mentions the app still satisfied the claim. Reproduced against
+    the real W03-A read-back:
+
+        device reports `unknown` (it honestly could not tell);
+        the live consented session is observing Firefox, titled
+        "How to use Notepad on Windows 11 - Mozilla Firefox";
+        -> "notepad is in the foreground" returned VERIFIED.
+
+    That is the wave's central rule inverted: an `effect_unverifiable` outcome
+    became a confirmed one, on evidence about a different window. Nothing tied
+    the read-back's scope to the action's target, and nothing could --- the
+    executive supplies no `read_back_target`, so W03-A reads "whatever the live
+    session is consented to observe", which need not be what the action touched.
+
+    So the claim is now settled by the observed APPLICATION rather than by text
+    anywhere in the summary. Where the observation names no application at all
+    the older summary match stands, because a port that identifies nothing
+    cannot be interrogated further; with the real W03-A provider that case does
+    not arise on this path (an unavailable accessibility read emits no "active
+    window" part and is already routed to `unknown` as a screenshot fallback).
+    """
+    needle = token.strip().lower()
+    application = _observed_application(result, summary)
+    if application is not None:
+        # The app id and the observed image name are compared both ways so
+        # "notepad" matches "notepad.exe" without "calc" matching "calculator".
+        observed = application.strip().lower()
+        stem = observed.rsplit(".", 1)[0] if "." in observed else observed
+        return needle in {stem, observed}
+    return needle in summary.lower()
 
 
 def _read_back_evidence(result: Any, base: dict[str, Any]) -> dict[str, Any]:
@@ -457,8 +518,14 @@ def verify_step(
     # Foreground claims are now settled by the read-back's own summary line, and
     # content claims (the typed text) still match anywhere, because that is where
     # a control's value legitimately appears.
-    haystack = text if match_scope == MATCH_ANYWHERE else text.split("\n", 1)[0]
-    matched = token.strip().lower() in haystack.lower()
+    if match_scope == MATCH_ANYWHERE:
+        matched = token.strip().lower() in text.lower()
+    else:
+        # A foreground claim is about WHICH APPLICATION is in front, so it is
+        # settled by the observed application --- not by the window title, which
+        # is what let an unrelated window satisfy it. See
+        # `_foreground_claim_holds`.
+        matched = _foreground_claim_holds(token, text.split("\n", 1)[0], result)
     if matched:
         return Verification(
             verdict=VERIFIED,
