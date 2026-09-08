@@ -279,6 +279,31 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # capture backend. It observes nothing and names nothing the person is
     # doing.
     ("GET", "/api/multimodal/diagnostics"): Capability.LIVENESS,
+    # --- the operator console (W03-E) ---------------------------------------
+    # Classified before `app.py` registers the router, on exactly the precedent
+    # the inbound-capture block above records: routes are default-deny, so an
+    # unclassified /api/operator/* would 403 the moment W03-F registered it, and
+    # pre-classifying is what stops that becoming a reason to reach for a bypass.
+    #
+    # The overview is SELF_READ, the same class as the other reads of what
+    # Bartholomew is doing right now: it names pending actions and the windows a
+    # device asked to observe, which is a statement about the person's day, not
+    # about whether the process is up.
+    #
+    # Giving Bartholomew a task is ACTION_REQUEST and not a capability of its
+    # own. Asking for a task is asking for the actions it proposes: the
+    # executive proposes every Windows step through the same envelope this
+    # capability already gates, it can never mint an approval, and a separate
+    # capability would make "may ask the executive for an action but may not ask
+    # for an action" a reachable and meaningless configuration. Advancing a task
+    # is the executive's second proposing pass -- it can propose the next step
+    # or re-propose a failed one -- so it is a request too, on a POST. Reading a
+    # task back is a pure read of the stored plan and is ACTION_READ: it
+    # observes nothing, verifies nothing and proposes nothing.
+    ("GET", "/api/operator/overview"): Capability.SELF_READ,
+    ("POST", "/api/operator/tasks"): Capability.ACTION_REQUEST,
+    ("POST", "/api/operator/tasks/{task_id}/advance"): Capability.ACTION_REQUEST,
+    ("GET", "/api/operator/tasks/{task_id}"): Capability.ACTION_READ,
     # --- kernel command -----------------------------------------------------
     ("POST", "/kernel/command/{cmd}"): Capability.KERNEL_COMMAND,
     # --- metrics -------------------------------------------------------------

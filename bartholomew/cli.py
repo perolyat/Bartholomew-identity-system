@@ -43,7 +43,15 @@ app.add_typer(multimodal_app, name="multimodal")
 from bartholomew.cli_companion import companion_app  # noqa: E402
 from bartholomew.cli_consent import consent_app  # noqa: E402
 
+# The operator console (W03-E). Same reasoning again: `bartholomew/cli_operator.py`
+# holds the commands, and this file holds one registration line. The group is
+# registered here because a console nothing can invoke is a shipped-broken
+# surface, not a scope saving -- see BARTHOLOMEW_W03_E_HANDOFF.md, which flags
+# this one line for W03-F as the only edit W03-E makes to a file it does not own.
+from bartholomew.cli_operator import operator_app  # noqa: E402
+
 app.add_typer(companion_app, name="companion")
+app.add_typer(operator_app, name="operator")
 # The person's answer to a device's ask to observe. Separate from `companion`
 # on purpose: that group speaks with the device credential, and this one must
 # never carry it.
