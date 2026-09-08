@@ -127,7 +127,7 @@ class MultimodalReadBackProvider:
                 type(exc).__name__,
             )
             return ReadBack.unavailable(
-                f"the read-back raised {type(exc).__name__}, so nothing was observed"
+                f"the read-back raised {type(exc).__name__}, so nothing was observed",
             )
 
         if not getattr(observed, "available", False):
@@ -142,7 +142,7 @@ class MultimodalReadBackProvider:
             # there", which is a claim about the screen that nobody observed.
             return ReadBack.unavailable(
                 "the read-back reported success but returned no text, so nothing "
-                "could be compared"
+                "could be compared",
             )
 
         if getattr(observed, "provenance_degraded", False):
