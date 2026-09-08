@@ -1,4 +1,4 @@
-"""The action channel: a separate, separately authenticated boundary. Two verbs.
+"""The action channel: a separate, separately authenticated boundary. Three verbs.
 
 **This is not the observation client and cannot be reached from it.** The
 observation companion (`bartholomew/companion/client.py`) POSTs to
@@ -12,13 +12,20 @@ observation package nor anything the observation package imports.
 `tests/test_windows_action_channel_separation.py` asserts that in both
 directions over the module import graph.
 
-Two verbs, and the asymmetry between them is deliberate:
+Three verbs, and the asymmetry between them is deliberate:
 
 * `lease()` **does** parse the response into typed actions, because that is
   what an action channel is for. Every field is then re-validated by
-  `dispatch.check()` before anything runs, so a hostile response gets four
+  `dispatch.check()` before anything runs, so a hostile response gets five
   device-side refusals rather than an execution.
 * `report()` sends an outcome and reads nothing back but a status code.
+* `abort_check()` asks whether the actions this companion is holding may still
+  run, and can only ever make it act **less**. It is the narrowest verb of the
+  three: its response has no field that names an action to run, a program, a
+  path or a parameter, and the only thing a hostile answer to it can achieve is
+  stopping a companion that would otherwise have acted. A third verb widens the
+  surface, so it was worth checking what it widens it *to*, and the answer is
+  "a set of ids the companion already knows, and a boolean".
 
 Everything a response can influence is bounded: a fixed number of actions, a
 fixed maximum body size, and a typed constructor that refuses a malformed
@@ -40,12 +47,13 @@ from typing import Any
 
 from bartholomew.actuation.result import HandlerOutcome
 
-from .dispatch import DispatchRefusedError, LeasedAction
+from .dispatch import AbortSignal, DispatchRefusedError, LeasedAction
 
 logger = logging.getLogger(__name__)
 
 LEASE_PATH = "/api/device-actions/lease"
 RESULT_PATH_TEMPLATE = "/api/device-actions/{action_id}/result"
+ABORT_PATH = "/api/device-actions/abort-check"
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
 
@@ -101,12 +109,12 @@ def _classify(http_status: int) -> ChannelStatus:
 
 
 class ActionChannelClient:
-    """Leases actions and reports results. Has no other verb.
+    """Leases actions, asks whether they may still run, and reports results.
 
-    Deliberately no `execute`, no `run`, no generic `post`: the two methods
+    Deliberately no `execute`, no `run`, no generic `post`: the three methods
     below are the whole interface, and
     `tests/test_windows_action_channel_separation.py` asserts that the public
-    surface is exactly those two.
+    surface is exactly those three and that none of them is a wider one.
     """
 
     def __init__(
@@ -158,7 +166,7 @@ class ActionChannelClient:
                 f"{type(e).__name__}: {e}",
             )
 
-    # -- the two verbs ----------------------------------------------------
+    # -- the three verbs --------------------------------------------------
 
     def lease(self, *, limit: int = 5) -> tuple[ChannelResult, list[LeasedAction], list[str]]:
         """Ask for actions this device may run now.
@@ -170,7 +178,7 @@ class ActionChannelClient:
 
         Leasing is a **request**, not an instruction: the server has already
         decided each of these passed its eleven governance checks, and this
-        client re-checks four of them before running anything.
+        client re-checks five of them before running anything.
         """
         result = self._post(LEASE_PATH, {"device_id": self.device_id, "limit": int(limit)})
         if not result.ok or not isinstance(result.body, dict):
@@ -203,6 +211,31 @@ class ActionChannelClient:
                 malformed.append(identifier)
                 logger.warning("Refusing a malformed leased action %s: %s", identifier, refusal)
         return result, actions, malformed
+
+    def abort_check(self, *, action_ids: list[str]) -> tuple[ChannelResult, AbortSignal]:
+        """Ask whether these leased actions may still run. Fail-closed on everything.
+
+        The device half of stop-after-lease. Returns `(result, signal)`, and
+        every path that is not a well-formed 200 produces
+        `AbortSignal.unreadable(...)` -- a transport failure, a 401, a 503, a
+        body that is not an object, a body with no lists. `may_run()` is False
+        for all of them, so a companion that cannot reach the abort signal does
+        not act, which is the only reading of "the brake stops it" that is
+        worth having.
+
+        Note what this verb cannot do in the other direction: there is no field
+        in the response this client reads that could *start* anything. It
+        narrows what is runnable and never widens it.
+        """
+        result = self._post(
+            ABORT_PATH,
+            {"device_id": self.device_id, "action_ids": [str(a) for a in action_ids]},
+        )
+        if not result.ok:
+            return result, AbortSignal.unreadable(
+                f"the abort check did not succeed ({result.http_status}): {result.detail}",
+            )
+        return result, AbortSignal.from_wire(result.body)
 
     def report(
         self,

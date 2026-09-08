@@ -50,11 +50,61 @@ app.add_typer(companion_app, name="companion")
 app.add_typer(consent_app, name="consent")
 
 
+# ---------------------------------------------------------------------------
+# One answer to "which database?"
+# ---------------------------------------------------------------------------
+#
+# Every `--db` on this CLI used to default to a literal `data/bartholomew.db`
+# -- a scratch file the running server had never opened. On the live Windows
+# test that produced a `brake on` printing "ENGAGED" while the server carried
+# on dispatching: an emergency stop that appeared to work and did nothing,
+# which is the worst shape a safety control can take.
+#
+# The brake commands were migrated first. W03-C finishes the job: every
+# remaining command resolves through `bartholomew.kernel.db_paths`, the same
+# resolver the API server and the kernel daemon use, and every one of them
+# *prints the file it touched*. Printing is half the fix -- a resolver whose
+# answer an operator never sees leaves them exactly where the live test found
+# them, unable to tell which file they just changed.
+#
+# An explicit `--db` still wins, unconditionally: tests address per-test
+# databases while a session-wide `BARTH_DB_PATH` is set, and a shell must keep
+# a way to name a specific file.
+_KERNEL_DB_HELP = (
+    "Kernel database. Default: BARTH_DB_PATH, else <project root>/data/barth.db "
+    "-- the same file the running server reads. Pass a path to address a "
+    "different one; the running server is then untouched."
+)
+
+
+def _kernel_db(explicit: str | None) -> str:
+    from bartholomew.kernel.db_paths import resolve_kernel_db_path
+
+    return resolve_kernel_db_path(explicit)
+
+
+def _resolved_db(explicit: str | None) -> str:
+    """Resolve `--db` and say out loud which file it landed on.
+
+    Returns the resolved path and prints one line naming it and where the
+    answer came from. Both halves matter: the resolution is what makes the
+    command touch the file the server is using, and the printed line is what
+    lets an operator confirm that it did.
+    """
+    from bartholomew.kernel.db_paths import describe_kernel_db_path
+
+    resolved = _kernel_db(explicit)
+    described = describe_kernel_db_path(explicit)
+    console.print(f"Database: {resolved}  (from {described['source']})")
+    return resolved
+
+
 @embeddings_app.command("stats")
 def embeddings_stats(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
 ):
     """Show embeddings statistics and the live retrieval mode"""
+    db = _resolved_db(db)
     import os
     import sqlite3
 
@@ -226,7 +276,7 @@ def embeddings_provision(
 
 @embeddings_app.command("rebuild")
 def embeddings_rebuild(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
     dry_run: bool = typer.Option(False, help="Report what would change, write nothing"),
 ):
     """Regenerate embeddings that cannot honestly be used for retrieval.
@@ -247,6 +297,7 @@ def embeddings_rebuild(
     Never deletes a memory. A row that cannot be regenerated is excluded, not
     destroyed, so nothing is lost that a later provisioning run could recover.
     """
+    db = _resolved_db(db)
     import sqlite3
 
     from bartholomew.kernel.embedding_engine import (
@@ -449,9 +500,10 @@ def embeddings_evaluate(
 
 @embeddings_app.command("rebuild-vss")
 def embeddings_rebuild_vss(
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
 ):
     """Rebuild SQLite VSS virtual table and triggers"""
+    db = _resolved_db(db)
     import os
     import sqlite3
 
@@ -579,23 +631,6 @@ def embeddings_rebuild_vss(
 
 _CLI_BRAKE_REASON_PREFIX = "CLI"
 
-# The brake commands used to default `--db` to a literal "data/bartholomew.db"
-# -- a scratch file the running server never opened. On the live Windows test
-# that printed "ENGAGED" while the server carried on dispatching. They now
-# resolve through the same path the server and kernel daemon use, and say
-# which file they touched. An explicit --db still wins, unconditionally.
-_KERNEL_DB_HELP = (
-    "Kernel database. Default: BARTH_DB_PATH, else <project root>/data/barth.db "
-    "-- the same file the running server reads. Pass a path to address a "
-    "different one; the running server is then untouched."
-)
-
-
-def _kernel_db(explicit: str | None) -> str:
-    from bartholomew.kernel.db_paths import resolve_kernel_db_path
-
-    return resolve_kernel_db_path(explicit)
-
 
 @brake_app.command("on")
 def brake_on(
@@ -696,7 +731,7 @@ def train(
         help="Path to a JSON training submission "
         "(competency_id, source_type, source_detail, records[])",
     ),
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
 ):
     """
     Submit structured training material for a competency (S5.2).
@@ -711,6 +746,7 @@ def train(
     inbox rather than stored, and are reported separately below: "queued"
     means Bartholomew does NOT yet know it.
     """
+    db = _resolved_db(db)
     import asyncio
     import json
     from pathlib import Path
@@ -830,7 +866,7 @@ def train(
 @app.command("say")
 def say(
     text: str = typer.Argument(..., help="What Bartholomew should say out loud"),
-    db: str = typer.Option("data/bartholomew.db", help="Path to database file"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
     config: str = typer.Option("config/kernel.yaml", help="Path to kernel config"),
     identity: str = typer.Option("Identity.yaml", help="Path to Identity file"),
 ):
@@ -850,6 +886,7 @@ def say(
     A machine with no local speech binary installed reports "no engine"
     rather than silently appearing to have spoken.
     """
+    db = _resolved_db(db)
     import asyncio
 
     import yaml
@@ -1107,7 +1144,7 @@ def serve_command(
 @app.command("unattended-report")
 def unattended_report_command(
     run_id: str = typer.Argument(..., help="The BARTH_UNATTENDED_RUN_ID the run used."),
-    db: str = typer.Option("data/bartholomew.db", help="Path to the runtime database file."),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
     out: str = typer.Option(None, help="Write the frozen report here instead of stdout."),
     item_limit: int = typer.Option(200, help="Max rows inlined per evidence source."),
 ) -> None:
@@ -1124,6 +1161,7 @@ def unattended_report_command(
     reported as still open -- which, for a run that is supposed to be over,
     is the finding.
     """
+    db = _resolved_db(db)
     import json as _json
 
     from bartholomew.runtime.evidence_report import freeze, write_frozen_report
