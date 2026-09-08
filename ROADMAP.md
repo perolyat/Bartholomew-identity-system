@@ -1557,3 +1557,35 @@ pass inserts ahead of them.
   and **not** scheduled: Bartholomew has no structured representation of a long-lived objective
   today (`ExperienceKernel`'s active goals are free-text strings), which is a conceptual gap for a
   future separately-approved proposal, not work authorised here.
+- **Redesign the customer-facing UI toward the "Bartholomew Executive Dark" visual direction
+  (added 2026-09-08).** `CONSTITUTION.md`'s "UX Principles" section now records an agreed **future**
+  visual direction for customer-facing interfaces (dark charcoal grounds, muted slate panels, warm
+  off-white type, restrained blue/green/amber accents, compact typography, rounded cards, subtle
+  borders — a calm, premium executive-assistant feel rather than a developer dashboard); see
+  `DECISIONS.md`'s "Customer-facing visual direction — Bartholomew Executive Dark" entry. That is
+  **recorded direction, not current scope.** It is explicitly **non-binding on Wave 3**, changes no
+  stage's scope, sequencing, exit criteria or status, and authorises no redesign, mock-up,
+  frontend framework or dependency. Only the **visual language** is agreed: the reference image that
+  prompted it contained invented information architecture (Projects, Analytics, Reports,
+  market/customer analysis) which is **not approved and must not be recorded as a Bartholomew
+  requirement**.
+
+  **Future-work candidate (bounded; not scheduled, and not Wave 4 scope merely by being written
+  down):** *Customer-facing UI visual consolidation toward Bartholomew Executive Dark* — a single
+  cohesive visual pass over the customer-facing surfaces that already exist, at whatever point a
+  future Wave Prep session evaluates UI/UX candidates. Wave selection remains a separate decision.
+
+  **Promotion threshold — all four must hold before it is a candidate for a wave:**
+  1. current functional UI capabilities are mature enough that a cohesive customer-facing design
+     pass is justified (a design pass over surfaces still changing shape would be re-done);
+  2. real-world testing has identified actual interface friction — visual overload, poor
+     discoverability, or an excessive developer-console feel — rather than an assumed need;
+  3. the redesign can demonstrably preserve governance visibility and truthful system-state
+     communication, including the Parking Brake, consent/approval and awaiting-response surfaces;
+  4. it does not displace higher-priority capability or reliability defects.
+
+  **Constraint that survives promotion:** visual simplification must not be achieved by hiding or
+  deleting useful capability. Engineering instrumentation may be separated from the ordinary
+  experience, but safety, consent, system state and user agency must remain appropriately visible.
+  The direction is subordinate to usability, accessibility, truthful system-state representation,
+  governance visibility and actual capability requirements.

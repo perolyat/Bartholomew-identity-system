@@ -792,6 +792,46 @@ The application should feel alive. Setup should feel like "my phone just became 
 The user should almost never need forms. Voice should be the primary interface; typing is
 secondary. Configuration should disappear wherever possible.
 
+### Visual direction: "Bartholomew Executive Dark" (recorded 2026-09-08, not yet scheduled)
+
+An agreed **future** visual direction for Bartholomew's customer-facing interfaces, recorded so it
+is not lost. **This is a visual language, not an authorisation to redesign or implement anything
+now.** It is non-binding on Wave 3 and on every current implementation; the operator-facing
+surfaces that exist today are unchanged by it. See `ROADMAP.md`'s "What we will not do yet" entry
+of the same name for the future-work candidate and its promotion threshold, and `DECISIONS.md`'s
+"Customer-facing visual direction — Bartholomew Executive Dark" entry for the decision record.
+
+The preserved aspects are:
+
+- deep charcoal / near-black overall background; muted slate or dark-grey panels
+- warm off-white primary typography rather than stark white
+- restrained blue, green and amber accents used for state, action and status
+- clean, relatively compact typography; generous but controlled spacing
+- rounded panels/cards; subtle borders and shadows rather than bright or glowing sci-fi styling
+- calm, mature, premium executive-assistant appearance — information-dense screens that stay
+  visually quiet and understandable
+- simple, understated **B / BARTHOLOMEW** branding as a promising direction
+- the interface should increasingly feel like the front of a capable personal executive system
+  rather than a developer dashboard
+
+**Subordinate, not superior.** This direction ranks below usability, accessibility (including
+"Cognitive accessibility" above), truthful representation of real system state, governance
+visibility, and actual capability requirements. Where it conflicts with any of those, they win.
+
+**Visual language only — no information architecture is approved by this.** The reference image
+that prompted the decision contained invented content (Projects, Analytics, Reports, market and
+customer analysis, and an unrelated dashboard information architecture). **None of that is a
+Bartholomew requirement and none of it may be recorded, cited or built as one.** Bartholomew's
+UI architecture continues to emerge from its real responsibilities — conversation and interaction,
+presence, memory, learning, governance and the Parking Brake, approvals and consent, devices,
+observations, actions and autonomy, notifications/attention, and user-facing system state. That
+list distinguishes real capability domains from the invented reference content; it is **not** a
+navigation model and must not be frozen into one either.
+
+**Capability-preservation invariant.** Visual simplification must not be achieved by hiding or
+deleting useful capability. Engineering instrumentation may be separated from the ordinary
+experience, but safety, consent, system state and user agency must remain appropriately visible.
+
 ## Personality
 
 **Split 2026-07-28 between enduring character values (this document) and switchable presentation
