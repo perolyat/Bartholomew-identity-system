@@ -196,8 +196,13 @@ class TestSpeakText:
         # is the thing under test and it must be under test on both.
         if sys.platform.startswith("win"):
             script = tmp_path / "hanging-tts.cmd"
+            # A batch file that wedges *itself*. Deliberately not `ping`,
+            # `timeout` or any other waiting binary: those run as a grandchild
+            # that inherits the pipes, so killing the interpreter on timeout
+            # leaves the pipe open and the reader blocks on a process nobody is
+            # waiting for. A `goto` loop has no child to outlive it.
             script.write_text(
-                "@echo off\r\nping -n 60 127.0.0.1 >nul\r\n",
+                "@echo off\r\n:loop\r\ngoto loop\r\n",
                 encoding="utf-8",
             )
         else:
