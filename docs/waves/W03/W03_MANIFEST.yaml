@@ -155,9 +155,17 @@ sessions:
     handoff: BARTHOLOMEW_W03_D_HANDOFF.md
     contract: docs/waves/W03/W03_D_CONTRACT.md
     required_ci_tier: integration
-    status: ready_to_start
+    status: frozen
     depends_on: []
     requires_frozen: []
+    # Session metadata recorded by W03-D at completion. The `branch` field
+    # above stays as the contract prescribes it (and as
+    # tests/test_wave_manifest.py enforces for every builder); the commits
+    # were pushed to the branch this session's execution harness assigned,
+    # the same divergence W03-PREP records for itself. An identical ref was
+    # pushed under the prescribed name, so both resolve to one head.
+    # See docs/waves/W03/BARTHOLOMEW_W03_D_HANDOFF.md, "Branch naming".
+    pushed_branch: claude/w03-d-urzyeg
     owns:
       - bartholomew/kernel/memory_store.py
       - bartholomew/kernel/consent_gate.py

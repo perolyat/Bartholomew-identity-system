@@ -49,6 +49,17 @@ Deletion is permanent and this schema has no soft-delete tier to route to, so
 from conversational text; the only way to reach `forget_memory()` is a
 deliberate, confirmed request naming an exact record.
 
+Revocation tombstones (W03-D)
+-----------------------------
+Deleting a memory now also records that its `(kind, key)` was withdrawn, so
+the next personal-fact capture, lesson consolidation or training write cannot
+silently put it back. No content is retained -- the tombstone is an identity,
+a timestamp and who asked. Two routes make that visible and reversible rather
+than a silent behaviour change: `GET /api/memory/revocations` lists what is
+withheld, and `POST /api/memory/{kind}/{key}/reinstate` lifts one. Both are
+`MemoryStore` calls like every other route here; this module still decides
+nothing.
+
 Auth note: same as every other route in this API bridge -- no authentication
 today; ROADMAP.md's Stage 1 section defers that to a separate future project.
 """
@@ -71,6 +82,18 @@ class MemoryCorrection(BaseModel):
     """A user-supplied replacement value for one stored memory."""
 
     value: str = Field(min_length=1)
+
+
+class MemoryReinstatement(BaseModel):
+    """A named request to lift one revocation tombstone.
+
+    `reinstated_by` is required and has no default. Lifting a withdrawal is
+    never anonymous -- the store itself refuses an empty one -- and a default
+    here would quietly supply the name the store is asking for.
+    """
+
+    reinstated_by: str = Field(min_length=1)
+    reason: str | None = None
 
 
 def _get_kernel():
@@ -151,6 +174,63 @@ async def export_memories() -> Response:
         media_type="application/json",
         headers={"Content-Disposition": 'attachment; filename="bartholomew-memories.json"'},
     )
+
+
+@router.get("/revocations")
+async def list_revocations(limit: int = Query(200, ge=1, le=1000)) -> dict[str, Any]:
+    """
+    The `(kind, key)` identities currently withheld by a revocation tombstone.
+
+    Declared before `/{kind}/{key}` so the literal path wins over the
+    parameterised one; FastAPI matches in declaration order.
+
+    Answers a question the store could not answer at all before W03-D: what
+    has Bartholomew been told to stop remembering, and when. Content is not
+    part of the answer, because none is kept.
+    """
+    kernel = _get_kernel()
+    return {"revocations": await kernel.mem.list_revocations(limit=limit)}
+
+
+@router.post("/{kind}/{key}/reinstate")
+async def reinstate_memory(kind: str, key: str, body: MemoryReinstatement) -> dict[str, Any]:
+    """
+    Lift a revocation tombstone so this identity may be stored again.
+
+    Deliberately a separate, named, attributed act rather than a flag on the
+    write path: a bypass parameter would be reachable by anything that found
+    the refusal inconvenient, while this shows up in the audit trail as
+    somebody deciding to allow it again.
+
+    Lifting a tombstone restores no content. A memory that was revoked
+    (kept, marked) becomes live again; one that was forgotten (content
+    erased) is simply writable once more.
+    """
+    kernel = _get_kernel()
+    try:
+        outcome = await kernel.mem.reinstate_memory(
+            kind,
+            key,
+            reinstated_by=body.reinstated_by,
+            reason=body.reason,
+        )
+    except ParkingBrakeEngagedError as e:
+        raise HTTPException(503, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    return {
+        "ok": True,
+        "kind": kind,
+        "key": key,
+        "tombstone_lifted": outcome.reinstated,
+        "record_restored": outcome.was_present,
+        "detail": (
+            "This memory may be stored again."
+            if outcome.reinstated
+            else "There was no revocation in force for this memory; nothing changed."
+        ),
+    }
 
 
 @router.get("/{kind}/{key}")
@@ -252,4 +332,17 @@ async def forget_memory(
 
     if not deleted:
         raise HTTPException(404, f"no memory {kind}/{key}")
-    return {"ok": True, "forgotten": True, "kind": kind, "key": key}
+    return {
+        "ok": True,
+        "forgotten": True,
+        "kind": kind,
+        "key": key,
+        # W03-D. Reported rather than silent: "deleted" and "deleted, and
+        # Bartholomew will not write this down again on its own" are
+        # different promises, and only the second one is now true.
+        "tombstoned": True,
+        "detail": (
+            "Deleted. Bartholomew will not re-learn this from conversation, "
+            "training or a lesson unless you reinstate it."
+        ),
+    }

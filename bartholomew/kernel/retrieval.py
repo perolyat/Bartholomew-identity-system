@@ -15,6 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from bartholomew.kernel.consent_gate import VERDICT_CURRENTLY_VALID
 from bartholomew.kernel.embedding_engine import (
     EmbedderUnavailableError,
     EmbeddingEngine,
@@ -172,7 +173,19 @@ class RetrievalFilters:
 
 @dataclass
 class RetrievedItem:
-    """Single retrieved memory item"""
+    """Single retrieved memory item
+
+    W03-D adds `verdict` and `provenance`, the retrieval-side half of the
+    `memory-retrieval-governance` shared contract. Every item a retriever
+    returns is `currently_valid` -- a revoked, superseded or expired memory is
+    excluded, not returned with a warning flag -- so `verdict` is carried for
+    the *consumer's* benefit (W03-B's executive and W03-E's operator surface
+    can state, honestly, that what they applied was checked), not as something
+    a caller is expected to re-filter on. `provenance` carries the stored
+    origin, confidence and validity window for the same reason: a consumer can
+    present recalled material with its source without reaching into
+    `memories` itself.
+    """
 
     memory_id: int
     score: float
@@ -181,11 +194,15 @@ class RetrievedItem:
     kind: str | None = None
     context_only: bool = False
     policy_flags: set = None  # Phase 2d+: Set of policy flags
+    verdict: str = VERDICT_CURRENTLY_VALID
+    provenance: dict[str, Any] | None = None
 
     def __post_init__(self):
         """Initialize policy_flags if not provided"""
         if self.policy_flags is None:
             self.policy_flags = set()
+        if self.provenance is None:
+            self.provenance = {}
 
 
 class Retriever:
@@ -280,6 +297,13 @@ class Retriever:
         # memory unconditionally regardless of its real consent state.
         consented_ids = self._get_consented_ids()
 
+        # W03-D: the retrieval-side validity verdict, computed once for the
+        # whole candidate set through the owned consent-gate seam. Relevance
+        # logic below is untouched -- an invalid memory is dropped before it
+        # is scored, not scored and then demoted, because a claim that does
+        # not hold is not weak evidence, it is not evidence.
+        verdicts = self._validity_verdicts([memory_id for memory_id, _ in candidates])
+
         # Load memory data and apply rule-based filtering
         # Store tuples of (item, ts) for tie-breaking
         results_with_ts = []
@@ -298,6 +322,16 @@ class Retriever:
 
             # Check if memory should be excluded from retrieval
             if not self._should_include(evaluated, memory_id, consented_ids):
+                continue
+
+            verdict = verdicts.get(memory_id)
+            if verdict is not None and not verdict.currently_valid:
+                logger.debug(
+                    "Excluding memory %s from vector retrieval: %s (%s)",
+                    memory_id,
+                    verdict.verdict,
+                    verdict.reason,
+                )
                 continue
 
             # Phase 2d+: Apply retrieval boost from rules
@@ -319,6 +353,8 @@ class Retriever:
                 kind=memory_data.get("kind"),
                 context_only=(recall_policy == "context_only"),
                 policy_flags=policy_flags,
+                verdict=verdict.verdict if verdict else VERDICT_CURRENTLY_VALID,
+                provenance=dict(verdict.provenance or {}) if verdict else {},
             )
 
             # Store with timestamp for tie-breaking
@@ -405,6 +441,17 @@ class Retriever:
         from bartholomew.kernel.consent_gate import ConsentGate
 
         return ConsentGate(self.vector_store.db_path).get_consented_memory_ids()
+
+    def _validity_verdicts(self, memory_ids: list[int]) -> dict[int, Any]:
+        """W03-D validity verdicts for this candidate set, from the gate.
+
+        Computed through `ConsentGate` rather than here so there is exactly
+        one place that decides what "still true" means. This retriever owns
+        relevance; it does not own governance.
+        """
+        from bartholomew.kernel.consent_gate import ConsentGate
+
+        return ConsentGate(self.vector_store.db_path).validity_verdicts(memory_ids)
 
     def _should_include(
         self,
@@ -695,6 +742,20 @@ class FTSOnlyRetriever:
                 mid for mid in filtered_ids if rules_data.get(mid, {}).get("include", True)
             }
 
+        # W03-D: the validity verdict is applied whether or not a rules engine
+        # was supplied. That asymmetry is deliberate. A caller constructing
+        # `FTSOnlyRetriever(db_path=...)` with no rules engine -- exactly what
+        # this class's own docstring usage example shows, and what the
+        # consent-bypass red-team suite exercises -- must still not be able to
+        # recall a revoked, superseded or expired memory. Governance that only
+        # applies when the caller opted into a rules engine is not governance.
+        validity = self._validity_verdicts(sorted(filtered_ids))
+        filtered_ids = {
+            mid
+            for mid in filtered_ids
+            if validity.get(mid) is None or validity[mid].currently_valid
+        }
+
         if not filtered_ids:
             return []
 
@@ -717,6 +778,7 @@ class FTSOnlyRetriever:
             if recall_policy == "context_only":
                 policy_flags.add("context_only")
 
+            verdict = validity.get(memory_id)
             item = RetrievedItem(
                 memory_id=memory_id,
                 score=score,
@@ -725,11 +787,19 @@ class FTSOnlyRetriever:
                 kind=data.get("kind"),
                 context_only=(recall_policy == "context_only"),
                 policy_flags=policy_flags,
+                verdict=verdict.verdict if verdict else VERDICT_CURRENTLY_VALID,
+                provenance=dict(verdict.provenance or {}) if verdict else {},
             )
             results.append(item)
 
         logger.debug(f"FTS retrieval returned {len(results)} results")
         return results
+
+    def _validity_verdicts(self, memory_ids: list[int]) -> dict[int, Any]:
+        """W03-D validity verdicts for these ids, from the consent gate."""
+        from bartholomew.kernel.consent_gate import ConsentGate
+
+        return ConsentGate(self.db_path).validity_verdicts(memory_ids)
 
     def _load_metadata(self, memory_ids: list[int]) -> dict[int, dict[str, Any]]:
         """Load memory metadata for given IDs"""

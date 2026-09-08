@@ -10,6 +10,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -19,6 +20,93 @@ except ImportError:  # pragma: no cover
 
 RuleMatch = dict[str, Any]
 RuleMeta = dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# W03-D: making `auto_expire` mean something
+#
+# `memory_rules.yaml` has declared an `auto_expire` category with `expires_in`
+# values since v1.0 -- "2h" for a drive output, "7d" for an environment
+# observation, "3d" for a transient mood. **No code path read any of them.**
+# The rules engine returned `expires_in` in its evaluated metadata and every
+# caller ignored it, so a Windows observation captured once was recalled
+# forever, exactly as readily as a fact the user stated a minute ago.
+#
+# These two functions are the interpretation half of the fix, and they live
+# here rather than with the store or the gate for one reason: this module is
+# the authority on what a rule *means*. `memory_store.upsert_memory()` uses
+# them to record a validity window at write time, and `consent_gate` uses them
+# to reach the same verdict for a row written before the columns existed. Both
+# get the same answer because both ask the same function.
+# ---------------------------------------------------------------------------
+
+_DURATION_UNITS: dict[str, int] = {
+    "s": 1,
+    "m": 60,
+    "h": 3600,
+    "d": 86400,
+    "w": 604800,
+}
+
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([smhdw])\s*$", re.IGNORECASE)
+
+
+def parse_duration_seconds(spec: Any) -> float | None:
+    """
+    Parse a `memory_rules.yaml` `expires_in` spec ("2h", "7d", "30m") into
+    seconds, or None if it is absent or unparseable.
+
+    Returning None for an unparseable spec is not a silent pass: the callers
+    treat "this record declares an expiry that cannot be read" as
+    `expired`, not as "keeps forever" (see `consent_gate.validity_verdict`).
+    A typo in a retention rule must never quietly extend retention.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, (int, float)) and not isinstance(spec, bool):
+        return float(spec) if spec >= 0 else None
+    match = _DURATION_RE.match(str(spec))
+    if not match:
+        return None
+    return float(match.group(1)) * _DURATION_UNITS[match.group(2).lower()]
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    """Parse an ISO8601 timestamp into an aware UTC datetime, or None."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def expiry_from_rules(evaluated: dict[str, Any], ts: str) -> str | None:
+    """
+    Derive the `valid_to` an `auto_expire` rule implies for a record written
+    at `ts`, or None when no rule declares one.
+
+    `memory_rules.yaml`'s `auto_expire` category has declared `expires_in`
+    since v1.0 and, until W03-D, **no code path read it** -- a
+    `drive_output` marked "expires_in: 2h" and an `environment_observation`
+    marked "7d" were both kept and recalled forever. This is the function
+    that makes the declaration mean something.
+
+    A declared-but-unparseable `expires_in` yields the record's own `ts`,
+    i.e. "already expired". Fail-closed: a retention rule nobody can read
+    must not be read as "no retention rule".
+    """
+    spec = evaluated.get("expires_in")
+    if spec is None:
+        return None
+    seconds = parse_duration_seconds(spec)
+    written = _parse_iso(ts) or datetime.now(timezone.utc)
+    if seconds is None:
+        return written.isoformat()
+    return (written + timedelta(seconds=seconds)).isoformat()
 
 
 @dataclass
