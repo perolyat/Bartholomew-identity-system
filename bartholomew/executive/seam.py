@@ -659,7 +659,16 @@ async def advance_executive_task_through_runtime_contract(
             governance_allowed=True,
         )
 
-    verification = verify_step(
+    # W03-F integration repair, same class as the one in `actuation/seam.py`.
+    #
+    # `verify_step` resolves W03-A's `read_back` by name at call time. On W03-B's
+    # own branch that resolution returned `None` and the call was pure
+    # computation, so calling it inline in an `async def` cost nothing. On the
+    # composed head it resolves, and the call performs a governance read, a
+    # screen capture and an event write. Every other blocking call in this
+    # function already goes through `run_off_loop`.
+    verification = await run_off_loop(
+        verify_step,
         capability=outstanding.capability,
         parameters=outstanding.parameters,
         device_status=stored.status.value,
@@ -670,6 +679,7 @@ async def advance_executive_task_through_runtime_contract(
         read_back_port=read_back_port,
         read_back_target=read_back_target,
         store=multimodal_store,
+        executor=getattr(ctx, "blocking_executor", None),
     )
     outstanding.verification = verification
 

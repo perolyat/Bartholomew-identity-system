@@ -184,33 +184,110 @@ class Verification:
         }
 
 
-def _expectation(capability: str, parameters: dict[str, Any]) -> tuple[str, str | None]:
-    """What a successful step should have made true, and the token to look for.
+def _used_screenshot_fallback(result: Any) -> bool:
+    """Whether W03-A served this read from a screenshot rather than the UI tree.
+
+    Read defensively off the observation event W03-A attaches, because it is the
+    only place the distinction is published and a port that omits it must not be
+    read as "the UI tree was available".
+    """
+    event = getattr(result, "event", None)
+    observed = getattr(event, "observed_event", None)
+    facts = getattr(observed, "facts", None)
+    if not isinstance(facts, dict):
+        return False
+    # Only a fallback when the accessibility read did NOT succeed: a read that
+    # got both is real UI text.
+    return bool(facts.get("used_screenshot")) and not bool(facts.get("available"))
+
+
+def _read_back_evidence(result: Any, base: dict[str, Any]) -> dict[str, Any]:
+    """`base`, plus W03-A's provenance degradation when it reported one.
+
+    W03-A publishes `provenance_degraded` for a read that happened but could not
+    be written to the backbone. W03-F carries it into the verdict's evidence
+    rather than dropping it: the read stands, so the verdict stands, but a
+    confirmation whose observation was never recorded cannot be reconstructed
+    from the audit trail later, and an account that did not say so would be
+    claiming a stronger record than exists.
+    """
+    evidence = dict(base)
+    if bool(getattr(result, "provenance_degraded", False)):
+        evidence["read_back_provenance_degraded"] = True
+        error = getattr(result, "provenance_error", None)
+        if error:
+            evidence["read_back_provenance_error"] = str(error)[:200]
+    return evidence
+
+
+#: Where a token may be looked for in W03-A's read-back text.
+#:
+#: `observed_text()` builds one block: the observed summary on the first line,
+#: then one line per observed UI element (`role: name = value [focused]`). Those
+#: are different kinds of evidence and a foreground claim must not be settled by
+#: the second kind.
+MATCH_IN_SUMMARY = "summary"
+MATCH_ANYWHERE = "anywhere"
+
+
+def _expectation(capability: str, parameters: dict[str, Any]) -> tuple[str, str | None, str]:
+    """What a successful step should have made true, the token, and where to look.
 
     Deliberately modest. The executive checks that the machine now shows
     something consistent with the action --- the application in the foreground,
     the typed text present in the read-back's observed half --- and reports
     `unknown` when it has no such check for a capability rather than inventing
     one. An expectation that could not fail would be worse than no expectation,
-    because it would manufacture verifications.
+    because it would manufacture verifications. An expectation that is
+    *backwards* is worse still, because it manufactures both verifications and
+    contradictions --- which is what W03-F found here (see `manage_window`).
+
+    The third element is the match scope. A "the app is in the foreground" claim
+    is only evidenced by the read-back's own summary of what it observed;
+    matching it against the element dump lets an app name in a taskbar button or
+    another window's control settle it. A "the typed text is present" claim is
+    the opposite: the text lives in a control, so element lines are exactly where
+    it belongs.
     """
     if capability in ("windows.focus_window", "windows.launch_app"):
         app = str(parameters.get("app_id") or "").strip()
-        return (f"{app} is in the foreground", app or None)
+        return (f"{app} is in the foreground", app or None, MATCH_IN_SUMMARY)
     if capability == "windows.manage_window":
+        # W03-F integration repair. This used to return the app id as the token
+        # for EVERY operation, ignoring `operation` entirely --- so for
+        # `minimize` the check was inverted: a minimize that worked leaves the
+        # app out of the foreground, which read as `failed`, and a minimize that
+        # did nothing left it there, which read as `verified`. For `move` and
+        # `resize` the app's presence says nothing about whether it moved, so
+        # the check was vacuous rather than backwards.
+        #
+        # Only the operations whose success is genuinely CONSISTENT with the app
+        # being what the read-back describes keep a token. The rest report
+        # `unknown`, which is what this function's own docstring prescribes for a
+        # capability it has no check for. Narrowing a claim to the truth is a
+        # repair; inventing a minimize-detector from a text dump would not be.
         app = str(parameters.get("app_id") or "").strip()
-        return (f"{app}'s window was {parameters.get('operation')}d", app or None)
+        operation = str(parameters.get("operation") or "").strip().lower()
+        described = f"{app}'s window was {operation or parameters.get('operation')}d"
+        if operation in ("focus", "maximize", "restore"):
+            return (described, app or None, MATCH_IN_SUMMARY)
+        return (
+            f"{described} (no read-back check is defined for {operation or 'this'}: the "
+            "app being on screen is not evidence either way)",
+            None,
+            MATCH_IN_SUMMARY,
+        )
     if capability == "windows.type_text":
         text = str(parameters.get("text") or "")
-        return ("the typed text is present in the focused control", text or None)
+        return ("the typed text is present in the focused control", text or None, MATCH_ANYWHERE)
     if capability == "windows.open_url":
-        return ("the URL was opened in the default browser", None)
+        return ("the URL was opened in the default browser", None, MATCH_ANYWHERE)
     if capability == "windows.open_path":
-        return ("the file or folder was opened", None)
+        return ("the file or folder was opened", None, MATCH_ANYWHERE)
     if capability == "windows.accessibility_action":
         app = str(parameters.get("app_id") or "").strip()
-        return (f"the control in {app} changed as asked", app or None)
-    return ("no read-back check is defined for this capability", None)
+        return (f"the control in {app} changed as asked", app or None, MATCH_ANYWHERE)
+    return ("no read-back check is defined for this capability", None, MATCH_ANYWHERE)
 
 
 def verify_step(
@@ -276,7 +353,7 @@ def verify_step(
         pass
 
     port = read_back_port if read_back_port is not None else resolve_read_back_port()
-    expectation, token = _expectation(capability, parameters)
+    expectation, token, match_scope = _expectation(capability, parameters)
     if port is None:
         return Verification(
             verdict=UNKNOWN,
@@ -329,6 +406,33 @@ def verify_step(
         )
 
     text = str(getattr(result, "text", "") or "")
+
+    # W03-F integration repair: a screenshot-fallback read is not UI text.
+    #
+    # W03-A returns `available=True` when the accessibility read failed but a
+    # screenshot fallback was used (`readback.py`: `readable = available or
+    # used_screenshot`). In that case `text` is a prose description of pixels and
+    # contains no control text at all --- so a token that is genuinely on screen
+    # will not be in it, and the comparison below would have turned a truthful
+    # `succeeded` into `FAILED` ("the state wins"). That is a manufactured
+    # contradiction, which is the same untruth as a manufactured confirmation
+    # pointed the other way. Nothing was read in the sense this check needs, so
+    # the answer is `unknown`.
+    if _used_screenshot_fallback(result):
+        return Verification(
+            verdict=UNKNOWN,
+            source=SOURCE_READ_BACK,
+            detail=(
+                f"the device reported {status!r} and the target was read, but only by "
+                "screenshot fallback --- no UI text was available, so nothing is claimed "
+                f"about whether {expectation}"
+            ),
+            device_status=status,
+            read_back_code=code,
+            read_back_event_id=event_id,
+            evidence=_read_back_evidence(result, {"read_back_chars": len(text)}),
+        )
+
     if token is None:
         return Verification(
             verdict=UNKNOWN,
@@ -341,10 +445,20 @@ def verify_step(
             device_status=status,
             read_back_code=code,
             read_back_event_id=event_id,
-            evidence={"read_back_chars": len(text)},
+            evidence=_read_back_evidence(result, {"read_back_chars": len(text)}),
         )
 
-    matched = token.strip().lower() in text.lower()
+    # W03-F integration repair: match in the scope the claim is about.
+    #
+    # This used to be a bare substring test against the WHOLE observed block ---
+    # the summary plus every element's `role: name = value`. For a foreground
+    # claim that is far too wide: an app id appearing in a taskbar button, a
+    # shortcut name or another window's control settles "X is in the foreground".
+    # Foreground claims are now settled by the read-back's own summary line, and
+    # content claims (the typed text) still match anywhere, because that is where
+    # a control's value legitimately appears.
+    haystack = text if match_scope == MATCH_ANYWHERE else text.split("\n", 1)[0]
+    matched = token.strip().lower() in haystack.lower()
     if matched:
         return Verification(
             verdict=VERIFIED,
@@ -352,7 +466,10 @@ def verify_step(
             detail=f"read back from the live session: {expectation}",
             device_status=status,
             read_back_event_id=event_id,
-            evidence={"read_back_chars": len(text), "expectation": expectation},
+            evidence=_read_back_evidence(
+                result,
+                {"read_back_chars": len(text), "expectation": expectation},
+            ),
         )
     if status == "succeeded":
         return Verification(
@@ -365,7 +482,10 @@ def verify_step(
             ),
             device_status=status,
             read_back_event_id=event_id,
-            evidence={"read_back_chars": len(text), "expectation": expectation},
+            evidence=_read_back_evidence(
+                result,
+                {"read_back_chars": len(text), "expectation": expectation},
+            ),
         )
     return Verification(
         verdict=UNKNOWN,
@@ -376,7 +496,10 @@ def verify_step(
         ),
         device_status=status,
         read_back_event_id=event_id,
-        evidence={"read_back_chars": len(text), "expectation": expectation},
+        evidence=_read_back_evidence(
+            result,
+            {"read_back_chars": len(text), "expectation": expectation},
+        ),
     )
 
 

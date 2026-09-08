@@ -131,7 +131,24 @@ async def _brake_section(kernel: Any) -> dict[str, Any]:
     }
 
 
-def _channel_section(tenant: str) -> dict[str, Any]:
+def _channel_section(tenant: str, *, brake: dict[str, Any]) -> dict[str, Any]:
+    """Whether this machine can act right now --- the same answer W03-C gives.
+
+    W03-F integration repair. This section used to report `armed: true` purely
+    from the arming window, with no brake consultation, while W03-C's
+    `GET /api/actions/channel` deliberately rewrites the same window to
+    `armed: false` plus `brake_engaged: true` under a halt, because "the window
+    is open and nothing can be carried out through it" is not an armed channel.
+
+    Composed, that made the overview a SECOND and less truthful answer to
+    exactly the question W03-C built that surface for --- and the less truthful
+    one is the one a person reads, because this is what the console renders.
+    So the brake is taken from `_brake_section`'s single read (no second read,
+    no chance of the two disagreeing) and applied here on W03-C's precedent.
+
+    An UNREADABLE brake suppresses `armed` too. "We cannot tell whether he is
+    halted" must not render as "he can act".
+    """
     from bartholomew.actuation import arming
 
     try:
@@ -141,7 +158,34 @@ def _channel_section(tenant: str) -> dict[str, Any]:
         return {"readable": False, "armed": None}
     if window is None:
         return {"readable": True, "armed": False}
-    return {"readable": True, "armed": True, **window.describe()}
+
+    if not brake.get("readable", False):
+        # `describe()` carries its own `armed`, so it is spread FIRST and the
+        # brake-aware answer overrides it. Spreading it last silently undid the
+        # override --- caught by the regression test below, which is why the
+        # test asserts the rendered value rather than the code path.
+        return {
+            **window.describe(),
+            "readable": True,
+            "armed": None,
+            "brake_engaged": None,
+            "detail": (
+                "An arming window is open, but the Parking Brake could not be read, so "
+                "whether anything can actually be carried out is unknown."
+            ),
+        }
+    if brake.get("engaged"):
+        return {
+            **window.describe(),
+            "readable": True,
+            "armed": False,
+            "brake_engaged": True,
+            "detail": (
+                "The Parking Brake is engaged. The arming window is still open, but "
+                "nothing can be carried out through it while the brake holds."
+            ),
+        }
+    return {**window.describe(), "readable": True, "brake_engaged": False}
 
 
 def _actions_section(db_path: str, tenant: str) -> dict[str, Any]:
@@ -194,15 +238,51 @@ async def overview(request: Request) -> dict[str, Any]:
     whether it could be read, so a section that failed says so rather than
     rendering as "nothing is waiting" -- which is a different claim.
     """
+    from bartholomew.kernel.blocking_executor import run_off_loop
+    from bartholomew_api_bridge_v0_1.services.api.routes.device_consent import (
+        _refuse_device_credential,
+    )
+
+    # W03-F integration repair, and the one with a security edge.
+    #
+    # `_consent_section` re-implements the read behind
+    # `GET /api/device-consent/pending`, faithfully including `include_nonce=False`
+    # --- but not `_refuse_device_credential`, the guard whose entire purpose is
+    # "this surface is for the person, not the machine". An enrolled companion's
+    # credential could therefore read the tenant's pending observation asks here,
+    # through a route the machine has no business reading, and it is W03-F's own
+    # `app.py` registration that made that reachable at all.
+    #
+    # Applied at the handler rather than inside the section: the owning surface
+    # 403s the whole request, and copying its read means copying its refusal, not
+    # softening it. The console only sends the device credential where arming
+    # needs it, so no operator command is affected.
+    _refuse_device_credential(request)
+
     kernel = _kernel_or_503()
     db_path = _db_path(kernel)
     tenant = _tenant(request)
+    executor = getattr(kernel, "blocking_executor", None)
+
+    brake = await _brake_section(kernel)
+    # The remaining three sections each open SQLite. `_brake_section` already
+    # went off-loop; these did not, and this read is what a console polls.
     return {
         "tenant_id": tenant,
-        "parking_brake": await _brake_section(kernel),
-        "action_channel": _channel_section(tenant),
-        "actions": _actions_section(db_path, tenant),
-        "device_consent": _consent_section(db_path, request),
+        "parking_brake": brake,
+        "action_channel": await run_off_loop(
+            _channel_section,
+            tenant,
+            brake=brake,
+            executor=executor,
+        ),
+        "actions": await run_off_loop(_actions_section, db_path, tenant, executor=executor),
+        "device_consent": await run_off_loop(
+            _consent_section,
+            db_path,
+            request,
+            executor=executor,
+        ),
         "executive_available": _executive_seam() is not None,
     }
 

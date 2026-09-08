@@ -160,6 +160,29 @@ def _lease(port: int, limit: int = 5):
     )
 
 
+def _get_with_headers(port: int, path: str, headers: dict) -> tuple[int, object]:
+    """A GET that carries headers and reports a refusal as a status.
+
+    `tests.integration.test_always_on_service._get` takes no headers and lets
+    urllib raise on 4xx; the point of these tests is the refusal, so the status
+    is what must come back.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers)  # noqa: S310
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 - fixed localhost
+            return r.status, _json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try:
+            return e.code, _json.loads(body)
+        except ValueError:
+            return e.code, body
+
+
 def _engage_brake(port: int, *scopes: str):
     return _post(
         port,
@@ -1193,3 +1216,212 @@ class TestABrakeAbortIsNeverASuccess:
         )
         assert result.verdict == UNKNOWN
         assert result.verified is False
+
+
+# ===========================================================================
+# 13. The read-back seam W03-F turned on, and what it must not claim
+# ===========================================================================
+
+
+class _ReadBack:
+    """A read-back result shaped like W03-A's, for the seam W03-F installed.
+
+    Carries the observation event too, because two of the repairs below depend
+    on facts W03-A publishes there and W03-B previously discarded.
+    """
+
+    code = None
+    reason = None
+    event_id = 7
+
+    def __init__(self, text, *, screenshot=False, accessible=True, degraded=False):
+        self.available = True
+        self.text = text
+        self.provenance_degraded = degraded
+        self.provenance_error = "sink unavailable" if degraded else None
+        facts = {"available": accessible, "used_screenshot": screenshot}
+        self.event = type(
+            "Ev",
+            (),
+            {"observed_event": type("OE", (), {"facts": facts})()},
+        )()
+
+    def __call__(self, **_kwargs):
+        return self
+
+
+def _verify(capability, parameters, port, status="succeeded"):
+    from bartholomew.executive.verification import verify_step
+
+    return verify_step(
+        capability=capability,
+        parameters=parameters,
+        device_status=status,
+        tenant_id="t-1",
+        device_id=DEVICE,
+        requested_by="user:alice",
+        read_back_port=port,
+    )
+
+
+class TestTheReadBackCannotOverClaim:
+    """Four W03-F repairs, all of the same kind: a claim narrowed to the truth.
+
+    Every one of these was **inert** on every builder branch, because
+    `resolve_read_back_port()` returned None with no `bartholomew/multimodal/` in
+    the tree. W03-F's seam is what made them live, so they are W03-F's.
+    """
+
+    def test_a_foreground_claim_is_not_settled_by_the_element_dump(self):
+        """`observed_text()` is a summary line plus every element's role/name.
+
+        Matching a foreground claim against the whole block let an app id in a
+        taskbar button or a shortcut name prove "X is in the foreground".
+        """
+        from bartholomew.executive.verification import VERIFIED
+
+        result = _verify(
+            "windows.focus_window",
+            {"app_id": "notepad"},
+            _ReadBack(
+                "active window 'Calculator' (calc): 3 controls\nbutton: notepad.exe - Shortcut",
+            ),
+        )
+        assert (
+            result.verdict != VERIFIED
+        ), "an app id appearing in an element line settled a foreground claim"
+        assert result.verified is False
+
+    def test_a_genuine_summary_match_still_verifies(self):
+        """The narrowing must not have broken the check it narrowed."""
+        from bartholomew.executive.verification import VERIFIED
+
+        result = _verify(
+            "windows.focus_window",
+            {"app_id": "notepad"},
+            _ReadBack("active window 'Untitled - Notepad' (notepad): 4 controls"),
+        )
+        assert result.verdict == VERIFIED
+
+    def test_manage_window_minimize_is_no_longer_inverted(self):
+        """`_expectation` ignored `operation` and returned the app id for all six.
+
+        For `minimize` that inverted the check: a minimize that worked leaves the
+        app out of the foreground and read as `failed`, and a minimize that did
+        nothing left it there and read as `verified`.
+        """
+        from bartholomew.executive.verification import UNKNOWN, VERIFIED
+
+        minimized = _verify(
+            "windows.manage_window",
+            {"app_id": "notepad", "operation": "minimize"},
+            _ReadBack("active window 'Untitled - Notepad' (notepad)"),
+        )
+        assert (
+            minimized.verdict == UNKNOWN
+        ), "the app still being on screen was read as a successful minimize"
+
+        # And the operations whose success IS consistent with the app being
+        # described keep their check.
+        restored = _verify(
+            "windows.manage_window",
+            {"app_id": "notepad", "operation": "restore"},
+            _ReadBack("active window 'Untitled - Notepad' (notepad)"),
+        )
+        assert restored.verdict == VERIFIED
+
+    def test_a_screenshot_fallback_read_cannot_manufacture_a_contradiction(self):
+        """W03-A reports `available=True` for a screenshot fallback.
+
+        Its `text` is then prose about pixels with no control text, so a token
+        that really is on screen is absent from it --- and a truthful
+        `succeeded` was being turned into `failed`, "the state wins". A
+        manufactured contradiction is the same untruth as a manufactured
+        confirmation, pointed the other way.
+        """
+        from bartholomew.executive.verification import UNKNOWN
+
+        result = _verify(
+            "windows.type_text",
+            {"text": "hello"},
+            _ReadBack("a screenshot of the desktop, 1920x1080", screenshot=True, accessible=False),
+        )
+        assert result.verdict == UNKNOWN
+        assert result.verified is False
+
+    def test_a_degraded_provenance_read_says_so_in_its_evidence(self):
+        """The read stands, so the verdict stands --- but the record is weaker.
+
+        W03-A publishes `provenance_degraded` for a read it could not write to
+        the backbone. W03-B dropped it, so a confirmation that cannot be
+        reconstructed from the audit trail looked identical to one that can.
+        """
+        result = _verify(
+            "windows.focus_window",
+            {"app_id": "notepad"},
+            _ReadBack("active window 'Untitled - Notepad' (notepad)", degraded=True),
+        )
+        assert result.evidence.get("read_back_provenance_degraded") is True, result.evidence
+
+
+class TestTheOperatorOverviewIsGoverned:
+    """W03-F registered this router, so what it discloses is W03-F's."""
+
+    def test_the_overview_refuses_a_device_credential(self, service):
+        """`_consent_section` copied `GET /api/device-consent/pending`'s read,
+        `include_nonce=False` and all --- but not `_refuse_device_credential`,
+        the guard whose whole point is "for the person, not the machine". An
+        enrolled companion could read the tenant's pending observation asks."""
+        from bartholomew.platform.device_inbound import DEVICE_CREDENTIAL_HEADER
+
+        # The COMPANION credential, which is the header `device_consent.py`
+        # refuses -- a different one from the action channel's device token,
+        # because they are different trust channels. The observation asks are
+        # what leaked, so it is the observation credential that must be refused.
+        status, body = _get_with_headers(
+            service.port,
+            "/api/operator/overview",
+            {DEVICE_CREDENTIAL_HEADER: "any-companion-credential"},
+        )
+        assert status == 403, f"a device credential read the operator overview -- {body}"
+
+    def test_the_overview_does_not_report_an_armed_channel_under_a_halt(self, service):
+        """The second, less truthful answer to W03-C's question --- and the one a
+        person actually reads, because the console renders it."""
+        code, _ = _engage_brake(service.port, "voice")
+        assert code == 200
+
+        status, payload = _get(service.port, "/api/operator/overview")
+        assert status == 200, payload
+        channel = payload["action_channel"]
+        assert channel.get("armed") is not True, (
+            "the operator overview reports an armed channel while a brake scope is "
+            f"engaged, contradicting GET /api/actions/channel -- {channel}"
+        )
+        assert payload["parking_brake"]["engaged"] is True, payload["parking_brake"]
+
+
+class TestTheUnboundDeploymentSaysWhatItCannotDo:
+    """W03-A §5.1 left the unbound rule to W03-F. The rule is unchanged --- an
+    unbound process resolves no devices --- and what W03-F added is that the
+    seam report now says what that costs, because the Observe and Verify halves
+    of the loop are inert in that state while Act works."""
+
+    def test_the_unbound_seam_report_names_the_consequence_and_the_fix(self, tmp_path):
+        from bartholomew.integration.install import install_seams
+
+        report = install_seams(db_path=str(tmp_path / "unbound.db"), tenant_id=None).to_dict()
+        resolver = report["capability_resolver"]
+        assert resolver.startswith("not installed"), resolver
+        # The consequence, not just the condition.
+        assert "observation session" in resolver, resolver
+        assert "unverifiable" in resolver, resolver
+        # And the one-line fix, so it is not an investigation.
+        assert "BARTH_RUNTIME_USER_ID" in resolver, resolver
+
+    def test_an_unbound_process_still_installs_the_w03_seams(self, tmp_path):
+        """Being unbound withholds device resolution, not the composition."""
+        from bartholomew.integration.install import install_seams
+
+        report = install_seams(db_path=str(tmp_path / "unbound2.db"), tenant_id=None).to_dict()
+        assert report["w03_seams"]["read_back_provider"].startswith("multimodal"), report

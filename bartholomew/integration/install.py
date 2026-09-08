@@ -138,9 +138,37 @@ def install_seams(
             report.errors.append(f"capability resolver: {type(e).__name__}: {e}")
             logger.exception("Could not install the multimodal capability resolver")
     else:
+        # W03-F: the unbound rule, which W03-A §5.1 explicitly left to this
+        # session to decide ("the live retest should run bound, or W03-F should
+        # decide the unbound rule in install.py").
+        #
+        # DECISION: the rule is unchanged --- an unbound process resolves no
+        # devices --- and what changes is that it now says what that COSTS.
+        # Installing a resolver here would mean W03-F deciding, on its own
+        # authority, that an unbound process may resolve a device's capability to
+        # be asked to observe a person's screen. This module's own docstring
+        # rules that out: "Installing the seams makes the system coherent; it
+        # does not make it permissive."
+        #
+        # But silence was the real defect. Without the resolver
+        # `resolve_modality_capability` fails closed, so NO observation session
+        # can start; and because W03-A's read-back requires an active consented
+        # session, the server-side verify verdict is then always UNVERIFIABLE
+        # too. On an unbound deployment the Observe and Verify halves of the
+        # Wave 3 loop are inert while the Act half works --- which is safe, and
+        # is exactly the kind of thing an operator must be told rather than
+        # discover during an acceptance test.
+        #
+        # The recorded live procedure (docs/G §8) binds BARTH_RUNTIME_USER_ID, so
+        # a bound process is the intended live configuration; this names the
+        # variable so the fix is one line rather than an investigation.
         report.capability_resolver = (
             "not installed: this process has no runtime binding, so there is no "
-            "tenant whose devices could be resolved (fail-closed)"
+            "tenant whose devices could be resolved (fail-closed). No observation "
+            "session can start, and the server-side verify verdict is therefore "
+            "always 'unverifiable'. Set BARTH_RUNTIME_USER_ID to bind this process "
+            "to an account (docs/G §8) if the Observe/Verify half of the loop is "
+            "needed."
         )
 
     # -- C -> A: one event bus --------------------------------------------

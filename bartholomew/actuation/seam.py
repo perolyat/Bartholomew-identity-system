@@ -1575,13 +1575,29 @@ async def record_action_result_through_runtime_contract(
         )
 
     merged_evidence = dict(evidence) if isinstance(evidence, dict) else {}
+    # W03-F integration repair, and a regression W03-F itself made live.
+    #
+    # `_server_side_verification()` is synchronous, and until this wave nothing
+    # inside it did any work: `verify_effect()` returns immediately when no
+    # read-back provider is installed, and none ever was, because
+    # `bartholomew/actuation/` may not import `bartholomew/multimodal/`. It was
+    # therefore free to call it inline, and it was.
+    #
+    # `install_w03_seams()` installs the provider, so the same call now performs
+    # a governed UIA read (or a screenshot fallback) plus a backbone event
+    # write --- on the event loop that also serves the brake read and the
+    # abort-check, in the handler a device posts its result to. Every other
+    # blocking call in this module already goes through `run_off_loop`; this is
+    # that pattern applied to the one that only became blocking now.
     merged_evidence.update(
-        _server_side_verification(
+        await run_off_loop(
+            _server_side_verification,
             tenant_id=tenant_id,
             device_id=device_id,
             stored=stored,
             reported=reported,
             category=category,
+            executor=getattr(ctx, "blocking_executor", None),
         ),
     )
 
