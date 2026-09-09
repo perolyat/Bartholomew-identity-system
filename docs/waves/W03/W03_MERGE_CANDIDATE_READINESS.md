@@ -148,50 +148,95 @@ Local, on the changed tree:
 CI on this head is the authoritative record; see the pull request for the tier
 results, and §6 for the standard this candidate is held to.
 
-## 5a. Measured result, and the one thing that remains
+## 5a. Measured result, and what remains
+
+> **This section was rewritten after the `_pid_alive` repair (§5b) let the
+> Windows suite run to completion for the first time.** Its earlier version
+> reported the Windows tier as "0 failed, 2242 passed" and called the ten
+> failures resolved with nothing else outstanding. That was true of the tests
+> that ran and wrong about what it implied, because roughly half the suite had
+> never executed. The corrected figures are below.
 
 ### The ten failures are resolved
 
-`Windows full default suite + actuation (py3.11)`, on a real Windows runner:
+They were, and are, genuinely fixed — all ten are in the first half of the
+suite and all ten pass. That claim survives.
 
-| Head | Result |
-|---|---|
-| `main @ e96e6a6` (no W03 code) | **10 failed**, 2035 passed, 6 skipped |
-| W03-F frozen head `7af5fe7` | **10 failed**, 2211 passed, 6 skipped |
-| this branch | **0 failed**, 2242 passed, 6 skipped |
+### But no Windows run had ever executed more than about half the suite
 
-Every one of the ten passed. The skip count is **unchanged at 6**, which is the
-check that nothing was bought by skipping.
+The Ctrl+C described in §5b truncated every Windows run at roughly the halfway
+mark. The arithmetic is unambiguous:
 
-### The job is still red, for a condition that predates Wave 3
+| Head | Reported | Tests run | Share of the suite |
+|---|---|---|---|
+| `main @ e96e6a6` (no W03 code) | 10 failed, 2035 passed, 6 skipped | 2051 | ~44% |
+| this branch, before the repair | 0 failed, 2239 passed, 6 skipped | 2245 | ~49% |
+| **this branch, after the repair** | 16 failed, 4524 passed, 79 skipped | **4619** | **100%** |
 
-After reporting its results the run takes a `KeyboardInterrupt` and cannot exit
-cleanly, so the job is red on an *incomplete run* rather than on a *result*:
+The progress bar stalling at "~48%" was stating the total directly; it was read
+as a symptom of the interrupt and never reconciled against the Linux suite's
+~4,627 tests, which would have shown the shortfall immediately.
 
-```
-!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!
-C:\...\Lib\threading.py:331: KeyboardInterrupt
-```
+### What the previously-unreached half contains
 
-**The same interrupt, at the same line, appears on `main @ e96e6a6`** — this
-candidate's own baseline, carrying no W03 code — immediately after its ten
-failures. It was invisible there only because the job was already red on those.
-Two commits on this branch (`f4e7ebb`, `eea3cd7`) were pushed on the mistaken
-theory that the interrupt was the Windows wedged-engine stub's; the base-branch
-evidence disproves that. `eea3cd7` is kept on its own merits — it is the
-`WinError 193` repair, and wedging a Python process rather than a shell script
-runs the same assertion identically on both platforms.
+Sixteen failures, every one in wave-1/2 code and none in a W03 package:
 
-Diagnosing it further needs what this session does not have: a Windows machine,
-or the job's junit artifact (artifact download is not authorised for this
-session). It is therefore recorded, not guessed at. **It is not this candidate's
-and no fix for it exists to port**, so the stand-down rule applies — and it does
-mean the Merge Candidate tier still cannot show green, now for a different and
-much narrower reason than when `W03-F` closed.
+| Cause | Count | Where |
+|---|---|---|
+| `WinError 32` — a temp DB unlinked while SQLite holds the handle | 10 | `tests/integration/`: `test_recency_flip_integration.py` (3), `test_fts_unavailable_vector_quality.py` (3), `test_hybrid_paraphrase_benchmark.py` (2), `test_lexical_over_vector_on_rare_tokens.py` (2) |
+| `UnicodeDecodeError` (cp1252) — `read_text()` with no encoding | 2 | `test_skill_runtime_contract_seam.py`, `test_consent_bypass_redteam.py` |
+| The documented scheduler / writer-lock class | 2 | `test_event_backbone_drive.py` |
+| Windows path escaping in an assertion | 1 | `test_process_lock.py` |
+| xdist worker crash | 1 | `test_scheduler_queue_containment.py` |
 
-**This is a decision for the user**, in the same class as the one `W03-F`
-escalated: the acceptance criterion is not weakened to accommodate it, and no
-test is skipped or quarantined to get the tick.
+The first two rows are **the same two defect classes already repaired in this
+branch's first commit**, in files the truncated run never reached. The
+`UnicodeDecodeError` pair matters for the same reason its sibling did: both are
+structural **governance** assertions — the skill-seam no-bypass proof and the
+consent-gate red-team check — and neither runs on Windows at all.
+
+### And the job budget no longer fits
+
+`windows-full` carries `timeout-minutes: 40`. The completed suite used **38 min
+20 s** for tests alone, so the job was **cancelled** rather than failed; the
+trailing `KeyboardInterrupt` in that log is the cancellation, not the defect
+§5b repaired.
+
+### Status
+
+None of the sixteen is a consequence of the authorised repair — the repair
+revealed them — so they are recorded here rather than fixed, under the
+authorisation's own stop condition. The Merge Candidate tier is **not** green
+and this candidate is **not** ready for merge approval. What has changed is
+that the reason is now smaller, fully enumerated, and understood.
+
+## 5b. The `_pid_alive` repair (separately authorised)
+
+A **pre-existing base-branch defect**, discovered while validating this merge
+candidate and repaired under explicit, separate user authorisation. It is not
+Wave 3 work.
+
+`bartholomew/multimodal/store.py::_pid_alive` probed liveness with
+`os.kill(pid, 0)` — the POSIX "signal nothing, just check it exists" idiom. On
+Windows that is not a question: `signal.CTRL_C_EVENT == 0`, and CPython routes
+signal 0 to `GenerateConsoleCtrlEvent`, so the call **raises Ctrl+C on that
+process group's console**. `reconcile_after_restart` calls it on any snapshot
+this process owns — our own pid — so the probe interrupted the running process.
+
+Evidence: `os.kill(pid, 0)` is present at that line on `main @ e96e6a6`, added
+by wave-1/2 commit `0d1b19a`, and is the only `os.kill` site in the product. A
+one-round `--full-trace` CI probe (since reverted byte-for-byte) showed the
+interrupt landing inside pytest-timeout's `timer.start()` on an Event already
+`set` — nothing blocked, an asynchronous interrupt arriving in whatever frame
+the main thread held.
+
+The Windows path now asks instead of signalling: `OpenProcess` for `SYNCHRONIZE`
+plus `WaitForSingleObject(handle, 0)`. POSIX behaviour is unchanged. Three
+regression tests run on every platform, including the direct one — a SIGINT
+handler is installed, the probe is called, and the handler must not fire.
+
+Beyond CI this mattered on its own: on a real Windows machine the same call can
+interrupt whatever shares the console.
 
 ## 6. The merge gate
 
