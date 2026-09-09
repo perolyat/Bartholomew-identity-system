@@ -26,9 +26,11 @@ must act on every live session within a bounded interval.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import os
+import sys
 import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
@@ -39,6 +41,38 @@ from .modality import Modality
 from .session import LIVE_STATES, MultimodalSession, SessionState
 
 logger = logging.getLogger(__name__)
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Whether `pid` is a live process, asked the way Windows answers it.
+
+    `os.kill(pid, 0)` must never be used here. It reads as the POSIX "signal
+    nothing, just check the process exists" idiom, and on Windows it is not
+    that at all: `signal.CTRL_C_EVENT == 0`, and CPython routes signal 0 to
+    `GenerateConsoleCtrlEvent`, so the call **raises Ctrl+C on that process
+    group's console** rather than asking a question. Pointed at our own pid it
+    interrupts this process; pointed at another it can interrupt whatever
+    shares that console. A liveness probe must not be able to stop anything.
+
+    `OpenProcess` + `WaitForSingleObject` asks and does not signal: a process
+    handle is signalled once the process has exited, so a wait that times out
+    immediately means it is still running.
+    """
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+
+    #: The narrowest right that still permits a wait on the handle.
+    synchronize = 0x00100000
+    wait_timeout = 0x00000102
+
+    handle = kernel32.OpenProcess(synchronize, False, pid)
+    if not handle:
+        # No such process, or one we may not query -- "not alive" either way,
+        # which is the same answer the POSIX path gives for both.
+        return False
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _pid_alive(pid: int | None) -> bool:
@@ -52,6 +86,8 @@ def _pid_alive(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
     try:
+        if sys.platform == "win32":
+            return _pid_alive_windows(pid)
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
