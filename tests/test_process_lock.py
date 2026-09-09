@@ -11,6 +11,7 @@ tests/test_daemon_lifecycle_integrity.py.
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -120,6 +121,33 @@ def test_lock_released_by_one_process_is_acquirable_by_another(db_path):
         assert second.held is True
     finally:
         second.release()
+
+
+def test_lock_messages_show_the_path_verbatim_not_escaped(tmp_path):
+    """The message exists for a person to act on, so it must carry the path
+    as they would type it. Both messages used `!r`, which doubles every
+    backslash -- on Windows the path in the message was therefore not the
+    path, and `db_path in message` was false there. A backslash is a legal
+    filename character on POSIX, which lets the property be asserted on
+    every platform rather than only where it once failed."""
+    name = "test.db" if sys.platform == "win32" else "back\\slash.db"
+    db_path = str(tmp_path / name)
+    assert "\\" in db_path, "the fixture path must contain a backslash for this to prove anything"
+
+    first = ProcessLock(db_path)
+    second = ProcessLock(db_path)
+    first.acquire()
+    try:
+        with pytest.raises(ProcessLockHeldError) as contended:
+            second.acquire()
+        with pytest.raises(ProcessLockHeldError) as reentered:
+            first.acquire()
+    finally:
+        first.release()
+
+    for message in (str(contended.value), str(reentered.value)):
+        assert db_path in message
+        assert repr(db_path) not in message, "the path was rendered escaped, not verbatim"
 
 
 def test_process_lock_held_error_message_is_actionable(db_path):

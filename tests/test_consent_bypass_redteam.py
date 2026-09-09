@@ -305,7 +305,7 @@ class TestNoProductionCallerDisablesTheGate:
             if not root.exists():
                 continue
             for py_file in root.rglob("*.py"):
-                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+                tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
                 for node in ast.walk(tree):
                     if not isinstance(node, ast.Call):
                         continue

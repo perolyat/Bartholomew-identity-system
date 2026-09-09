@@ -78,7 +78,7 @@ class ProcessLock:
     def acquire(self) -> None:
         if self._fd is not None:
             raise ProcessLockHeldError(
-                f"Process lock for {self.db_path!r} is already held by this "
+                f"Process lock for '{self.db_path}' is already held by this "
                 "ProcessLock instance.",
             )
 
@@ -91,8 +91,8 @@ class ProcessLock:
         except OSError as e:
             os.close(fd)
             raise ProcessLockHeldError(
-                f"Could not acquire process lock for {self.db_path!r} "
-                f"(lock file: {self.lock_path!r}) -- another process (the "
+                f"Could not acquire process lock for '{self.db_path}' "
+                f"(lock file: '{self.lock_path}') -- another process (the "
                 "daemon, or another maintenance command) is already using "
                 "this database. Stop it first, or wait for it to finish, "
                 "then retry.",

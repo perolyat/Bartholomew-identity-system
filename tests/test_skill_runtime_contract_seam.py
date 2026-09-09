@@ -330,7 +330,7 @@ class TestNamedSeamIsTheSoleProductionEntryPath:
             for py_file in root.rglob("*.py"):
                 if py_file in allowed:
                     continue
-                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+                tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
                 for node in ast.walk(tree):
                     if (
                         isinstance(node, ast.Call)
