@@ -171,7 +171,8 @@ mark. The arithmetic is unambiguous:
 |---|---|---|---|
 | `main @ e96e6a6` (no W03 code) | 10 failed, 2035 passed, 6 skipped | 2051 | ~44% |
 | this branch, before the repair | 0 failed, 2239 passed, 6 skipped | 2245 | ~49% |
-| **this branch, after the repair** | 16 failed, 4524 passed, 79 skipped | **4619** | **100%** |
+| **after the repair, run 1** (38 m 20 s) | 16 failed, 4524 passed, 79 skipped | **4619** | **100%** |
+| **after the repair, run 2** (13 m 14 s) | 16 failed, 4541 passed, 79 skipped | **4636** | **100%** |
 
 The progress bar stalling at "~48%" was stating the total directly; it was read
 as a symptom of the interrupt and never reconciled against the Linux suite's
@@ -181,13 +182,21 @@ as a symptom of the interrupt and never reconciled against the Linux suite's
 
 Sixteen failures, every one in wave-1/2 code and none in a W03 package:
 
+Two complete runs now exist, and comparing them separates the deterministic
+failures from the contention-class ones. **Thirteen are identical in both:**
+
 | Cause | Count | Where |
 |---|---|---|
 | `WinError 32` — a temp DB unlinked while SQLite holds the handle | 10 | `tests/integration/`: `test_recency_flip_integration.py` (3), `test_fts_unavailable_vector_quality.py` (3), `test_hybrid_paraphrase_benchmark.py` (2), `test_lexical_over_vector_on_rare_tokens.py` (2) |
 | `UnicodeDecodeError` (cp1252) — `read_text()` with no encoding | 2 | `test_skill_runtime_contract_seam.py`, `test_consent_bypass_redteam.py` |
-| The documented scheduler / writer-lock class | 2 | `test_event_backbone_drive.py` |
 | Windows path escaping in an assertion | 1 | `test_process_lock.py` |
-| xdist worker crash | 1 | `test_scheduler_queue_containment.py` |
+
+The remaining **three are all in the documented scheduler / SQLite writer-lock
+contention class**, and they do not fully repeat: `test_event_backbone_drive.py`
+contributed two in both runs, while the third rotated —
+`test_scheduler_queue_containment.py` (an xdist worker crash) in run 1,
+`test_event_backbone_processing.py` in run 2. That is the signature the CI
+baseline already records for this class, not a new deterministic break.
 
 The first two rows are **the same two defect classes already repaired in this
 branch's first commit**, in files the truncated run never reached. The
@@ -195,12 +204,14 @@ branch's first commit**, in files the truncated run never reached. The
 structural **governance** assertions — the skill-seam no-bypass proof and the
 consent-gate red-team check — and neither runs on Windows at all.
 
-### And the job budget no longer fits
+### The job budget does fit — an earlier claim here was wrong
 
-`windows-full` carries `timeout-minutes: 40`. The completed suite used **38 min
-20 s** for tests alone, so the job was **cancelled** rather than failed; the
-trailing `KeyboardInterrupt` in that log is the cancellation, not the defect
-§5b repaired.
+The first completed run took **38 min 20 s** against `windows-full`'s
+`timeout-minutes: 40` and was cancelled, and this document reported that the
+budget no longer fits. **A second completed run finished the same suite in
+13 min 14 s**, cleanly and well inside the budget, so the first was a slow
+outlier — runner contention, not a standing capacity problem. `timeout-minutes`
+needs no change and none was made.
 
 ### Status
 
