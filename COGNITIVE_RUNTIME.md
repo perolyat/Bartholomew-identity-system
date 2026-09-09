@@ -276,6 +276,99 @@ records is narrower and purely architectural: S5.1's competency/candidate-learni
 not make this future distinction structurally impossible to add later (e.g., by omitting
 classification/provenance fields entirely) — it does not require building the pipeline now.
 
+### Memory kinds this direction adds: workflow and policy/boundary content (added 2026-09-08)
+
+*Reconciliation, not a new taxonomy. "Memory semantics this implies (kinds, not a schema)" above
+remains the authority: one substrate, open-ended `kind` values, provenance and confidence, governed
+by `memory_rules.yaml`. This subsection names two content classes that direction implies and that
+were not previously written down, and reconciles the vocabulary a reader arriving from outside the
+repository is likely to bring. Nothing here defines a schema, a `kind` value, or a store, and
+nothing here is implemented. Source and evidence grading: `docs/research/RESEARCH_REGISTER.md`,
+RSCH-01.*
+
+| Content class | Bartholomew's existing home | Example |
+|---|---|---|
+| **Knowledge** | `fact` / domain knowledge (existing) | "Taylor is working on Project Bartholomew." |
+| **Preference** | `preference` (existing) | "Taylor normally prefers X to Y." |
+| **Episodic** | events, `ActionReflection`, the narrator's episodic layer (existing) | "This happened, Bartholomew did this, and this was the outcome." |
+| **Workflow** | **named here for the first time** — a kind within the same substrate | "When this situation occurs, the user normally follows A → B → C, uses source X, treats Y as authoritative, and wants approval before step C." |
+| **Competency / skill** | S5.1's competency model (existing) | a reusable capability Bartholomew knows how to execute, with proficiency and supervision metadata. |
+| **Policy / boundary** | **named here for the first time** as *stored content*; the *authority* remains `Identity.yaml`, Governance and consent | "may / may not / must ask first." |
+
+Two clarifications, because both are easy to get wrong:
+
+- **Workflow memory is not replayed mouse coordinates or recorded screen actions.** It captures
+  reusable operational structure: information sources, decision rules, preferred tools, sequence,
+  handoffs, conflict resolution, verification, approval points, expected result and recovery
+  strategy. A coordinate replay would be brittle, unexplainable and unverifiable, and would fail
+  the inspectability requirements this document already places on learned content.
+- **Stored policy/boundary content is a record, never an authority.** A remembered "he wants
+  approval before step C" informs the `CandidateAction`; Governance still decides. Nothing in
+  Memory grants authority — that would be exactly the second decision authority the ownership table
+  forbids.
+
+Workflow content is subject to the **Transfer boundaries** above without exception: relevance,
+provenance, confidence, privacy, Governance and domain boundaries. A workflow learned in one
+domain does not generalise to another because both involve comparing options.
+
+### Correction → validated lesson: the lifecycle inside the existing learning machinery (added 2026-09-08)
+
+A correction that fixes one task and then evaporates is a burden failure: the user pays the same
+correction cost repeatedly. The lifecycle this direction requires is:
+
+```
+Observation -> Attempt -> Outcome -> Correction -> Lesson candidate -> Validation
+  -> Promotion -> Reusable competency / workflow
+```
+
+**This is a lifecycle within the existing, frozen learning machinery — not a second mechanism, and
+not automatic learning.** Specifically, and without weakening any of them:
+
+- `DECISIONS.md`'s "Learning acceptance requires candidate-bound authorization; proposal and
+  rejection do not" and "The learning policy is built in full and shipped structurally unable to
+  accept" remain in force. **Manual acceptance stays authoritative**; enabling automatic acceptance
+  remains a separate director decision (`docs/waves/W03/W03_DEFERRALS.md` #4).
+- "Promotion" above means *the existing governed acceptance path succeeded*. It is not a new
+  authority, a threshold this section sets, or permission to consolidate silently. The Memory-stage
+  row of the table above already governs how candidate learning is consolidated.
+- Every lesson stays **attributable, inspectable, confidence-scored, versionable, reversible,
+  auditable, bounded by authority, separable from execution, and subject to promotion thresholds**.
+- **Reversibility is the load-bearing one.** Retiring a promoted lesson must be as available, and as
+  auditable, as promoting it was, and retirement must actually change behaviour rather than hide a
+  row. This is where learning meets recovery/undo: an unretireable lesson is uncontrolled
+  behavioural drift wearing a provenance record.
+
+**Status: being built as Wave 3 scope, not authorised here.** The loop above —
+`experience -> correction -> candidate lesson -> governance -> memory/competency`, with
+first-class supersession — is **W03-D's contracted deliverable**
+(`docs/waves/W03/W03_D_CONTRACT.md`), whose Wave 3 exit criteria include an approved correction
+changing a later turn. This section describes that loop's runtime semantics; it does not authorise
+it, schedule it, or add to it. What is genuinely *beyond* W03-D — generalising a validated lesson
+to situations nobody corrected, and retiring an already-promoted lesson — is candidate work only,
+framed with its evidence thresholds in `docs/waves/W04/W04_CANDIDATE_REGISTER.md` (W04-C05,
+W04-C06, W04-C10).
+
+### Preparation and commitment within the loop (added 2026-09-08)
+
+`CONSTITUTION.md`'s "The Preparation Plane and the Commitment Plane are distinct" has a precise
+runtime reading, and it adds no stage: **it is a property of the `CandidateAction` Governance is
+asked to admit**, not a second path around Governance.
+
+- The **Executive** already proposes rather than executes. The distinction makes the proposal say
+  which plane it is in — does this act produce an external or irreversible effect, or only
+  reversible internal state?
+- **Governance** remains the single admission authority and still decides. A preparation-plane
+  proposal is not auto-admitted: consent, privacy classification, Identity policy and the
+  **Parking Brake** apply to it unchanged. A brake that stopped only commitment would not be a
+  brake.
+- **Capability / Execution** are unchanged, except that a prepared artifact is inert by
+  construction — it must not be possible for preparation to reach an external effect.
+- **Reflection / Memory** record prepared work as work: attributable and inspectable like any other.
+
+The practical consequence is a *wider* preparation posture with an **unchanged or more conservative**
+commitment posture — never the reverse. Nothing here is implemented, and nothing here authorises
+implementation.
+
 ### Non-goals (mirrors `CONSTITUTION.md`)
 
 - No `EstateExecutive`, `EstatePlanner`, `EstateMemory`, `EstateGovernance`, `EstateLLM`, or
