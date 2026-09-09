@@ -129,6 +129,12 @@ class AccessibilityProvider(Protocol):
     Returns a plain dict so the provider needs no knowledge of this package's
     types: `{"application", "window_id", "window_title", "complete",
     "elements": [{"role", "name", "value", "focused", "selected"}, ...]}`.
+
+    A provider *may* additionally offer `read_idle_seconds() -> float | None`
+    -- how long since the last keyboard or mouse input. It is optional and
+    read through `getattr`, so a provider without it is still a complete
+    provider; the observation loop records the duration as an observed fact
+    (`idle_seconds`) and never as a conclusion about the person.
     """
 
     def available(self) -> tuple[bool, str]: ...
@@ -213,6 +219,36 @@ class _UIAutomationProvider:  # pragma: no cover - requires Windows + UIA
             "complete": complete,
             "elements": elements,
         }
+
+    def read_idle_seconds(self) -> float | None:
+        """Seconds since the last input, from Win32 `GetLastInputInfo`.
+
+        Read-only: no hook is installed and no input is synthesised. None
+        when the call is unavailable, so an observation records "idle time
+        unknown" rather than a number this code did not get.
+        """
+        return windows_idle_seconds()
+
+
+def windows_idle_seconds() -> float | None:  # pragma: no cover - requires Win32
+    """`GetLastInputInfo` as a duration, or None off Windows / on any error."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _LastInputInfo(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+        info = _LastInputInfo()
+        info.cbSize = ctypes.sizeof(_LastInputInfo)
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        if not user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        elapsed_ms = (kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF
+        return elapsed_ms / 1000.0
+    except Exception:
+        return None
 
 
 def observe_active_window(

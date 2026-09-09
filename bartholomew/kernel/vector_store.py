@@ -11,7 +11,7 @@ import sqlite3
 
 import numpy as np
 
-from bartholomew.kernel.db_ctx import set_wal_pragmas
+from bartholomew.kernel.db_ctx import wal_db
 from bartholomew.kernel.embedding_engine import (
     KIND_DETERMINISTIC,
     KIND_SEMANTIC,
@@ -89,8 +89,7 @@ class VectorStore:
         parent_dir = os.path.dirname(self.db_path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
-            set_wal_pragmas(conn)
+        with wal_db(self.db_path) as conn:
             conn.executescript(VECTOR_SCHEMA)
             self._migrate_embedder_kind(conn)
             conn.execute(KIND_INDEX_SQL)
@@ -152,8 +151,7 @@ class VectorStore:
         Phase 2d+: Disable VSS if configured dim != 384 (VSS hardcoded)
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                set_wal_pragmas(conn)
+            with wal_db(self.db_path) as conn:
                 # Try to load vss extension
                 conn.enable_load_extension(True)
                 conn.load_extension("vss0")
@@ -315,8 +313,7 @@ class VectorStore:
         vec_blob = vec.tobytes()
         dim = len(vec)
 
-        with sqlite3.connect(self.db_path) as conn:
-            set_wal_pragmas(conn)
+        with wal_db(self.db_path) as conn:
             # Check if embedding already exists for this memory/source
             cursor = conn.execute(
                 "SELECT embedding_id FROM memory_embeddings WHERE memory_id=? AND source=?",
@@ -351,8 +348,7 @@ class VectorStore:
         Args:
             memory_id: Memory ID to delete embeddings for
         """
-        with sqlite3.connect(self.db_path) as conn:
-            set_wal_pragmas(conn)
+        with wal_db(self.db_path) as conn:
             conn.execute("DELETE FROM memory_embeddings WHERE memory_id=?", (memory_id,))
             conn.commit()
 
@@ -499,8 +495,7 @@ class VectorStore:
         Loads all vectors, computes dot products, returns top-k.
         Efficient enough for small to medium datasets (<10k vectors).
         """
-        with sqlite3.connect(self.db_path) as conn:
-            set_wal_pragmas(conn)
+        with wal_db(self.db_path) as conn:
             # Build query with optional filters
             query = "SELECT memory_id, vec, dim, provider, model FROM memory_embeddings WHERE 1=1"
             params: list = []
@@ -577,8 +572,7 @@ class VectorStore:
         are genuinely semantic, how many are the deterministic development
         embedder, and how many are unverified and therefore not retrievable.
         """
-        with sqlite3.connect(self.db_path) as conn:
-            set_wal_pragmas(conn)
+        with wal_db(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT embedder_kind, COUNT(*) FROM memory_embeddings GROUP BY embedder_kind",
             ).fetchall()
@@ -591,8 +585,7 @@ class VectorStore:
         Returns:
             Number of embedding rows
         """
-        with sqlite3.connect(self.db_path) as conn:
-            set_wal_pragmas(conn)
+        with wal_db(self.db_path) as conn:
             cursor = conn.execute("SELECT COUNT(*) FROM memory_embeddings")
             row = cursor.fetchone()
             return row[0] if row else 0

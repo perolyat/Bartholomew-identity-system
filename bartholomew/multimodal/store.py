@@ -26,9 +26,11 @@ must act on every live session within a bounded interval.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import os
+import sys
 import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
@@ -39,6 +41,38 @@ from .modality import Modality
 from .session import LIVE_STATES, MultimodalSession, SessionState
 
 logger = logging.getLogger(__name__)
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Whether `pid` is a live process, asked the way Windows answers it.
+
+    `os.kill(pid, 0)` must never be used here. It reads as the POSIX "signal
+    nothing, just check the process exists" idiom, and on Windows it is not
+    that at all: `signal.CTRL_C_EVENT == 0`, and CPython routes signal 0 to
+    `GenerateConsoleCtrlEvent`, so the call **raises Ctrl+C on that process
+    group's console** rather than asking a question. Pointed at our own pid it
+    interrupts this process; pointed at another it can interrupt whatever
+    shares that console. A liveness probe must not be able to stop anything.
+
+    `OpenProcess` + `WaitForSingleObject` asks and does not signal: a process
+    handle is signalled once the process has exited, so a wait that times out
+    immediately means it is still running.
+    """
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+
+    #: The narrowest right that still permits a wait on the handle.
+    synchronize = 0x00100000
+    wait_timeout = 0x00000102
+
+    handle = kernel32.OpenProcess(synchronize, False, pid)
+    if not handle:
+        # No such process, or one we may not query -- "not alive" either way,
+        # which is the same answer the POSIX path gives for both.
+        return False
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _pid_alive(pid: int | None) -> bool:
@@ -52,6 +86,8 @@ def _pid_alive(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
     try:
+        if sys.platform == "win32":
+            return _pid_alive_windows(pid)
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
@@ -74,6 +110,10 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, MultimodalSession] = {}
         self._stoppers: dict[str, Callable[[], None]] = {}
+        #: The observation loop (W03-A) driving a live screen session, so the
+        #: status surface can report what it has emitted and the read-back
+        #: primitive can observe through the same governed backends.
+        self._observers: dict[str, Any] = {}
         self._lock = threading.RLock()
 
     # -- membership ----------------------------------------------------------
@@ -88,6 +128,17 @@ class SessionStore:
     def get(self, session_id: str) -> MultimodalSession | None:
         with self._lock:
             return self._sessions.get(session_id)
+
+    def attach_observer(self, session_id: str, observer: Any) -> None:
+        """Record the observation loop that drives `session_id`."""
+        with self._lock:
+            if session_id not in self._sessions:
+                raise KeyError(f"no such session: {session_id}")
+            self._observers[session_id] = observer
+
+    def observer(self, session_id: str) -> Any | None:
+        with self._lock:
+            return self._observers.get(session_id)
 
     def all(self) -> list[MultimodalSession]:
         with self._lock:
@@ -259,6 +310,29 @@ class SessionStore:
                 record["reconciled_after_restart"] = True
             reconciled.append(record)
         return reconciled
+
+
+# ---------------------------------------------------------------------------
+# The process-wide registry
+# ---------------------------------------------------------------------------
+# One registry per process, because a session is only real in the process
+# that owns the device (module docstring). The API routes read it, and the
+# read-back primitive (`readback.read_back`) defaults to it so an in-process
+# consumer -- W03-C's Verify step -- reads the same sessions the status
+# surface shows. A holder rather than a bare global so a test can swap it.
+
+_DEFAULT: dict[str, SessionStore] = {"store": SessionStore()}
+
+
+def default_store() -> SessionStore:
+    """The one registry this process's sessions live in."""
+    return _DEFAULT["store"]
+
+
+def _set_default_store_for_tests(store: SessionStore | None) -> SessionStore:
+    """Swap the registry. Tests only; None installs a fresh, empty one."""
+    _DEFAULT["store"] = store if store is not None else SessionStore()
+    return _DEFAULT["store"]
 
 
 def write_status_file(path: str | Path, sessions: list[MultimodalSession]) -> None:

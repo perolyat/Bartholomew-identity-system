@@ -674,7 +674,7 @@ class PersonaPackManager:
             rows = conn.execute(
                 """
                 SELECT * FROM persona_switch_log
-                ORDER BY timestamp DESC
+                ORDER BY timestamp DESC, rowid DESC
                 LIMIT ?
                 """,
                 (limit,),

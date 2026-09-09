@@ -1268,7 +1268,7 @@ class NarratorEngine:
                     """
                     SELECT * FROM episodic_entries
                     WHERE timestamp >= ?
-                    ORDER BY timestamp DESC
+                    ORDER BY timestamp DESC, rowid DESC
                     LIMIT ?
                     """,
                     (since.isoformat(), limit),
@@ -1277,7 +1277,7 @@ class NarratorEngine:
                 rows = conn.execute(
                     """
                     SELECT * FROM episodic_entries
-                    ORDER BY timestamp DESC
+                    ORDER BY timestamp DESC, rowid DESC
                     LIMIT ?
                     """,
                     (limit,),
@@ -1309,7 +1309,7 @@ class NarratorEngine:
                 """
                 SELECT * FROM episodic_entries
                 WHERE episode_type = ?
-                ORDER BY timestamp DESC
+                ORDER BY timestamp DESC, rowid DESC
                 LIMIT ?
                 """,
                 (episode_type.value, limit),
@@ -1341,7 +1341,7 @@ class NarratorEngine:
                 """
                 SELECT * FROM episodic_entries
                 WHERE tags_json LIKE ?
-                ORDER BY timestamp DESC
+                ORDER BY timestamp DESC, rowid DESC
                 LIMIT ?
                 """,
                 (f'%"{tag}"%', limit),
@@ -1451,7 +1451,7 @@ class NarratorEngine:
                     FROM episodic_entries e
                     WHERE e.narrative LIKE ?
                     {filter_clause_fb}
-                    ORDER BY timestamp DESC
+                    ORDER BY timestamp DESC, rowid DESC
                     LIMIT ?
                 """
                 rows = conn.execute(sql_fallback, params_fallback).fetchall()

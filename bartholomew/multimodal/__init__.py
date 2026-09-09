@@ -37,4 +37,20 @@ Module map:
 * `events.py`    -- logical canonical-event serializers and the Session F adapter.
 * `status.py`    -- the visible "what is Bartholomew doing right now" surface.
 * `diagnostics.py` -- the Windows multimodal diagnostic report.
+* `device_consent.py` -- the operator-reachable consent channel a headless
+                    server needs for a person to answer a device start.
+
+Wave 3, W03-A (Live Windows Perception & State Evidence) adds the running
+Observe leg on top of the lifecycle above, and the read primitive the Verify
+leg consumes:
+
+* `observation.py` -- the `observation-event` shared contract: observed_event,
+                    inferred_state, confidence, competing_explanations and
+                    provenance as distinct fields, so evidence is never
+                    collapsed into an asserted human state.
+* `inference.py` -- the bounded, structural-facts-only inferencer (or none).
+* `loop.py`      -- the active-session observation loop: brake re-read every
+                    wake, capture on a cadence, classify, emit to the one sink.
+* `readback.py`  -- the governed read-back of a consented window's UI state
+                    ("what does it say now?"), honest about "unavailable".
 """

@@ -20,7 +20,8 @@ table exists to prevent -- the same reasoning `inbound_store`'s
               |                       |                  |               failed
               |                       |                  |               unknown
               +--refuse-------------->+--cancel--------->+-------------> cancelled
-                                                                         refused
+                                                         |               refused
+                                                         +--brake------> aborted_by_brake
 
 Every terminal state is final. There is no transition out of one, so a
 duplicate delivery, a late result, or a second lease after an outcome are all
@@ -107,6 +108,12 @@ CREATE INDEX IF NOT EXISTS idx_windows_action_results_recorded
 #: action cannot become an unbounded retry loop against the same machine.
 MAX_IDEMPOTENT_LEASES = 3
 
+#: Most action ids one abort poll will answer about. The companion holds at
+#: most `MAX_LEASE_BATCH` leases at a time; this bounds the `IN (...)` list
+#: whatever a caller sends, so the poll cannot be turned into an unbounded
+#: query by a device that asks about ten thousand ids.
+MAX_ABORT_POLL_IDS = 50
+
 #: How long past its expiry a *leased* action is left alone before it is
 #: recorded as `unknown`. A device that took an action needs room to finish it
 #: and report; sweeping it the instant its window closed cancelled actions
@@ -134,6 +141,11 @@ class ActionState(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     UNKNOWN = "unknown"
+    #: A halt stopped it after it was leased. Terminal, and deliberately not
+    #: folded into `CANCELLED`: a person withdrawing an action and a Parking
+    #: Brake stopping one are different events, and an operator auditing a
+    #: safety control needs to count the second without the first.
+    ABORTED_BY_BRAKE = "aborted_by_brake"
 
 
 TERMINAL_STATES: frozenset[ActionState] = frozenset(
@@ -143,10 +155,11 @@ TERMINAL_STATES: frozenset[ActionState] = frozenset(
         ActionState.FAILED,
         ActionState.CANCELLED,
         ActionState.UNKNOWN,
+        ActionState.ABORTED_BY_BRAKE,
     },
 )
 
-#: How a stored state is reported through the contract's seven-value result
+#: How a stored state is reported through the contract's eight-value result
 #: vocabulary. `pending_approval` and `approved` are both `accepted`: the
 #: request has been admitted and recorded, and nothing has run.
 _STATE_TO_STATUS: dict[ActionState, ActionResultStatus] = {
@@ -158,6 +171,7 @@ _STATE_TO_STATUS: dict[ActionState, ActionResultStatus] = {
     ActionState.FAILED: ActionResultStatus.FAILED,
     ActionState.CANCELLED: ActionResultStatus.CANCELLED,
     ActionState.UNKNOWN: ActionResultStatus.UNKNOWN,
+    ActionState.ABORTED_BY_BRAKE: ActionResultStatus.ABORTED_BY_BRAKE,
 }
 
 _RESULT_TO_STATE: dict[ActionResultStatus, ActionState] = {
@@ -165,6 +179,7 @@ _RESULT_TO_STATE: dict[ActionResultStatus, ActionState] = {
     ActionResultStatus.FAILED: ActionState.FAILED,
     ActionResultStatus.CANCELLED: ActionState.CANCELLED,
     ActionResultStatus.UNKNOWN: ActionState.UNKNOWN,
+    ActionResultStatus.ABORTED_BY_BRAKE: ActionState.ABORTED_BY_BRAKE,
 }
 
 _COLUMNS = (
@@ -214,7 +229,7 @@ class StoredAction:
 
     @property
     def status(self) -> ActionResultStatus:
-        """This action's state in the contract's seven-value vocabulary."""
+        """This action's state in the contract's eight-value vocabulary."""
         return _STATE_TO_STATUS[self.state]
 
     @property
@@ -769,6 +784,81 @@ def dispatchable_action_ids(
             f"dispatchable actions could not be read: {type(e).__name__}: {e}",
         ) from e
     return [r[0] for r in rows]
+
+
+def states_for(
+    db_path: str,
+    *,
+    tenant_id: str,
+    device_id: str,
+    action_ids: list[str],
+) -> dict[str, str]:
+    """The current state of each named action, for one device only.
+
+    The abort poll's read. Scoped to `(tenant_id, device_id)` in the `WHERE`
+    rather than filtered afterwards, so a device asking about an action that is
+    not its own gets silence rather than another machine's state -- the same
+    reasoning `run_action_dispatch_through_runtime_contract` applies when it
+    refuses to lease another device's action.
+
+    An id that is absent from the answer is absent on purpose: it does not
+    exist, or it is not this device's. The caller treats an unanswered id as
+    "stop", never as "carry on", because an action whose state cannot be
+    established is not one to keep executing.
+    """
+    wanted = [str(a) for a in action_ids if str(a or "").strip()][:MAX_ABORT_POLL_IDS]
+    if not wanted:
+        return {}
+    placeholders = ", ".join("?" for _ in wanted)
+    try:
+        with wal_db(db_path, timeout=5.0, label="windows_action_states") as conn:
+            conn.execute("PRAGMA busy_timeout = 3000")
+            rows = conn.execute(
+                "SELECT action_id, state FROM windows_action_requests "  # noqa: S608
+                f"WHERE tenant_id = ? AND device_id = ? AND action_id IN ({placeholders})",
+                (tenant_id, device_id, *wanted),
+            ).fetchall()
+    except sqlite3.OperationalError as e:
+        if not _is_missing_table(e):
+            raise ActionPersistenceError(
+                f"action states could not be read: {type(e).__name__}: {e}",
+            ) from e
+        return {}
+    except sqlite3.Error as e:
+        raise ActionPersistenceError(
+            f"action states could not be read: {type(e).__name__}: {e}",
+        ) from e
+    return {str(r[0]): str(r[1]) for r in rows}
+
+
+def mark_aborted_by_brake(
+    db_path: str,
+    *,
+    tenant_id: str,
+    action_id: str,
+    reason: str,
+) -> StoredAction | None:
+    """`leased` -> `aborted_by_brake`. The server's half of the abort.
+
+    Only from `leased`, and that is the whole point of the state: before a
+    lease an engaged brake simply refuses the dispatch and nothing needs a new
+    word for it, and after a terminal state there is nothing left to stop. The
+    gap this closes is the one the W03-C contract names -- once `try_lease`
+    succeeded, nothing could abort the action.
+
+    A device that later reports its own `aborted_by_brake` for the same action
+    finds the row already terminal and is told so, which is correct: the abort
+    happened once and both parties agree about it.
+    """
+    return _transition(
+        db_path,
+        tenant_id=tenant_id,
+        action_id=action_id,
+        from_states=(ActionState.LEASED,),
+        to_state=ActionState.ABORTED_BY_BRAKE,
+        reason=reason[:200],
+        label="windows_action_abort",
+    )
 
 
 def record_result(

@@ -30,6 +30,19 @@ It also turns two previously-manual, one-time audits into permanent
 regression guards: that no production code path ever calls
 `apply_consent_gate=False`, and that no public `.retrieve()` facade even
 exposes a parameter capable of disabling the gate.
+
+W03-D extension
+---------------
+W03-D adds a second thing the gate decides -- the validity verdict
+(`currently_valid` / `revoked` / `superseded` / `expired`) -- and with it a
+second thing a future caller could try to switch off. `TestNoGateBypassKnob`
+below extends the AST guard to that, as the W03-D contract requires ("the
+consent-bypass red-team AST guard is extended to any new bypass parameter").
+
+The extension is deliberately written against a *vocabulary* of bypass-shaped
+names rather than the one parameter that exists today, because the parameter
+that matters is the one somebody adds next year. A guard that only knows
+`apply_consent_gate` cannot see `skip_validity_gate` arriving.
 """
 
 from __future__ import annotations
@@ -292,7 +305,7 @@ class TestNoProductionCallerDisablesTheGate:
             if not root.exists():
                 continue
             for py_file in root.rglob("*.py"):
-                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+                tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
                 for node in ast.walk(tree):
                     if not isinstance(node, ast.Call):
                         continue
@@ -317,3 +330,157 @@ class TestNoProductionCallerDisablesTheGate:
             assert (
                 "apply_consent_gate" not in sig.parameters
             ), f"{cls.__name__}.retrieve() must not expose a gate-bypass parameter"
+
+
+# =============================================================================
+# 4. W03-D: the validity gate must be as unbypassable as the consent gate.
+# =============================================================================
+
+
+#: Parameter names that would, by their shape, disable a governance gate.
+#:
+#: Not an exhaustive list of things somebody could name a bypass -- nothing
+#: could be. It is the list of names a developer reaching for one would most
+#: naturally write, which is what makes it a useful tripwire rather than a
+#: proof. `apply_consent_gate` is included because the existing knob is the
+#: template a new one would be copied from.
+_BYPASS_PARAMETER_NAMES = frozenset(
+    {
+        "apply_consent_gate",
+        "apply_validity_gate",
+        "skip_validity_gate",
+        "skip_validity",
+        "skip_consent_gate",
+        "skip_governance",
+        "ignore_validity",
+        "ignore_revocation",
+        "include_revoked",
+        "include_superseded",
+        "include_expired",
+        "allow_revoked",
+        "allow_expired",
+    },
+)
+
+#: The one legitimate exception. `FTSClient.search()` and
+#: `VectorStore.search()` have carried `apply_consent_gate` since long before
+#: W03-D, two layers below any retrieval facade, and the existing tests above
+#: audit every call site of it. This guard is about new knobs, not about
+#: re-litigating that one.
+_PRE_EXISTING_KNOBS = frozenset({"apply_consent_gate"})
+
+
+class TestNoGateBypassKnob:
+    def test_no_production_call_disables_any_governance_gate(self):
+        """
+        The AST guard, widened from one parameter name to the family.
+
+        Catches a real `keyword=False` argument -- not a docstring or comment
+        that merely mentions the name -- anywhere in first-party code.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        search_roots = [
+            repo_root / "bartholomew",
+            repo_root / "bartholomew_api_bridge_v0_1",
+            repo_root / "identity_interpreter",
+        ]
+
+        offenders = []
+        for root in search_roots:
+            if not root.exists():
+                continue
+            for py_file in root.rglob("*.py"):
+                tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    for kw in node.keywords:
+                        if kw.arg not in _BYPASS_PARAMETER_NAMES:
+                            continue
+                        value = kw.value
+                        disabled = isinstance(value, ast.Constant) and value.value in (False, None)
+                        enabled_bypass = (
+                            kw.arg.startswith(("skip_", "ignore_", "include_", "allow_"))
+                            and isinstance(value, ast.Constant)
+                            and value.value is True
+                        )
+                        if disabled or enabled_bypass:
+                            offenders.append(f"{py_file}:{node.lineno} ({kw.arg}={value.value})")
+
+        assert offenders == [], f"Production call(s) disabling a governance gate: {offenders}"
+
+    def test_no_new_bypass_parameter_was_defined_anywhere(self):
+        """
+        Stronger than auditing call sites: the *parameter itself* must not
+        exist. A knob nobody currently turns is still a knob, and the reason
+        the consent gate has survived is that there has never been one on the
+        retrieval facade to turn.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        offenders = []
+        for root in (
+            repo_root / "bartholomew",
+            repo_root / "bartholomew_api_bridge_v0_1",
+            repo_root / "identity_interpreter",
+        ):
+            if not root.exists():
+                continue
+            for py_file in root.rglob("*.py"):
+                tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+                for node in ast.walk(tree):
+                    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    args = node.args
+                    names = [a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]]
+                    for name in names:
+                        if name in _BYPASS_PARAMETER_NAMES and name not in _PRE_EXISTING_KNOBS:
+                            offenders.append(f"{py_file}:{node.lineno} {node.name}({name}=...)")
+
+        assert offenders == [], (
+            "a new governance-gate bypass parameter was introduced: "
+            f"{offenders}. Withdrawing or expiring a memory is lifted by a "
+            "named, audited act (MemoryStore.reinstate_memory), never by a "
+            "flag on a read or write path."
+        )
+
+    def test_no_public_retrieve_facade_exposes_a_validity_bypass(self):
+        """The W03-D counterpart of the consent-gate facade check above."""
+        for cls in (HybridRetriever, FTSOnlyRetriever, VectorRetrieverAdapter):
+            params = set(inspect.signature(cls.retrieve).parameters)
+            leaked = params & _BYPASS_PARAMETER_NAMES
+            assert not leaked, f"{cls.__name__}.retrieve() exposes {sorted(leaked)}"
+
+    def test_the_validity_verdict_is_computed_by_the_gate_and_nowhere_else(self):
+        """
+        One retrieval governance point, structurally.
+
+        `consent_gate.py` is the only module that may decide what
+        `currently_valid` means. A retriever computing its own verdict would
+        be a second governance authority -- exactly the duplicated-concept
+        shape the project's "one authority per architectural concept"
+        decision forbids, and the reason a bypass would be easy to add.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        allowed = {repo_root / "bartholomew" / "kernel" / "consent_gate.py"}
+        offenders = []
+        for py_file in (repo_root / "bartholomew").rglob("*.py"):
+            if py_file in allowed:
+                continue
+            source = py_file.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(py_file))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name in {
+                    "_verdict_for_row",
+                    "validity_verdicts",
+                    "validity_verdict",
+                }:
+                    # A thin delegating helper on a retriever is fine and is
+                    # what the contract asks for ("honour the verdict via the
+                    # owned consent-gate seam"); a real implementation is not.
+                    body = ast.dump(node)
+                    if "ConsentGate" not in body:
+                        offenders.append(f"{py_file}:{node.lineno} {node.name}")
+
+        assert (
+            offenders == []
+        ), f"validity verdicts must come from ConsentGate; found local logic in {offenders}"

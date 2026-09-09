@@ -74,6 +74,22 @@ def _seed_memory(kind: str, key: str, value: str) -> None:
         store = MemoryStore(_DB_PATH)
         await store.init()
         try:
+            # W03-D: forgetting a memory now leaves a revocation tombstone, so
+            # the identity cannot be silently recreated by a later capture,
+            # lesson or training write (see MemoryStore.forget_memory()). Tests
+            # in this module delete and re-seed the same (kind, key) many times
+            # over one module-scoped database; each re-seed is a deliberate
+            # operator act, so it lifts any tombstone the previous test's
+            # cleanup left, exactly as a person would through the reinstate
+            # route. That the refusal is real -- and that ordinary re-learning
+            # does NOT get this treatment -- is pinned in
+            # tests/test_w03d_supersession_and_tombstone.py.
+            await store.reinstate_memory(
+                kind,
+                key,
+                reinstated_by="test-harness",
+                reason="re-seeding a fixture record",
+            )
             await store.upsert_memory(
                 kind,
                 key,

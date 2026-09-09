@@ -104,6 +104,12 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("GET", "/api/memory/{kind}/{key}"): _MEMORY,
     ("PUT", "/api/memory/{kind}/{key}"): _MEMW,
     ("DELETE", "/api/memory/{kind}/{key}"): _MEMW,
+    # W03-D revocation tombstones. Listing what is withheld is a read of the
+    # memory surface; lifting a withdrawal changes what Bartholomew may store
+    # again, which is squarely a memory write -- a caller holding only
+    # memory:read must not be able to undo a deletion.
+    ("GET", "/api/memory/revocations"): _MEMORY,
+    ("POST", "/api/memory/{kind}/{key}/reinstate"): _MEMW,
     # Export is its own capability, not memory:read. Reading one key and
     # exfiltrating an entire personal memory are different powers, and a
     # future read-only role should be able to hold one without the other.
@@ -200,7 +206,7 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/inbound/events"): Capability.INBOUND_SUBMIT,
     ("GET", "/api/inbound/events"): Capability.INBOUND_READ,
     ("GET", "/api/inbound/events/{event_id}"): Capability.INBOUND_READ,
-    # --- governed Windows actuation (Session B) ------------------------------
+    # --- governed Windows actuation (Session B; abort-check added by W03-C) ---
     # Four capabilities across two routers, because they are two trust
     # channels. `/api/actions` is the person's surface: ask for an action,
     # look at what is pending, approve exactly one, withdraw one. Nothing on
@@ -230,6 +236,14 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     ("POST", "/api/actions/channel/disarm"): Capability.BRAKE_ENGAGE,
     ("POST", "/api/device-actions/lease"): Capability.DEVICE_ACTION_CHANNEL,
     ("POST", "/api/device-actions/{action_id}/result"): Capability.DEVICE_ACTION_CHANNEL,
+    # The abort read (W03-C), deliberately on the SAME capability as the other
+    # two rather than a new one. A device that may be handed work is exactly
+    # the party that has to be able to ask whether to stop; a separate
+    # capability would make it configurable to have a device that can act and
+    # cannot be told to stop, which is not a configuration anybody should be
+    # able to reach. It is also the narrowest verb on the channel -- its
+    # response can only ever make a device do less.
+    ("POST", "/api/device-actions/abort-check"): Capability.DEVICE_ACTION_CHANNEL,
     # --- multimodal presence (Package C) -------------------------------------
     # Reads and stops only; there is no start route to classify, deliberately
     # (see bartholomew_api_bridge_v0_1/.../routes/multimodal.py).
@@ -265,6 +279,31 @@ ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
     # capture backend. It observes nothing and names nothing the person is
     # doing.
     ("GET", "/api/multimodal/diagnostics"): Capability.LIVENESS,
+    # --- the operator console (W03-E) ---------------------------------------
+    # Classified before `app.py` registers the router, on exactly the precedent
+    # the inbound-capture block above records: routes are default-deny, so an
+    # unclassified /api/operator/* would 403 the moment W03-F registered it, and
+    # pre-classifying is what stops that becoming a reason to reach for a bypass.
+    #
+    # The overview is SELF_READ, the same class as the other reads of what
+    # Bartholomew is doing right now: it names pending actions and the windows a
+    # device asked to observe, which is a statement about the person's day, not
+    # about whether the process is up.
+    #
+    # Giving Bartholomew a task is ACTION_REQUEST and not a capability of its
+    # own. Asking for a task is asking for the actions it proposes: the
+    # executive proposes every Windows step through the same envelope this
+    # capability already gates, it can never mint an approval, and a separate
+    # capability would make "may ask the executive for an action but may not ask
+    # for an action" a reachable and meaningless configuration. Advancing a task
+    # is the executive's second proposing pass -- it can propose the next step
+    # or re-propose a failed one -- so it is a request too, on a POST. Reading a
+    # task back is a pure read of the stored plan and is ACTION_READ: it
+    # observes nothing, verifies nothing and proposes nothing.
+    ("GET", "/api/operator/overview"): Capability.SELF_READ,
+    ("POST", "/api/operator/tasks"): Capability.ACTION_REQUEST,
+    ("POST", "/api/operator/tasks/{task_id}/advance"): Capability.ACTION_REQUEST,
+    ("GET", "/api/operator/tasks/{task_id}"): Capability.ACTION_READ,
     # --- kernel command -----------------------------------------------------
     ("POST", "/kernel/command/{cmd}"): Capability.KERNEL_COMMAND,
     # --- metrics -------------------------------------------------------------

@@ -38,22 +38,23 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from bartholomew.multimodal.status import status_snapshot
-from bartholomew.multimodal.store import SessionStore
+from bartholomew.multimodal.store import SessionStore, default_store
 
 from ..db import resolve_db_path
 
 router = APIRouter(prefix="/api/multimodal", tags=["multimodal"])
 
-#: The process-wide session registry. A multimodal session is only real while
-#: the process that owns the device is running (see `store.py`), so the
-#: registry lives with the process rather than in a database -- and a restart
-#: therefore cannot leave a session falsely reported as active.
-_STORE = SessionStore()
-
 
 def get_store() -> SessionStore:
-    """The registry these routes read. Overridden in tests."""
-    return _STORE
+    """The registry these routes read. Overridden in tests.
+
+    The process-wide registry lives in the package (`store.default_store`), not
+    here: a multimodal session is only real while the process that owns the
+    device is running (see `store.py`), and W03-A's in-process read-back
+    primitive must read the same registry these routes show, so both share one
+    holder rather than this module owning a private copy.
+    """
+    return default_store()
 
 
 class StopRequest(BaseModel):
@@ -91,6 +92,12 @@ async def start_multimodal_session(request: Request) -> dict:
     fail-closed -- the interactive consent ask. A refusal at any of them
     returns 403 with the outcome named, because a refused session is a normal,
     inspectable state rather than an error to swallow.
+
+    A screen session that becomes ACTIVE is then *driven*: `start_session`
+    starts the W03-A observation loop, which captures the approved scope on
+    a bounded cadence, re-reads the Parking Brake on every wake, and emits
+    each observation into the installed canonical sink. The loop's counters
+    appear on `/status`; its content never does.
     """
     from bartholomew.multimodal.modality import CaptureScope, Modality, ScopeKind
     from bartholomew.multimodal.runtime import (

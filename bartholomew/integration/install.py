@@ -35,6 +35,10 @@ class SeamReport:
     multimodal_sink: str = "not installed"
     action_resolver: str = "closed"
     event_types: tuple[str, ...] = ()
+    #: The Wave 3 cross-package adapters (`integration/seams.py`), keyed by
+    #: seam name. Reported alongside the wave-two seams so "is this deployment
+    #: actually integrated" still has ONE answer rather than two.
+    w03_seams: dict[str, str] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,6 +48,7 @@ class SeamReport:
             "multimodal_sink": self.multimodal_sink,
             "action_resolver": self.action_resolver,
             "event_types": list(self.event_types),
+            "w03_seams": dict(self.w03_seams),
             "errors": list(self.errors),
             "integrated": not self.errors,
         }
@@ -133,9 +138,37 @@ def install_seams(
             report.errors.append(f"capability resolver: {type(e).__name__}: {e}")
             logger.exception("Could not install the multimodal capability resolver")
     else:
+        # W03-F: the unbound rule, which W03-A §5.1 explicitly left to this
+        # session to decide ("the live retest should run bound, or W03-F should
+        # decide the unbound rule in install.py").
+        #
+        # DECISION: the rule is unchanged --- an unbound process resolves no
+        # devices --- and what changes is that it now says what that COSTS.
+        # Installing a resolver here would mean W03-F deciding, on its own
+        # authority, that an unbound process may resolve a device's capability to
+        # be asked to observe a person's screen. This module's own docstring
+        # rules that out: "Installing the seams makes the system coherent; it
+        # does not make it permissive."
+        #
+        # But silence was the real defect. Without the resolver
+        # `resolve_modality_capability` fails closed, so NO observation session
+        # can start; and because W03-A's read-back requires an active consented
+        # session, the server-side verify verdict is then always UNVERIFIABLE
+        # too. On an unbound deployment the Observe and Verify halves of the
+        # Wave 3 loop are inert while the Act half works --- which is safe, and
+        # is exactly the kind of thing an operator must be told rather than
+        # discover during an acceptance test.
+        #
+        # The recorded live procedure (docs/G §8) binds BARTH_RUNTIME_USER_ID, so
+        # a bound process is the intended live configuration; this names the
+        # variable so the fix is one line rather than an investigation.
         report.capability_resolver = (
             "not installed: this process has no runtime binding, so there is no "
-            "tenant whose devices could be resolved (fail-closed)"
+            "tenant whose devices could be resolved (fail-closed). No observation "
+            "session can start, and the server-side verify verdict is therefore "
+            "always 'unverifiable'. Set BARTH_RUNTIME_USER_ID to bind this process "
+            "to an account (docs/G §8) if the Observe/Verify half of the loop is "
+            "needed."
         )
 
     # -- C -> A: one event bus --------------------------------------------
@@ -165,6 +198,23 @@ def install_seams(
         report.errors.append(f"action resolver: {type(e).__name__}: {e}")
         report.action_resolver = "closed (installation failed)"
         logger.exception("Could not install the device action resolver")
+
+    # -- W03: the Wave 3 cross-package adapters ---------------------------
+    #
+    # Last, because they plug packages into each other rather than into the
+    # platform: the read-back provider is only useful once the device truth and
+    # the event sink above are in place. `install_w03_seams` reports rather
+    # than raises, on the same reasoning as every seam above -- a deployment
+    # that cannot verify is worse than one that cannot start only if it also
+    # claims to have verified, and W03-C's `verify_effect()` answers
+    # UNVERIFIABLE with no provider installed.
+    try:
+        from bartholomew.integration.seams import install_w03_seams
+
+        report.w03_seams = install_w03_seams(db_path=db_path)
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"w03 seams: {type(e).__name__}: {e}")
+        logger.exception("Could not install the Wave 3 cross-package seams")
 
     _LAST_REPORT["report"] = report
     if report.errors:

@@ -1,6 +1,6 @@
 """The device action channel -- the dispatch side, and a different trust boundary.
 
-Two endpoints, reachable only by an enrolled device that a **separate**
+Three endpoints, reachable only by an enrolled device that a **separate**
 resolver has verified. This is the only surface in Bartholomew from which a
 validated action's parameters ever leave the server, and it is deliberately not
 reachable from the observation path:
@@ -28,6 +28,12 @@ conditional `UPDATE` that exactly one caller can win.
 | 403  | Governance refused, or the device asked about an action that is not its own. |
 | 409  | The result arrived for an action that had already ended. It was **not** applied. |
 | 503  | The Parking Brake is engaged, or persistence is unavailable. |
+
+**Leasing is not a standing permission either.** `/abort-check` is the third
+endpoint and the newest: a device re-reads it between its lease and its
+handler, and an engaged brake or a cancelled row stops the action there. It is
+the only endpoint here that can make a device do *less*, and it has no field
+that could make one do more.
 """
 
 from __future__ import annotations
@@ -58,6 +64,11 @@ MAX_BODY_BYTES = 64 * 1024
 #: Most actions one lease call will hand over, whatever the device asks for.
 MAX_LEASE_BATCH = 10
 
+#: Most action ids one abort check will answer about. The server applies
+#: `store.MAX_ABORT_POLL_IDS` as well; this is the boundary's own bound, so an
+#: over-long list is refused by the model before it reaches a query.
+MAX_ABORT_IDS = 50
+
 
 class LeaseIn(BaseModel):
     """What a device asks for. It cannot ask on behalf of another device.
@@ -69,6 +80,17 @@ class LeaseIn(BaseModel):
 
     device_id: str = Field(..., min_length=1, max_length=128)
     limit: int = Field(default=5, ge=1, le=MAX_LEASE_BATCH)
+
+
+class AbortCheckIn(BaseModel):
+    """What a device asks about. Only ids, and only its own.
+
+    There is no field here that could name an action to *start*: the endpoint
+    reads state for ids the caller already holds and answers with a narrowing.
+    """
+
+    device_id: str = Field(..., min_length=1, max_length=128)
+    action_ids: list[str] = Field(default_factory=list, max_length=MAX_ABORT_IDS)
 
 
 class ResultIn(BaseModel):
@@ -251,10 +273,22 @@ async def lease_actions(request: Request) -> Any:
     kernel = _kernel_or_503()
     db_path = getattr(getattr(kernel, "mem", None), "db_path", None) or resolve_db_path()
 
+    # W03-F integration repair (W03-C handoff §8, flagged as W03-F's call).
+    # These were the only two synchronous SQLite calls left on this file's
+    # event loop -- every other persistence call here goes through an
+    # `await seam.*`, which runs its own work off-loop. Under lease load from
+    # several enrolled devices the two of them blocked the loop that also
+    # serves the brake and abort-check reads, which is the one thing that must
+    # stay responsive while a device is acting. `routes/actions.py:565` already
+    # expires overdue actions exactly this way; this is that pattern, applied
+    # to the sibling channel.
+    from bartholomew.kernel.blocking_executor import run_off_loop
+
     try:
         # Housekeeping first, so an expired action is never even a candidate.
-        store.expire_overdue(db_path, tenant_id=tenant)
-        candidates = store.dispatchable_action_ids(
+        await run_off_loop(store.expire_overdue, db_path, tenant_id=tenant)
+        candidates = await run_off_loop(
+            store.dispatchable_action_ids,
             db_path,
             tenant_id=tenant,
             device_id=device.device_id,
@@ -297,6 +331,12 @@ async def lease_actions(request: Request) -> Any:
                 "expires_at": result.request.expires_at,
                 "repeatability": result.request.repeatability.value,
                 "correlation_id": result.request.correlation_id,
+                # How long this lease's abort clearance is good for. The bound
+                # is the server's, not a number the companion chose: a device
+                # that has not re-read `/abort-check` by then has not
+                # established that this action may still run, and
+                # `dispatch.check()` refuses it rather than running it.
+                "abort_deadline": seam.abort_deadline(),
             },
         )
 
@@ -304,10 +344,81 @@ async def lease_actions(request: Request) -> Any:
         "device_id": device.device_id,
         "verified_by": device.verified_by,
         "actions": leased,
+        "abort_check_seconds": seam.ABORT_CLEARANCE_SECONDS,
         "detail": (
             "Leased. Each of these passed the full governance admission a moment ago; "
-            "the device is expected to validate them again before acting, and to "
-            "report 'unknown' rather than 'succeeded' for anything it cannot observe."
+            "the device is expected to validate them again before acting, to re-read "
+            "/api/device-actions/abort-check before it acts and again during any long "
+            "step, and to report 'unknown' rather than 'succeeded' for anything it "
+            "cannot observe."
+        ),
+    }
+
+
+@router.post("/abort-check")
+async def abort_check(request: Request) -> Any:
+    """Answer whether the actions this device holds may still run.
+
+    The read that closes stop-after-lease. Before it, a lease was the last
+    word: once `try_lease` had succeeded, an engaged Parking Brake refused the
+    *next* dispatch but could not reach an action already handed over, and a
+    cancel written onto a leased row changed a database column that no device
+    ever read.
+
+    **It can only ever narrow.** The response names ids the caller already
+    holds, a boolean, and a sentence. There is no field in it that could name
+    an action to run, a program, a path, a parameter or a handler -- so the
+    worst a hostile or broken answer achieves is a companion that stops.
+    That asymmetry is why a third verb on the action channel was acceptable at
+    all.
+
+    Registered **before** `/{action_id}/result` so the literal path is matched
+    as a path and not as an action id.
+
+    | Code | Meaning |
+    |------|---------|
+    | 200  | The signal was read. `halted`, `aborted` and `running` say what it is. |
+    | 401  | This device is not verified. Nothing was answered. |
+    | 403  | The body named a different device than the verified one. |
+    | 503  | The action state could not be read. The companion treats this as stop. |
+    """
+    device, tenant, payload = await _authenticated_device(request, AbortCheckIn)
+    if payload.device_id != device.device_id:
+        raise HTTPException(
+            403,
+            "The device_id in the body does not match the verified device; no abort "
+            "signal was answered.",
+        )
+
+    kernel = _kernel_or_503()
+    try:
+        signal = await seam.evaluate_action_abort_through_runtime_contract(
+            kernel,
+            tenant_id=tenant,
+            device_id=device.device_id,
+            action_ids=list(payload.action_ids),
+        )
+    except ActionPersistenceError as e:
+        raise HTTPException(503, str(e)) from e
+
+    return {
+        "device_id": device.device_id,
+        "halted": signal.halted,
+        "reason": signal.reason,
+        "aborted": list(signal.aborted),
+        "running": list(signal.running),
+        "checked_at": signal.checked_at,
+        "valid_for_seconds": signal.valid_for_seconds,
+        # Re-stamped on every read, not carried over from the lease. The bound
+        # is "how long may a halt go unhonoured", so the clock has to restart
+        # each time the device asks -- otherwise a batch that simply took
+        # longer than the window would have its tail refused as a halt that
+        # never happened.
+        "clearance_deadline": signal.clearance_deadline,
+        "detail": (
+            "An action appears in 'running' only if its row was read and says it is "
+            "still leased to this device. An id in neither list was not established "
+            "as runnable and must not be run."
         ),
     }
 
@@ -352,6 +463,14 @@ async def report_result(action_id: str, request: Request) -> Any:
         "recorded": result.governance_allowed,
         "action": result.action.as_dict() if result.action is not None else None,
     }
+    if result.recovery is not None:
+        # What follows from this outcome, computed once on the server so the
+        # device, the operator surface and a later audit all read the same
+        # answer rather than each deciding for itself whether an `unknown` is
+        # worth another go. Advice, not permission: a retry is a new action
+        # through the whole envelope, which is why `requires_new_approval` is
+        # in the payload rather than left to be inferred.
+        body["recovery"] = result.recovery.as_dict()
     if result.reason:
         body["reason"] = result.reason
     if result.category is not None:

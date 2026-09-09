@@ -63,12 +63,43 @@ LAUNCH_WINDOW_WAIT_SECONDS = 4.0
 class HandlerContext:
     """What a handler is given besides its parameters.
 
-    Just the configuration. A handler has no access to the channel, the
-    network, the action's governance state or the approving principal: it is
-    handed validated parameters and asked what happened.
+    The configuration, and one callable that can only ever stop it. A handler
+    still has no access to the channel, the network, the action's governance
+    state or the approving principal: it is handed validated parameters, a way
+    to ask "has a halt been engaged since I started?", and asked what happened.
+
+    `abort_gate` is deliberately shaped so the only thing it can express is
+    *stop*. It takes nothing and returns a reason or `None`; there is no value
+    it can return that starts, retries, redirects or widens anything. The
+    runner installs one that consults the server's abort signal; a handler test
+    constructs a context without one and simply gets no mid-flight checks,
+    which is safe because the runner has already checked before the handler was
+    entered and `dispatch.check()` refuses a stale abort clearance outright.
     """
 
     config: ActionCompanionConfig
+    #: Returns the reason this action must stop, or None to carry on. See the
+    #: class docstring for why it cannot say anything else.
+    abort_gate: Callable[[], str | None] | None = None
+
+    def check_abort(self) -> str | None:
+        """The reason to stop now, or None. Never raises.
+
+        A gate that raises is treated as no reason to stop rather than as a
+        stop, and that asymmetry is deliberate: this is a *mid-flight*,
+        best-effort refinement on top of the pre-handler check, and a
+        transient error inside it should not abort a running action that
+        governance never objected to. The load-bearing refusals -- the
+        pre-handler abort read and the stale-clearance check -- are both
+        fail-closed, and they run before a handler is entered at all.
+        """
+        if self.abort_gate is None:
+            return None
+        try:
+            return self.abort_gate()
+        except Exception:  # noqa: BLE001 - see the docstring
+            logger.warning("The abort gate raised; the action continues")
+            return None
 
     def validation_context(self) -> ValidationContext:
         """This machine's own allowlists, with the filesystem actually present."""
@@ -338,6 +369,18 @@ def launch_app(params: Any, ctx: HandlerContext) -> HandlerOutcome:
     deadline = time.monotonic() + LAUNCH_WINDOW_WAIT_SECONDS
     window_seen = False
     while time.monotonic() < deadline:
+        # The per-step abort check, in the one handler with a real multi-second
+        # wait. The process has already started -- `steps_completed=1` says so
+        # rather than pretending the machine is untouched -- but there is no
+        # reason to keep waiting on behalf of an action a halt has stopped.
+        stop = ctx.check_abort()
+        if stop:
+            return HandlerOutcome.aborted_by_brake(
+                f"{app_id!r} was started and then the action was stopped: {stop}",
+                steps_completed=1,
+                app_id=app_id,
+                process_id=started.process_id,
+            )
         windows = _windows_for(app_id, ctx)
         if isinstance(windows, HandlerOutcome):
             break
@@ -443,6 +486,19 @@ def manage_window(params: Any, ctx: HandlerContext) -> HandlerOutcome:
     window = _one_window(app_id, ctx)
     if isinstance(window, HandlerOutcome):
         return window
+
+    # Finding the window is the first step and it touched nothing; the call
+    # below is the one that changes the machine. Checking in between is the
+    # cheapest place a halt engaged during the window search can still stop
+    # this action having done anything at all.
+    stop = ctx.check_abort()
+    if stop:
+        return HandlerOutcome.aborted_by_brake(
+            f"the window was found and then the action was stopped before it was "
+            f"changed: {stop}",
+            steps_completed=0,
+            app_id=app_id,
+        )
 
     if operation == "focus":
         return _focus(window, app_id)
@@ -671,6 +727,15 @@ def type_text(params: Any, ctx: HandlerContext) -> HandlerOutcome:
     refuses them -- and `win32.send_unicode_text` cannot send a virtual-key
     code at all, so there is no way for this capability to press Send, Submit,
     Confirm, Purchase or Delete.
+
+    And then it **verifies**. Before W03-C this handler stopped at "Windows
+    accepted every event" and reported `unknown` forever, because reading the
+    field back was treated as reading the person's writing. It is -- so the
+    read is reduced to a length and a digest inside `uia.focused_field_text()`
+    and the contents never reach this function at all. What comes back is
+    enough to say whether the characters landed and not enough to say what they
+    were. Where the control does not expose its contents, the answer is still
+    `unknown`, honestly and for a stated reason.
     """
     canonical = _revalidate(CapabilityKind.TYPE_TEXT, params, ctx)
     if isinstance(canonical, HandlerOutcome):
@@ -712,6 +777,13 @@ def type_text(params: Any, ctx: HandlerContext) -> HandlerOutcome:
             control_type=field.control_type,
         )
 
+    # The baseline, taken **before** anything is sent. Verification is a
+    # comparison, and a comparison needs both ends: without a before-reading
+    # there is no way to tell a field that gained the typed characters from one
+    # that already contained something the same length. `FieldText` carries a
+    # length and a digest and never the contents -- see `uia.FieldText`.
+    before = uia.focused_field_text()
+
     try:
         sent = win32.send_unicode_text(text)
     except win32.PlatformUnsupportedError as e:
@@ -726,28 +798,55 @@ def type_text(params: Any, ctx: HandlerContext) -> HandlerOutcome:
     # `send_unicode_text` builds. Anything else means the injection was
     # partially blocked, and a partially typed string is not a success.
     expected = len(text) * 2
-    evidence = {
+    evidence: dict[str, Any] = {
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "text_length": len(text),
         "events_sent": sent,
     }
-    if sent == expected:
-        # Deliberately `unknown` rather than `succeeded`. Windows accepted
-        # every event, but whether the characters landed in the field -- rather
-        # than being swallowed by a focus change between the check and the
-        # injection -- is not something this process can read back without
-        # reading the field's contents, which would be reading the person's
-        # screen. Accepting the honest answer here costs nothing and is the
-        # difference between a truthful log and a confident one.
+    if sent != expected:
+        # Windows itself rejected some of the events. Nothing was verified and
+        # nothing needs to be: a partially typed string is observably a
+        # failure, and reading the field back would not make it less of one.
+        return HandlerOutcome.failed(
+            ErrorCategory.OS_CALL_FAILED,
+            f"only {sent} of {expected} keyboard events were accepted",
+            verified=False,
+            verify_method="unavailable",
+            **evidence,
+        )
+
+    # Every event was accepted. That is *issuance*, and issuance is not effect:
+    # the characters may still have been swallowed by a focus change between
+    # the check above and the injection. So the field is read back and the two
+    # measurements are compared. Where the control exposes its contents this
+    # produces a real verdict; where it does not, the answer stays `unknown`,
+    # which is what this handler returned unconditionally before W03-C.
+    after = uia.focused_field_text()
+    verdict = uia.verify_typed_text(expected=text, before=before, after=after)
+    evidence["text_length_before"] = before.length
+    evidence["text_length_after"] = after.length
+
+    if not verdict.observed:
         return HandlerOutcome.unverifiable(
-            "every keystroke was accepted by Windows; whether the characters landed "
-            "in the intended field is not observable without reading the field back, "
-            "which this build does not do",
+            "every keystroke was accepted by Windows, and whether the characters "
+            f"landed in the intended field could not be read back: {verdict.reason}",
+            verified=False,
+            verify_method="unavailable",
+            **evidence,
+        )
+    if verdict.matched:
+        return HandlerOutcome.succeeded(
+            f"the text was typed and read back from the field: {verdict.reason}",
+            verified=True,
+            verify_method="uia_value_read_back",
             **evidence,
         )
     return HandlerOutcome.failed(
         ErrorCategory.OS_CALL_FAILED,
-        f"only {sent} of {expected} keyboard events were accepted",
+        "every keystroke was accepted by Windows but the field does not hold them: "
+        f"{verdict.reason}",
+        verified=False,
+        verify_method="uia_value_read_back",
         **evidence,
     )
 

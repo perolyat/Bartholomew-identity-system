@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .devices import DeviceCapabilityResolver, resolve_modality_capability
+from .events import MultimodalEventSink, get_event_sink, serialize_microphone
+from .loop import ObservationLoop, ObservationLoopConfig
 from .microphone import (
     MicrophoneCaptureFailedError,
     MicrophoneSessionAdapter,
@@ -126,7 +128,9 @@ class SessionStartResult:
             "reason": self.reason,
             "provenance_degraded": self.provenance_degraded,
             "session": self.session.snapshot(),
-            **self.extra,
+            # Underscore-prefixed extras are in-process handles (a thread, the
+            # observation loop) for tests and callers, never for the wire.
+            **{k: v for k, v in self.extra.items() if not str(k).startswith("_")},
         }
 
 
@@ -140,12 +144,27 @@ async def start_session(
     blocking_executor: Any | None = None,
     microphone_backend: Any | None = None,
     seam: Callable[..., Any] | None = None,
+    accessibility_provider: Any | None = None,
+    screen_backend: Any | None = None,
+    event_sink: MultimodalEventSink | None = None,
+    inferencer: Any | None = None,
+    brake_check: Callable[[], bool] | None = None,
+    loop_config: ObservationLoopConfig | None = None,
+    run_observation_loop: bool = True,
 ) -> SessionStartResult:
     """Resolve, gate and (only if every gate passed) start one session.
 
     Returns rather than raises for every denial: a refused session is a normal,
     inspectable outcome that the status surface must be able to show, not an
     exception for a caller to swallow.
+
+    W03-A: a screen session that reaches ACTIVE is driven by an
+    `ObservationLoop` on its own thread (`run_observation_loop`, default on;
+    a caller that drives ticks itself may turn it off). `accessibility_provider`,
+    `screen_backend`, `event_sink`, `inferencer` and `brake_check` are the
+    loop's injection points; each unset one falls back to the machine's
+    default provider/backend, the installed sink, the bounded inferencer and
+    a fail-closed read of the one Parking Brake at `db_path`.
     """
     session = MultimodalSession(
         tenant_id=request.tenant_id,
@@ -240,14 +259,31 @@ async def start_session(
             session,
             store,
             backend=microphone_backend,
+            sink=event_sink,
             provenance_degraded=result.provenance_degraded,
             provenance_error=result.provenance_error,
         )
 
-    # Screen and spoken-output sessions become ACTIVE and are then driven by
-    # their own bounded calls (`screen.capture_with_fallback`,
-    # `speech.speak_with_handle`), which the caller makes while the session is
-    # live and which the store can stop at any moment.
+    if request.modality is Modality.SCREEN:
+        return _start_screen_observation(
+            session,
+            store,
+            request=request,
+            db_path=db_path,
+            accessibility_provider=accessibility_provider,
+            screen_backend=screen_backend,
+            sink=event_sink,
+            inferencer=inferencer,
+            brake_check=brake_check,
+            loop_config=loop_config,
+            run_loop=run_observation_loop,
+            provenance_degraded=result.provenance_degraded,
+            provenance_error=result.provenance_error,
+        )
+
+    # A spoken-output session becomes ACTIVE and is then driven by its own
+    # bounded call (`speech.speak_with_handle`), which the caller makes while
+    # the session is live and which the store can stop at any moment.
     session.transition(SessionState.ACTIVE, "session started")
     return SessionStartResult(
         session=session,
@@ -259,11 +295,67 @@ async def start_session(
     )
 
 
+def _start_screen_observation(
+    session: MultimodalSession,
+    store: SessionStore,
+    *,
+    request: SessionRequest,
+    db_path: str | None,
+    accessibility_provider: Any | None,
+    screen_backend: Any | None,
+    sink: MultimodalEventSink | None,
+    inferencer: Any | None,
+    brake_check: Callable[[], bool] | None,
+    loop_config: ObservationLoopConfig | None,
+    run_loop: bool,
+    provenance_degraded: bool,
+    provenance_error: str | None,
+) -> SessionStartResult:
+    """Enter ACTIVE and start the Observe leg for one approved screen session.
+
+    The loop is constructed *after* approval and registered as the session's
+    stopper before the session becomes ACTIVE, so there is no instant in
+    which the session is live and the store cannot stop it. The loop reads
+    only the approved scope, re-reads the brake on every wake, and emits into
+    the installed canonical sink; see `loop.py`.
+    """
+    loop = ObservationLoop(
+        session,
+        store,
+        allow_screenshot_fallback=request.allow_screenshot_fallback,
+        accessibility_provider=accessibility_provider,
+        screen_backend=screen_backend,
+        sink=sink,
+        inferencer=inferencer,
+        db_path=db_path,
+        brake_check=brake_check,
+        config=loop_config,
+    )
+    store.add(session, stopper=loop.stop)
+    store.attach_observer(session.session_id, loop)
+    session.transition(SessionState.ACTIVE, "observing")
+    thread = loop.start_thread() if run_loop else None
+    return SessionStartResult(
+        session=session,
+        allowed=True,
+        outcome="started",
+        provenance_degraded=provenance_degraded,
+        provenance_error=provenance_error,
+        extra={
+            "allow_screenshot_fallback": request.allow_screenshot_fallback,
+            "observation": loop.stats(),
+            "_loop": loop,
+            "_thread": thread,
+        },
+    )
+
+
 def _start_microphone(
     session: MultimodalSession,
     store: SessionStore,
     *,
     backend: Any | None,
+    sink: MultimodalEventSink | None = None,
     provenance_degraded: bool,
     provenance_error: str | None,
 ) -> SessionStartResult:
@@ -315,6 +407,27 @@ def _start_microphone(
             logger.exception("Microphone session failed")
             store.terminate(session.session_id, SessionState.FAILED, str(exc))
         else:
+            # W03-A: the transcript the adapter produced reaches the one
+            # canonical sink. Before this it was returned to the caller and
+            # went nowhere. A refused record is a failed session, recorded as
+            # such, not a listening session that quietly kept nothing.
+            observation = observation_holder.get("observation")
+            if observation is not None:
+                try:
+                    (sink or get_event_sink()).submit(serialize_microphone(session, observation))
+                except Exception as exc:
+                    observation_holder["emit_error"] = str(exc)
+                    logger.warning(
+                        "microphone transcript could not be recorded for %s: %s",
+                        session.session_id,
+                        exc,
+                    )
+                    store.terminate(
+                        session.session_id,
+                        SessionState.FAILED,
+                        f"transcript could not be recorded: {type(exc).__name__}: {exc}",
+                    )
+                    return
             store.stop(session.session_id, "listening session finished")
 
     thread = threading.Thread(

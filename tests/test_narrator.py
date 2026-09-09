@@ -16,9 +16,8 @@ Comprehensive tests covering:
 from __future__ import annotations
 
 import sqlite3
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
+import time
+from datetime import datetime, timedelta, timezone
 
 from bartholomew.kernel.narrator import (
     EpisodeType,
@@ -217,11 +216,11 @@ class TestNarratorConfig:
         # Should return defaults
         assert config.enabled is True
 
-    def test_config_from_identity_with_valid_file(self):
+    def test_config_from_identity_with_valid_file(self, tmp_path):
         """Test config loading from a valid Identity.yaml."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(
-                """
+        identity_file = tmp_path / "Identity.yaml"
+        identity_file.write_text(
+            """
 identity:
   self_model:
     narrator_episodic_layer:
@@ -231,17 +230,32 @@ identity:
         redact_personal_data: false
         exportable: true
 """,
-            )
-            f.flush()
+            encoding="utf-8",
+        )
 
-            config = NarratorConfig.from_identity(f.name)
+        config = NarratorConfig.from_identity(str(identity_file))
 
-            assert config.enabled is True
-            assert config.style == "test style"
-            assert config.redact_personal_data is False
-            assert config.exportable is True
+        assert config.enabled is True
+        assert config.style == "test style"
+        assert config.redact_personal_data is False
+        assert config.exportable is True
 
-            Path(f.name).unlink()
+
+def _cutoff_strictly_after(moment: datetime) -> datetime:
+    """A cutoff that is unambiguously later than `moment`, and earlier than
+    anything recorded after this call returns.
+
+    Taking `datetime.now()` as the cutoff between two writes only separates
+    them where the clock is finer-grained than the gap between them. Windows
+    resolves the system clock to roughly 15.6 ms, so two episodes written in a
+    tight loop can share a timestamp and `timestamp >= cutoff` then admits the
+    earlier one too. Waiting past the boundary makes the filter, rather than
+    the platform's clock resolution, decide the result.
+    """
+    cutoff = moment + timedelta(milliseconds=50)
+    while datetime.now(timezone.utc) <= cutoff:
+        time.sleep(0.005)
+    return cutoff
 
 
 # =============================================================================
@@ -304,22 +318,23 @@ class TestNarratorEngineInit:
         assert narrator._config is not None
         assert narrator._db_path == ":memory:"
 
-    def test_init_with_custom_db_path(self):
+    def test_init_with_custom_db_path(self, tmp_path):
         """Test initialization with custom database path."""
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = str(tmp_path / "narrator.db")
 
         narrator = NarratorEngine(db_path=db_path)
 
         assert narrator._db_path == db_path
 
-        # Verify schema was created
-        with sqlite3.connect(db_path) as conn:
+        # Verify schema was created. `with sqlite3.connect(...)` commits but
+        # does not close, so the handle is released explicitly.
+        conn = sqlite3.connect(db_path)
+        try:
             tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
             table_names = [t[0] for t in tables]
             assert "episodic_entries" in table_names
-
-        Path(db_path).unlink()
+        finally:
+            conn.close()
 
     def test_init_creates_database_schema(self):
         """Test that initialization creates the database schema."""
@@ -622,8 +637,8 @@ class TestPersistence:
         episode1 = narrator.generate_observation_episode("Old episode")
         narrator.persist_episode(episode1)
 
-        # Wait a tiny bit and mark timestamp
-        cutoff = datetime.now(timezone.utc)
+        # Mark a timestamp that is unambiguously after it
+        cutoff = _cutoff_strictly_after(episode1.timestamp)
 
         # Create another episode
         episode2 = narrator.generate_observation_episode("New episode")
@@ -633,6 +648,32 @@ class TestPersistence:
 
         assert len(recent) == 1
         assert "New episode" in recent[0].narrative
+
+    def test_recent_episodes_tied_on_timestamp_are_newest_written_first(self):
+        """A clock too coarse to separate two writes must not reverse
+        "most recent first".
+
+        Windows resolves the system clock to roughly 15.6 ms against
+        microseconds on Linux, so episodes written in a tight loop genuinely
+        share a timestamp there and `ORDER BY timestamp DESC` alone leaves
+        their order to SQLite. The insertion-order tiebreaker is what makes
+        the answer truthful; this reproduces the platform condition rather
+        than waiting for a Windows runner to stumble into it.
+        """
+        narrator = NarratorEngine()
+        frozen = datetime.now(timezone.utc)
+
+        for i in range(5):
+            episode = narrator.generate_observation_episode(f"Content {i}")
+            episode.timestamp = frozen
+            narrator.persist_episode(episode)
+
+        recent = narrator.get_recent_episodes(limit=3)
+
+        assert len(recent) == 3
+        assert "Content 4" in recent[0].narrative
+        assert "Content 3" in recent[1].narrative
+        assert "Content 2" in recent[2].narrative
 
     def test_get_episodes_by_type(self):
         """Test filtering episodes by type."""
@@ -1330,12 +1371,11 @@ class TestEpisodeFTSSearch:
         narrator = NarratorEngine()
 
         # Create first episode
-        narrator.persist_episode(
-            narrator.generate_observation_episode("Early observation"),
-        )
+        early = narrator.generate_observation_episode("Early observation")
+        narrator.persist_episode(early)
 
-        # Mark time
-        cutoff = datetime.now(timezone.utc)
+        # Mark a time that is unambiguously after it
+        cutoff = _cutoff_strictly_after(early.timestamp)
 
         # Create second episode
         narrator.persist_episode(
@@ -1463,10 +1503,9 @@ class TestFullIntegration:
         narrative = narrator.generate_daily_reflection_narrative()
         assert "Daily Reflection" in narrative
 
-    def test_persistence_across_narrator_instances(self):
+    def test_persistence_across_narrator_instances(self, tmp_path):
         """Test that data persists across narrator instances."""
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = str(tmp_path / "persistence.db")
 
         # First narrator
         narrator1 = NarratorEngine(db_path=db_path)
@@ -1480,5 +1519,3 @@ class TestFullIntegration:
 
         assert count == 1
         assert "Persistent content" in episodes[0].narrative
-
-        Path(db_path).unlink()

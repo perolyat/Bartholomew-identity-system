@@ -8,6 +8,8 @@ falsely marked active).
 from __future__ import annotations
 
 import os
+import signal
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -22,7 +24,12 @@ from bartholomew.multimodal.session import (
     SessionState,
     validate_duration,
 )
-from bartholomew.multimodal.store import SessionStore, read_status_file, write_status_file
+from bartholomew.multimodal.store import (
+    SessionStore,
+    _pid_alive,
+    read_status_file,
+    write_status_file,
+)
 
 
 def _session(modality: Modality = Modality.MICROPHONE, **kwargs) -> MultimodalSession:
@@ -207,6 +214,66 @@ class TestStopAndExpiry:
         session = _activate(_session())
         far = datetime.now(timezone.utc) + timedelta(days=1)
         assert session.seconds_remaining(far) == 0.0
+
+
+class TestLivenessProbeSignalsNothing:
+    """A liveness probe must ask, never signal.
+
+    `_pid_alive` used `os.kill(pid, 0)`, the POSIX "does this process exist"
+    idiom. On Windows that is not a question: `signal.CTRL_C_EVENT == 0`, and
+    CPython routes signal 0 to `GenerateConsoleCtrlEvent`, so the call raises
+    **Ctrl+C on that process group's console**. Pointed at our own pid -- which
+    `reconcile_after_restart` does for any snapshot this process owns -- it
+    interrupted the running process. It stopped the Windows CI suite mid-run
+    for as long as the tier has existed, and on a real machine it can
+    interrupt whatever shares the console.
+
+    A pre-existing defect, on `main` before Wave 3 and found while validating
+    the W03 merge candidate.
+    """
+
+    def test_probing_our_own_pid_delivers_no_console_control_event(self):
+        """The regression, and it runs on every platform.
+
+        A console control event is delivered asynchronously, so the handler is
+        given time to be called before the assertion. On POSIX this documents
+        the property; on Windows it is the bug.
+        """
+        interrupted: list[str] = []
+        previous = signal.signal(signal.SIGINT, lambda *_: interrupted.append("SIGINT"))
+        try:
+            for _ in range(5):
+                assert _pid_alive(os.getpid()) is True
+            time.sleep(0.25)
+        finally:
+            signal.signal(signal.SIGINT, previous)
+
+        assert interrupted == [], "the liveness probe raised a console control event"
+
+    def test_the_windows_path_never_reaches_os_kill(self, monkeypatch):
+        """Structural, because the behavioural proof above cannot run the
+        Windows branch on a Linux runner and the branch is the whole point."""
+        from bartholomew.multimodal import store
+
+        # The compiled names, not the source text: the docstring names the
+        # forbidden call in order to explain it.
+        assert "kill" not in store._pid_alive_windows.__code__.co_names
+
+        def _fail(*_args, **_kwargs):
+            raise AssertionError("os.kill reached on the Windows path")
+
+        monkeypatch.setattr(store.os, "kill", _fail)
+        monkeypatch.setattr(store.sys, "platform", "win32")
+        monkeypatch.setattr(store, "_pid_alive_windows", lambda pid: True)
+
+        assert store._pid_alive(os.getpid()) is True
+
+    def test_a_pid_that_cannot_be_alive_is_not_alive(self):
+        """The probe still answers the question it exists to answer."""
+        assert _pid_alive(None) is False
+        assert _pid_alive(0) is False
+        assert _pid_alive(-1) is False
+        assert _pid_alive(0x7FFFFFFF) is False
 
 
 class TestRestartCleanup:

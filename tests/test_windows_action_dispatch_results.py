@@ -40,7 +40,7 @@ from bartholomew.actuation.result import (
 from bartholomew.windows_actuation import handlers as handlers_module
 from bartholomew.windows_actuation import win32
 from bartholomew.windows_actuation.config import ActionCompanionConfig
-from bartholomew.windows_actuation.dispatch import LeasedAction, dispatch
+from bartholomew.windows_actuation.dispatch import AbortSignal, LeasedAction, dispatch
 from bartholomew.windows_actuation.handlers import HandlerContext
 from bartholomew.windows_actuation.state import (
     ActionCompanionState,
@@ -89,6 +89,11 @@ def _action(capability, parameters, **overrides):
         "parameters": parameters,
         "expires_at": to_iso(utc_now() + timedelta(minutes=5)),
         "repeatability": "non_repeatable",
+        # A live abort clearance, because the default for these tests is an
+        # action the companion has just re-established it may run. The
+        # W03-C tests below override it to prove that a stale or missing one
+        # refuses -- which is the direction that has to fail closed.
+        "abort_deadline": to_iso(utc_now() + timedelta(minutes=5)),
     }
     payload.update(overrides)
     return LeasedAction.from_wire(payload)
@@ -127,13 +132,24 @@ class _FakeWindow:
 
 
 def test_a_handler_cannot_report_a_governance_word():
-    """`accepted` and `refused` are Governance's, not a device's."""
+    """`accepted` and `refused` are Governance's, not a device's.
+
+    W03-C added `aborted_by_brake` to the reportable set, and the reasoning is
+    the one that decides membership: a device may report what it *observed*,
+    and the device is the party that reads the abort signal and declines to
+    run. It is not borrowing Governance's authority to say a halt is engaged --
+    the server decided that; the device is reporting that it therefore stopped.
+
+    The two words it still may not say are unchanged, and that is the property
+    the pin protects.
+    """
     assert DEVICE_REPORTABLE_STATUSES == {
         ActionResultStatus.STARTED,
         ActionResultStatus.SUCCEEDED,
         ActionResultStatus.FAILED,
         ActionResultStatus.CANCELLED,
         ActionResultStatus.UNKNOWN,
+        ActionResultStatus.ABORTED_BY_BRAKE,
     }
     for word in (ActionResultStatus.ACCEPTED, ActionResultStatus.REFUSED):
         with pytest.raises(ValueError, match="may not report"):
@@ -781,6 +797,14 @@ def test_the_runner_records_before_it_reports(config, monkeypatch):
         def lease(self, *, limit):
             return ChannelResult(ChannelStatus.OK, 200, {"actions": []}), [], []
 
+        def abort_check(self, *, action_ids):
+            return ChannelResult(ChannelStatus.OK, 200, {}, ""), AbortSignal(
+                readable=True,
+                halted=False,
+                aborted=frozenset(),
+                running=frozenset(action_ids),
+            )
+
         def report(self, *, action_id, outcome, observed_at):
             order.append("reported")
             assert (config.state_path).exists(), "the ledger was written first"
@@ -821,6 +845,14 @@ def test_an_unreported_outcome_is_resent_verbatim_and_never_upgraded(config):
         def lease(self, *, limit):
             return ChannelResult(ChannelStatus.OK, 200, {"actions": []}), [], []
 
+        def abort_check(self, *, action_ids):
+            return ChannelResult(ChannelStatus.OK, 200, {}, ""), AbortSignal(
+                readable=True,
+                halted=False,
+                aborted=frozenset(),
+                running=frozenset(action_ids),
+            )
+
         def report(self, *, action_id, outcome, observed_at):
             sent.append((action_id, outcome.status))
             return ChannelResult(ChannelStatus.OK, 200, {}, "")
@@ -840,6 +872,9 @@ def test_a_refused_channel_is_terminal_and_visible(config):
 
     class _Client:
         device_id = DEVICE
+
+        def abort_check(self, *, action_ids):  # pragma: no cover - never leased
+            raise AssertionError("nothing was leased, so nothing is abort-checked")
 
         def lease(self, *, limit):
             attempts.append("lease")

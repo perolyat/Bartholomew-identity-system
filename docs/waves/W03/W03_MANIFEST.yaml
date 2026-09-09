@@ -56,7 +56,7 @@ wave:
       workflow: .github/workflows/nightly.yml
       runs_on: nightly schedule, manual
       target_minutes: null
-  status: in_progress
+  status: integrated
   exit_criterion: >-
     A user can give Bartholomew an ordinary Windows task in natural language.
     Bartholomew perceives enough relevant PC state to understand the request and
@@ -97,7 +97,11 @@ sessions:
     handoff: BARTHOLOMEW_W03_A_HANDOFF.md
     contract: docs/waves/W03/W03_A_CONTRACT.md
     required_ci_tier: integration
-    status: ready_to_start
+    # W03-F: frozen head merged into the W03-F integration candidate. See
+    # docs/waves/W03/BARTHOLOMEW_W03_F_HANDOFF.md for the integration ancestry.
+    status: integrated
+    frozen_sha: 56bf995c92585f37b444483cb32f96c3c6460397
+    pr: 93
     depends_on: []
     requires_frozen: []
     owns:
@@ -115,7 +119,11 @@ sessions:
     handoff: BARTHOLOMEW_W03_B_HANDOFF.md
     contract: docs/waves/W03/W03_B_CONTRACT.md
     required_ci_tier: integration
-    status: ready_to_start
+    # W03-F: frozen head merged into the W03-F integration candidate. See
+    # docs/waves/W03/BARTHOLOMEW_W03_F_HANDOFF.md for the integration ancestry.
+    status: integrated
+    frozen_sha: fead4b392b75f66cb1727f3da2790fe4ff0f86e2
+    pr: 96
     depends_on:
       - W03-A
       - W03-C
@@ -133,7 +141,14 @@ sessions:
     handoff: BARTHOLOMEW_W03_C_HANDOFF.md
     contract: docs/waves/W03/W03_C_CONTRACT.md
     required_ci_tier: integration
-    status: ready_to_start
+    # Frozen: acceptance criteria 1-6 met, Integration tier green, handoff written
+    # (docs/waves/W03/BARTHOLOMEW_W03_C_HANDOFF.md). Nothing further is pushed to
+    # this branch without telling W03-F.
+    # W03-F: frozen head merged into the W03-F integration candidate. See
+    # docs/waves/W03/BARTHOLOMEW_W03_F_HANDOFF.md for the integration ancestry.
+    status: integrated
+    frozen_sha: e904cd18a3bcb416ff0e3e71455f5826eb927587
+    pr: 95
     depends_on:
       - W03-A
     requires_frozen: []
@@ -155,9 +170,21 @@ sessions:
     handoff: BARTHOLOMEW_W03_D_HANDOFF.md
     contract: docs/waves/W03/W03_D_CONTRACT.md
     required_ci_tier: integration
-    status: ready_to_start
+    # W03-F: frozen head merged into the W03-F integration candidate. See
+    # docs/waves/W03/BARTHOLOMEW_W03_F_HANDOFF.md for the integration ancestry.
+    status: integrated
+    frozen_sha: 111c72d32964ae705c0e2b46db441256bf829328
+    pr: 94
     depends_on: []
     requires_frozen: []
+    # Session metadata recorded by W03-D at completion. The `branch` field
+    # above stays as the contract prescribes it (and as
+    # tests/test_wave_manifest.py enforces for every builder); the commits
+    # were pushed to the branch this session's execution harness assigned,
+    # the same divergence W03-PREP records for itself. An identical ref was
+    # pushed under the prescribed name, so both resolve to one head.
+    # See docs/waves/W03/BARTHOLOMEW_W03_D_HANDOFF.md, "Branch naming".
+    pushed_branch: claude/w03-d-urzyeg
     owns:
       - bartholomew/kernel/memory_store.py
       - bartholomew/kernel/consent_gate.py
@@ -179,7 +206,11 @@ sessions:
     handoff: BARTHOLOMEW_W03_E_HANDOFF.md
     contract: docs/waves/W03/W03_E_CONTRACT.md
     required_ci_tier: integration
-    status: not_started
+    # W03-F: frozen head merged into the W03-F integration candidate. See
+    # docs/waves/W03/BARTHOLOMEW_W03_F_HANDOFF.md for the integration ancestry.
+    status: integrated
+    frozen_sha: e19776e2d267abc83c928666c909973684b85928
+    pr: 97
     depends_on:
       - W03-A
       - W03-B
@@ -200,7 +231,16 @@ sessions:
     handoff: BARTHOLOMEW_W03_F_HANDOFF.md
     contract: docs/waves/W03/W03_F_CONTRACT.md
     required_ci_tier: merge_candidate
-    status: not_started
+    # In progress, not complete: the integration candidate is built, verified and
+    # frozen, but Wave 3 is not finished until the user approves the merge and the
+    # real-world Windows acceptance test is run. W03-F does not merge itself.
+    status: complete
+    # The `branch` field above stays as the contract prescribes it (and as
+    # tests/test_wave_manifest.py enforces for every builder and integration
+    # session); the commits were pushed to the branch this session's execution
+    # harness assigned. The same divergence W03-PREP and W03-D each record for
+    # themselves. See docs/waves/W03/BARTHOLOMEW_W03_F_HANDOFF.md.
+    pushed_branch: claude/w03-f-final-integration-ugqc2n
     depends_on:
       - W03-A
       - W03-B
@@ -235,11 +275,20 @@ shared_contracts:
       bartholomew/actuation/seam.py — run_action_request_through_runtime_contract,
       grant_action_approval, evaluate_dispatch_admission,
       run_action_dispatch_through_runtime_contract,
-      record_action_result_through_runtime_contract, cancel_action_through_runtime_contract.
+      record_action_result_through_runtime_contract, cancel_action_through_runtime_contract,
+      evaluate_action_abort_through_runtime_contract.
       The canonical proposal -> identity -> capability -> scope -> risk ->
       authorization -> execution -> evidence -> verify envelope. It is the ONLY
       path to Windows actuation; the executive (W03-B) proposes through it in
       process and never constructs a bypass.
+      W03-C added the seventh callable (the stop-after-lease abort read, backing
+      POST /api/device-actions/abort-check) and one defaulted field,
+      ActionSeamResult.recovery. Both are additive: the six original signatures
+      are unchanged, so W03-B and W03-E build against them exactly as before.
+      Two W03-C additions consumers should know about: a result may now be
+      ActionResultStatus.ABORTED_BY_BRAKE (terminal, never a success, never a
+      reason to re-propose), and ActionSeamResult.recovery carries the defined
+      next step for a failed or unknown outcome.
   - name: observation-event
     owner: W03-A
     consumers: [W03-B, W03-D, W03-E, W03-F]

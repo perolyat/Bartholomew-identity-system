@@ -335,6 +335,178 @@ def test_a_parking_brake_refuses_a_request_with_503(service):
         )
 
 
+def _brake(service, scopes):
+    status, _ = _post(
+        service.port,
+        "/api/governance/brake/engage",
+        {"scopes": scopes, "reason": "integration test", "actor": "test"},
+    )
+    assert status == 200
+
+
+def _release(service):
+    _, current = _get(service.port, "/api/governance/brake")
+    _post(
+        service.port,
+        "/api/governance/brake/disengage",
+        {
+            "reason": "integration test",
+            "actor": "test",
+            "expected_revision": current.get("revision"),
+        },
+    )
+
+
+# --- stop after lease, over real HTTP (W03-C acceptance criterion 2) ----------------
+
+
+def test_the_lease_response_carries_an_abort_deadline(service):
+    """The bound the device honours is the server's, and it arrives with the lease."""
+    _, requested = _request(service.port)
+    action_id = requested["action"]["action_id"]
+    _post(service.port, f"/api/actions/{action_id}/approve", {})
+
+    status, leased = _post(
+        service.port,
+        "/api/device-actions/lease",
+        {"device_id": DEVICE, "limit": 5},
+        headers=DEVICE_AUTH,
+    )
+    assert status == 200
+    assert leased["abort_check_seconds"] > 0
+    assert leased["actions"][0]["abort_deadline"].endswith("Z")
+
+
+def test_an_engaged_brake_aborts_an_action_already_leased_over_http(service):
+    """The whole criterion, end to end over real sockets and real Governance.
+
+    The lease succeeds while the brake is clear -- that is the point, and it is
+    what the wave-two envelope already guaranteed. Then a halt is engaged, and
+    the abort read that a companion makes between its lease and its handler
+    comes back `halted`, with the action moved to `aborted_by_brake` on the
+    server without the device having reported anything.
+    """
+    _, requested = _request(service.port)
+    action_id = requested["action"]["action_id"]
+    _post(service.port, f"/api/actions/{action_id}/approve", {})
+
+    status, leased = _post(
+        service.port,
+        "/api/device-actions/lease",
+        {"device_id": DEVICE, "limit": 5},
+        headers=DEVICE_AUTH,
+    )
+    assert status == 200
+    assert [a["action_id"] for a in leased["actions"]] == [action_id]
+
+    # Clear brake: the companion is told it may carry on. Non-vacuity anchor.
+    status, clear = _post(
+        service.port,
+        "/api/device-actions/abort-check",
+        {"device_id": DEVICE, "action_ids": [action_id]},
+        headers=DEVICE_AUTH,
+    )
+    assert status == 200
+    assert clear["halted"] is False
+    assert clear["running"] == [action_id]
+
+    _brake(service, ["actuation"])
+    try:
+        status, halted = _post(
+            service.port,
+            "/api/device-actions/abort-check",
+            {"device_id": DEVICE, "action_ids": [action_id]},
+            headers=DEVICE_AUTH,
+        )
+        assert status == 200
+        assert halted["halted"] is True
+        assert halted["aborted"] == [action_id]
+        assert halted["running"] == []
+    finally:
+        _release(service)
+
+    status, read_back = _get(service.port, f"/api/actions/{action_id}")
+    assert status == 200
+    assert read_back["action"]["state"] == "aborted_by_brake"
+    assert read_back["recovery"]["outcome"] == "surface"
+
+
+def test_a_cancel_on_a_leased_action_reaches_the_device_over_http(service):
+    """No brake at all: one withdrawn action, and the device is told."""
+    _, requested = _request(service.port)
+    action_id = requested["action"]["action_id"]
+    _post(service.port, f"/api/actions/{action_id}/approve", {})
+    _post(
+        service.port,
+        "/api/device-actions/lease",
+        {"device_id": DEVICE, "limit": 5},
+        headers=DEVICE_AUTH,
+    )
+
+    status, _ = _post(service.port, f"/api/actions/{action_id}/cancel", {})
+    assert status == 200
+
+    status, signal = _post(
+        service.port,
+        "/api/device-actions/abort-check",
+        {"device_id": DEVICE, "action_ids": [action_id]},
+        headers=DEVICE_AUTH,
+    )
+    assert status == 200
+    assert signal["halted"] is False, "one withdrawn action is not a halt"
+    assert signal["aborted"] == [action_id]
+
+
+def test_an_unauthenticated_device_cannot_read_the_abort_signal(service):
+    """The third verb is on the device channel and behind the same door."""
+    status, _ = _post(
+        service.port,
+        "/api/device-actions/abort-check",
+        {"device_id": DEVICE, "action_ids": ["anything"]},
+    )
+    assert status == 401
+
+
+def test_a_device_cannot_ask_about_another_devices_actions(service):
+    status, _ = _post(
+        service.port,
+        "/api/device-actions/abort-check",
+        {"device_id": "laptop", "action_ids": ["anything"]},
+        headers=DEVICE_AUTH,
+    )
+    assert status == 403
+
+
+def test_a_result_carries_the_recovery_plan_over_http(service):
+    """W03-C acceptance criterion 5, at the boundary a caller actually reads."""
+    _, requested = _request(service.port)
+    action_id = requested["action"]["action_id"]
+    _post(service.port, f"/api/actions/{action_id}/approve", {})
+    _post(
+        service.port,
+        "/api/device-actions/lease",
+        {"device_id": DEVICE, "limit": 5},
+        headers=DEVICE_AUTH,
+    )
+
+    status, recorded = _post(
+        service.port,
+        f"/api/device-actions/{action_id}/result",
+        {
+            "device_id": DEVICE,
+            "status": "unknown",
+            "error_category": "effect_unverifiable",
+            "detail": "the foreground could not be read back",
+            "evidence": {},
+            "observed_at": "2026-09-01T12:00:00Z",
+        },
+        headers=DEVICE_AUTH,
+    )
+    assert status == 200
+    assert recorded["recovery"]["outcome"] == "surface"
+    assert recorded["recovery"]["requires_new_approval"] is False
+
+
 def test_a_cancelled_action_cannot_be_leased(service):
     _, requested = _request(service.port)
     action_id = requested["action"]["action_id"]

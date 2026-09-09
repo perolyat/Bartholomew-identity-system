@@ -1,7 +1,7 @@
-"""Turning one leased action into one handler call. Four checks first, every time.
+"""Turning one leased action into one handler call. Five checks first, every time.
 
 This is the device-side gate. Bartholomew's server has already run the eleven
-governance checks, and this runs four more before anything reaches an operating
+governance checks, and this runs five more before anything reaches an operating
 system -- not because the server is doubted, but because a client that trusts
 whatever a server tells it is a client that a compromised or impersonated
 server can drive:
@@ -15,6 +15,10 @@ server can drive:
    independently here rather than trusting the server's view of the time.
 4. **Replay state.** An action id in this machine's durable executed-ledger is
    never run again; what it did before is reported instead.
+5. **Abort clearance.** A lease carries a deadline by which this companion must
+   have re-read the server's abort signal. Past it, nothing runs. This is the
+   device half of stop-after-lease: the server can move a leased row to
+   `aborted_by_brake`, but only the device can decline to act on it.
 
 **Dispatch is a literal table lookup on a closed enum.** `handlers.HANDLERS`
 maps `CapabilityKind` to a named function. There is no `getattr` on a
@@ -44,6 +48,12 @@ from .handlers import HANDLERS, HandlerContext
 from .state import ActionCompanionState
 
 logger = logging.getLogger(__name__)
+
+#: Most action ids this module will read out of one abort response. Matches the
+#: server's own `store.MAX_ABORT_POLL_IDS` bound, applied again here because a
+#: client that trusts a server's list length is a client an unbounded list can
+#: exhaust.
+MAX_ABORT_IDS = 50
 
 
 class DispatchRefusedError(Exception):
@@ -78,6 +88,11 @@ class LeasedAction:
     expires_at: str
     repeatability: str = "non_repeatable"
     correlation_id: str = ""
+    #: When this lease's abort clearance goes stale, as the **server** measured
+    #: it. Empty when the server did not send one, which an older server will
+    #: not -- `check()` treats an absent deadline as an expired one, so the
+    #: companion refuses to act rather than falling back to acting freely.
+    abort_deadline: str = ""
 
     @classmethod
     def from_wire(cls, raw: Any) -> LeasedAction:
@@ -120,7 +135,95 @@ class LeasedAction:
             expires_at=str(raw["expires_at"]),
             repeatability=str(raw.get("repeatability") or "non_repeatable"),
             correlation_id=str(raw.get("correlation_id") or ""),
+            abort_deadline=str(raw.get("abort_deadline") or ""),
         )
+
+
+@dataclass(frozen=True)
+class AbortSignal:
+    """The server's answer to "may the actions I am holding still run?".
+
+    **Unreadable is stop.** `readable=False` is what a transport failure, an
+    unauthenticated channel, a malformed body and an older server that has no
+    such endpoint all produce, and `may_run()` returns False for every one of
+    them. The alternative -- carrying on when the abort signal cannot be
+    reached -- would make the whole mechanism a control that works exactly when
+    nothing is wrong.
+
+    `halted` and `aborted` are kept apart for the reason the server keeps them
+    apart: a halt is about the channel and means stop polling too, while an
+    aborted id is about one action and means the others are still fine.
+    """
+
+    readable: bool
+    halted: bool = False
+    aborted: frozenset[str] = frozenset()
+    running: frozenset[str] = frozenset()
+    reason: str = ""
+    #: When this clearance goes stale, as the **server** measured it on this
+    #: read. Empty when the server did not send one, which is treated as
+    #: already stale -- the same reading `abort_deadline_passed` gives every
+    #: other unusable deadline.
+    clearance_deadline: str = ""
+
+    @classmethod
+    def unreadable(cls, reason: str) -> AbortSignal:
+        return cls(readable=False, halted=False, reason=str(reason or "")[:300])
+
+    @classmethod
+    def from_wire(cls, raw: Any) -> AbortSignal:
+        """Parse the abort response, or return an unreadable signal.
+
+        Never raises. A malformed body is not an error to handle somewhere
+        else; it is an answer that failed to establish clearance, which is
+        exactly what `unreadable` means.
+        """
+        if not isinstance(raw, dict):
+            return cls.unreadable("the abort response was not a JSON object")
+        running = raw.get("running")
+        aborted = raw.get("aborted")
+        if not isinstance(running, list) or not isinstance(aborted, list):
+            return cls.unreadable("the abort response named no running/aborted lists")
+        return cls(
+            readable=True,
+            halted=bool(raw.get("halted")),
+            clearance_deadline=str(raw.get("clearance_deadline") or ""),
+            aborted=frozenset(str(a) for a in aborted[:MAX_ABORT_IDS]),
+            running=frozenset(str(a) for a in running[:MAX_ABORT_IDS]),
+            reason=str(raw.get("reason") or "")[:300],
+        )
+
+    def may_run(self, action_id: str) -> bool:
+        """Whether one action is established as still runnable. Fail-closed.
+
+        Affirmative only: the id has to be *in* `running`. Absence is not
+        permission, so an id the server did not mention -- because it was
+        cancelled, expired, swept, or never that device's -- stops.
+        """
+        return self.readable and not self.halted and action_id in self.running
+
+
+def abort_deadline_passed(raw: str, *, now: datetime | None = None) -> bool:
+    """Whether a lease's abort clearance has gone stale. Missing is stale.
+
+    The bound the W03-C contract asks the *lease response* to carry, honoured
+    here on the device. An empty or unparseable deadline returns True, so a
+    server that sent no bound gets the conservative reading rather than an
+    unbounded one -- the same treatment `_parse_expiry` gives an unreadable
+    expiry, and for the same reason.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return True
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        return True
+    return (now or datetime.now(timezone.utc)) >= parsed.astimezone(timezone.utc)
 
 
 def _parse_expiry(raw: str) -> datetime:
@@ -150,7 +253,7 @@ def check(
     *,
     now: datetime | None = None,
 ) -> CapabilityKind:
-    """The four device-side checks. Returns the capability, or raises a refusal.
+    """The five device-side checks. Returns the capability, or raises a refusal.
 
     Ordered cheapest-and-most-fundamental first: an action for another device
     is refused before its capability is even parsed, because nothing about it
@@ -202,6 +305,21 @@ def check(
             f"this device already ran action {action.action_id} and observed "
             f"{previous.status!r}; a duplicate delivery does not run it again",
         )
+
+    # 5. The abort clearance, which is the newest of the five and the only one
+    #    that is about *now* rather than about the action. A lease is not a
+    #    standing permission: the server stamped a deadline on it, and past
+    #    that deadline this companion has not established that the action may
+    #    still run. The runner re-reads the abort signal to refresh it; this is
+    #    the check that makes failing to do so stop the action rather than
+    #    silently widen the window.
+    if abort_deadline_passed(action.abort_deadline, now=now):
+        raise DispatchRefusedError(
+            ErrorCategory.PARKING_BRAKE,
+            f"the abort clearance for action {action.action_id} expired at "
+            f"{action.abort_deadline or '<unset>'}; this companion has not "
+            "established that it may still run, so it will not run it",
+        )
     return descriptor.kind
 
 
@@ -223,6 +341,13 @@ def dispatch(
     try:
         kind = check(action, ctx, state, now=now)
     except DispatchRefusedError as refusal:
+        if refusal.category is ErrorCategory.PARKING_BRAKE:
+            # The abort-clearance refusal, and it is an abort rather than a
+            # failure. Nothing else in `check()` raises this category, and
+            # recording "a halt stopped this" as `failed` would put it in the
+            # same column as a window that would not focus -- which is the one
+            # distinction an operator auditing a safety control needs.
+            return HandlerOutcome.aborted_by_brake(refusal.detail, steps_completed=0)
         return HandlerOutcome(
             ActionResultStatus.FAILED,
             refusal.category,

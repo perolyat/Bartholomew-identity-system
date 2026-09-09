@@ -189,13 +189,31 @@ class TestSpeakText:
         assert result.detail == "nothing to say"
         assert not log.exists(), "an engine was run for nothing"
 
-    def test_a_wedged_engine_is_abandoned_not_waited_on(self, tmp_path, monkeypatch):
-        script = tmp_path / "hanging-tts"
-        script.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
-        script.chmod(script.stat().st_mode | stat.S_IEXEC)
-        monkeypatch.setenv(spoken_output.ENGINE_COMMAND_ENV, str(script))
+    def test_a_wedged_engine_is_abandoned_not_waited_on(self):
+        """The timeout path, against a process that genuinely will not finish.
 
-        result = spoken_output.speak_text("hello", timeout=0.5)
+        The wedged engine is a Python interpreter that sleeps, injected through
+        `speak_text`'s own `engine` parameter, rather than a shell script named
+        by the environment override. Two reasons, both about running this
+        assertion on every platform rather than only on POSIX:
+
+          * a `#!/bin/sh` stub cannot execute on Windows at all (`WinError
+            193`), so this test never reached its own subject there;
+          * a batch file that waits does so by running `ping`/`timeout` as a
+            *grandchild*, which inherits the pipes -- killing the interpreter
+            on timeout then leaves the reader blocked on a process nobody is
+            waiting for.
+
+        `sys.executable` has neither problem, and the path under test is
+        unchanged: a real `subprocess.run()`, a real timeout, a real kill.
+        """
+        wedged = spoken_output.SpeechEngine(
+            name="hanging-tts",
+            path=sys.executable,
+            flags=("-c", "import time; time.sleep(30)"),
+        )
+
+        result = spoken_output.speak_text("hello", engine=wedged, timeout=0.5)
 
         assert result.spoken is False
         assert "timed out" in (result.detail or "")

@@ -41,6 +41,60 @@ share_app = typer.Typer(help="Explicit, sanitized sharing to a trusted group")
 console = Console()
 
 
+# ---------------------------------------------------------------------------
+# One answer to "which database?"
+# ---------------------------------------------------------------------------
+#
+# Every `--db` on this CLI used to default to a literal `data/bartholomew.db`
+# -- a scratch file the running server had never opened. On the live Windows
+# test that produced a `brake on` printing "ENGAGED" while the server carried
+# on dispatching: an emergency stop that appeared to work and did nothing,
+# which is the worst shape a safety control can take.
+#
+# The brake commands were migrated first. W03-C finishes the job: every
+# remaining command resolves through `bartholomew.kernel.db_paths`, the same
+# resolver the API server and the kernel daemon use, and every one of them
+# *prints the file it touched*. Printing is half the fix -- a resolver whose
+# answer an operator never sees leaves them exactly where the live test found
+# them, unable to tell which file they just changed.
+#
+# Duplicated from `bartholomew/cli.py` rather than shared through it: that
+# module imports this one to mount `devices`, `groups` and `share`, so an
+# import in the other direction would be a cycle. Twelve lines is a cheaper
+# price than a shared module neither file owns.
+#
+# An explicit `--db` still wins, unconditionally: tests address per-test
+# databases while a session-wide `BARTH_DB_PATH` is set, and a shell must keep
+# a way to name a specific file.
+_KERNEL_DB_HELP = (
+    "Kernel database. Default: BARTH_DB_PATH, else <project root>/data/barth.db "
+    "-- the same file the running server reads. Pass a path to address a "
+    "different one; the running server is then untouched."
+)
+
+
+def _kernel_db(explicit: str | None) -> str:
+    from bartholomew.kernel.db_paths import resolve_kernel_db_path
+
+    return resolve_kernel_db_path(explicit)
+
+
+def _resolved_db(explicit: str | None) -> str:
+    """Resolve `--db` and say out loud which file it landed on.
+
+    Returns the resolved path and prints one line naming it and where the
+    answer came from. Both halves matter: the resolution is what makes the
+    command touch the file the server is using, and the printed line is what
+    lets an operator confirm that it did.
+    """
+    from bartholomew.kernel.db_paths import describe_kernel_db_path
+
+    resolved = _kernel_db(explicit)
+    described = describe_kernel_db_path(explicit)
+    console.print(f"Database: {resolved}  (from {described['source']})")
+    return resolved
+
+
 def _init() -> None:
     from bartholomew.platform.store import init_platform_schema
 
@@ -982,7 +1036,7 @@ def share_adopt_local(
         ...,
         help="Where this belongs in YOUR competency map. Your decision, not the publisher's.",
     ),
-    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
     identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
 ) -> None:
     """Turn an adopted package into a local candidate in your own runtime.
@@ -991,6 +1045,7 @@ def share_adopt_local(
     retrieval structurally cannot see, so nothing you have adopted can change
     an answer Bartholomew gives until you approve and accept it below.
     """
+    db = _resolved_db(db)
     from bartholomew.kernel import runtime_contract as rc
     from bartholomew.kernel.trusted_share import TrustedSharePackage
 
@@ -1022,7 +1077,7 @@ def share_approve_local(
     slug: str = typer.Option(..., help="The candidate's slug, from `share adopt-local`"),
     approver: str = typer.Option(..., help="Who is authorising this. Never anonymous."),
     note: str = typer.Option(None, help="Why, for the audit trail"),
-    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
     identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
 ) -> None:
     """Authorise accepting one adopted share. Consolidates nothing on its own.
@@ -1031,6 +1086,7 @@ def share_approve_local(
     bound by fingerprint to this candidate's exact content -- so editing it
     afterwards invalidates this, deliberately.
     """
+    db = _resolved_db(db)
     from bartholomew.kernel import runtime_contract as rc
 
     result = _run_local(
@@ -1060,7 +1116,7 @@ def share_review_local(
     rule: str = typer.Option(None, help="customise: replacement rule/statement"),
     conditions: str = typer.Option(None, help="customise: replacement conditions"),
     step: list[str] = typer.Option(None, "--step", help="customise: replacement step. Repeatable."),
-    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
     identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
 ) -> None:
     """Accept, reject, or customise an adopted share in your own runtime.
@@ -1068,6 +1124,7 @@ def share_review_local(
     `accept` requires an approval from `share approve-local` first, and is the
     only one of the three that makes anything retrievable.
     """
+    db = _resolved_db(db)
     from bartholomew.kernel import runtime_contract as rc
 
     actions = {
@@ -1113,7 +1170,7 @@ def share_mark_revoked(
         ...,
         help="The `revoked_at` from `share provenance`, RFC3339 UTC",
     ),
-    db: str = typer.Option("data/bartholomew.db", help="Your kernel database"),
+    db: str = typer.Option(None, "--db", help=_KERNEL_DB_HELP),
     identity: str = typer.Option("Identity.yaml", help="Path to Identity.yaml"),
 ) -> None:
     """Record on your own candidate that the publisher has withdrawn the share.
@@ -1123,6 +1180,7 @@ def share_mark_revoked(
     -- a publisher who could reach further than this would hold a remote
     delete on your memory.
     """
+    db = _resolved_db(db)
     from bartholomew.kernel import runtime_contract as rc
 
     result = _run_local(
