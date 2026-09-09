@@ -214,8 +214,25 @@ observations, in order, are these. `windows-full` carries `timeout-minutes: 40`:
 | 1 | `dcf842e` | Suite completed in **38 min 20 s**; job **cancelled** at the cap |
 | 2 | `d80aba8` (re-run) | Suite completed in **13 min 14 s**; job **failed** on the 16, a clean result |
 | 3 | `ebe9d12` | **Cancelled** at the cap with no summary and no junit written at all |
+| 4 | `81e3150` | **Cancelled** at the cap; 97% reached at ~18 min, then no further progress |
+| 5 | `cdf08c9` | **Cancelled** at the cap; 97% reached at 15 min 30 s, then no further progress for ~24 min |
+| 6 | `cdf08c9` (re-run) | Suite completed in **15 min 11 s**; job **failed** on 6, a clean result (§5c) |
 
-Two of three attempts hit the cap. So the earlier reading here — that attempt 1
+Four of six attempts hit the cap, and the three most recent cancellations share a
+shape worth recording exactly: the progress bar reaches 97% at 15–18 minutes and
+then **nothing further is printed** until the cap. That is not a slow suite; it is
+a tail that does not finish. Each of those runs also shows one `[gw*] node down:
+Not properly terminated` at ~62–68%, in the region where
+`test_scheduler_queue_containment.py` runs — pytest-timeout is configured with
+`timeout_method = "thread"`, which ends a wedged worker with `os._exit`, and
+xdist then redistributes its tests. Whether the stalled tail is that
+redistribution or a separate wedge is not determined; the junit file is never
+written on a cancelled run, so the cancelled attempts carry no per-test timing.
+This is **timing evidence for the contention class and the job budget**, reported
+here separately as the authorisation requires, and nothing in CI configuration
+has been changed in response to it.
+
+So the earlier reading here — that attempt 1
 was a slow outlier and the budget is comfortable — is **not supported**; nor is
 the reading before it, that the budget is definitively too small. What the
 evidence supports is narrower: **the Windows suite's wall-clock is highly
@@ -228,11 +245,11 @@ not a Wave 3 question. `timeout-minutes` has not been touched.
 
 ### Status
 
-None of the sixteen is a consequence of the authorised repair — the repair
-revealed them — so they are recorded here rather than fixed, under the
-authorisation's own stop condition. The Merge Candidate tier is **not** green
-and this candidate is **not** ready for merge approval. What has changed is
-that the reason is now smaller, fully enumerated, and understood.
+None of the sixteen was a consequence of the `_pid_alive` repair — that repair
+revealed them — so at the time they were recorded here rather than fixed, under
+the authorisation's own stop condition. The thirteen deterministic ones were
+then repaired under a further, separate authorisation; §5c is that record and
+carries the current status.
 
 ## 5b. The `_pid_alive` repair (separately authorised)
 
@@ -261,6 +278,100 @@ handler is installed, the probe is called, and the handler must not fire.
 
 Beyond CI this mattered on its own: on a real Windows machine the same call can
 interrupt whatever shares the console.
+
+## 5c. The thirteen deterministic Windows failures (separately authorised)
+
+The second bounded repair, authorised after §5a enumerated the sixteen. Its
+scope was the **thirteen failures identical across both complete Windows runs**
+and nothing else: the contention class, `timeout-minutes`, CI topology and any
+broader cleanup were explicitly excluded. All thirteen are pre-existing wave-1/2
+failures that no Windows run had ever reached before §5b.
+
+### Enumeration and root causes
+
+| Class | Root cause | Tests | Repair |
+|---|---|---|---|
+| **A. `WinError 32`** (10) | `bartholomew/kernel/vector_store.py` opened every connection as `with sqlite3.connect(...) as conn:`, which commits on exit but **never closes**. On CPython 3.11 a `sqlite3.Connection` sits in a reference cycle with its own statement cache, so the handle — and the `.db`/`-wal`/`-shm` files under it — stayed open until the cyclic collector happened to run. POSIX can unlink an open file; Windows cannot, so every `TemporaryDirectory` teardown after a `VectorStore` call raced the collector and lost. Confirmed by an fd probe: seven handles held after one `upsert`, zero after `gc.collect()`; after the fix, zero at every step. `FTSClient`, `HybridRetriever` and `MemoryStore` already closed explicitly and were not the leak. | `tests/integration/`: `test_recency_flip_integration.py` ×3, `test_fts_unavailable_vector_quality.py` ×3, `test_hybrid_paraphrase_benchmark.py` ×2, `test_lexical_over_vector_on_rare_tokens.py` ×2 | All seven sites go through `db_ctx.wal_db()`, the repository's own pattern — same pragmas, `close` in `finally`, already used at seventeen W03 store sites and enforced for the API layer by `test_no_raw_sqlite_connect_in_api.py` citing this exact leak. Every write site already committed explicitly, so the old context's implicit commit was not load-bearing. The ten tests are untouched. |
+| **B. `UnicodeDecodeError`** (2) | Two governance walkers read the product with `read_text()` and no encoding — cp1252 on Windows — and died at byte `0x9D` (the last byte of a U+201D quotation mark at offset 5849 of `bartholomew/executive/intent.py`) before reaching their assertion. | `test_skill_runtime_contract_seam.py`, `test_consent_bypass_redteam.py` | `encoding="utf-8"` at the two walker sites. Search roots, AST logic and assertions are byte-identical. **These two no-bypass proofs now execute on Windows for the first time.** |
+| **C. Path escaping** (1) | Both `ProcessLockHeldError` messages in `bartholomew/kernel/process_lock.py` rendered the path with `!r`, which doubles every backslash, so on Windows the path in the message was not the path. | `test_process_lock.py` | `'{path}'` at the three sites — quoted plain, byte-identical on POSIX for ordinary paths. No other test asserts on the message text. |
+
+Classes A and B are the same two defect classes as §3.2 and §3.3, in files the
+truncated runs never reached; C is new. The reconciliation the authorisation asked
+for: "twelve in the two classes already repaired" was correct as to class, but the
+earlier repairs were **in tests** (a walker's encoding, a test's own unlink), while
+class A's root here is **in the product** — a shared leak that ten tests merely
+exposed. Fixing the product once, rather than the ten tests, was the shared
+root-cause fix the authorisation preferred.
+
+### Regression coverage, and that it is load-bearing
+
+Every new test was run against the pre-fix product in a separate worktree and
+failed there.
+
+* `tests/test_vector_store_handle_lifetime.py` (new): with the collector
+  **disabled**, construction, `upsert`, `count`, `count_by_kind` and
+  `delete_for_memory` each leave no handle open (read from `/proc/self/fd` where
+  the kernel offers it, by rename-probe elsewhere); structurally, the module opens
+  no raw `sqlite3.connect`; and the store's directory is deletable the moment a
+  call returns — the symptom itself, run on every platform, and able to fail only
+  on Windows.
+* `tests/test_process_lock.py`: a backslash in the filename (legal on POSIX) makes
+  the verbatim-not-escaped property provable everywhere; both messages checked.
+* Class B's proof is the two governance tests themselves, now executing on
+  Windows. A Linux-side structural guard over test walkers would be suite-wide
+  cleanup and is left for separate authorisation.
+
+### Measured result
+
+Head `cdf08c9`. PR Fast and Integration tiers: **green**. Windows full suite,
+run 34333396707 attempt 2, complete in 15 min 11 s:
+
+| | Before (§5a, two runs) | After |
+|---|---|---|
+| Deterministic, identical across runs | **13** | **0** |
+| Contention class (documented, §2.6 of the CI baseline) | 3 | 5 |
+| Other | 0 | 1 |
+| Total | 16 failed / 4,524–4,541 passed | **6 failed / 4,555 passed / 79 skipped** |
+
+**None of the thirteen recurred.** Every one of the ten `WinError 32` tests, both
+governance walkers and the lock-message test passed.
+
+### What remains, kept separate
+
+The six that failed, none of them in the authorised classes and **none touched by
+this repair**:
+
+1. **Writer-lock / WAL contention class — five.** `test_event_backbone_drive.py`
+   ×2 (`claimed` never became `processed`; no tick recorded),
+   `test_notifications_api.py` ×2 (`database is locked` inside `_save_settings`,
+   surfacing as HTTP 400), `test_sqlite_wal_concurrent_processes.py` (spawned
+   worker: `database is locked`). All are named in the CI baseline's §2.6
+   intermittent list; all pass in isolation; they rotate between runs. Explicitly
+   out of this authorisation's scope, and not fixed.
+2. **One new, previously unseen: `test_always_on_runtime_unit.py::`
+   `test_the_scheduler_loop_beats_even_when_no_drive_is_due`** —
+   `assert 701.25 > 701.25`. The test stamps `time.monotonic()`, sleeps 10 ms, and
+   stamps again; Windows resolves `monotonic()` to ~15.6 ms, so two beats inside
+   one tick are equal. It passed in both earlier complete runs and is the same
+   coarse-clock class as §3.1/§3.5, here in the **test** (it measures the clock,
+   not the heartbeat). A **test defect, intermittent on Windows only**, unrelated
+   to this repair, and — under the stop condition for new unrelated failures —
+   reported rather than fixed. Recorded as a follow-up.
+
+The job budget evidence is in §5a: the two attempts on this head before the clean
+one were cancelled at the cap with the stalled-tail shape described there.
+
+### Status
+
+The Merge Candidate tier on `cdf08c9` is **not green**: six failures, all outside
+the authorised deterministic classes. The candidate is therefore **not yet ready
+for merge approval on the contract's own criterion 1** as literally written. What
+the two authorised repairs have established is narrower and, this document holds,
+decisive for the next decision: **every deterministic Windows failure this
+repository has is gone, and what remains is the pre-existing, documented
+intermittent contention class plus one coarse-clock test.** Whether to authorise
+work on that class, or to judge the criterion on that evidence, is the user's
+call and is not made here.
 
 ## 6. The merge gate
 
