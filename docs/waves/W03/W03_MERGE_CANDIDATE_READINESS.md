@@ -204,14 +204,27 @@ branch's first commit**, in files the truncated run never reached. The
 structural **governance** assertions — the skill-seam no-bypass proof and the
 consent-gate red-team check — and neither runs on Windows at all.
 
-### The job budget does fit — an earlier claim here was wrong
+### The job budget is marginal — the observations, not a verdict
 
-The first completed run took **38 min 20 s** against `windows-full`'s
-`timeout-minutes: 40` and was cancelled, and this document reported that the
-budget no longer fits. **A second completed run finished the same suite in
-13 min 14 s**, cleanly and well inside the budget, so the first was a slow
-outlier — runner contention, not a standing capacity problem. `timeout-minutes`
-needs no change and none was made.
+This section has twice stated a conclusion that the next run contradicted. The
+observations, in order, are these. `windows-full` carries `timeout-minutes: 40`:
+
+| Attempt | Head | Outcome |
+|---|---|---|
+| 1 | `dcf842e` | Suite completed in **38 min 20 s**; job **cancelled** at the cap |
+| 2 | `d80aba8` (re-run) | Suite completed in **13 min 14 s**; job **failed** on the 16, a clean result |
+| 3 | `ebe9d12` | **Cancelled** at the cap with no summary and no junit written at all |
+
+Two of three attempts hit the cap. So the earlier reading here — that attempt 1
+was a slow outlier and the budget is comfortable — is **not supported**; nor is
+the reading before it, that the budget is definitively too small. What the
+evidence supports is narrower: **the Windows suite's wall-clock is highly
+variable, roughly 13 to 40+ minutes, and the 40-minute budget is marginal
+against it.** A run can produce a clean result or none at all depending on
+runner speed.
+
+Whether that budget should be raised is a judgement about this repository's CI,
+not a Wave 3 question. `timeout-minutes` has not been touched.
 
 ### Status
 
