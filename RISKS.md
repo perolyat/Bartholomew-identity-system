@@ -971,6 +971,46 @@
   fixed in WP-A2** (Taylor, 2026-08-22): repository-wide test/runtime behaviour could shift;
   requires its own bounded investigation. **Risk category:** tech debt/test isolation.
 
+- **(2026-09-09) Windows Merge Candidate intermittent failures — deferred out of Wave 3 as a
+  separate reliability task (User Approval Gate exception, PR #101).** The Wave 3 candidate was
+  merged with the Merge Candidate tier not literally green; the user approved the exception on the
+  evidence in `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7. Every *deterministic* Windows
+  failure was repaired first (§3, §5b, §5c there: 13 → 0 on a complete run). **What remains, all
+  pre-existing, none in a W03 package, none attributable to Wave 3:**
+  - **Writer-lock / WAL contention class (5 on the last complete run):**
+    `tests/test_event_backbone_drive.py` ×2 (`claimed` never becomes `processed`; no tick recorded),
+    `tests/test_notifications_api.py` ×2 (`database is locked` in `_save_settings`, surfacing as
+    HTTP 400), `tests/test_sqlite_wal_concurrent_processes.py` (spawned worker: `database is
+    locked`). Rotating members seen on other runs: `test_scheduler_queue_containment.py` (as an
+    xdist worker `os._exit` under pytest-timeout), `test_event_backbone_processing.py`,
+    `test_personal_memory_capture_recall.py`, `test_device_consent_channel.py`. Same class as the
+    2026-08-18 and 2026-08-22 entries above.
+  - **Coarse `time.monotonic()` (1):** `tests/test_always_on_runtime_unit.py::
+    test_the_scheduler_loop_beats_even_when_no_drive_is_due` asserts two beats 10 ms apart are
+    strictly ordered; Windows resolves `monotonic()` to ~15.6 ms (`assert 701.25 > 701.25`). A
+    test-robustness defect: the product's heartbeat only ever uses the stamp for an age.
+  - **Job budget:** `windows-full` (`timeout-minutes: 40`) is cancelled on roughly half of attempts
+    with a stalled tail — 97% at 15–18 min, then no output until the cap — while clean runs finish in
+    13–15 min. Cancelled runs write no junit, so the tail carries no per-test timing.
+  **Diagnostic evidence gathered 2026-09-09, for whoever takes this up (not yet confirmed as the CI
+  mechanism, but reproduced locally on Linux):** with the test process pinned to one CPU shared with
+  three busy processes, `test_notifications_api.py::test_set_quiet_hours_updates_settings` failed
+  exactly as on Windows (`400 == 200`, `database is locked`). A per-connection probe showed the write
+  lock held for **15.08 s** by an `aiosqlite` worker thread on a transaction opened by
+  `MemoryStore.insert_reflection()`'s `INSERT INTO reflections` and closed by its `COMMIT`, while
+  three *synchronous* SQLite writers on the event-loop thread (`skill_permissions._log_audit` ×2,
+  then `notify._save_settings`) each waited exactly the 5 s `busy_timeout` and failed. The shape is
+  a self-inflicted convoy: aiosqlite runs `execute` and `commit` as two event-loop round trips, so a
+  synchronous writer that blocks the loop between them waits on a lock whose release needs the loop
+  it is blocking — it can never win, and always fails after exactly `busy_timeout`. That matches the
+  Windows runs' `dur_ms=6000` drive ticks and the "always within the first requests after start"
+  signature measured by WP-A2, and would explain why pacing the burst (2026-08-27) did not change the
+  rate. Candidate fixes are repository-wide decisions, not Wave 3 work: keep event-loop-thread SQLite
+  writes off the loop (the B2 `run_off_loop` pattern), or make `MemoryStore`'s write transactions
+  complete in one worker call; the `busy_timeout` value itself is the companion decision recorded
+  above. **Risk category:** reliability/CI. **Owner:** separate follow-up reliability task; not Wave
+  3, not Wave 4.
+
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
   **chat**, **training**, and **sight/voice** surfaces, the shared Reflection sink is the sole

@@ -375,7 +375,7 @@ call and is not made here.
 
 ## 6. The merge gate
 
-Unchanged, and it is the user's alone:
+It is the user's alone. §7 records how it was exercised.
 
 * The Wave 3 merge requires **explicit user approval**. Auto-merge is not enabled
   and must not be.
@@ -384,3 +384,79 @@ Unchanged, and it is the user's alone:
 * The formal real-world Windows acceptance test follows the merge, per the
   project's own sequencing. Automated green is not a claim that Bartholomew is
   usable on the user's real Windows machine.
+
+## 7. Wave 3 exit decision (User Approval Gate, 2026-09-09)
+
+Recorded once, on the user's explicit instruction, as the authoritative Wave 3
+exit record.
+
+### The decision
+
+The user approved the Wave 3 exit and authorised the merge of PR #101 on the
+evidence in this document, with an **explicit User Approval Gate exception to the
+literal wording of contract acceptance criterion 1** ("Merge Candidate tier green
+on the integrated head"). The exception is bounded and reasoned: the tier's
+remaining red is limited to identified intermittent CI/test-reliability behaviour
+that predates Wave 3 and is not attributable to it, and continuing to expand the
+integration session into general repository reliability repair was judged the
+wrong use of the wave. **That remaining work is repository reliability debt, not
+Wave 3 implementation scope**, and is deferred to a separate follow-up (see
+"Deferred" below). No test was skipped, quarantined, loosened or reworded to
+reach this decision; the criterion is recorded as unmet-as-written and
+exception-approved, not as satisfied.
+
+### What Wave 3 passed
+
+* The single integration candidate (§1) is integrated: `main`, the five frozen
+  builder heads in contract order, W03-F's seam repairs and its integration
+  suite, unchanged, plus this branch's repairs.
+* PR Fast tier: **green** on the code head. Integration tier: **green**.
+* Every **deterministic** Windows failure the repository had is repaired, at the
+  root, with load-bearing regression coverage:
+  * the ten W03-F could not meet criterion 1 against (§3);
+  * the `_pid_alive` Ctrl+C that had truncated every Windows run in the
+    repository's history at ~48% (§5b);
+  * the thirteen the completed suite then revealed — ten `WinError 32` from
+    `VectorStore`'s never-closed connections, two cp1252 governance walkers, one
+    escaped lock path (§5c). Deterministic count **13 → 0**, measured on a
+    complete 15-minute Windows run.
+* Three governance assertions that could not execute on Windows before now do.
+* No Wave 3 scope change, no feature work, no Wave 4 implementation: the diff
+  against `main` contains no Wave 4 file or reference.
+
+### What remains, and the evidence it is not Wave 3's
+
+On the last complete Windows run (§5c): six failures.
+
+| Class | Tests | Evidence it predates Wave 3 |
+|---|---|---|
+| Writer-lock / WAL contention (5) | `test_event_backbone_drive` ×2, `test_notifications_api` ×2, `test_sqlite_wal_concurrent_processes` | Every one is named in `RISKS.md`'s tech-debt watchlist entries of 2026-08-18 and 2026-08-22 and in the CI baseline's §2.6 intermittent list, with failures recorded on `main` as early as `d0c202f` (2026-08-15). They rotate between runs and pass in isolation. None is in a W03 package. |
+| Coarse `time.monotonic()` on Windows (1) | `test_always_on_runtime_unit.py::test_the_scheduler_loop_beats_even_when_no_drive_is_due` | Wave-1/2 test; measures a 10 ms sleep against a ~15.6 ms clock. Passed on two earlier complete runs; the product's heartbeat is untouched by Wave 3. |
+| Job budget / stalled tail | the `windows-full` job itself | Cancellations at the 40-minute cap with a stalled tail after 97% (§5a) occur on heads with and without the W03 repairs, including documentation-only commits. |
+
+The two authorised repairs on this branch touched none of these tests and none
+of the code they exercise for contention.
+
+### Deferred
+
+All of the above is deferred, as one follow-up reliability task separate from
+Wave 3, into `RISKS.md`'s tech-debt watchlist (entry dated 2026-09-09), which
+carries the diagnostic evidence gathered in this session, including a local
+reproduction of the lock-loss mechanism. It is not repaired here.
+
+### Confirmations at merge
+
+| | |
+|---|---|
+| PR #101 head (code) | `cdf08c97e40ae459f094ad68ffe6b9e8e0fd3713` |
+| PR #101 head (this record) | the commit this document is committed on |
+| Mergeable against current `main` | yes — `main @ 72ed19a` (PR #100, documentation-only) merges with no conflict |
+| Unresolved deterministic failures attributable to Wave 3 | none |
+| Wave 4 implementation in the PR | none |
+
+### After the merge
+
+The formal real-world Windows acceptance test follows the merge, per the
+project's own sequencing (§6). Automated green is not a claim that Bartholomew
+is usable on the user's real Windows machine. Wave 4 implementation and further
+CI repair each require separate authorisation.

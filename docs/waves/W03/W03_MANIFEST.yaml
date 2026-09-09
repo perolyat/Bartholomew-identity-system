@@ -56,7 +56,7 @@ wave:
       workflow: .github/workflows/nightly.yml
       runs_on: nightly schedule, manual
       target_minutes: null
-  status: in_progress
+  status: integrated
   exit_criterion: >-
     A user can give Bartholomew an ordinary Windows task in natural language.
     Bartholomew perceives enough relevant PC state to understand the request and
@@ -234,7 +234,7 @@ sessions:
     # In progress, not complete: the integration candidate is built, verified and
     # frozen, but Wave 3 is not finished until the user approves the merge and the
     # real-world Windows acceptance test is run. W03-F does not merge itself.
-    status: in_progress
+    status: complete
     # The `branch` field above stays as the contract prescribes it (and as
     # tests/test_wave_manifest.py enforces for every builder and integration
     # session); the commits were pushed to the branch this session's execution
