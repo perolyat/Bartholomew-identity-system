@@ -132,7 +132,86 @@ If the machine loads the 7B model slowly (HDD, low RAM) and the first message st
 
 ### Governed Windows action
 
-*Interim revision: the step-by-step governed-action procedure (endpoints, arming, approval, companion, verification, audit queries) is being compiled from the actuation package's own code and handoffs and is recorded in the final revision of this document.*
+Compiled from the actuation package's own code (`bartholomew/actuation/*`, `bartholomew/windows_actuation/*`, `routes/actions.py`, `routes/device_actions.py`, `routes/operator.py`, `cli_operator.py`) and the W03-B/W03-E handoffs, **not from a live run**. Nothing on this path was changed by BGPR-01; the existing action tests pass on the repaired tree. Where `docs/G_WINDOWS_COMPANION_COMPLETION.md` §8 and this section differ, this section follows the code as it is on the PR head (docs/H §10 itself records that §8 was never fully re-verified).
+
+**Recommended action: `windows.manage_window` with `operation: "minimize"` on Notepad, then `"restore"`.** It is the one low-risk capability whose result the device *verifies by reading the window state back* (`IsIconic` / `IsZoomed`, `windows_actuation/handlers.py`), so the outcome can be a definite `succeeded` rather than an honest `unknown`; it never calls `SetForegroundWindow`, so it is immune to the known foreground-lock defect that makes `windows.focus_window` unusable; it is idempotent and exactly reversible. Fallback if the enrolled device cannot be given that capability (see B1 below): `windows.type_text` into a hand-focused Notepad, the leg already proven live in docs/G, at the cost of a SENSITIVE-class approval and a permanently `unknown` outcome. There is no "write a text file" capability: file creation is excluded by design (`bartholomew/actuation/capabilities.py`), so that example from the brief is not an existing action.
+
+**Chat cannot trigger an action.** `_CHAT_DISPATCH` in `bartholomew/kernel/runtime_contract.py` has exactly three recognisers (to-do tasks, a weather forecast, objectives) and no path into `bartholomew.actuation`; the natural-language route is `bartholomew operator task run "Open notepad" --device-id …` → `POST /api/operator/tasks`, and even that only *proposes* a step that stops at `pending_approval`. Actions are requested via `POST /api/actions` and approved via `POST /api/actions/{id}/approve` (or the operator console), never from the chat box.
+
+Procedure (server on `:5173`; every `bartholomew operator …` command needs `--base-url http://127.0.0.1:5173`, because the console defaults to `:8000`):
+
+```powershell
+# Server window -- in addition to BARTH_DB_PATH from the chat procedure:
+$env:BARTH_RUNTIME_USER_ID        = "<user_id>"          # without it no capability resolver installs (health: integration_seams)
+$env:BARTH_DEVICE_ACTION_AUTH     = "1"                  # production device-credential resolver
+$env:BARTH_ACTION_DEVICE_ENROLMENT = "<path>\allowlist.json"   # device truth for the actuation gates (see B1)
+uvicorn app:app --host 127.0.0.1 --port 5173
+Invoke-RestMethod http://127.0.0.1:5173/api/health   # components.device_actions.open = true, test_resolver_active = false; db_path as intended
+
+# Companion window (companion.env, prefix BARTH_ACTION_):
+#   BARTH_ACTION_BASE_URL=http://127.0.0.1:5173
+#   BARTH_ACTION_DEVICE_ID=<device_id>
+#   BARTH_ACTION_CREDENTIAL_HEADERS=X-Bartholomew-Device-Credential: <secret>   (NOT the X-Bartholomew-Device-Token line in companion.env.example -- that is the test resolver's header)
+#   BARTH_ACTION_CAPABILITIES=windows.manage_window
+#   BARTH_ACTION_APP_ALLOWLIST=notepad=C:\Windows\System32\notepad.exe
+#   BARTH_ACTION_POLL_SECONDS=25
+python -m bartholomew.windows_actuation diagnostics     # contacts nothing; confirm capabilities + application_keys
+python -m bartholomew.windows_actuation run
+
+# Open ONE Notepad window by hand. Then, in a third window:
+bartholomew operator channel status --base-url http://127.0.0.1:5173            # armed: false
+$env:BARTH_COMPANION_DEVICE_ID = "<device_id>"
+bartholomew operator channel arm --reason "BGPR-01 verification" --minutes 15 --device-id <device_id> --base-url http://127.0.0.1:5173
+curl.exe -s -X POST http://127.0.0.1:5173/api/actions -H "Content-Type: application/json" `
+  -d "{\"device_id\":\"<device_id>\",\"capability\":\"windows.manage_window\",\"capability_version\":1,\"parameters\":{\"app_id\":\"notepad\",\"operation\":\"minimize\"}}"
+#   expect 201, state pending_approval, "Recorded. Nothing has been dispatched to any device"
+bartholomew operator actions show <ACTION_ID> --base-url http://127.0.0.1:5173   # CAPTURE THIS: canonical parameters are purged at the terminal state
+#   wait one poll (25 s): Notepad must NOT move (unapproved)
+bartholomew operator actions approve <ACTION_ID> --note "BGPR-01 verification" --base-url http://127.0.0.1:5173
+#   within one poll: Notepad minimises
+bartholomew operator actions show <ACTION_ID> --base-url http://127.0.0.1:5173   # state succeeded; evidence {app_id, hwnd, minimized: true}
+bartholomew operator actions explain <ACTION_ID> --base-url http://127.0.0.1:5173
+#   reverse: same request with "operation":"restore", approve, confirm
+
+# Brake negative check (brief item 11): ANY engaged scope halts actuation (seam.evaluate_actuation_brake)
+bartholomew operator brake on --scope actuation --base-url http://127.0.0.1:5173
+bartholomew operator channel status --base-url http://127.0.0.1:5173            # armed: false, brake_engaged: true
+#   request + approve a manage_window action -> it does not lease (POST /api/actions itself answers 503 while engaged)
+bartholomew operator brake off --base-url http://127.0.0.1:5173                  # the identical action now leases
+bartholomew operator channel disarm --base-url http://127.0.0.1:5173
+```
+
+Audit / provenance reconstruction (brief item 15), with `$T` = `BARTH_RUNTIME_USER_ID` and `$A` = the action id — the chain *request → interpreted action → authorization → execution → result → verification*:
+
+```sql
+-- request, interpretation (capability + canonical fingerprint), authorization and hand-over, one row
+SELECT action_id, requested_by, device_id, capability, capability_version, parameters_redacted_json,
+       parameter_fingerprint, risk_class, approval_requirement, issued_at, state, state_reason,
+       approved_by, approved_at, lease_count, leased_at, terminal_at
+FROM windows_action_requests WHERE tenant_id = '$T' AND action_id = '$A';
+-- execution result and the device's read-back verification (append-only)
+SELECT status, error_category, detail, evidence_json, observed_at, recorded_at
+FROM windows_action_results WHERE tenant_id = '$T' AND action_id = '$A' ORDER BY id;
+-- the governance decision(s) around the window
+SELECT ts, action, scopes, reason, revision, actor FROM governance_audit ORDER BY id DESC LIMIT 20;
+-- one Reflection per governed decision on this action (request / approve / dispatch / cancel)
+SELECT ts, content, meta FROM reflections
+ WHERE kind = 'action_reflection' AND json_extract(meta,'$.surface') = 'windows_action'
+   AND json_extract(meta,'$.action_id') = '$A' ORDER BY id;
+-- the chat request itself (redacted Reflection; the verbatim turn lives in Working Memory and is
+-- persisted to working_memory_snapshots only on a clean KernelDaemon.stop())
+SELECT ts, content, meta FROM reflections
+ WHERE kind = 'action_reflection' AND json_extract(meta,'$.surface') = 'chat' ORDER BY id DESC LIMIT 5;
+```
+HTTP equivalents: `GET /api/actions/{id}` (the one surface that shows canonical parameters, only while the action is live), `GET /api/actions`, `GET /api/governance/audit`, `GET /api/governance/brake`, `GET /api/actions/channel`, `GET /api/operator/overview`. `skill_action_audit` is the *skill* surface's table and records nothing for a Windows action.
+
+Known traps, from the code and the earlier live runs:
+
+- **B1 — device authorisation.** docs/H records the enrolled device `desk-pc` as declaring only `focus_window`, `type_text`, `accessibility_action`, `screen_capture`, under an approval ceiling that cannot be widened on an ACTIVE device (`platform/devices.py`). Setting `BARTH_ACTION_DEVICE_ENROLMENT` to a JSON file that lists `windows.manage_window` and `"applications": {"notepad": "C:\\Windows\\System32\\notepad.exe"}` makes that file the device truth for the actuation gates (a supported alpha configuration; health reports `interim: true`). Its `tenant_id` must equal `BARTH_RUNTIME_USER_ID`, or the device reads as "not enrolled here". Arming is unaffected (it needs only `focus_window@1`, which the device has).
+- Arming is in-process and does not survive a server restart: restart first, then arm.
+- Two allowlists, two variables, two formats: the server's `BARTH_ACTION_PARAMETER_ALLOWLIST`/`BARTH_ACTION_DEVICE_ENROLMENT` (JSON) and the companion's `BARTH_ACTION_APP_ALLOWLIST` (`key=path`); both must agree.
+- `windows.focus_window` (and `manage_window` with `operation: "focus"`) hit Windows' foreground lock and report `permission_denied`; focus by hand.
+- A hard kill of the server loses the verbatim chat turn; stop with Ctrl-C.
 
 ## Out-of-Scope Findings
 
