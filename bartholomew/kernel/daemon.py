@@ -1166,25 +1166,39 @@ class KernelDaemon:
         try:
             from identity_interpreter.adapters.reflection_generator import ReflectionGenerator
 
-            generator = ReflectionGenerator(identity_path="Identity.yaml")
-            result = generator.generate_daily_reflection(
-                metrics={
-                    "nudges_count": 0,
-                    "pending_nudges": pending_nudges,
-                },
-                date=now,
-                timezone_str=str(self.tz),
-                # No `backend` argument: reflection routes through the same
-                # Identity-driven model selection every other surface uses.
-                # This used to be `backend="stub"`, which meant no real model
-                # had ever composed a reflection -- the stub's mock text
-                # tripped the generator's own red-line check every night and
-                # fell through to a template, so the whole reflection history
-                # is template-composed. Pinning the backend here also made
-                # Identity.yaml's model policy inapplicable to the one
-                # surface that reads the user's stored memory.
-                episodic_evidence=episodic_evidence,
-            )
+            # BGPR-01: composed off the event loop. Composition is a real
+            # model call -- a cold model load plus a long generation, then a
+            # possible redraft -- and on a CPU-only machine that runs for
+            # minutes. Run on the loop it froze every API request for the
+            # whole of that time, chat and the readiness probe included
+            # (observed on a fresh database inside the nightly window: a
+            # self_check tick of 120 000 ms while /api/health could not
+            # answer). asyncio.to_thread rather than the shared single-worker
+            # blocking executor, because a minutes-long model call must not
+            # queue every governed SQLite read behind it.
+            def _compose() -> dict:
+                generator = ReflectionGenerator(identity_path="Identity.yaml")
+                return generator.generate_daily_reflection(
+                    metrics={
+                        "nudges_count": 0,
+                        "pending_nudges": pending_nudges,
+                    },
+                    date=now,
+                    timezone_str=str(self.tz),
+                    # No `backend` argument: reflection routes through the
+                    # same Identity-driven model selection every other
+                    # surface uses. This used to be `backend="stub"`, which
+                    # meant no real model had ever composed a reflection --
+                    # the stub's mock text tripped the generator's own
+                    # red-line check every night and fell through to a
+                    # template, so the whole reflection history is
+                    # template-composed. Pinning the backend here also made
+                    # Identity.yaml's model policy inapplicable to the one
+                    # surface that reads the user's stored memory.
+                    episodic_evidence=episodic_evidence,
+                )
+
+            result = await asyncio.to_thread(_compose)
 
             content = result["content"]
             meta = {
@@ -1270,19 +1284,24 @@ Continue supporting user wellness and autonomy.
         try:
             from identity_interpreter.adapters.reflection_generator import ReflectionGenerator
 
-            generator = ReflectionGenerator(identity_path="Identity.yaml")
-            result = generator.generate_weekly_audit(
-                weekly_scope={
-                    "reflections_count": 7,  # Placeholder
-                    "policy_checks": 0,
-                    "safety_triggers": 0,
-                },
-                iso_week=iso_week,
-                year=year,
-                # No `backend` argument -- same reasoning as
-                # _run_daily_reflection()'s equivalent call above.
-                episodic_evidence=episodic_evidence,
-            )
+            # BGPR-01: off the event loop -- same reasoning as
+            # _run_daily_reflection()'s equivalent block above.
+            def _compose() -> dict:
+                generator = ReflectionGenerator(identity_path="Identity.yaml")
+                return generator.generate_weekly_audit(
+                    weekly_scope={
+                        "reflections_count": 7,  # Placeholder
+                        "policy_checks": 0,
+                        "safety_triggers": 0,
+                    },
+                    iso_week=iso_week,
+                    year=year,
+                    # No `backend` argument -- same reasoning as
+                    # _run_daily_reflection()'s equivalent call above.
+                    episodic_evidence=episodic_evidence,
+                )
+
+            result = await asyncio.to_thread(_compose)
 
             content = result["content"]
             meta = {
