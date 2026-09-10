@@ -42,6 +42,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 # Isolated database for the live-route tests, set before the app module is
 # imported -- the same pattern as tests/test_api_chat_runtime_contract.py.
@@ -55,6 +56,7 @@ from identity_interpreter.adapters.llm_stub import (  # noqa: E402
     LIST_TIMEOUT_ENV,
     LLMAdapter,
     resolve_ollama_base_url,
+    resolve_ollama_endpoint,
 )
 from identity_interpreter.loader import load_identity  # noqa: E402
 from identity_interpreter.orchestrator.model_router import (  # noqa: E402
@@ -85,11 +87,17 @@ class FakeOllama:
         self.tags_delay = 0.0
         self.generate_delay = 0.0
         self.reply = "READY"
+        # A non-200 answer for generation, with Ollama's own error text.
+        self.generate_status = 200
+        self.generate_error = ""
         self.requests: list[tuple[str, str, str | None]] = []
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._server.daemon_threads = True
         self.port = self._server.server_address[1]
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=lambda: self._server.serve_forever(poll_interval=0.05),
+            daemon=True,
+        )
 
     def start(self) -> FakeOllama:
         self._thread.start()
@@ -121,8 +129,9 @@ class FakeOllama:
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
-                except (BrokenPipeError, ConnectionResetError):
-                    # The client gave up (a timeout under test). Fine.
+                except OSError:
+                    # The client gave up (a timeout under test): BrokenPipe /
+                    # ConnectionReset here, ConnectionAborted on Windows.
                     pass
 
             def do_GET(self):
@@ -149,6 +158,9 @@ class FakeOllama:
                             404,
                             {"error": f"model '{model}' not found, try pulling it first"},
                         )
+                        return
+                    if fake.generate_status != 200:
+                        self._send(fake.generate_status, {"error": fake.generate_error})
                         return
                     time.sleep(fake.generate_delay)
                     if self.path == "/api/generate":
@@ -333,6 +345,49 @@ class TestTruthfulFailure:
         monkeypatch.setenv(GENERATE_TIMEOUT_ENV, "not a number")
         assert LLMAdapter(identity).generate_timeout_seconds >= 120.0
 
+    def test_a_connect_timeout_is_a_connection_failure_not_a_generation_timeout(
+        self,
+        identity,
+        fake_ollama,
+        monkeypatch,
+    ):
+        """requests' ConnectTimeout is both a Timeout and a ConnectionError.
+        The bound that expired is the connect bound, so the answer must not
+        quote the generation bound or point at its knob -- and readiness
+        must read it as unreachable, not as the absence of a reading."""
+        adapter = LLMAdapter(identity)
+
+        def _connect_timeout(*args, **kwargs):
+            raise requests.exceptions.ConnectTimeout("connect timeout=5.0")
+
+        monkeypatch.setattr(adapter._http, "post", _connect_timeout)
+        monkeypatch.setattr(adapter._http, "get", _connect_timeout)
+
+        result = adapter.generate(prompt=GOLDEN_PATH_MESSAGE, model=IDENTITY_MODEL, parameters={})
+        assert result["success"] is False
+        assert result["error"] == "connection_failed"
+        assert GENERATE_TIMEOUT_ENV not in result["response"]
+
+        report = adapter.probe(IDENTITY_MODEL)
+        assert report["reachable"] is False
+        assert report["reason"] == "connection_failed"
+
+    def test_an_ollama_server_error_carries_ollamas_own_words(self, identity, fake_ollama):
+        """A 5xx body is where Ollama says *why* ("model requires more system
+        memory ..."); the status line alone hides the reason."""
+        fake_ollama.generate_status = 500
+        fake_ollama.generate_error = (
+            "model requires more system memory (5.2 GiB) than is available (3.1 GiB)"
+        )
+        router = _identity_router(identity)
+
+        with pytest.raises(ModelBackendError) as exc:
+            router.route({"prompt": GOLDEN_PATH_MESSAGE})
+
+        assert exc.value.reason == "http_500"
+        assert "more system memory" in str(exc.value)
+        assert _MOCK_MARKER not in str(exc.value).lower()
+
 
 # ---------------------------------------------------------------------------
 # Host resolution: every form Ollama documents for OLLAMA_HOST reaches Ollama
@@ -351,12 +406,51 @@ class TestHostResolution:
             ("0.0.0.0:11434", "http://127.0.0.1:11434"),
             ("http://localhost:11434", "http://localhost:11434"),
             ("http://localhost:11434/", "http://localhost:11434"),
+            # An explicit scheme with no port keeps the scheme's own port, as
+            # Ollama's client does and as requests did with the raw value.
+            ("http://localhost", "http://localhost:80"),
             ("https://ollama.example.com", "https://ollama.example.com:443"),
+            # A reverse-proxy prefix survives.
+            ("http://proxy.local:8080/ollama/", "http://proxy.local:8080/ollama"),
             ("[::1]:11434", "http://[::1]:11434"),
         ],
     )
     def test_resolves_the_forms_ollama_documents(self, raw, expected):
         assert resolve_ollama_base_url(raw) == expected
+
+    def test_credentials_in_ollama_host_never_reach_the_reported_url(self):
+        url, auth = resolve_ollama_endpoint("http://user:s3cret@127.0.0.1:11434")
+        assert url == "http://127.0.0.1:11434"
+        assert auth == ("user", "s3cret")
+        assert resolve_ollama_endpoint("127.0.0.1:11434") == ("http://127.0.0.1:11434", None)
+
+    def test_a_host_with_credentials_still_reaches_ollama_and_hides_them(
+        self,
+        identity,
+        fake_ollama,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("OLLAMA_HOST", f"http://user:s3cret@127.0.0.1:{fake_ollama.port}")
+        router = _identity_router(identity)
+        assert "s3cret" not in router.llm_adapter.ollama_base_url
+        assert router.llm_adapter._http.auth == ("user", "s3cret")
+        assert router.route({"prompt": GOLDEN_PATH_MESSAGE}) == "READY"
+
+    def test_a_proxy_in_the_environment_is_not_used_for_a_loopback_ollama(
+        self,
+        identity,
+        fake_ollama,
+        monkeypatch,
+    ):
+        """Hardening: a corporate HTTP_PROXY inherited by the process is never
+        the right path to a loopback Ollama."""
+        dead_proxy = f"http://127.0.0.1:{_closed_port()}"
+        for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.setenv(name, dead_proxy)
+        for name in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        router = _identity_router(identity)
+        assert router.route({"prompt": GOLDEN_PATH_MESSAGE}) == "READY"
 
     def test_a_scheme_less_host_reaches_ollama(self, identity, fake_ollama, monkeypatch):
         monkeypatch.setenv("OLLAMA_HOST", f"127.0.0.1:{fake_ollama.port}")
@@ -411,6 +505,16 @@ class TestReadinessAgreesWithGeneration:
         adapter = LLMAdapter(identity)
         assert app_module._model_probe_timeout_seconds(adapter) >= adapter.list_timeout_seconds
 
+    def test_the_listing_never_depends_on_the_optional_client(self, identity, fake_ollama):
+        """The optional `ollama` client takes one timeout for every call it
+        makes; the listing (and so the readiness probe) must keep its own
+        bound on every install, so it never goes through the client."""
+        adapter = LLMAdapter(identity)
+        adapter.client = object()  # no usable API at all
+        report = adapter.probe(IDENTITY_MODEL)
+        assert report["reachable"] is True
+        assert [r for r in fake_ollama.requests if r[1] == "/api/tags"]
+
 
 # ---------------------------------------------------------------------------
 # 7. The live /api/chat route, end to end, against the fake backend
@@ -428,19 +532,26 @@ def client():
         yield c
 
 
-def _point_live_app_at(identity, host: str) -> None:
+def _point_live_app_at(identity, host: str, monkeypatch) -> None:
     """Rebuild the live app's orchestrator against `host`, exactly as
-    startup() builds it, and forget any cached readiness reading."""
+    startup() builds it, and forget any cached readiness reading. Through
+    monkeypatch, so nothing leaks into the next test module on this worker."""
     from bartholomew_api_bridge_v0_1.services.api import app as app_module
 
-    os.environ["OLLAMA_HOST"] = host
-    app_module.orch = Orchestrator(model_identity_config=identity)
-    app_module._model_probe_cache = (0.0, None, None)
+    monkeypatch.setenv("OLLAMA_HOST", host)
+    monkeypatch.setattr(app_module, "orch", Orchestrator(model_identity_config=identity))
+    monkeypatch.setattr(app_module, "_model_probe_cache", (0.0, None, None))
 
 
 class TestLiveChatRoute:
-    def test_chat_returns_the_genuine_local_model_reply(self, client, fake_ollama, identity):
-        _point_live_app_at(identity, fake_ollama.host)
+    def test_chat_returns_the_genuine_local_model_reply(
+        self,
+        client,
+        fake_ollama,
+        identity,
+        monkeypatch,
+    ):
+        _point_live_app_at(identity, fake_ollama.host, monkeypatch)
 
         response = client.post("/api/chat", json={"message": GOLDEN_PATH_MESSAGE})
 
@@ -465,7 +576,7 @@ class TestLiveChatRoute:
         monkeypatch,
         caplog,
     ):
-        _point_live_app_at(identity, f"http://127.0.0.1:{_closed_port()}")
+        _point_live_app_at(identity, f"http://127.0.0.1:{_closed_port()}", monkeypatch)
 
         with caplog.at_level(logging.WARNING):
             response = client.post("/api/chat", json={"message": GOLDEN_PATH_MESSAGE})
@@ -484,9 +595,15 @@ class TestLiveChatRoute:
         assert health["model_status"] == "selected_but_unreachable"
         assert health["model_reachability_reason"] == "connection_failed"
 
-    def test_chat_503_names_a_missing_model_truthfully(self, client, fake_ollama, identity):
+    def test_chat_503_names_a_missing_model_truthfully(
+        self,
+        client,
+        fake_ollama,
+        identity,
+        monkeypatch,
+    ):
         fake_ollama.models = []
-        _point_live_app_at(identity, fake_ollama.host)
+        _point_live_app_at(identity, fake_ollama.host, monkeypatch)
 
         response = client.post("/api/chat", json={"message": GOLDEN_PATH_MESSAGE})
 
@@ -508,9 +625,12 @@ class TestLiveChatRoute:
     ):
         """A listing slower than its bound is the absence of a reading, not a
         reading of failure -- and it must not stop the generation."""
-        monkeypatch.setenv(LIST_TIMEOUT_ENV, "0.5")
+        # The adapter's own read bound (0.25 s) must fire well inside the
+        # health endpoint's outer bound (0.25 s + the 0.5 s margin), so the
+        # reason recorded is the adapter's `timeout`, not `probe_timeout`.
+        monkeypatch.setenv(LIST_TIMEOUT_ENV, "0.25")
         fake_ollama.tags_delay = 3.0
-        _point_live_app_at(identity, fake_ollama.host)
+        _point_live_app_at(identity, fake_ollama.host, monkeypatch)
 
         health = client.get("/api/health").json()
         assert health["model_status"] == "selected_reachability_unknown"
@@ -525,11 +645,12 @@ class TestLiveChatRoute:
         client,
         fake_ollama,
         identity,
+        monkeypatch,
     ):
         """The generation used to run on the event loop, so every other
         request -- the UI's readiness poll included -- waited for it."""
         fake_ollama.generate_delay = 3.0
-        _point_live_app_at(identity, fake_ollama.host)
+        _point_live_app_at(identity, fake_ollama.host, monkeypatch)
         outcome: dict = {}
 
         def _chat():
@@ -553,12 +674,13 @@ class TestLiveChatRoute:
         client,
         fake_ollama,
         identity,
+        monkeypatch,
     ):
         """Restoring the real model path must not have moved the Parking
         Brake: an engaged brake refuses the turn before Ollama is asked."""
         from bartholomew_api_bridge_v0_1.services.api import app as app_module
 
-        _point_live_app_at(identity, fake_ollama.host)
+        _point_live_app_at(identity, fake_ollama.host, monkeypatch)
         store = app_module._kernel.governance_store
         store.engage("skills")
         try:

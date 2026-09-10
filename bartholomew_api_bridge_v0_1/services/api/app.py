@@ -887,16 +887,25 @@ async def _probe_model_reachable(router) -> bool | None:
     if now < deadline:
         return cached
 
+    def _not_probed(reason: str) -> None:
+        # No probe ran; say so rather than leaving an earlier probe's reason
+        # beside a fresh "unknown".
+        global _model_probe_cache
+        _model_probe_cache = (0.0, None, reason)
+
     adapter = getattr(router, "llm_adapter", None)
     if adapter is None:
+        _not_probed("no_adapter")
         return None
 
     backend = router.config.get("default_backend")
     if backend not in ("local", "ollama"):
+        _not_probed("backend_not_local")
         return None
 
     model = router.config["backends"].get(backend, {}).get("model")
     if not model:
+        _not_probed("no_model_selected")
         return None
 
     def _check() -> tuple[bool | None, str | None]:
@@ -972,7 +981,11 @@ async def _model_health() -> dict[str, Any]:
             # "Ollama is down" from "the model is not pulled" from "the
             # process is pointed at the wrong address" without a log dive.
             "model_reachability_reason": _model_probe_cache[2] if real else None,
-            "model_host": getattr(getattr(router, "llm_adapter", None), "ollama_base_url", None),
+            "model_host": (
+                getattr(getattr(router, "llm_adapter", None), "ollama_base_url", None)
+                if backend in ("local", "ollama")
+                else None
+            ),
         }
     except Exception:
         pass
@@ -1278,7 +1291,13 @@ def _model_backend_failure_detail(e: ModelBackendError) -> str:
     fact could not tell a timeout from a missing model from a wrong address.
     Logged at WARNING so it reaches the console under uvicorn's default
     logging configuration.
+
+    Also forgets the cached readiness reading: a generation has just failed,
+    so a "ready" read up to 10 s old must not outlive it -- the next health
+    poll probes again.
     """
+    global _model_probe_cache
+    _model_probe_cache = (0.0, None, None)
     host = getattr(
         getattr(getattr(orch, "router", None), "llm_adapter", None),
         "ollama_base_url",

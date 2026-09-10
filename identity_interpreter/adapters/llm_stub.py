@@ -34,11 +34,14 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import unquote
 
 import requests
 
-# Try to import official ollama client
+# Try to import official ollama client (httpx is its own dependency, and is
+# only needed here to give that client separate connect and read bounds)
 try:
+    import httpx
     from ollama import Client as OllamaClient
 
     HAS_OLLAMA_CLIENT = True
@@ -65,8 +68,12 @@ DEFAULT_LIST_TIMEOUT_SECONDS = 5.0
 #: Bound on establishing the TCP connection, for every call.
 CONNECT_TIMEOUT_SECONDS = 5.0
 
+#: httpx's timeout family, by name so httpx need not be imported here. A
+#: connect-phase timeout is deliberately absent: it is classified as a
+#: connection failure below, because the bound that expired is the connect
+#: bound, not the generation bound.
 _TIMEOUT_EXCEPTION_NAMES = frozenset(
-    {"ReadTimeout", "ConnectTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException"},
+    {"ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException"},
 )
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]", "::1"})
 
@@ -97,34 +104,59 @@ def _split_host_port(rest: str) -> tuple[str, str]:
     return host, port
 
 
-def resolve_ollama_base_url(raw: str | None = None) -> str:
+def resolve_ollama_endpoint(raw: str | None = None) -> tuple[str, tuple[str, str] | None]:
     """
-    The base URL this adapter will call, from ``OLLAMA_HOST`` (or ``raw``).
+    The base URL this adapter will call, from ``OLLAMA_HOST`` (or ``raw``),
+    plus any HTTP basic-auth credentials the value carried.
 
-    Accepts every form Ollama documents for the variable, the same way
-    Ollama's own client does: ``host``, ``host:port``, ``:port``,
-    ``scheme://host``, ``scheme://host:port``, with or without a trailing
-    slash. A bind-all address (``0.0.0.0``, ``::``) is a server-side setting
-    that a client cannot connect to on Windows; it is read as the loopback
-    address it implies for a local client.
+    Accepts every form Ollama documents for the variable, resolved as
+    Ollama's own client resolves it: ``host`` and ``host:port`` (port
+    11434 when absent), ``:port``, ``scheme://host`` (the scheme's own
+    default port, 80 or 443, when absent -- what ``requests`` would have
+    used for the raw value too), ``scheme://host:port``, an optional path
+    prefix (a reverse proxy in front of Ollama), with or without a trailing
+    slash.
+
+    Two rules are this adapter's own, not the client's: a bind-all address
+    (``0.0.0.0``, ``[::]``) is the server's listen setting, which a client
+    cannot connect to on Windows, so it is read as the loopback address it
+    implies for a local client; and a ``user:password@`` component is split
+    off and returned separately, so the URL this adapter reports on
+    ``/api/health`` and in its error messages never contains a secret.
     """
     value = (os.getenv("OLLAMA_HOST", "") if raw is None else raw).strip()
     if not value:
-        return DEFAULT_OLLAMA_HOST
+        return DEFAULT_OLLAMA_HOST, None
 
-    scheme = "http"
+    scheme: str | None = None
     rest = value
     if "://" in value:
         scheme, rest = value.split("://", 1)
-        scheme = scheme.lower() or "http"
-    rest = rest.split("/", 1)[0]
+        scheme = scheme.lower() or None
+    authority, _, path = rest.partition("/")
 
-    host, port = _split_host_port(rest)
+    auth: tuple[str, str] | None = None
+    userinfo, at, hostport = authority.rpartition("@")
+    if at:
+        user, _, password = userinfo.partition(":")
+        auth = (unquote(user), unquote(password))
+
+    host, port = _split_host_port(hostport)
     if host in ("", "0.0.0.0", "[::]"):
         host = "127.0.0.1"
     if not port:
-        port = "443" if scheme == "https" else "11434"
-    return f"{scheme}://{host}:{port}"
+        if scheme is None:
+            port = "11434"
+        else:
+            port = "443" if scheme == "https" else "80"
+    scheme = scheme or "http"
+    prefix = path.strip("/")
+    return f"{scheme}://{host}:{port}" + (f"/{prefix}" if prefix else ""), auth
+
+
+def resolve_ollama_base_url(raw: str | None = None) -> str:
+    """The base URL alone -- see resolve_ollama_endpoint()."""
+    return resolve_ollama_endpoint(raw)[0]
 
 
 def _is_loopback(base_url: str) -> bool:
@@ -154,7 +186,7 @@ class LLMAdapter:
         """
         self.identity = identity_config
         self.current_model = None
-        self.ollama_base_url = resolve_ollama_base_url()
+        self.ollama_base_url, auth = resolve_ollama_endpoint()
         self.generate_timeout_seconds = _seconds_from_env(
             GENERATE_TIMEOUT_ENV,
             DEFAULT_GENERATE_TIMEOUT_SECONDS,
@@ -164,25 +196,43 @@ class LLMAdapter:
             DEFAULT_LIST_TIMEOUT_SECONDS,
         )
 
-        # Ollama is a local service. A proxy inherited from the environment
-        # (a corporate HTTP_PROXY, say) is never the right path to a loopback
-        # address, and routing through one is precisely the kind of
-        # difference between "works from my shell" and "fails from
-        # Bartholomew" that the Golden Path repair exists to remove.
+        # One session for every call this adapter makes, listing and
+        # generation alike, so both bounds and both rules below apply to both.
+        #
+        # Hardening beyond the reproduced runs, recorded as such: Ollama is a
+        # local service, and a proxy inherited from the environment (a
+        # corporate HTTP_PROXY on the machine, say) is never the right path to
+        # a loopback address. Routing through one is exactly the shape of
+        # difference -- "works from my shell, fails from Bartholomew" -- that
+        # this repair exists to remove, so loopback targets never consult the
+        # proxy environment. Credentials carried in OLLAMA_HOST are applied
+        # here and nowhere else (never in a URL that is logged or reported).
         loopback = _is_loopback(self.ollama_base_url)
         self._http = requests.Session()
         if loopback:
             self._http.trust_env = False
+        if auth is not None:
+            self._http.auth = auth
 
-        # Initialize ollama client if available
+        # Initialize ollama client if available. Generation only: the model
+        # listing always goes through the session above, so the listing bound
+        # holds on both installs (the client takes one timeout for every call
+        # it makes, and would otherwise hold the readiness probe to the
+        # generation bound).
         self.client = None
         if HAS_OLLAMA_CLIENT:
             try:
-                self.client = OllamaClient(
-                    host=self.ollama_base_url,
-                    timeout=self.generate_timeout_seconds,
-                    trust_env=not loopback,
-                )
+                client_kwargs: dict[str, Any] = {
+                    "host": self.ollama_base_url,
+                    "timeout": httpx.Timeout(
+                        self.generate_timeout_seconds,
+                        connect=CONNECT_TIMEOUT_SECONDS,
+                    ),
+                    "trust_env": not loopback,
+                }
+                if auth is not None:
+                    client_kwargs["auth"] = auth
+                self.client = OllamaClient(**client_kwargs)
             except Exception:
                 # Fall back to requests-based approach
                 pass
@@ -214,7 +264,12 @@ class LLMAdapter:
         (``connection_failed`` / ``timeout`` / ``model_not_available``), so a
         caller rendering a degraded state needs nothing new.
         """
-        # requests (the default path)
+        # requests (the default path). ConnectTimeout is both a Timeout and a
+        # ConnectionError; it is a failure to *connect* within the connect
+        # bound, so it is a connection failure -- the generation bound and
+        # its knob are not what expired.
+        if isinstance(exc, requests.exceptions.ConnectTimeout):
+            return "connection_failed"
         if isinstance(exc, requests.exceptions.Timeout):
             return "timeout"
         if isinstance(exc, requests.exceptions.ConnectionError):
@@ -229,23 +284,48 @@ class LLMAdapter:
         status = getattr(exc, "status_code", None)
         if isinstance(status, int):
             return "model_not_available" if status == 404 else f"http_{status}"
+        if type(exc).__name__ == "ConnectTimeout":
+            return "connection_failed"
         if type(exc).__name__ in _TIMEOUT_EXCEPTION_NAMES or isinstance(exc, TimeoutError):
             return "timeout"
         if isinstance(exc, ConnectionError):
             return "connection_failed"
         return "adapter_error"
 
+    @staticmethod
+    def _response_body(exc: BaseException) -> str:
+        """Whatever the provider said in the failed response's body, so an
+        Ollama error such as "model requires more system memory" reaches the
+        person instead of only the status line."""
+        response = getattr(exc, "response", None)
+        text = getattr(response, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+        error = getattr(exc, "error", None)  # ollama.ResponseError
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+        return ""
+
     def _describe_failure(self, reason: str, ollama_model: str, exc: BaseException) -> str:
         host = self.ollama_base_url
         if reason == "model_not_available":
             return f"[ERROR] Model '{ollama_model}' not found. Run: ollama pull {ollama_model}"
         if reason == "connection_failed":
-            return f"[ERROR] Could not connect to Ollama at {host}"
+            return (
+                f"[ERROR] Could not connect to Ollama at {host} "
+                f"(no connection within {CONNECT_TIMEOUT_SECONDS:g}s, or refused)"
+            )
         if reason == "timeout":
             return (
                 f"[ERROR] Request timed out for model {ollama_model} at {host} after "
                 f"{self.generate_timeout_seconds:g}s (set {GENERATE_TIMEOUT_ENV} higher if "
                 "this machine needs longer for a cold model load)"
+            )
+        if reason.startswith("http_"):
+            body = self._response_body(exc)
+            return (
+                f"[ERROR] Ollama answered HTTP {reason[5:]} for model {ollama_model} at {host}: "
+                f"{body or exc}"
             )
         return f"[ERROR] {exc}"
 
@@ -256,20 +336,12 @@ class LLMAdapter:
         return any(name == ollama_model or name.startswith(f"{ollama_model}:") for name in names)
 
     def _list_models(self) -> list[str]:
-        """Names of the models Ollama has installed. Raises _ListingFailedError."""
-        if self.client is not None:
-            try:
-                listed = self.client.list()
-            except Exception as exc:
-                raise _ListingFailedError(self._classify_exception(exc), str(exc)) from exc
-            models = listed.get("models", []) if hasattr(listed, "get") else []
-            names = []
-            for entry in models:
-                name = entry.get("model") or entry.get("name") if hasattr(entry, "get") else None
-                if name:
-                    names.append(str(name))
-            return names
+        """Names of the models Ollama has installed. Raises _ListingFailedError.
 
+        Always the session, never the optional client, so the listing bound
+        (and therefore the readiness probe's bound) is the same on every
+        install -- see __init__.
+        """
         try:
             response = self._http.get(
                 f"{self.ollama_base_url}/api/tags",
