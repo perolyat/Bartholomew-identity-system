@@ -223,7 +223,8 @@ Recorded, not fixed:
 4. **The `ollama` Python client path had no timeout at all** before this repair (`timeout=None`); it now receives the same bound. Not otherwise exercised here because the documented install does not include the client.
 5. **`Orchestrator.handle_input()` is now called from worker threads**; it writes `logs/orchestrator/orchestrator.log` and the adapter shares one `requests.Session` across concurrent chats. Both are safe for this usage, but `Orchestrator` was not designed with a thread-safety statement and has none.
 6. **The `_kernel is None` chat branch and the kernel branch duplicate their 503 handling** (now via one helper); the branch itself predates this repair.
-7. **`platform_halt_check` is not consulted by `GET /api/governance/brake`**, so on a deployment where the platform tier *is* active the UI could show the personal brake released while chat is refused by the platform halt. Inert on a loopback install, so not on this Golden Path.
+7. **CI writer-lock flake class, hit once on this PR.** `PR Fast tests` on `64feb2a` failed only `tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes` (`database is locked` in a spawned worker) with 4671 passed. This is the recorded xdist WAL-contention class (`W03_CI_BASELINE.md` §2.6; `W03_MERGE_CANDIDATE_READINESS.md`, "Writer-lock / WAL contention (5)"; `CI.md` line 291; W03-E's handoff hit the same test). Nothing in this PR touches SQLite or WAL; the brief excludes that debt. Noted on the PR; the failed job was re-run once.
+8. **`platform_halt_check` is not consulted by `GET /api/governance/brake`**, so on a deployment where the platform tier *is* active the UI could show the personal brake released while chat is refused by the platform halt. Inert on a loopback install, so not on this Golden Path.
 
 ## Golden Path Gate
 
