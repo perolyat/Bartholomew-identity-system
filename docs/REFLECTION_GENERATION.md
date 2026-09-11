@@ -115,7 +115,7 @@ Default backend is `stub` (returns mock responses for testing). To enable actual
 
 1. **Ollama (Local)**:
    - Ensure `Identity.yaml` has `runtimes.ollama_enabled: true`
-   - Set `OLLAMA_HOST` environment variable (default: `http://localhost:11434`)
+   - Set `OLLAMA_HOST` environment variable (default: `http://127.0.0.1:11434`; any form Ollama itself accepts, such as `127.0.0.1:11434`, is resolved the same way)
    - Pull required model: `ollama pull mistral:7b-instruct`
    - Change backend in `KernelDaemon._run_daily_reflection()`: `backend="ollama"`
 

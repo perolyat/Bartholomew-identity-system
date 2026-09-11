@@ -2,6 +2,7 @@ import asyncio
 import atexit
 import datetime as dt
 import ipaddress
+import logging
 import os
 import re
 import sys
@@ -842,15 +843,33 @@ def healthz():
     return {"status": "ok", "version": app.version}
 
 
-# Model-reachability probe cache: (monotonic_deadline, reachable).
+# Model-reachability probe cache: (monotonic_deadline, reachable, reason).
 #
 # The probe is a real call to the local provider, so it is neither free nor
 # instant, and /api/health is polled by the UI. A few seconds of staleness is
 # the right trade: long enough that polling costs nothing, short enough that
 # "I just started Ollama" shows up while the tester is still looking.
 _MODEL_PROBE_TTL_SECONDS = 10.0
-_MODEL_PROBE_TIMEOUT_SECONDS = 2.0
-_model_probe_cache: tuple[float, bool | None] = (0.0, None)
+# BGPR-01: the probe's bound is the adapter's own listing bound plus a small
+# margin, never a shorter figure of this module's own. With a 2 s bound of its
+# own, the probe reported `selected_reachability_unknown` -- rendered by the
+# UI as "cannot tell whether the model will answer" -- for a provider that
+# listed its models in 3 s and then generated a reply perfectly well. The
+# health surface exists to agree with what chat will do, not to hold it to a
+# stricter clock.
+_MODEL_PROBE_TIMEOUT_MARGIN_SECONDS = 0.5
+_model_probe_cache: tuple[float, bool | None, str | None] = (0.0, None, None)
+
+
+def _model_probe_timeout_seconds(adapter) -> float:
+    from identity_interpreter.adapters.llm_stub import DEFAULT_LIST_TIMEOUT_SECONDS
+
+    listing = getattr(adapter, "list_timeout_seconds", DEFAULT_LIST_TIMEOUT_SECONDS)
+    try:
+        listing = float(listing)
+    except (TypeError, ValueError):
+        listing = DEFAULT_LIST_TIMEOUT_SECONDS
+    return listing + _MODEL_PROBE_TIMEOUT_MARGIN_SECONDS
 
 
 async def _probe_model_reachable(router) -> bool | None:
@@ -858,42 +877,61 @@ async def _probe_model_reachable(router) -> bool | None:
 
     Returns None when reachability is unknown (no adapter, probe timed out,
     or the backend isn't one this can probe) -- deliberately tri-state, so
-    "we could not tell" is never reported as "it works".
+    "we could not tell" is never reported as "it works". The reason behind a
+    False or None answer is kept beside the cached value for /api/health.
     """
     global _model_probe_cache
 
-    deadline, cached = _model_probe_cache
+    deadline, cached, _ = _model_probe_cache
     now = _time.monotonic()
     if now < deadline:
         return cached
 
+    def _not_probed(reason: str) -> None:
+        # No probe ran; say so rather than leaving an earlier probe's reason
+        # beside a fresh "unknown".
+        global _model_probe_cache
+        _model_probe_cache = (0.0, None, reason)
+
     adapter = getattr(router, "llm_adapter", None)
     if adapter is None:
+        _not_probed("no_adapter")
         return None
 
     backend = router.config.get("default_backend")
     if backend not in ("local", "ollama"):
+        _not_probed("backend_not_local")
         return None
 
     model = router.config["backends"].get(backend, {}).get("model")
     if not model:
+        _not_probed("no_model_selected")
         return None
 
-    def _check() -> bool:
-        return adapter._model_exists(adapter._map_model_name(model))
+    def _check() -> tuple[bool | None, str | None]:
+        # The adapter's own readiness answer: same listing call, same bound,
+        # same reason vocabulary as generate(), so this can never disagree
+        # with chat about whether Ollama is usable.
+        probe = getattr(adapter, "probe", None)
+        if callable(probe):
+            report = probe(model)
+            return report.get("reachable"), report.get("reason")
+        return adapter._model_exists(adapter._map_model_name(model)), None
 
     try:
         # Off the event loop (it does blocking IO) and bounded, so an
         # unresponsive provider degrades the health *answer* rather than the
         # health *endpoint*.
-        reachable: bool | None = await asyncio.wait_for(
+        reachable, reason = await asyncio.wait_for(
             asyncio.to_thread(_check),
-            timeout=_MODEL_PROBE_TIMEOUT_SECONDS,
+            timeout=_model_probe_timeout_seconds(adapter),
         )
-    except Exception:
-        reachable = None
+    except asyncio.TimeoutError:
+        reachable, reason = None, "probe_timeout"
+    except Exception as exc:
+        reachable, reason = None, f"probe_error: {type(exc).__name__}"
 
-    _model_probe_cache = (_time.monotonic() + _MODEL_PROBE_TTL_SECONDS, reachable)
+    _model_probe_cache = (_time.monotonic() + _MODEL_PROBE_TTL_SECONDS, reachable, reason)
     return reachable
 
 
@@ -937,6 +975,17 @@ async def _model_health() -> dict[str, Any]:
             # Tri-state: True/False/None (unknown).
             "model_reachable": reachable,
             "model_status": status,
+            # BGPR-01: why the answer is not "ready", in the adapter's own
+            # words (connection_failed / timeout / model_not_available / ...),
+            # and where it looked -- so a tester reading health can tell
+            # "Ollama is down" from "the model is not pulled" from "the
+            # process is pointed at the wrong address" without a log dive.
+            "model_reachability_reason": _model_probe_cache[2] if real else None,
+            "model_host": (
+                getattr(getattr(router, "llm_adapter", None), "ollama_base_url", None)
+                if backend in ("local", "ollama")
+                else None
+            ),
         }
     except Exception:
         pass
@@ -1232,6 +1281,39 @@ async def health():
     }
 
 
+def _model_backend_failure_detail(e: ModelBackendError) -> str:
+    """The truthful 503 body for a failed generation, also written to the
+    runtime log.
+
+    BGPR-01: the uvicorn access line -- `"POST /api/chat HTTP/1.1" 503` -- was
+    the only server-side record of the Golden Path failing. The reason lived
+    solely in the response body, so a person reading the console after the
+    fact could not tell a timeout from a missing model from a wrong address.
+    Logged at WARNING so it reaches the console under uvicorn's default
+    logging configuration.
+
+    Also forgets the cached readiness reading: a generation has just failed,
+    so a "ready" read up to 10 s old must not outlive it -- the next health
+    poll probes again.
+    """
+    global _model_probe_cache
+    _model_probe_cache = (0.0, None, None)
+    host = getattr(
+        getattr(getattr(orch, "router", None), "llm_adapter", None),
+        "ollama_base_url",
+        None,
+    )
+    logging.getLogger(__name__).warning(
+        "/api/chat 503: model backend unavailable backend=%s model=%s reason=%s host=%s detail=%s",
+        e.backend,
+        e.model,
+        e.reason,
+        host,
+        e,
+    )
+    return f"Model backend unavailable ({e.backend}/{e.model}): {e.reason}. {e}"
+
+
 @app.post("/api/chat", response_model=ChatOut)
 async def chat(body: ChatIn):
     # MASTER_PLAN.md "P2.5 -- Runtime Convergence" item 11.4: route chat
@@ -1252,7 +1334,21 @@ async def chat(body: ChatIn):
             # stage B4 removed handle_input()'s own redundant blocking
             # Parking Brake read on this path (previously a second,
             # synchronous SQLite read on every single chat message).
-            return orch.handle_input(prompt, skip_governance_check=True)
+            #
+            # BGPR-01: off the event loop, as the no-kernel branch below has
+            # always done. handle_input() is the model call itself -- a
+            # blocking HTTP round trip to Ollama that on a CPU-only machine
+            # runs for tens of seconds -- and calling it here directly froze
+            # the whole API for the duration: /api/health could not answer,
+            # the UI's readiness read went stale, and the tester's natural
+            # response (a refresh) arrived at a server that could not serve
+            # it. Observed: /api/health unanswered for the full 5 s bound of
+            # the check while one chat generation was in flight.
+            return await asyncio.to_thread(
+                orch.handle_input,
+                prompt,
+                skip_governance_check=True,
+            )
 
         try:
             result = await run_chat_through_runtime_contract(_kernel, body.message, _respond)
@@ -1262,10 +1358,7 @@ async def chat(body: ChatIn):
             # ModelRouter.route()'s docstring. 503, because this is a
             # temporarily-unavailable dependency (Ollama down, model not
             # pulled), not a malformed request.
-            raise HTTPException(
-                503,
-                f"Model backend unavailable ({e.backend}/{e.model}): {e.reason}. {e}",
-            ) from e
+            raise HTTPException(503, _model_backend_failure_detail(e)) from e
         if not result.governance_allowed:
             raise HTTPException(503, result.governance_reason or "Blocked by governance")
         raw = result.response
@@ -1287,10 +1380,7 @@ async def chat(body: ChatIn):
         try:
             raw = await asyncio.to_thread(orch.handle_input, body.message)
         except ModelBackendError as e:
-            raise HTTPException(
-                503,
-                f"Model backend unavailable ({e.backend}/{e.model}): {e.reason}. {e}",
-            ) from e
+            raise HTTPException(503, _model_backend_failure_detail(e)) from e
 
     reply, tone, emotion = _parse_reply(raw)
     if not reply:

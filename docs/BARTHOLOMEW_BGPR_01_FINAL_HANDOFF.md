@@ -1,0 +1,282 @@
+# BGPR-01 — Golden Path Runtime Repair
+
+Session identity: **BGPR-01 — Golden Path Runtime Repair** (bounded repair package; not Wave 4).
+
+## Starting State
+
+| Item | Value |
+|---|---|
+| Repository | `https://github.com/perolyat/Bartholomew-identity-system` (verified via `git remote -v`) |
+| Base | `origin/main` = `68dd88bbaae4010453d72666764d4ea859404b01`, the PR #101 (Wave 3) merge commit named in the brief. `HEAD..origin/main` and `origin/main..HEAD` were both empty at session start. |
+| Branch | `claude/bgpr-01-golden-path-runtime-f4enz1` (the designated development branch for this session), created from that SHA |
+| Worktree | Clean at start (`git status --short` empty). A dedicated Python 3.11 venv (`.venv-bgpr`, untracked) was built from `requirements.txt` + `requirements-dev.txt`, the install `docs/FIRST_REAL_WORLD_TEST.md` documents. |
+| Wave 3 delta on the chat path | `git diff 72ed19a 68dd88b` touches neither `/api/chat`, `_model_health`, `ModelRouter`, `LLMAdapter` nor the Orchestrator. Wave 3 added the operator router to `app.py` and memory framing to `runtime_contract.py`. This is therefore **not a Wave 3 regression in the chat files**; the defects below predate Wave 3 and were exposed by the clean-environment test. |
+
+### Initial reproduction
+
+This container has no Windows host and cannot reach `ollama.com` / `registry.ollama.ai` (egress policy), so the observed failure was traced with an **in-process fake Ollama** (`GET /api/tags`, `POST /api/show`, `POST /api/generate`, `POST /api/chat`, real response shapes, per-endpoint latency) and the real Bartholomew runtime: `uvicorn app:app --port 5173`, fresh `BARTH_DB_PATH` outside the repo, fresh `BARTH_DATA_ROOT`, the exact message *"Hello Bartholomew. Please reply with only: READY"*.
+
+| Run (unrepaired `68dd88b`) | Fake Ollama | `/api/health` `model_status` | `/api/chat` | What it proves |
+|---|---|---|---|---|
+| A | healthy, fast | `ready` | **200**, reply `READY` | Wiring is correct: Identity → `ModelRouter` → `LLMAdapter` → `mistral:7b-instruct` → runtime contract → UI-shaped reply. Request sequence seen by Ollama: `tags` (probe), `tags` (pre-flight), `generate`. |
+| D | `/api/tags` takes 3 s | **`selected_reachability_unknown`** (the UI renders exactly *"unknown — cannot tell whether the model will answer"*) | 200 | Readiness disagreed with generation: the probe's own 2 s bound expired while the adapter's 5 s listing bound did not. |
+| D2 | `/api/tags` takes 6 s | `selected_reachability_unknown` | **503** `model_not_available. [ERROR] Model 'mistral:7b-instruct' not found. Run: ollama pull mistral:7b-instruct` | **Both observed symptoms from one cause.** The listing call timed out; `generate()` reported that as a *missing model* although the model was installed and generation would have succeeded. |
+| E | healthy; `OLLAMA_HOST=127.0.0.1:11434` (Ollama's own documented, scheme-less form) | `selected_but_unreachable` | **503** `model_not_available … Run: ollama pull` | A scheme-less host produced `MissingSchema` inside `requests`, also reported as "model not found". |
+| C | generation takes 65 s | `ready` before; **`/api/health` unanswerable (`000`) while the chat was in flight** | no answer within 120 s; server log: `[Scheduler] tick=self_check ok=1 dur_ms=120000`, `Daily reflection used fallback: … reason=timeout` | The chat generation and the nightly reflection's generation both ran **on the asyncio event loop**, freezing every other request (health polls, the UI) for the whole model call; the fixed 60 s bound then failed the call. |
+
+## Root Cause
+
+`/api/chat` returned 503 because `ModelRouter.route()` raised `ModelBackendError` from the **local Ollama adapter's HTTP layer**, not because routing, model selection, the model-name mapping, the Identity `ollama_enabled` flag, or governance were wrong (run A proves each of those correct on a fresh database). The adapter turned a healthy-but-slow, busy, or unusually addressed Ollama into a false failure, and the health surface held Ollama to a stricter clock than the adapter did:
+
+1. **False "model not found" (the 503 text a person would have seen).** `LLMAdapter.generate()` first called `GET /api/tags` (5 s bound) and treated *any* failure of that call — timeout, connection error, proxy error, `MissingSchema` from a scheme-less `OLLAMA_HOST` — as "model not installed", returning `error=model_not_available` with a `ollama pull` instruction. The router raised `ModelBackendError(reason="model_not_available")` and the route answered 503. On the Windows machine the model *was* installed and Ollama *did* answer the person's own shell, which is exactly this signature.
+2. **Readiness "unknown" while chat was possible.** `_probe_model_reachable()` bounded its probe at 2 s while the adapter's listing bound was 5 s. Any listing between 2 s and 5 s — a cold Ollama, or an Ollama whose host is saturated by a 7B model on CPU — produced `selected_reachability_unknown`, which the UI renders as *"unknown — cannot tell whether the model will answer"*.
+3. **The API froze during every model call.** In the kernel path, `app.py`'s `_respond()` called the synchronous `orch.handle_input()` directly inside the coroutine, so the whole event loop blocked for the duration of the Ollama round trip (tens of seconds on CPU). The nightly reflection (`KernelDaemon._run_daily_reflection` / `_run_weekly_reflection`, fired by the dream loop inside `config` window `21:00–23:00` kernel time, on a fresh database at the first check) did the same for up to two full generation timeouts. A frozen API is why the presence line went stale and why the tester's next move was a refresh.
+4. **A 60 s generation bound that a cold CPU load can exceed.** Ollama loads a 4 GB model into memory on the first request after start; with prompt evaluation on CPU that can pass 60 s, which the adapter reported as `timeout` — truthful, but it fails the Golden Path on the first message of a fresh runtime.
+
+Which of (1) and (4) carried the exact 503 body on the Windows machine cannot be settled from the evidence supplied: the uvicorn access line was the only server-side record, and the runtime never logged the reason. Both are reproduced above, both are repaired, and the reason is now written to the runtime log so the next run pins it in one line.
+
+Ruled out with evidence: Identity `ollama_enabled` (true, read correctly); mapping `Mistral-7B-Instruct-GGUF-Q4_K_M → mistral:7b-instruct` (applied in run A); adapter construction (present, run A); `select_route()` task-type selection (`local` / `local_primary`, run A); the platform halt tier (inert on a loopback install: `platform_tier_active()` is false unless non-loopback or auth is enabled); the admission middleware (would have produced `Kernel not available`, and `kernel_online` was true); the parking brake (the brake status the UI showed was *released*, and the runtime contract's governance record would read `governance_denied`).
+
+## Repair
+
+| File | Change | Why |
+|---|---|---|
+| `identity_interpreter/adapters/llm_stub.py` | `generate()` no longer performs a separate listing call before generating; the generation call's own outcome is the answer. Ollama's `404` for a missing model is classified `model_not_available` (with the `ollama pull` hint kept); connection errors are `connection_failed`; timeouts are `timeout` and name the knob. The same classification covers the optional `ollama` Python client (`ResponseError.status_code`, built-in `ConnectionError`, httpx timeout classes). | Defect 1. |
+| same | `resolve_ollama_endpoint()` / `resolve_ollama_base_url()` accept every `OLLAMA_HOST` form Ollama documents, resolved as Ollama's own client resolves them: `host` and `host:port` (11434 when absent), `:port`, `scheme://host` (the scheme's own port, 80/443, when absent — what `requests` did with the raw value), `scheme://host:port`, a reverse-proxy path prefix, trailing slash. Two rules are this adapter's own and are labelled as such: a bind-all address (`0.0.0.0`, `[::]`) is read as loopback for a client, and a `user:password@` component is split off, applied as HTTP basic auth, and never placed in a URL that is reported or logged. Default is Ollama's own `http://127.0.0.1:11434`. | Defect 1 (run E). The userinfo and path rules came from the adversarial review (see below): the first draft published a credential-bearing host on `/api/health` and dropped a proxy prefix. |
+| same | **Hardening, recorded as such (not a reproduced defect):** loopback targets never go through an inherited `HTTP(S)_PROXY` (`requests.Session.trust_env=False`; `trust_env=False` for the optional client). Pinned by `TestHostResolution::test_a_proxy_in_the_environment_is_not_used_for_a_loopback_ollama`. | The "works from my shell, fails from Bartholomew" class; a corporate proxy on the tester's machine would route a loopback call away from Ollama. |
+| same | Generation read bound configurable: `BARTH_OLLAMA_TIMEOUT_SECONDS` (default 120 s; connect bound 5 s). Listing bound configurable: `BARTH_OLLAMA_LIST_TIMEOUT_SECONDS` (default 5 s). The listing always goes through the `requests` session, so the listing bound holds on both installs (the optional `ollama` client takes one timeout for every call it makes and is now used for generation only, built with separate connect and read bounds). A connect-phase timeout is classified `connection_failed`, not `timeout`, because the bound that expired is the connect bound and the generation knob cannot help. An Ollama 5xx carries Ollama's own error body (for example "model requires more system memory") in the 503 and the log line. | Defect 4, plus three review findings (see below). A hung provider still becomes a truthful `timeout`. |
+| same | New `probe(model)` → `{reachable: True/False/None, reason, detail, host, model, ollama_model}` using the same listing call, bound and reason vocabulary as generation. `_model_exists()`/`is_available()` unchanged in contract. | Defect 2: readiness answers from the adapter's own truth. |
+| `bartholomew_api_bridge_v0_1/services/api/app.py` | `_respond()` runs `orch.handle_input()` via `asyncio.to_thread` (the no-kernel branch already did). | Defect 3. |
+| same | `_probe_model_reachable()` uses `adapter.probe()`, with its bound derived from the adapter's listing bound plus 0.5 s (never stricter than the adapter); a probe timeout is `probe_timeout`; the early "nothing to probe" returns record their own reason instead of leaving an older one in place. `/api/health` gains `model_reachability_reason` and `model_host` (the latter only when the selected backend is the local one). | Defect 2, and a tester can read *why* from health. |
+| same | `_model_backend_failure_detail()` builds the 503 body, logs `WARNING /api/chat 503: … backend= model= reason= host= detail=` (reaches the console under uvicorn's default logging), and forgets the cached readiness reading so a `ready` read up to 10 s old cannot outlive a generation that has just failed. | The access line was the only record; now the reason is beside it, and health re-probes after a failure. |
+| `bartholomew/kernel/daemon.py` | `_run_daily_reflection` / `_run_weekly_reflection` compose (construct `ReflectionGenerator` + generate) inside `asyncio.to_thread`; the `generate_*` call keeps no `backend=` override (pinned by `tests/test_reflection_model_path.py`). | Defect 3 (the `dur_ms=120000` tick). `to_thread`, not the shared single-worker blocking executor, so a minutes-long model call cannot queue every governed SQLite read. |
+| `docs/REFLECTION_GENERATION.md` | One line: the documented default host. | Truthfulness of the doc that names the default. |
+| `tests/test_bgpr01_golden_path_local_chat.py` | New (see next section). | Regression guard. |
+
+Not changed, deliberately: the UI (its presence logic was truthful; it rendered what health said), `ModelRouter`/`select_model` (correct), governance and the runtime contract (governance still runs before `respond_fn`; proven by a new test), the reflection *policy* (when it fires), Identity.yaml, dependencies.
+
+### Post-repair reproduction (same fake-Ollama harness, same fresh-DB procedure)
+
+| Run (repaired) | Fake Ollama | `/api/health` | `/api/chat` |
+|---|---|---|---|
+| A | healthy, fast | `ready`, reason `None`, `model_host` `http://127.0.0.1:11434`; **`/api/health` answered in 0.02 s while the chat was in flight** | 200 `READY`; Ollama saw one `generate` (no pre-flight listing) |
+| D2 | `/api/tags` takes 6 s | `selected_reachability_unknown`, reason **`timeout`** (the absence of a reading, truthfully labelled) | **200 `READY`** — generation is no longer gated on the listing |
+| C | generation takes 65 s | `ready`; **`/api/health` answered in 0.04 s during the generation**; the nightly reflection ran concurrently without freezing the API | **200 `READY` after 65.05 s** (was: no answer in 120 s) |
+| E | `OLLAMA_HOST=127.0.0.1:11434` | `ready`, `model_host` `http://127.0.0.1:11434` | **200 `READY`** (was: 503 "model not found") |
+| G | model not installed | `selected_but_unreachable`, reason **`model_not_available`** | 503 `model_not_available … Run: ollama pull mistral:7b-instruct`; console: `WARNING … /api/chat 503: … reason=model_not_available host=http://127.0.0.1:11434` |
+| H | Ollama down | `selected_but_unreachable`, reason **`connection_failed`**, `model_host` shows the address tried | 503 `connection_failed. [ERROR] Could not connect to Ollama at http://127.0.0.1:11435`; console WARNING line with `reason=connection_failed` |
+
+## Regression Coverage
+
+`tests/test_bgpr01_golden_path_local_chat.py` — 41 tests, no live Ollama, an in-process fake Ollama HTTP server on an ephemeral loopback port (mocks/fakes test wiring and failure semantics only; the live Windows verification below still uses real Ollama):
+
+| Brief requirement | Tests |
+|---|---|
+| 1. identity-configured `ModelRouter` gets a usable real local adapter | `TestIdentityWiring::test_identity_configured_router_gets_a_usable_real_local_adapter` |
+| 2. Identity model selection resolves the expected local model | `TestIdentityWiring::test_identity_model_selection_resolves_the_local_primary` |
+| 3. mapping `Mistral-7B-Instruct-GGUF-Q4_K_M → mistral:7b-instruct` | `TestIdentityWiring::test_identity_model_maps_to_the_installed_ollama_name` |
+| 4. healthy Ollama + installed model → genuine generation | `TestGenuineGeneration::*` (router, listing-independence, Orchestrator pipeline) |
+| 5. adapter/backend failure stays a truthful failure | `TestTruthfulFailure::*` (down → `connection_failed`; missing → `model_not_available` + pull hint; slow → `timeout` naming `BARTH_OLLAMA_TIMEOUT_SECONDS`) |
+| 6. no real-backend failure falls back to fabricated output | every failure test asserts the exception is raised and carries no "mock response"; `tests/test_model_backend_honesty.py` still passes |
+| 7. `/api/chat` success path returns genuine model output | `TestLiveChatRoute::test_chat_returns_the_genuine_local_model_reply` (live route, real `KernelDaemon`, fresh DB), plus truthful/logged 503s for down and missing-model backends |
+| 8. readiness agrees with actual local backend usability | `TestReadinessAgreesWithGeneration::*`, `TestLiveChatRoute::test_readiness_is_unknown_only_for_an_unanswered_probe_and_chat_still_works`, `test_health_probe_bound_is_never_stricter_than_the_adapters` |
+| Governance preserved | `TestLiveChatRoute::test_governance_still_gates_chat_ahead_of_the_real_backend` (engaged brake → 503, Ollama never asked; released → 200 `READY`) |
+| Event loop not frozen | `TestLiveChatRoute::test_health_answers_while_a_chat_generation_is_in_flight`; `TestReflectionCompositionIsOffLoop::test_daily_reflection_composition_does_not_block_the_event_loop` |
+| Host forms, credentials never reported, proxy bypass on loopback | `TestHostResolution::*` |
+| Review-driven truthfulness (connect timeout is `connection_failed`; Ollama 5xx body surfaced; listing independent of the optional client) | `TestTruthfulFailure::test_a_connect_timeout_is_a_connection_failure_not_a_generation_timeout`, `::test_an_ollama_server_error_carries_ollamas_own_words`, `TestReadinessAgreesWithGeneration::test_the_listing_never_depends_on_the_optional_client` |
+
+Existing suites that pin the surrounding contracts and still pass: `test_real_model_path_wiring.py`, `test_model_backend_honesty.py`, `test_hybrid_model_routing.py`, `test_reflection_model_path.py`, `test_stage1_api_endpoints.py`, `test_api_chat_runtime_contract.py`, `test_reflection_generation.py`. Full default suite (`pytest -n auto --dist loadfile`, the PR Fast tests command): **4668 passed, 2 skipped, 4 failed in 7 m 20 s** on the repaired tree. The four failures (`tests/test_kernel_db_path_resolution.py` ×2, `tests/smoke/test_packaging_contract.py::test_declared_console_script_runs_help` ×2) invoke the `bartholomew` console scripts by name and failed only because the session's venv was not on `PATH` when the run was launched; re-run with the venv activated, all 23 tests in those two modules pass. None of the four touches the repaired code. The PR's CI is the authoritative run. `pre-commit run --files …` (black, ruff, hygiene hooks): passed. After the review-driven amendments below, the regression module plus the six pinned suites were re-run: 132 passed.
+
+### Adversarial review of the repair
+
+Five independent reviewers (adapter correctness, route and daemon, governance and truthfulness, scope containment, tests and CI) read the diff against this brief; each finding was then handed to three refuters (the refutation stage was cut short by a session limit, so only the first finding carries three recorded verdicts — all three upheld it). Acted on, in this PR:
+
+| Finding | Action |
+|---|---|
+| `requests.ConnectTimeout` is both a `Timeout` and a `ConnectionError`; it was classified `timeout`, quoted the 120 s generation bound and recommended its knob, and readiness read it as "unknown" | classified `connection_failed`; readiness reads `False`; test added |
+| On the optional `ollama`-client install the listing ran through the client's single 120 s timeout, so the readiness probe could block a worker for 120 s and `BARTH_OLLAMA_LIST_TIMEOUT_SECONDS` was ignored | listing always via the `requests` session; the client is built with separate connect/read bounds and used for generation only; test added |
+| `resolve_ollama_base_url()` mangled a `user:password@` host into an IPv6-looking URL and would have published it on `/api/health` and in the log line; it also dropped a reverse-proxy path prefix and gave `http://host` port 11434 where Ollama's client and the raw-value `requests` path use 80 | userinfo split off, applied as auth, never reported; path kept; scheme default ports; tests added |
+| An Ollama 5xx reached the person as the status line only (`str(HTTPError)`), hiding Ollama's own reason such as "model requires more system memory" | response body rendered into the 503 and the log line; test added |
+| A cached `ready` reading could outlive a 503 by up to 10 s | cache forgotten on every 503 |
+| Early returns in the probe left an older reason next to a fresh "unknown"; `model_host` reported for a non-local backend | reasons recorded on early returns; `model_host` only for the local backend |
+| Live-route test helper leaked `OLLAMA_HOST` and a dead orchestrator into the next module on the same xdist worker; one timing test had a ~0.4 s margin; the fake did not catch Windows' `ConnectionAbortedError`; each fake teardown cost 0.5 s | helper uses `monkeypatch`; margin widened by lowering the inner bound; `OSError` caught; `poll_interval=0.05` |
+| `trust_env=False` on loopback was unevidenced and untested | kept as labelled hardening (this table's own row) with one test |
+| The bind-all rewrite was attributed to Ollama's client, which does not do it | docstring corrected: this adapter's own rule |
+
+Considered and not acted on: every 404 is still `model_not_available` with the pull hint (pre-existing behaviour, narrowed by this repair, refuted as a defect of it); the nightly reflection can still occupy Ollama while a person chats (Out-of-Scope #1, with the mitigation recorded there); a cancelled reflection composition keeps its worker thread until the model call returns (Remaining Risk); the daily-reflection test writes `exports/sessions/<date>.md` like its three sibling tests.
+
+## Real Windows Verification
+
+**Not executed in this session.** This session ran in a Linux container with no Windows host, no GPU, and no route to Ollama's model registry, so items 1–16 of the brief's clean-Windows procedure could not be performed here. Everything above that says "verified" was verified against the fake Ollama and the real Bartholomew runtime on Linux. The live Windows run remains the acceptance step and is the user's to perform on the PR head. The procedure, with what to record at each step:
+
+```powershell
+# 0. Clean worktree + venv on the PR head
+git fetch origin claude/bgpr-01-golden-path-runtime-f4enz1
+git worktree add ..\bgpr01 claude/bgpr-01-golden-path-runtime-f4enz1
+cd ..\bgpr01
+py -3.12 -m venv .venv ; .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt -r requirements-dev.txt ; pip install -e .
+
+# 1. Fresh DB outside the repo (record: it must not exist yet)
+$env:BARTH_DB_PATH = "$env:LOCALAPPDATA\bartholomew-bgpr01\barth.db"
+Test-Path $env:BARTH_DB_PATH        # expect False
+
+# 2-3. Runtime
+uvicorn app:app --host 127.0.0.1 --port 5173
+#   record: "[Kernel] Starting with empty working memory"
+
+# 4-5. UI + readiness
+#   open http://localhost:5173/ui/ ; presence line must NOT read "unknown"
+Invoke-RestMethod http://127.0.0.1:5173/api/health |
+  Select-Object kernel_online, db_path, model_backend, model_name, model_reachable, model_status, model_reachability_reason, model_host
+#   expect model_status = ready, model_reachability_reason empty, model_host = http://127.0.0.1:11434
+
+# 6-9. Chat (record the response body and the server console line)
+Invoke-RestMethod -Method Post -ContentType 'application/json' `
+  -Body '{"message":"Hello Bartholomew. Please reply with only: READY"}' http://127.0.0.1:5173/api/chat
+#   expect HTTP 200 and a reply that is the model's own (no "Mock response for prompt")
+#   if 503: the console now carries "WARNING ... /api/chat 503: ... reason=<x> host=<y>" -- record it verbatim
+
+# 10-12. Parking brake (record status before/after)
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{"scopes":["global"]}' http://127.0.0.1:5173/api/governance/brake/engage
+#   chat again -> expect 503 "Blocked by parking brake (scope=skills)"
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body '{}' http://127.0.0.1:5173/api/governance/brake/disengage
+#   chat again -> expect 200
+
+# 13-15. One harmless Windows action + audit: see "Governed Windows action" below
+
+# 16. Ctrl-C ; expect "[Kernel] Working memory state persisted" and "Application shutdown complete"
+```
+
+If the machine loads the 7B model slowly (HDD, low RAM) and the first message still reports `timeout`, set `BARTH_OLLAMA_TIMEOUT_SECONDS=300` for the run and record that; the default is 120 s.
+
+### Governed Windows action
+
+Compiled from the actuation package's own code (`bartholomew/actuation/*`, `bartholomew/windows_actuation/*`, `routes/actions.py`, `routes/device_actions.py`, `routes/operator.py`, `cli_operator.py`) and the W03-B/W03-E handoffs, **not from a live run**. Nothing on this path was changed by BGPR-01; the existing action tests pass on the repaired tree. Where `docs/G_WINDOWS_COMPANION_COMPLETION.md` §8 and this section differ, this section follows the code as it is on the PR head (docs/H §10 itself records that §8 was never fully re-verified).
+
+**Recommended action: `windows.manage_window` with `operation: "minimize"` on Notepad, then `"restore"`.** It is the one low-risk capability whose result the device *verifies by reading the window state back* (`IsIconic` / `IsZoomed`, `windows_actuation/handlers.py`), so the outcome can be a definite `succeeded` rather than an honest `unknown`; it never calls `SetForegroundWindow`, so it is immune to the known foreground-lock defect that makes `windows.focus_window` unusable; it is idempotent and exactly reversible. Fallback if the enrolled device cannot be given that capability (see B1 below): `windows.type_text` into a hand-focused Notepad, the leg already proven live in docs/G, at the cost of a SENSITIVE-class approval and a permanently `unknown` outcome. There is no "write a text file" capability: file creation is excluded by design (`bartholomew/actuation/capabilities.py`), so that example from the brief is not an existing action.
+
+**Chat cannot trigger an action.** `_CHAT_DISPATCH` in `bartholomew/kernel/runtime_contract.py` has exactly three recognisers (to-do tasks, a weather forecast, objectives) and no path into `bartholomew.actuation`; the natural-language route is `bartholomew operator task run "Open notepad" --device-id …` → `POST /api/operator/tasks`, and even that only *proposes* a step that stops at `pending_approval`. Actions are requested via `POST /api/actions` and approved via `POST /api/actions/{id}/approve` (or the operator console), never from the chat box.
+
+Procedure (server on `:5173`; every `bartholomew operator …` command needs `--base-url http://127.0.0.1:5173`, because the console defaults to `:8000`):
+
+```powershell
+# Server window -- in addition to BARTH_DB_PATH from the chat procedure:
+$env:BARTH_RUNTIME_USER_ID        = "<user_id>"          # without it no capability resolver installs (health: integration_seams)
+$env:BARTH_DEVICE_ACTION_AUTH     = "1"                  # production device-credential resolver
+$env:BARTH_ACTION_DEVICE_ENROLMENT = "<path>\allowlist.json"   # device truth for the actuation gates (see B1)
+uvicorn app:app --host 127.0.0.1 --port 5173
+Invoke-RestMethod http://127.0.0.1:5173/api/health   # components.device_actions.open = true, test_resolver_active = false; db_path as intended
+
+# Companion window (companion.env, prefix BARTH_ACTION_):
+#   BARTH_ACTION_BASE_URL=http://127.0.0.1:5173
+#   BARTH_ACTION_DEVICE_ID=<device_id>
+#   BARTH_ACTION_CREDENTIAL_HEADERS=X-Bartholomew-Device-Credential: <secret>   (NOT the X-Bartholomew-Device-Token line in companion.env.example -- that is the test resolver's header)
+#   BARTH_ACTION_CAPABILITIES=windows.manage_window
+#   BARTH_ACTION_APP_ALLOWLIST=notepad=C:\Windows\System32\notepad.exe
+#   BARTH_ACTION_POLL_SECONDS=25
+python -m bartholomew.windows_actuation diagnostics     # contacts nothing; confirm capabilities + application_keys
+python -m bartholomew.windows_actuation run
+
+# Open ONE Notepad window by hand. Then, in a third window:
+bartholomew operator channel status --base-url http://127.0.0.1:5173            # armed: false
+$env:BARTH_COMPANION_DEVICE_ID = "<device_id>"
+bartholomew operator channel arm --reason "BGPR-01 verification" --minutes 15 --device-id <device_id> --base-url http://127.0.0.1:5173
+curl.exe -s -X POST http://127.0.0.1:5173/api/actions -H "Content-Type: application/json" `
+  -d "{\"device_id\":\"<device_id>\",\"capability\":\"windows.manage_window\",\"capability_version\":1,\"parameters\":{\"app_id\":\"notepad\",\"operation\":\"minimize\"}}"
+#   expect 201, state pending_approval, "Recorded. Nothing has been dispatched to any device"
+bartholomew operator actions show <ACTION_ID> --base-url http://127.0.0.1:5173   # CAPTURE THIS: canonical parameters are purged at the terminal state
+#   wait one poll (25 s): Notepad must NOT move (unapproved)
+bartholomew operator actions approve <ACTION_ID> --note "BGPR-01 verification" --base-url http://127.0.0.1:5173
+#   within one poll: Notepad minimises
+bartholomew operator actions show <ACTION_ID> --base-url http://127.0.0.1:5173   # state succeeded; evidence {app_id, hwnd, minimized: true}
+bartholomew operator actions explain <ACTION_ID> --base-url http://127.0.0.1:5173
+#   reverse: same request with "operation":"restore", approve, confirm
+
+# Brake negative check (brief item 11): ANY engaged scope halts actuation (seam.evaluate_actuation_brake)
+bartholomew operator brake on --scope actuation --base-url http://127.0.0.1:5173
+bartholomew operator channel status --base-url http://127.0.0.1:5173            # armed: false, brake_engaged: true
+#   request + approve a manage_window action -> it does not lease (POST /api/actions itself answers 503 while engaged)
+bartholomew operator brake off --base-url http://127.0.0.1:5173                  # the identical action now leases
+bartholomew operator channel disarm --base-url http://127.0.0.1:5173
+```
+
+Audit / provenance reconstruction (brief item 15), with `$T` = `BARTH_RUNTIME_USER_ID` and `$A` = the action id — the chain *request → interpreted action → authorization → execution → result → verification*:
+
+```sql
+-- request, interpretation (capability + canonical fingerprint), authorization and hand-over, one row
+SELECT action_id, requested_by, device_id, capability, capability_version, parameters_redacted_json,
+       parameter_fingerprint, risk_class, approval_requirement, issued_at, state, state_reason,
+       approved_by, approved_at, lease_count, leased_at, terminal_at
+FROM windows_action_requests WHERE tenant_id = '$T' AND action_id = '$A';
+-- execution result and the device's read-back verification (append-only)
+SELECT status, error_category, detail, evidence_json, observed_at, recorded_at
+FROM windows_action_results WHERE tenant_id = '$T' AND action_id = '$A' ORDER BY id;
+-- the governance decision(s) around the window
+SELECT ts, action, scopes, reason, revision, actor FROM governance_audit ORDER BY id DESC LIMIT 20;
+-- one Reflection per governed decision on this action (request / approve / dispatch / cancel)
+SELECT ts, content, meta FROM reflections
+ WHERE kind = 'action_reflection' AND json_extract(meta,'$.surface') = 'windows_action'
+   AND json_extract(meta,'$.action_id') = '$A' ORDER BY id;
+-- the chat request itself (redacted Reflection; the verbatim turn lives in Working Memory and is
+-- persisted to working_memory_snapshots only on a clean KernelDaemon.stop())
+SELECT ts, content, meta FROM reflections
+ WHERE kind = 'action_reflection' AND json_extract(meta,'$.surface') = 'chat' ORDER BY id DESC LIMIT 5;
+```
+HTTP equivalents: `GET /api/actions/{id}` (the one surface that shows canonical parameters, only while the action is live), `GET /api/actions`, `GET /api/governance/audit`, `GET /api/governance/brake`, `GET /api/actions/channel`, `GET /api/operator/overview`. `skill_action_audit` is the *skill* surface's table and records nothing for a Windows action.
+
+Known traps, from the code and the earlier live runs:
+
+- **B1 — device authorisation.** docs/H records the enrolled device `desk-pc` as declaring only `focus_window`, `type_text`, `accessibility_action`, `screen_capture`, under an approval ceiling that cannot be widened on an ACTIVE device (`platform/devices.py`). Setting `BARTH_ACTION_DEVICE_ENROLMENT` to a JSON file that lists `windows.manage_window` and `"applications": {"notepad": "C:\\Windows\\System32\\notepad.exe"}` makes that file the device truth for the actuation gates (a supported alpha configuration; health reports `interim: true`). Its `tenant_id` must equal `BARTH_RUNTIME_USER_ID`, or the device reads as "not enrolled here". Arming is unaffected (it needs only `focus_window@1`, which the device has).
+- Arming is in-process and does not survive a server restart: restart first, then arm.
+- Two allowlists, two variables, two formats: the server's `BARTH_ACTION_PARAMETER_ALLOWLIST`/`BARTH_ACTION_DEVICE_ENROLMENT` (JSON) and the companion's `BARTH_ACTION_APP_ALLOWLIST` (`key=path`); both must agree.
+- `windows.focus_window` (and `manage_window` with `operation: "focus"`) hit Windows' foreground lock and report `permission_denied`; focus by hand.
+- A hard kill of the server loses the verbatim chat turn; stop with Ctrl-C.
+
+## Out-of-Scope Findings
+
+Recorded, not fixed:
+
+1. **Nightly reflection contends with chat for a single CPU model.** Composition now runs off the loop, but it still occupies Ollama for up to a full generation bound (and a redraft) whenever the dream loop fires inside `21:00–23:00` kernel time on a day with no reflection yet — on a fresh database that is the first check, 60 s after start. A chat sent during that window waits in Ollama's queue and may still time out. The scope reviewer rated this the one remaining Golden Path exposure; whether reflection should defer while a person is chatting is a scheduling decision, not this repair. **Mitigation for the acceptance run:** run it outside `21:00–23:00` kernel time (`config/kernel.yaml` `timezone`), or set `dream.nightly_window` in `config/kernel.yaml` to a window that will not fall inside the run; record which.
+2. **`docs/REFLECTION_GENERATION.md` "Configuration" is stale beyond the one line corrected** (it still tells the reader to pin `backend="ollama"` in the daemon, which `tests/test_reflection_model_path.py` forbids).
+3. **`requirements.txt` and `requirements.lock` disagree on the `ollama` client** (`ollama==0.6.0` is only in the lock). Which install a venv used decides whether the adapter uses the `requests` path or the httpx-based client. Both paths are now classified identically, but the two files describe two different environments. Also `requirements.lock` + `requirements-dev.txt` cannot be installed together (`ruff==0.14.2` vs `0.14.3`).
+4. **The `ollama` Python client path had no timeout at all** before this repair (`timeout=None`); it now receives the same bound. Not otherwise exercised here because the documented install does not include the client.
+5. **`Orchestrator.handle_input()` is now called from worker threads**; it writes `logs/orchestrator/orchestrator.log` and the adapter shares one `requests.Session` across concurrent chats. Both are safe for this usage, but `Orchestrator` was not designed with a thread-safety statement and has none.
+6. **The `_kernel is None` chat branch and the kernel branch duplicate their 503 handling** (now via one helper); the branch itself predates this repair.
+7. **CI writer-lock flake class, hit once on this PR.** `PR Fast tests` on `64feb2a` failed only `tests/test_sqlite_wal_concurrent_processes.py::test_wal_cleanup_concurrent_processes` (`database is locked` in a spawned worker) with 4671 passed. This is the recorded xdist WAL-contention class (`W03_CI_BASELINE.md` §2.6; `W03_MERGE_CANDIDATE_READINESS.md`, "Writer-lock / WAL contention (5)"; `CI.md` line 291; W03-E's handoff hit the same test). Nothing in this PR touches SQLite or WAL; the brief excludes that debt. Noted on the PR; the failed job was re-run once.
+8. **`platform_halt_check` is not consulted by `GET /api/governance/brake`**, so on a deployment where the platform tier *is* active the UI could show the personal brake released while chat is refused by the platform halt. Inert on a loopback install, so not on this Golden Path.
+
+## Golden Path Gate
+
+Legend: **PASS (here)** = verified in this session against the real runtime with a fake Ollama on Linux; **PENDING WINDOWS** = requires the user's live run on the PR head; the repair does not claim these.
+
+| Gate | Result |
+|---|---|
+| Clean Windows runtime starts | PENDING WINDOWS (Linux fresh-start: PASS) |
+| Fresh DB confirmed | PENDING WINDOWS (Linux: PASS — `fresh db exists before start? no`, `[Kernel] Starting with empty working memory`) |
+| UI loads | PENDING WINDOWS (unchanged by this repair; served from `/ui/` as before) |
+| Local model readiness is truthful | PASS (here): `ready` for a healthy backend; `selected_but_unreachable` + reason for down/missing; `unknown` only for an unanswered probe, with reason `timeout` |
+| Ollama connection works through Bartholomew | PASS (here) against the fake; PENDING WINDOWS against real Ollama |
+| `/api/chat` returns genuine local-model response | PASS (here): `READY` from the backend via the real route and runtime contract; PENDING WINDOWS |
+| UI displays the response | PENDING WINDOWS (UI unchanged; it renders `reply` and `detail` as before) |
+| No mock/stub fallback occurred | PASS (here): every failure path raises; tests assert no "mock response" |
+| Parking Brake remains effective | PASS (here): engaged brake → 503, Ollama never asked; released → 200 |
+| One harmless existing Windows action works through governance | PENDING WINDOWS (procedure above; not executable on Linux) |
+| Action outcome is verified | PENDING WINDOWS |
+| Audit/provenance reconstructs the path | PENDING WINDOWS for the action; chat turns: `reflections` (surface `chat`) + working memory, unchanged |
+| No unrelated feature work was introduced | PASS: four source files, one doc line, one test module; no UI, provider, schema, dependency or architecture change |
+
+**Overall: NOT COMPLETE until the Windows run above is performed.** This package restores the runtime path and proves it against a faithful fake; the brief's acceptance gate is a live Windows result, which this session could not produce.
+
+## Remaining Risk
+
+- The exact 503 body from the Windows run was never captured, so the trigger there (listing timeout vs cold-load timeout vs host form) is inferred from reproductions, not read. The new WARNING line closes this for the next run.
+- If the Windows machine needs more than 120 s for a cold 7B load plus a reply, the first message still returns a truthful `timeout` (knob: `BARTH_OLLAMA_TIMEOUT_SECONDS`).
+- Reflection/chat contention for Ollama in the nightly window (Out-of-Scope #1).
+- The health probe's bound is now up to 5.5 s, so `/api/health` can take that long when Ollama is slow; the UI polls every 30 s and the value is cached for 10 s.
+- A reflection composition cancelled at shutdown keeps its worker thread until the in-flight Ollama call returns (up to the generation bound); process exit waits for it. Acceptable for this repair; reintroducing on-loop composition is not the fix.
+- `Orchestrator.handle_input()` now runs on worker threads and the adapter shares one `requests.Session` across concurrent chats; both are safe for this usage but neither carries a thread-safety statement.
+
+## Exact PR Head
+
+Branch `claude/bgpr-01-golden-path-runtime-f4enz1`, PR #102 (`https://github.com/perolyat/Bartholomew-identity-system/pull/102`). Commits: `f3ec601` (the repair), `e24e300` / `3030634` / `64feb2a` / `72cf621` (this document), then the review-driven amendment commit that carries this revision. The exact head SHA is the PR's current head; it is also stated in the final session report. CI on `64feb2a` (the last head before the amendments) was green on attempt 2, after one occurrence of the documented writer-lock flake (Out-of-Scope #7).

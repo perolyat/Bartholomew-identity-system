@@ -62,6 +62,11 @@ GUARDED_OPTIONAL_IMPORTS = {
     "sentence_transformers",
     # Optional local-LLM client; llm_stub sets HAS_OLLAMA_CLIENT=False without it.
     "ollama",
+    # httpx is that client's own transport, imported in the same guarded block
+    # and used for nothing else (BGPR-01: it gives the client separate connect
+    # and read bounds). Absent together with `ollama`, the adapter's requests
+    # path serves generation exactly as before; never a hard dependency.
+    "httpx",
     # Optional cloud-LLM client; cloud_llm sets HAS_ANTHROPIC_SDK=False without
     # it. Cloud generation is opt-in (no API key means no cloud backend), so a
     # deployment that never enables it never needs the package -- deliberately
