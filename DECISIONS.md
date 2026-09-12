@@ -2998,3 +2998,56 @@
   - **No stage's exit criteria, sequencing or status changed. No implementation is authorised. No
     production behaviour is altered, and no source code is changed by this pass.**
 - **Date:** 2026-09-08
+
+---
+
+## Decision: Canonical identity is projected to the model through one renderer at the model boundary (FND-01)
+- **Decision:** `Identity.yaml` remains the single identity authority, and gains a second typed
+  projection beside `IdentityContext`: `identity_interpreter/identity_projection.py` renders a
+  deterministic, bounded, model-facing statement of who Bartholomew is. `ModelRouter` builds it once
+  from the identity config it already holds and passes it as `system=` to every **real** backend;
+  both adapters transport it into their own provider's system channel and author none of it. A real
+  backend selected without a canonical projection raises
+  `ModelBackendError(reason="identity_projection_unavailable")` rather than generating. The `stub`
+  backend is exempt, because its output is explicitly labelled mock text and never claims to be
+  Bartholomew speaking.
+- **Alternatives:**
+  - *Prepend identity to `interpretation.prompt`.* Rejected: it would place identity in the same
+    user-role string as recalled memory and the user's own words, eroding the W03-D
+    instruction/data boundary, and it changes bytes that existing chat-seam tests depend on.
+  - *Widen the `respond_fn` seam* (`runtime_contract.py`) to carry structured input. Rejected as a
+    larger blast radius for no gain: the Kernel does not need to know how a provider expresses a
+    system message, and `DECISIONS.md`'s "the Kernel never parses Identity.yaml directly" points the
+    other way.
+  - *Build the projection in each adapter.* Rejected outright: provider-specific identity prose is
+    exactly how "changing the model changes who Bartholomew is" becomes possible.
+  - *Reuse `prompt_composer`'s reflection preamble as the renderer.* Rejected: it is live,
+    reflection-shaped and not bypassed, so repurposing it would change reflection output as a side
+    effect of a chat repair.
+- **Why:** The live `/api/chat` path sent a single user-role message with no system role at all. The
+  only identity-derived text reaching the model was the literal string `Active persona: <pack_id>` —
+  no name, description, traits, core values, communication expectations or red lines. "Bartholomew's
+  identity survives a model change" was therefore true only in the empty sense that identity had
+  almost no effect on any model to begin with. `ModelRouter` is the one place every real generation
+  passes through, so enforcing the projection there makes the property structural rather than
+  per-caller: no real generation leaves Bartholomew without his identity.
+- **Consequences:**
+  - Identity is delivered through the provider's system channel, structurally separate from the
+    turn. `Interpretation.prompt` is byte-identical to before, so the instruction/data boundary and
+    every existing prompt assertion are untouched.
+  - Identity is **not** persona. The projection carries `Identity.yaml`'s enduring `persona.traits`
+    and `style_guidelines`; switchable tone remains `PersonaPackManager`'s, and
+    `Active persona: <pack_id>` remains in the turn context. Switching packs cannot alter identity.
+  - Governance is unchanged and remains structural. The projection *states* boundaries; the Parking
+    Brake, consent gates, capability policy and the actuation envelope continue to *enforce* them.
+    Nothing was moved into a prompt.
+  - Reflections now also receive the projection, since they route through the same choke point. That
+    is correct — a reflection is Bartholomew reasoning about himself — but it partially duplicates
+    `prompt_composer`'s own red-lines/values preamble. Converging that preamble onto this renderer is
+    left as follow-up work and was deliberately not done here.
+  - A deployment whose identity cannot be loaded or projected now fails loudly on its first real
+    generation instead of silently speaking as nobody.
+  - `tests/test_model_backend_honesty.py`'s real-backend fixtures now construct a router **with** the
+    canonical identity, because a router without one is no longer a realistic real-backend
+    configuration. No assertion in that file was relaxed.
+- **Date:** 2026-09-12

@@ -451,6 +451,7 @@ class LLMAdapter:
         model: str,
         parameters: dict[str, Any],
         context: dict[str, Any] | None = None,
+        system: str | None = None,
     ) -> dict[str, Any]:
         """
         Generate response from LLM via Ollama
@@ -460,6 +461,11 @@ class LLMAdapter:
             model: Model name (from Identity.yaml)
             parameters: Model parameters (temperature, etc.)
             context: Optional context
+            system: Canonical identity projection, carried into Ollama's own
+                system channel. This adapter only *transports* it: the text is
+                built by `identity_interpreter.identity_projection` and no part
+                of it is authored here, so swapping providers cannot change who
+                Bartholomew is. See FND-01.
 
         Returns:
             Dict with 'response', 'tokens_used', 'model', 'success'; on
@@ -499,9 +505,13 @@ class LLMAdapter:
         try:
             # Try using ollama client first
             if self.client is not None:
+                messages: list[dict[str, str]] = []
+                if system:
+                    messages.append({"role": "system", "content": system})
+                messages.append({"role": "user", "content": prompt})
                 response = self.client.chat(
                     model=ollama_model,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=messages,
                     options=options,
                 )
                 text = response.get("message", {}).get("content", "")
@@ -515,12 +525,17 @@ class LLMAdapter:
                 }
 
             # Fallback to REST API
-            payload = {
+            payload: dict[str, Any] = {
                 "model": ollama_model,
                 "prompt": prompt,
                 "stream": False,
                 "options": options,
             }
+            if system:
+                # /api/generate carries the system message in its own field,
+                # so the identity stays structurally separate from the turn
+                # here exactly as it does on the client path above.
+                payload["system"] = system
             response = self._http.post(
                 f"{self.ollama_base_url}/api/generate",
                 json=payload,
