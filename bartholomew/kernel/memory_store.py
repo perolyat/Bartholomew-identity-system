@@ -1698,16 +1698,34 @@ class MemoryStore:
         withdrawal rather than a review decision, so the audit trail does not
         claim a human sat and declined it. Rows are kept, content-free: the
         identity, reason, privacy class and timestamps remain answerable.
+
+        The note and the resolution are written to rows that are **still
+        pending** only (Codex review finding). Payload clearing covers every
+        row, because no copy may survive a withdrawal -- but a request a human
+        actually approved or denied last week was resolved by that decision,
+        and stamping this withdrawal's note over it would make the audit trail
+        claim the withdrawal caused a resolution that had already happened.
+
+        Returns the number of rows this call actually changed -- a payload
+        cleared or a pending request resolved. A second withdrawal of the same
+        identity returns 0, because there was nothing left to do.
         """
         resolved_at = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             try:
                 cursor = await db.execute(
                     "UPDATE pending_sensitive_writes "
-                    "SET value = '', resolution_note = ?, "
-                    "    status = CASE WHEN status = 'pending' THEN 'denied' ELSE status END, "
-                    "    resolved_at = COALESCE(resolved_at, ?) "
-                    "WHERE kind = ? AND key = ?",
+                    "SET value = '', "
+                    "    resolution_note = CASE WHEN status = 'pending' "
+                    "        THEN ? ELSE resolution_note END, "
+                    "    resolved_at = CASE WHEN status = 'pending' "
+                    "        THEN COALESCE(resolved_at, ?) ELSE resolved_at END, "
+                    "    status = CASE WHEN status = 'pending' THEN 'denied' ELSE status END "
+                    "WHERE kind = ? AND key = ? "
+                    # Only rows there is still something to do to, so the
+                    # count this returns means "work happened", which is what
+                    # forget_memory() reports success from.
+                    "  AND (value IS NOT NULL AND value != '' OR status = 'pending')",
                     (note, resolved_at, kind, key),
                 )
             except aiosqlite.OperationalError as exc:
@@ -1886,6 +1904,23 @@ class MemoryStore:
             "pending and can be resolved once the brake is released.",
         )
 
+    async def _undo_approved_write(self, memory_id: int | None) -> None:
+        """
+        Remove a memory an approval created that should not have landed.
+
+        By id rather than by `(kind, key)`: another writer may legitimately
+        hold that identity by the time this runs, and undoing our own write
+        must never delete theirs. Mirrors `delete_memory()`'s FTS discipline
+        -- index entry first, base row second, one transaction.
+        """
+        if memory_id is None:
+            return
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            await remove_memory_fts_async(db, memory_id)
+            await db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            await db.commit()
+
     async def _release_approval_claim(self, pending_id: int) -> None:
         """
         Hand a claimed row back to `pending` after an approval did not land.
@@ -2012,11 +2047,43 @@ class MemoryStore:
             # MORE sensitive copy behind than denial does. Ordered after the
             # governed write, never before it, so a failure above cannot
             # destroy the only copy.
-            await db.execute(
+            #
+            # `AND value != ''` makes this a compare-and-swap on the payload,
+            # which is what serialises this approval against a concurrent
+            # withdrawal (Codex review finding). `upsert_memory()` checks
+            # `is_revoked()` and inserts in separate transactions, so a
+            # `forget_memory()`/`revoke_memory()` landing inside that window
+            # would commit its tombstone and scrub this row while the approval
+            # carried on and stored the decrypted payload from its own local
+            # copy -- reporting success, and handing the forgotten content
+            # back live on the next reinstatement. The withdrawal always
+            # empties this row, so an empty row here means the withdrawal won
+            # and this approval must be undone rather than reported.
+            claim = await db.execute(
                 "UPDATE pending_sensitive_writes "
-                "SET resolved_memory_id = ?, value = '' WHERE id = ?",
+                "SET resolved_memory_id = ?, value = '' WHERE id = ? AND value != ''",
                 (result.memory_id, pending_id),
             )
+            await db.commit()
+            lost_to_withdrawal = claim.rowcount == 0
+
+        if lost_to_withdrawal:
+            # Compensation, not best effort: the governed row this approval
+            # created is the copy the user asked to be rid of. Removing it by
+            # id (not by identity) means a genuinely concurrent write to the
+            # same key is never collateral.
+            await self._undo_approved_write(result.memory_id)
+            logger.info(
+                "Approval of pending write %s was overtaken by a withdrawal of "
+                "%s/%s; the stored row has been removed and the approval is "
+                "reported as refused.",
+                pending_id,
+                row["kind"],
+                row["key"],
+            )
+            return StoreResult(stored=False, outcome="refused_revoked")
+
+        async with aiosqlite.connect(self.db_path) as db:
             if row["reason"] == "rule_consent" and result.memory_id is not None:
                 # Upsert, not INSERT OR IGNORE: upsert_memory()'s own
                 # embedding flow may have already inserted a memory_consent
@@ -2431,6 +2498,14 @@ class MemoryStore:
         route to. Callers must therefore make the action explicit and
         confirmed at the point of use rather than inferring it.
 
+        Returns True when this call actually removed something -- the
+        governed row, or a recoverable consent-inbox payload for this
+        identity, or both. Queued content is deliberately not in `memories`
+        yet, so "forget what you were about to ask me about" commonly has no
+        governed row at all, and reporting that as "not found" told the
+        caller nothing happened when a tombstone had just been laid and a raw
+        payload scrubbed. A repeat with nothing left to do returns False.
+
         W03-D: a tombstone is laid before the content goes. The content is
         still erased -- that is the promise this method makes and it is kept
         -- but the *identity* is remembered as withdrawn, so the very next
@@ -2467,8 +2542,16 @@ class MemoryStore:
         # user asked Bartholomew to forget. Scrubbed before the content row
         # goes, for the same reason the tombstone is written first: a failure
         # between the steps must leave the safe state.
-        await self._scrub_consent_payloads(kind, key, "forgotten_by_user")
-        return await self.delete_memory(kind, key)
+        scrubbed = await self._scrub_consent_payloads(kind, key, "forgotten_by_user")
+        deleted = await self.delete_memory(kind, key)
+        # Success if EITHER copy was removed (Codex review finding). Content
+        # queued for consent is deliberately not in `memories` yet, so the
+        # commonest shape of "forget what you were about to ask me about" has
+        # no governed row at all. Returning `delete_memory()`'s False there
+        # made both callers (the DELETE route and the learning-revocation
+        # path) report "no such memory" -- a 404 for a destructive operation
+        # that had just laid a tombstone and scrubbed a raw payload.
+        return deleted or scrubbed > 0
 
     # ------------------------------------------------------------------
     # W03-D: revocation tombstones

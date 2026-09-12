@@ -659,3 +659,97 @@ async def test_a_withdrawal_racing_an_approval_wins(store, monkeypatch) -> None:
     assert row[3] == ""
     assert row[4] != "pending", "an emptied request was handed back as approvable"
     assert await store.list_pending_sensitive_writes() == []
+
+
+# ----------------------------------------------------------------------
+# Codex review findings on the FND-03 diff itself
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_inside_the_is_revoked_window_still_wins(store, monkeypatch) -> None:
+    """P1. `upsert_memory()` checks `is_revoked()` and inserts in separate
+    transactions. A withdrawal landing in *that* window used to commit its
+    tombstone and scrub the consent row while the approval carried on and
+    stored its own decrypted local copy -- reporting `stored=True`, and
+    handing the forgotten content back live on the next reinstatement.
+
+    `test_a_withdrawal_racing_an_approval_wins` above does not reach this:
+    it withdraws before `upsert_memory()` is entered at all.
+    """
+    pending_id = await _queue(store, "window")
+
+    real_is_revoked = MemoryStore.is_revoked
+    fired = []
+
+    async def _withdraw_inside_the_window(self, kind, key):
+        revoked = await real_is_revoked(self, kind, key)
+        if kind == "chat" and key == "window" and not revoked and not fired:
+            fired.append(True)
+            await self.forget_memory("chat", "window")
+        return revoked
+
+    monkeypatch.setattr(MemoryStore, "is_revoked", _withdraw_inside_the_window)
+    result = await store.approve_pending_sensitive_write(pending_id)
+    monkeypatch.undo()
+
+    assert fired, "the withdrawal never fired; this test proves nothing"
+    assert result.stored is False
+    assert result.outcome == "refused_revoked"
+    assert await store.get_memory("chat", "window") is None
+
+    # And it stays gone once the identity is writable again.
+    await store.reinstate_memory("chat", "window", reinstated_by="user")
+    assert await store.get_memory("chat", "window") is None
+    assert _raw_value(store, pending_id) == ""
+    assert PRIVACY_GUARD_CONTENT.encode() not in _pending_table_bytes(store)
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_does_not_rewrite_an_earlier_real_decision(store) -> None:
+    """P2. A withdrawal clears content on every row -- no copy may survive it
+    -- but it must not stamp its own note over a request a human actually
+    decided earlier. That row was resolved by that decision, not by this."""
+    denied_id = await _queue(store, "audit")
+    await store.deny_pending_sensitive_write(denied_id)
+    denied_row = _raw_rows(store, id=denied_id)[0]
+    assert denied_row[10] is None  # resolution_note: a human denied it
+
+    still_pending = await store.record_pending_write(
+        "privacy_guard",
+        "chat",
+        "audit",
+        PRIVACY_GUARD_CONTENT,
+        TS,
+    )
+    await store.forget_memory("chat", "audit")
+
+    after = _raw_rows(store, id=denied_id)[0]
+    assert after[10] is None, "the withdrawal claimed credit for an earlier denial"
+    assert after[8] == denied_row[8]  # resolved_at untouched
+    assert after[4] == "denied"
+
+    # The genuinely unresolved one does carry the withdrawal's note.
+    withdrawn = _raw_rows(store, id=still_pending)[0]
+    assert withdrawn[10] == "forgotten_by_user"
+    assert withdrawn[3] == ""
+
+
+@pytest.mark.asyncio
+async def test_forgetting_a_consent_only_identity_reports_success(store) -> None:
+    """P2. Queued content is deliberately not in `memories` yet, so "forget
+    what you were about to ask me about" commonly has no governed row.
+    Returning `delete_memory()`'s False there made the DELETE route answer
+    404 for a destructive operation that had just laid a tombstone and
+    scrubbed a raw payload."""
+    pending_id = await _queue(store, "consent_only")
+    assert await store.get_memory("chat", "consent_only") is None
+
+    assert await store.forget_memory("chat", "consent_only") is True
+    assert _raw_value(store, pending_id) == ""
+    assert await store.is_revoked("chat", "consent_only") is True
+
+    # A repeat, with nothing left to do, is honestly reported as not found.
+    assert await store.forget_memory("chat", "consent_only") is False
+    # ...and an identity that never existed still is.
+    assert await store.forget_memory("chat", "never_existed") is False

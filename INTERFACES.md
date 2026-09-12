@@ -112,7 +112,16 @@ implemented"; a fresh database actually contains 37.)*
   nothing is queued. Parking it in plaintext is never the fallback. The payload lives only while
   the decision is outstanding — approve, deny, `forget_memory()` and `revoke_memory()` all scrub
   it, leaving content-free audit metadata (identity, reason, privacy class, timestamps,
-  resolution, resolved memory id).
+  resolution, resolved memory id). A withdrawal clears the payload on every
+  matching row but writes its resolution note only to rows still awaiting a
+  decision, so a request a human already approved or denied keeps its own
+  audit record. `forget_memory()` reports success when it removed either the
+  governed row or a consent payload.
+- Approving a pending write is serialised against a concurrent withdrawal by a
+  compare-and-swap on the payload: if a `forget_memory()`/`revoke_memory()`
+  lands between `upsert_memory()`'s revocation check and its insert, the
+  approval's own write is undone and reported as `refused_revoked` rather than
+  stored (FND-03).
 - If summarization fails → store redacted content and mark summary as missing; never crash the kernel loop.
 
 ---

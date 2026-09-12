@@ -248,6 +248,21 @@
   scrubs historical resolved ones, and fails closed (raises) rather than reporting a migration
   that did not happen. Proven against the persisted SQLite rows, not against helper return
   values, by `tests/test_fnd03_consent_inbox_privacy.py`.
+- **Review round (2026-09-12, Codex on the FND-03 diff):** three findings on the repair itself,
+  each reproduced before being fixed. (1) **P1 — approval was not serialised against a
+  withdrawal.** `upsert_memory()` checks `is_revoked()` and inserts in separate transactions; a
+  `forget`/`revoke` landing inside that window committed its tombstone and scrubbed the consent
+  row while the approval stored its own decrypted local copy and reported `stored=True`, so the
+  forgotten content returned live on the next reinstatement. The final resolution is now a
+  compare-and-swap on the payload (the withdrawal always empties it), and an approval that loses
+  that race has its own write undone by id and is reported `refused_revoked`. (2) **P2 — a
+  withdrawal stamped its note over already-decided rows**, making the audit trail claim the
+  withdrawal caused a resolution a human had made earlier; the note and resolution now apply to
+  still-pending rows only, while payload clearing still covers every row. (3) **P2 — a
+  consent-only forget reported "not found"**; queued content is deliberately not in `memories`
+  yet, so the DELETE route answered 404 for a destructive operation that had just laid a
+  tombstone and scrubbed a raw payload. `forget_memory()` now reports success when it removed
+  either copy.
 - **Residual:** the review path necessarily decrypts in process memory to show a human what
   they are deciding about — that is the inbox's purpose, and it is gated by the platform
   identity boundary (`Capability.CONSENT_DECIDE`; see
