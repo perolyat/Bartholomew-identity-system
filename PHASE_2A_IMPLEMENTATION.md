@@ -1,5 +1,32 @@
 # Phase 2a Implementation: Redaction, Encryption Routing, and Summarization Foundation
 
+> **SUPERSEDED IN PART — read this first (2026-09-12, FND-02).**
+>
+> This document is retained as the historical record of what Phase 2a built and intended.
+> Two of its central claims were **not true of the shipped code**, from Phase 2a until FND-02:
+>
+> 1. **"Pre-Storage Redaction: content redacted before any persistence" was false.**
+>    `apply_redaction()` read its regex from `rule["content"]`, and the dict actually passed
+>    to it — `MemoryRulesEngine.evaluate()`'s result — carries **the memory's own text**
+>    under that key. The memory became the regex that redacted it. Prose that matched itself
+>    was destroyed entirely; anything with a regex metacharacter matched nothing and was
+>    stored, FTS-indexed and embedded raw.
+> 2. **The "Safe Fallbacks" section below described a privacy defect, not a safety feature.**
+>    "Invalid regex patterns return original text", "unknown strategies return original
+>    text", "missing `content` field skips redaction" — each of those is a broken privacy
+>    control answering with the unredacted content. FND-02 replaced all three with
+>    `RedactionPolicyError` and a refused write.
+>
+> Also: the YAML `redact:` category this document treats as live configuration was never
+> loaded by `MemoryRulesEngine.PRIORITY`, so every rule under it was dead.
+>
+> For what redaction actually guarantees now, see `INTERFACES.md` §3 (governance pipeline
+> and error modes), `RISKS.md` R1's Correction and `R-MEM-REDACT-SCOPE`, and
+> `tests/test_fnd02_memory_redaction_contract.py`. The signature below
+> (`apply_redaction(text, rule)`) no longer exists; it is now
+> `apply_redaction(text: str, instruction: RedactionInstruction) -> str` and it refuses a
+> mapping outright.
+
 ## Overview
 Phase 2a introduces rule-based content redaction with hooks for encryption routing and summarization (to be fully implemented in phases 2b and 2c).
 
@@ -58,7 +85,8 @@ Updated to v2.0 with Phase 2a fields:
 - **Integration**: Multiple redactions, memory dict format
 - **YAML Configuration**: Validation of rule structure and Phase 2a fields
 
-**All tests pass ✓**
+**All tests pass ✓** *(as of Phase 2a. Several of these tests asserted the fail-open
+behaviour corrected by FND-02 and were updated then — see `tests/test_phase2a_redaction.py`.)*
 
 ## Key Design Decisions
 
@@ -68,9 +96,14 @@ Updated to v2.0 with Phase 2a fields:
 - Backward compatible with existing rules
 
 ### Safe Fallbacks
-- Invalid regex patterns return original text + log error
-- Unknown strategies return original text + log warning
-- Missing `content` field in rule skips redaction
+*(Corrected 2026-09-12, FND-02: these were never safe. Each line describes a redaction
+control failing **open** — answering "I cannot apply this policy" with the unredacted text.
+All three now raise `RedactionPolicyError` and the write is refused.)*
+- ~~Invalid regex patterns return original text + log error~~ → raises; write refused
+- ~~Unknown strategies return original text + log warning~~ → rejected when the instruction
+  is constructed; write refused
+- ~~Missing `content` field in rule skips redaction~~ → a rule that requires redaction and
+  declares no `redact_patterns` refuses the write
 
 ### Metadata Pass-Through
 - `encrypt` and `summarize` fields flow through evaluation
@@ -157,10 +190,19 @@ All functionality verified:
 
 ## Security Considerations
 
-1. **Pre-Storage Redaction**: Content redacted before any persistence
-2. **Regex Safety**: Invalid patterns safely caught and logged
-3. **No Data Loss**: Original evaluation preserved in evaluated dict
-4. **Audit Trail**: Redaction operations logged at DEBUG level
+*(Corrected 2026-09-12, FND-02. Items 1 and 2 as originally written were not true of the
+shipped code; they are restated here as what the repaired code actually does.)*
+
+1. **Pre-Storage Redaction**: content is redacted before any persistence, using an explicit
+   `RedactionInstruction` resolved once per write and applied identically to the stored
+   value, the summary, the FTS index text, chunks and embedding source text.
+   *(Originally claimed as working from Phase 2a; it was not — see the note at the top.)*
+2. **Regex Safety**: an invalid pattern is a **refused write**, not a caught-and-logged
+   no-op. *(Originally "invalid patterns safely caught and logged", which meant the raw
+   content was stored.)*
+3. **No Data Loss**: original evaluation preserved in evaluated dict
+4. **Audit Trail**: Redaction operations logged at DEBUG level; a refusal logs at ERROR
+   with the resolved instruction's provenance.
 5. **Consent Still Required**: Redaction doesn't bypass consent rules
 
 ## Performance Impact

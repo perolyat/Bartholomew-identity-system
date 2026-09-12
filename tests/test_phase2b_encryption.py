@@ -487,7 +487,10 @@ class TestMemoryStoreIntegration:
         """Redaction applied before encryption"""
         from bartholomew.kernel.encryption_engine import _encryption_engine
         from bartholomew.kernel.memory_store import MemoryStore
-        from bartholomew.kernel.redaction_engine import apply_redaction
+        from bartholomew.kernel.redaction_engine import (
+            RedactionInstruction,
+            apply_redaction,
+        )
 
         key = os.urandom(32)
         key_b64 = base64.urlsafe_b64encode(key).decode()
@@ -500,13 +503,17 @@ class TestMemoryStoreIntegration:
         # Test redaction-then-encryption logic directly:
         # 1. Define content with a pattern to redact
         original_value = "My SSN is 123-45-6789"
-        redact_rule = {
-            "content": r"\d{3}-\d{2}-\d{4}",
-            "redact_strategy": "mask",
-        }
+        # FND-02: the pattern is carried by an explicit RedactionInstruction,
+        # not by a dict key named "content" -- which is where the rules
+        # engine puts the memory's own text.
+        redact_instruction = RedactionInstruction(
+            patterns=(r"\d{3}-\d{2}-\d{4}",),
+            strategy="mask",
+            source="test:redaction_before_encryption",
+        )
 
         # 2. Apply redaction
-        redacted_value = apply_redaction(original_value, redact_rule)
+        redacted_value = apply_redaction(original_value, redact_instruction)
         assert "****" in redacted_value
         assert "123-45-6789" not in redacted_value
 

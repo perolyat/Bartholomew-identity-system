@@ -1,5 +1,19 @@
 # FTS Ingestion Wiring Implementation
 
+> **Correction (2026-09-12, FND-02).** The discipline this document describes was real and
+> is unchanged — FTS indexes `summary` or `redacted_value`, never the raw value. But
+> `redacted_value` was not actually redacted. `apply_redaction(value, evaluated)` (quoted
+> verbatim in the Code Flow below) read its regex from `evaluated["content"]`, which holds
+> **the memory's own text**, so redaction silently no-opped for any content containing a
+> regex metacharacter and `redacted_value == value`. Reproduced: the account number in
+> `"bank details: acct 12345 (branch)"` was searchable via `memory_fts MATCH '12345'` and
+> stored verbatim in `memory_fts_map.last_index_text`.
+>
+> So the claim below that it is **"impossible to accidentally index raw content"** was
+> false in exactly one way this document could not see: naming the variable
+> `redacted_value` did not make its contents redacted. Correct naming is not a control.
+> The repaired call is shown inline in the Code Flow section.
+
 ## Overview
 
 Implemented strict FTS indexing discipline ensuring:
@@ -18,10 +32,18 @@ Implemented strict FTS indexing discipline ensuring:
 
 #### Code Flow
 ```python
-# Apply redaction if required by rules (Phase 2a)
+# Apply redaction if required by rules (Phase 2a).
+#
+# FND-02 (2026-09-12) replaced this call. As originally written it was:
+#     if evaluated.get("redact_strategy"):
+#         redacted_value = apply_redaction(value, evaluated)
+# which passed the evaluated MEMORY as the redaction rule, so the memory's
+# own text was used as the regex. It is now an explicit instruction,
+# resolved once from policy before the consent gate, with a refused write
+# if the policy cannot be applied:
 redacted_value = value
-if evaluated.get("redact_strategy"):
-    redacted_value = apply_redaction(value, evaluated)
+if redaction is not None:
+    redacted_value = apply_redaction(value, redaction)
 
 # Phase 2c: Generate summary if required (before encryption)
 if _summarization_engine.should_summarize(evaluated, redacted_value, kind):
@@ -37,8 +59,12 @@ index_text = (
 ```
 
 #### Benefits
-- Clear variable names enforce the discipline ("redacted_value" not "value")
-- Impossible to accidentally index raw content
+- Clear variable names signal the discipline ("redacted_value" not "value") — though see
+  the correction at the top: the name was right while the contents were not, so this is a
+  readability aid, not a guarantee
+- The index text is never the raw value *provided redaction itself works* — which is what
+  `tests/test_fnd02_memory_redaction_contract.py` now proves by MATCH-querying the real
+  index, rather than by inspecting variable names
 - Summary-preferred mode works correctly
 - Consistent with backfill script logic
 

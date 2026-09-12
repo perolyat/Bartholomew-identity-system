@@ -88,7 +88,11 @@ implemented"; a fresh database actually contains 37.)*
 
 **Governance pipeline (must occur in this order):**
 1. Apply memory rules → determine allow_store / requires_consent / recall_policy / summarize / encrypt / embed.
-2. Redact sensitive spans (if required by rule).
+2. Redact sensitive spans (if required by rule), using the explicit `RedactionInstruction`
+   resolved from that rule's `redact_patterns`. The instruction is resolved **once** for the
+   write and the same instruction governs the stored value, the summary, the FTS index text,
+   chunks and embedding source text. A rule's `match.content` expression is a *match
+   condition* and is never used as a redaction pattern (FND-02).
 3. Summarize (if enabled by rule; must handle fallbacks deterministically).
 4. Encrypt at rest (if required) using envelope format.
 5. Persist to DB.
@@ -96,6 +100,11 @@ implemented"; a fresh database actually contains 37.)*
 
 **Error modes:**
 - If encryption fails → fail the write (no partial storage).
+- If a rule requires redaction but no usable instruction can be resolved (no patterns
+  declared, an unknown pattern name, a pattern that does not compile, an unknown strategy)
+  → **fail the write** (`outcome="refused_redaction_unavailable"`), before the consent
+  queue, so unredactable content is not parked in the pending inbox either. Storing or
+  indexing the content unredacted is never the fallback (FND-02).
 - If summarization fails → store redacted content and mark summary as missing; never crash the kernel loop.
 
 ---

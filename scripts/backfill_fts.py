@@ -34,9 +34,10 @@ from bartholomew.kernel.encryption_engine import _encryption_engine
 
 # Import Bartholomew components
 from bartholomew.kernel.fts_client import FTSClient, reindex_memory_fts, remove_memory_fts
-from bartholomew.kernel.memory_rules import _rules_engine
+from bartholomew.kernel.memory_rules import _rules_engine, resolve_redaction_instruction
 from bartholomew.kernel.memory_store import compute_governed_index_text
 from bartholomew.kernel.policy import can_index
+from bartholomew.kernel.redaction_engine import RedactionPolicyError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -152,14 +153,22 @@ def backfill_memory(
 
         if index_text is None:
             # compute_governed_index_text() collapses "policy denies
-            # indexing" and "no indexable text" into the same None result
-            # (both mean: don't index). Recover which one it was only for
-            # the stats/log line below -- this re-evaluation can't diverge
-            # from the None decision itself, since it's the same governance
-            # inputs already folded into that result.
+            # indexing", "redaction policy is unusable" (FND-02) and "no
+            # indexable text" into the same None result (all three mean:
+            # don't index). Recover which one it was only for the stats/log
+            # line below -- this re-evaluation can't diverge from the None
+            # decision itself, since it's the same governance inputs
+            # already folded into that result.
             memory_dict = {"kind": kind, "key": key, "value": plaintext_value, "ts": ts}
             evaluated = _rules_engine.evaluate(memory_dict)
             fts_allowed = evaluated.get("fts_index", True) and can_index(evaluated)
+
+            redaction_unusable = False
+            if fts_allowed:
+                try:
+                    resolve_redaction_instruction(evaluated)
+                except RedactionPolicyError:
+                    redaction_unusable = True
 
             if not dry_run:
                 remove_memory_fts(conn, memory_id)
@@ -167,6 +176,22 @@ def backfill_memory(
             if not fts_allowed:
                 logger.debug(f"Memory {memory_id} ({kind}/{key}): deleted (policy denied)")
                 return ("deleted", "policy denied")
+
+            if redaction_unusable:
+                # Distinct from "no indexable text": there IS text, and it is
+                # being withheld from the index on purpose because the
+                # redaction this memory requires cannot be applied. Reporting
+                # that as "nothing to index" would hide a governance-file
+                # error behind an ordinary-looking skip.
+                logger.error(
+                    "Memory %s (%s/%s): not indexed -- policy requires redaction but "
+                    "no usable redaction instruction could be resolved. Fix the rule "
+                    "in memory_rules.yaml and re-run.",
+                    memory_id,
+                    kind,
+                    key,
+                )
+                return ("skipped", "redaction policy unusable")
 
             logger.warning(f"Memory {memory_id} ({kind}/{key}): no indexable text")
             return ("skipped", "no indexable text")

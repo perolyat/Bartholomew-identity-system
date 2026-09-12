@@ -13,6 +13,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from bartholomew.kernel.redaction_engine import (
+    REDACTION_PATTERNS,
+    RedactionInstruction,
+    RedactionPolicyError,
+)
+
 try:
     import yaml  # PyYAML
 except ImportError:  # pragma: no cover
@@ -173,7 +179,30 @@ class MemoryRulesEngine:
     ]
 
     # Priority order (highest to lowest)
-    PRIORITY = ["never_store", "ask_before_store", "always_keep", "auto_expire", "context_only"]
+    #
+    # FND-02: `redact` is last, and until FND-02 it was *absent*.
+    # `memory_rules.yaml` has carried a top-level `redact:` section since
+    # v2.1 -- "Redact-only rules: Apply redaction without blocking storage",
+    # including the one rule in the whole file whose pattern actually
+    # identified a sensitive *value* rather than a sensitivity *keyword*
+    # (the SSN rule). Because this list is both the load list and the
+    # evaluation order, every rule under that heading was silently dead:
+    # an SSN written to memory matched no rule at all, and was stored,
+    # indexed and left unencrypted. A governance file whose rules do
+    # nothing is more dangerous than a file with no rules, because it reads
+    # as a control that is in force.
+    #
+    # Last, not first: this category grants no consent exemption and must
+    # never override never_store/ask_before_store, which are merged first
+    # and win every field they set (see `evaluate()`).
+    PRIORITY = [
+        "never_store",
+        "ask_before_store",
+        "always_keep",
+        "auto_expire",
+        "context_only",
+        "redact",
+    ]
 
     def __init__(self, config_path: str | None = None, watch_file: bool = True) -> None:
         """
@@ -363,7 +392,26 @@ class MemoryRulesEngine:
 
                     # Merge metadata without clobbering higher-priority fields
                     for k, v in rule.metadata.items():
-                        if k not in result_meta:
+                        if k == "redact_patterns":
+                            # FND-02: the one field that ACCUMULATES instead
+                            # of first-rule-wins. `redact_patterns` is a list
+                            # of things that must be removed, so a lower-
+                            # priority rule's entries are additional
+                            # protection, never a competing opinion. Under
+                            # first-wins, "bank details: acct 12345" -- which
+                            # matches two ask_before_store rules at once --
+                            # would silently take only the first rule's
+                            # protections and drop the second's.
+                            #
+                            # Union, in priority-then-file order, de-duped:
+                            # deterministic regardless of which rule matched
+                            # first, and monotonically safer as rules are
+                            # added.
+                            existing = result_meta.setdefault("redact_patterns", [])
+                            for name in v or []:
+                                if name not in existing:
+                                    existing.append(name)
+                        elif k not in result_meta:
                             result_meta[k] = v
 
         # Apply default flags if no rule set them
@@ -434,6 +482,134 @@ class MemoryRulesEngine:
         """
         evaluated = self.evaluate(memory)
         return bool(evaluated.get("requires_consent", False))
+
+
+# ---------------------------------------------------------------------------
+# FND-02: interpreting a rule's REDACTION INSTRUCTION
+#
+# These live here, beside `expiry_from_rules()`, for the same reason that
+# one does: this module is the authority on what a rule *means*. Every
+# caller that needs to know "does policy require redaction here, and with
+# what?" asks these two functions, so storage, FTS reindexing, chunking,
+# embeddings and the legacy adapter all reach the same verdict instead of
+# each re-deriving it from a shared, ambiguous dict.
+#
+# What they deliberately do NOT do is fall back to the matched rule's
+# `match.content`. That expression is the rule's MATCH CONDITION, not a
+# redaction instruction: the rules that trigger redaction in
+# `memory_rules.yaml` match on classifier words like
+# `(?i)(bank|medical|address|phone|email)`, and using one as a redaction
+# pattern masks the word "email" while leaving `a@b.com` in the index.
+# Recovering that regex would have looked like a fix and guaranteed
+# nothing. A rule that requires redaction must say, explicitly, what it
+# protects.
+# ---------------------------------------------------------------------------
+
+
+def redaction_required(evaluated: dict[str, Any]) -> bool:
+    """
+    Does policy require this memory to be redacted before it is stored?
+
+    True when a matched rule set `redact: true` or named a
+    `redact_strategy`. Both spellings appear in `memory_rules.yaml` and
+    both mean the same thing; `evaluate()` already defaults the strategy to
+    `mask` when only `redact` is set.
+    """
+    return bool(evaluated.get("redact")) or bool(evaluated.get("redact_strategy"))
+
+
+def resolve_redaction_instruction(
+    evaluated: dict[str, Any],
+) -> RedactionInstruction | None:
+    """
+    Build the authoritative `RedactionInstruction` for an evaluated memory.
+
+    Args:
+        evaluated: A `MemoryRulesEngine.evaluate()` result. Read for
+            *policy* fields only (`redact`, `redact_strategy`,
+            `redact_patterns`). Its `content` key -- the user's own memory
+            text -- is never read here, and must never be: that is the
+            FND-02 defect.
+
+    Returns:
+        None when policy requires no redaction.
+
+    Raises:
+        RedactionPolicyError: when policy requires redaction but the
+            instruction cannot be built -- no patterns named, an unknown
+            pattern name, a pattern that does not compile, or an unknown
+            strategy. Callers must fail the write closed on this. Returning
+            None here instead would be indistinguishable from "no redaction
+            required", which is how a typo in a governance file would come
+            to mean "store it raw".
+    """
+    if not redaction_required(evaluated):
+        return None
+
+    names_or_patterns = evaluated.get("redact_patterns") or []
+    if isinstance(names_or_patterns, str):
+        names_or_patterns = [names_or_patterns]
+
+    patterns: list[str] = []
+    unknown: list[str] = []
+    for entry in names_or_patterns:
+        if not isinstance(entry, str) or not entry:
+            unknown.append(repr(entry))
+            continue
+        resolved = REDACTION_PATTERNS.get(entry)
+        if resolved is None:
+            # Not a name from the library. A rule may supply a literal
+            # regex, but a *typo* must not read as one -- so anything that
+            # is not a known name has to at least be a compilable pattern,
+            # and `RedactionInstruction` enforces that below. A bare word
+            # like "emial" compiles fine as a regex, though, and would
+            # silently protect nothing, so only entries that look like a
+            # regex (rather than a plain identifier) are accepted verbatim.
+            if _looks_like_bare_name(entry):
+                unknown.append(entry)
+                continue
+            resolved = entry
+        if resolved not in patterns:
+            patterns.append(resolved)
+
+    if unknown:
+        raise RedactionPolicyError(
+            f"Redaction policy names unknown pattern(s) {unknown}. "
+            f"Known names: {sorted(REDACTION_PATTERNS)}. "
+            "Refusing to guess -- a mistyped rule must not read as "
+            "'nothing to redact'.",
+        )
+
+    if not patterns:
+        raise RedactionPolicyError(
+            "Policy requires redaction but no `redact_patterns` were "
+            "declared, so there is nothing to remove. Add explicit "
+            f"patterns (names: {sorted(REDACTION_PATTERNS)}) to the rule.",
+        )
+
+    strategy = evaluated.get("redact_strategy") or "mask"
+    categories = evaluated.get("matched_categories") or []
+    source = ",".join(dict.fromkeys(categories)) or "unspecified"
+
+    return RedactionInstruction(
+        patterns=tuple(patterns),
+        strategy=str(strategy),
+        source=source,
+    )
+
+
+_BARE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _looks_like_bare_name(entry: str) -> bool:
+    """A plain identifier (`email`, `emial`) rather than a regex.
+
+    Used to tell a mistyped library name from a deliberately inline regex.
+    An identifier is a perfectly valid regex that matches its own literal
+    text, so without this check `redact_patterns: [emial]` would compile,
+    match nothing, and quietly protect nothing at all.
+    """
+    return bool(_BARE_NAME_RE.match(entry))
 
 
 # Module-level singleton for shared access
