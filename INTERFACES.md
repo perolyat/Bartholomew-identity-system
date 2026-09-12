@@ -105,6 +105,14 @@ implemented"; a fresh database actually contains 37.)*
   → **fail the write** (`outcome="refused_redaction_unavailable"`), before the consent
   queue, so unredactable content is not parked in the pending inbox either. Storing or
   indexing the content unredacted is never the fallback (FND-02).
+- If a write is queued for a human consent decision, the **original, pre-redaction** payload is
+  parked in `pending_sensitive_writes` and is **always encrypted at rest**, under the inbox's own
+  policy rather than the matched rule's `encrypt:` (FND-03). If that payload cannot be encrypted
+  → **fail the write** (`outcome="refused_consent_inbox_unprotected"`): nothing is stored and
+  nothing is queued. Parking it in plaintext is never the fallback. The payload lives only while
+  the decision is outstanding — approve, deny, `forget_memory()` and `revoke_memory()` all scrub
+  it, leaving content-free audit metadata (identity, reason, privacy class, timestamps,
+  resolution, resolved memory id).
 - If summarization fails → store redacted content and mark summary as missing; never crash the kernel loop.
 
 ---

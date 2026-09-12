@@ -151,6 +151,17 @@ def compute_governed_index_text(
     return index_text
 
 
+class ConsentInboxProtectionError(Exception):
+    """
+    The consent inbox could not protect a payload at rest.
+
+    FND-03: raised instead of writing an unprotected pre-redaction payload
+    into `pending_sensitive_writes`. There is deliberately no plaintext
+    fallback -- a write that cannot be parked safely is refused, and the
+    caller reports that truthfully.
+    """
+
+
 @dataclass
 class StoreResult:
     """Result of a memory storage operation"""
@@ -176,6 +187,10 @@ class StoreResult:
       (``never_store``, or an interactive handler declining). Not storable.
     * ``precondition_failed`` -- a conditional write whose
       ``expected_memory_id`` no longer matched; nothing was written.
+    * ``refused_consent_inbox_unprotected`` -- FND-03: the write needed a
+      human decision, but the consent inbox could not encrypt the
+      pre-redaction payload at rest. Nothing was written and nothing was
+      queued; parking it unprotected is not a fallback.
 
     `stored` remains the authoritative boolean and is unchanged for every
     existing caller; this only names *which* not-stored case occurred.
@@ -524,7 +539,11 @@ CREATE TABLE IF NOT EXISTS pending_sensitive_writes (
   resolved_at TEXT,
   resolved_memory_id INTEGER,
   reason TEXT NOT NULL DEFAULT 'privacy_guard',
-  privacy_class TEXT
+  privacy_class TEXT,
+  -- FND-03: why a row stopped holding a payload, when that was something
+  -- other than the ordinary approve/deny decision (e.g. the user forgot or
+  -- revoked the identity). Content-free audit metadata only.
+  resolution_note TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pending_sensitive_writes_status
   ON pending_sensitive_writes(status, id);
@@ -604,6 +623,14 @@ class MemoryStore:
                 )
                 logger.info("Migrated pending_sensitive_writes table: added privacy_class column")
 
+            if "resolution_note" not in psw_columns:
+                await db.execute(
+                    "ALTER TABLE pending_sensitive_writes ADD COLUMN resolution_note TEXT",
+                )
+                logger.info(
+                    "Migrated pending_sensitive_writes table: added resolution_note column",
+                )
+
             # W03-D: provenance / confidence / validity-window / supersession
             # columns, via the same additive ALTER pattern the `summary` and
             # `reason` migrations above use. Additive only -- every column is
@@ -631,6 +658,8 @@ class MemoryStore:
                     ),
                 )
                 logger.info("Seeded parking_brake system flag")
+
+            await self._migrate_consent_inbox(db)
 
             await db.commit()
 
@@ -885,15 +914,32 @@ class MemoryStore:
         # approve_pending_sensitive_write) bypasses this so re-running the
         # pipeline on approval doesn't re-trip the gate and re-queue itself.
         if evaluated.get("requires_consent", False) and not skip_rule_consent:
-            pending_id = await self.record_pending_write(
-                "rule_consent",
-                kind,
-                key,
-                value,
-                ts,
-                privacy_class=evaluated.get("privacy_class"),
-                evaluated=evaluated,
-            )
+            try:
+                pending_id = await self.record_pending_write(
+                    "rule_consent",
+                    kind,
+                    key,
+                    value,
+                    ts,
+                    privacy_class=evaluated.get("privacy_class"),
+                    evaluated=evaluated,
+                )
+            except ConsentInboxProtectionError:
+                # FND-03 fail-closed: an inbox that cannot protect the
+                # payload does not get an unprotected one. Nothing is
+                # stored and nothing is queued, and the outcome says so.
+                logger.error(
+                    "Refusing write %s/%s: the consent inbox could not encrypt "
+                    "the pending payload at rest. Queuing it unprotected is not "
+                    "an acceptable fallback.",
+                    kind,
+                    key,
+                    exc_info=True,
+                )
+                return StoreResult(
+                    stored=False,
+                    outcome="refused_consent_inbox_unprotected",
+                )
             print(
                 f"[Bartholomew] Memory requires consent, queued for review "
                 f"(pending_id={pending_id}); not stored yet: {kind}/{key}",
@@ -1080,13 +1126,27 @@ class MemoryStore:
         # false positives, never open a bypass.
         if not skip_privacy_guard and is_sensitive(value, kind=kind):
             if get_consent_handler() is None:
-                pending_id = await self.record_pending_sensitive_write(
-                    kind,
-                    key,
-                    value,
-                    ts,
-                    evaluated=evaluated,
-                )
+                try:
+                    pending_id = await self.record_pending_sensitive_write(
+                        kind,
+                        key,
+                        value,
+                        ts,
+                        evaluated=evaluated,
+                    )
+                except ConsentInboxProtectionError:
+                    # FND-03 fail-closed -- see the rule_consent gate above.
+                    logger.error(
+                        "Refusing write %s/%s: the consent inbox could not encrypt "
+                        "the pending payload at rest.",
+                        kind,
+                        key,
+                        exc_info=True,
+                    )
+                    return StoreResult(
+                        stored=False,
+                        outcome="refused_consent_inbox_unprotected",
+                    )
                 print(
                     f"[Bartholomew] Sensitive content queued for review "
                     f"(pending_id={pending_id}); not stored yet.",
@@ -1500,6 +1560,163 @@ class MemoryStore:
     # Pending sensitive/consent writes (consent-handler fix, 2026-08; S1.2)
     # -------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # FND-03: the consent inbox's own protection contract.
+    #
+    # `pending_sensitive_writes` holds the ORIGINAL, pre-redaction payload of
+    # a write Bartholomew believes needs a human decision before it may be
+    # remembered. That makes the inbox row, by construction, at least as
+    # sensitive as the governed memory it might become -- and usually more so,
+    # because redaction has not run on it yet.
+    #
+    # Protection therefore cannot be a function of whatever `encrypt:` the
+    # matched rule happened to carry (it was, before FND-03: a
+    # privacy_guard-only write, or an ask_before_store rule with no `encrypt`,
+    # parked its raw payload in plaintext). Membership of this table IS the
+    # policy. One authoritative policy, applied here, rather than every caller
+    # remembering to ask for it.
+    # ------------------------------------------------------------------
+
+    CONSENT_INBOX_ENCRYPTION_POLICY = {"encrypt": "strong"}
+    """The single encryption policy for every consent-inbox payload.
+
+    `strong` rather than `standard`: the existing key policy already reserves
+    `strong` for the content the rules engine classifies as most sensitive
+    (passwords, bank details, auth codes), and the raw pre-redaction payload
+    of a write that needed human consent belongs in exactly that class. It is
+    also the only choice that cannot *weaken* an existing rule -- a rule
+    asking for `strong` still gets `strong`, and one asking for `standard`
+    (or nothing at all) is raised to it rather than lowered.
+    """
+
+    @staticmethod
+    def _protect_consent_payload(value: str, kind: str, key: str, ts: str) -> str:
+        """
+        Encrypt a consent-inbox payload, or refuse.
+
+        Fail-closed by construction: there is no branch that returns the
+        plaintext. If the encryption engine cannot produce an envelope -- no
+        usable key, no cipher backend, anything -- this raises and the caller
+        must refuse the write rather than park unprotected sensitive content
+        in the inbox.
+        """
+        try:
+            cipher = _encryption_module._encryption_engine.encrypt_for_policy(
+                value,
+                MemoryStore.CONSENT_INBOX_ENCRYPTION_POLICY,
+                {"kind": kind, "key": key, "ts": ts},
+            )
+        except Exception as exc:  # noqa: BLE001 - re-raised as the typed refusal
+            raise ConsentInboxProtectionError(
+                "the consent inbox payload could not be encrypted at rest",
+            ) from exc
+        if not cipher or not _encryption_module.is_envelope(cipher):
+            raise ConsentInboxProtectionError(
+                "the consent inbox payload could not be encrypted at rest",
+            )
+        return cipher
+
+    async def _migrate_consent_inbox(self, db) -> None:
+        """
+        Bring historical `pending_sensitive_writes` rows under the FND-03
+        contract. Idempotent and restart-safe; runs inside `init()`'s
+        transaction.
+
+        Two reconciliations, and nothing else:
+
+        * an *unresolved* row whose payload is still plaintext is encrypted
+          in place -- it is still reviewable through the application path,
+          which decrypts, but no longer readable from the file;
+        * a *resolved* row (approved or denied) that still carries a payload
+          is scrubbed -- the decision is made, so the content is no longer
+          necessary retention.
+
+        Never double-encrypts: an already-enveloped value is left exactly as
+        it is. A value that is an envelope this process cannot open is also
+        left alone -- it is already protected, and silently replacing it
+        would destroy content rather than protect it.
+
+        Fails closed and loudly: if a plaintext row cannot be encrypted, this
+        raises instead of leaving the plaintext in place and reporting
+        success.
+        """
+        try:
+            cursor = await db.execute(
+                "SELECT id, kind, key, ts, status, value FROM pending_sensitive_writes "
+                "WHERE value IS NOT NULL AND value != ''",
+            )
+            rows = await cursor.fetchall()
+        except aiosqlite.OperationalError as exc:
+            if "no such table" in str(exc):
+                return
+            raise
+
+        encrypted = 0
+        scrubbed = 0
+        for row_id, kind, key, ts, status, value in rows:
+            if status != "pending":
+                await db.execute(
+                    "UPDATE pending_sensitive_writes "
+                    "SET value = '', resolution_note = COALESCE(resolution_note, ?) "
+                    "WHERE id = ?",
+                    ("scrubbed_by_fnd03_migration", row_id),
+                )
+                scrubbed += 1
+                continue
+            if _encryption_module.is_envelope(value):
+                continue
+            protected = self._protect_consent_payload(value, kind, key, ts)
+            await db.execute(
+                "UPDATE pending_sensitive_writes SET value = ? WHERE id = ?",
+                (protected, row_id),
+            )
+            encrypted += 1
+
+        if encrypted or scrubbed:
+            logger.info(
+                "FND-03 consent inbox migration: encrypted %d pending payload(s), "
+                "scrubbed %d resolved payload(s)",
+                encrypted,
+                scrubbed,
+            )
+
+    async def _scrub_consent_payloads(self, kind: str, key: str, note: str) -> int:
+        """
+        Remove every recoverable consent-inbox payload for one `(kind, key)`,
+        and make any still-unresolved request unapprovable.
+
+        The single authoritative cleanup used by both `forget_memory()` and
+        `revoke_memory()`. Without it, "forget this" erased the governed,
+        redacted, encrypted copy while the ORIGINAL pre-redaction copy sat on
+        in the inbox -- and an unresolved request could later be approved and
+        recreate exactly what the user withdrew.
+
+        Unresolved rows are resolved as `denied`, which is the existing
+        terminal state that both clears content and makes approval impossible
+        (`approve_pending_sensitive_write()` only ever claims a row that is
+        still `pending`). `resolution_note` records that it was the user's
+        withdrawal rather than a review decision, so the audit trail does not
+        claim a human sat and declined it. Rows are kept, content-free: the
+        identity, reason, privacy class and timestamps remain answerable.
+        """
+        resolved_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                cursor = await db.execute(
+                    "UPDATE pending_sensitive_writes "
+                    "SET value = '', resolution_note = ?, "
+                    "    status = CASE WHEN status = 'pending' THEN 'denied' ELSE status END, "
+                    "    resolved_at = COALESCE(resolved_at, ?) "
+                    "WHERE kind = ? AND key = ?",
+                    (note, resolved_at, kind, key),
+                )
+            except aiosqlite.OperationalError as exc:
+                if "no such table" in str(exc):
+                    return 0
+                raise
+            await db.commit()
+            return cursor.rowcount or 0
+
     async def record_pending_write(
         self,
         reason: str,
@@ -1519,24 +1736,21 @@ class MemoryStore:
         requires_consent=true). Returns the new pending_sensitive_writes row
         id.
 
-        `evaluated` (the rules-engine metadata dict, when the caller already
-        has one) is used to encrypt the payload at rest with the same
-        policy upsert_memory()'s own storage path would apply -- content
-        matching ask_before_store patterns like password/bank/auth-code
-        rules is exactly the content configured for `encrypt: strong`, and
-        it would otherwise sit here as a plaintext duplicate while pending
-        (Codex review finding). No `evaluated` (or no encrypt policy on it)
-        stores as-is, same as upsert_memory() would for that content.
+        FND-03: the payload is ALWAYS encrypted at rest, under the inbox's
+        own authoritative policy (see `CONSENT_INBOX_ENCRYPTION_POLICY`),
+        and never as a function of the matched rule. Previously this
+        encrypted only when `evaluated` carried an `encrypt:` policy, so a
+        privacy_guard-only write -- or an ask_before_store rule without an
+        explicit `encrypt:`, which includes the trauma/confessional and
+        third-party-private categories -- parked its raw pre-redaction
+        payload here in plaintext.
+
+        Raises `ConsentInboxProtectionError` if the payload cannot be
+        encrypted. Nothing is written in that case: there is no plaintext
+        fallback. `evaluated` is retained only for its `privacy_class`
+        callers and no longer influences protection.
         """
-        value_to_store = value
-        if evaluated is not None:
-            cipher = _encryption_module._encryption_engine.encrypt_for_policy(
-                value,
-                evaluated,
-                {"kind": kind, "key": key, "ts": ts},
-            )
-            if cipher is not None:
-                value_to_store = cipher
+        value_to_store = self._protect_consent_payload(value, kind, key, ts)
 
         requested_at = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
@@ -1592,9 +1806,23 @@ class MemoryStore:
             rows = await cursor.fetchall()
             entries = [dict(row) for row in rows]
             for entry in entries:
-                entry["value"] = _encryption_module._encryption_engine.try_decrypt_if_envelope(
-                    entry["value"],
-                )
+                plaintext = _encryption_module.decrypt_if_envelope(entry["value"])
+                # FND-03: `decrypt_if_envelope()` returns the envelope
+                # unchanged when it cannot be opened, so "still an envelope"
+                # is exactly "could not decrypt". Say so, rather than handing
+                # a reviewer ciphertext JSON as if it were the content they
+                # are being asked to decide about.
+                if _encryption_module.is_envelope(plaintext):
+                    entry["value"] = ""
+                    entry["readable"] = False
+                    entry["unreadable_reason"] = (
+                        "Stored encrypted, and cannot be decrypted with the key this "
+                        "process holds. It cannot be reviewed or approved; deny it to "
+                        "clear it."
+                    )
+                else:
+                    entry["value"] = plaintext
+                    entry["readable"] = True
             return entries
 
     async def _refuse_mutation_if_braked(self, refusal: str) -> None:
@@ -1658,6 +1886,36 @@ class MemoryStore:
             "pending and can be resolved once the brake is released.",
         )
 
+    async def _release_approval_claim(self, pending_id: int) -> None:
+        """
+        Hand a claimed row back to `pending` after an approval did not land.
+
+        `approve_pending_sensitive_write()` claims the row (status ->
+        'approved') BEFORE the storage work, so a concurrent denial cannot
+        overwrite a completed approval. The cost is that a storage failure
+        would otherwise leave a row marked approved with nothing stored and
+        no way to decide it again. Only a row this process itself claimed is
+        released -- the guard on `status = 'approved'` with no
+        `resolved_memory_id` means a genuinely completed approval is never
+        reopened.
+
+        A row whose payload is gone is never released either. A concurrent
+        `forget_memory()`/`revoke_memory()` can scrub the row while this
+        approval is in flight (and that is exactly the case where the
+        governed write then fails, because the same call laid a revocation
+        tombstone). Handing that row back to `pending` would put an empty,
+        approvable request into the inbox -- the withdrawal wins instead.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE pending_sensitive_writes "
+                "SET status = 'pending', resolved_at = NULL "
+                "WHERE id = ? AND status = 'approved' AND resolved_memory_id IS NULL "
+                "AND value IS NOT NULL AND value != ''",
+                (pending_id,),
+            )
+            await db.commit()
+
     async def approve_pending_sensitive_write(self, pending_id: int) -> StoreResult:
         """
         Store a pending write for real, using its original kind/key/ts, then
@@ -1713,21 +1971,50 @@ class MemoryStore:
             if claim.rowcount == 0:
                 raise ValueError(f"Pending sensitive write {pending_id} is already resolved")
 
-        decrypted_value = _encryption_module._encryption_engine.try_decrypt_if_envelope(
-            row["value"],
-        )
-        result = await self.upsert_memory(
-            row["kind"],
-            row["key"],
-            decrypted_value,
-            row["ts"],
-            skip_privacy_guard=True,
-            skip_rule_consent=True,
-        )
+        decrypted_value = _encryption_module.decrypt_if_envelope(row["value"])
+        # FND-03: an envelope that came back unchanged is one this process
+        # cannot open. Storing it would write ciphertext JSON into memory as
+        # if it were the reviewed content, so refuse -- and hand the row back
+        # to `pending` so the payload survives for a retry under the right
+        # key rather than being consumed by a failed approval.
+        if _encryption_module.is_envelope(decrypted_value):
+            await self._release_approval_claim(pending_id)
+            raise ConsentInboxProtectionError(
+                f"Pending sensitive write {pending_id} cannot be decrypted with the "
+                f"key this process holds; it cannot be approved.",
+            )
+
+        try:
+            result = await self.upsert_memory(
+                row["kind"],
+                row["key"],
+                decrypted_value,
+                row["ts"],
+                skip_privacy_guard=True,
+                skip_rule_consent=True,
+            )
+        except Exception:
+            # The claim is released, never the payload: a failed approval
+            # must leave the request exactly as decidable as it was. Scrubbing
+            # here would destroy the only remaining copy of content the user
+            # has not yet had a chance to decide about.
+            await self._release_approval_claim(pending_id)
+            raise
+
+        if not result.stored:
+            await self._release_approval_claim(pending_id)
+            return result
 
         async with aiosqlite.connect(self.db_path) as db:
+            # Scrub and record in the same statement as the resolution: once
+            # the governed write has succeeded, the raw pre-redaction payload
+            # is no longer necessary retention, and approval must not leave a
+            # MORE sensitive copy behind than denial does. Ordered after the
+            # governed write, never before it, so a failure above cannot
+            # destroy the only copy.
             await db.execute(
-                "UPDATE pending_sensitive_writes SET resolved_memory_id = ? WHERE id = ?",
+                "UPDATE pending_sensitive_writes "
+                "SET resolved_memory_id = ?, value = '' WHERE id = ?",
                 (result.memory_id, pending_id),
             )
             if row["reason"] == "rule_consent" and result.memory_id is not None:
@@ -2173,6 +2460,14 @@ class MemoryStore:
                 (kind, key, forgotten_at, "user", "forgotten on the user's instruction"),
             )
             await db.commit()
+        # FND-03: the consent inbox holds the ORIGINAL, pre-redaction payload.
+        # Erasing only the governed row would leave the rawest copy of the
+        # forgotten content sitting in the inbox -- and any still-unresolved
+        # request there could later be approved and recreate exactly what the
+        # user asked Bartholomew to forget. Scrubbed before the content row
+        # goes, for the same reason the tombstone is written first: a failure
+        # between the steps must leave the safe state.
+        await self._scrub_consent_payloads(kind, key, "forgotten_by_user")
         return await self.delete_memory(kind, key)
 
     # ------------------------------------------------------------------
@@ -2302,6 +2597,11 @@ class MemoryStore:
                 outcome.revoked = True
 
             await db.commit()
+
+        # FND-03: same invariant as forget_memory(). A withdrawal that left
+        # the pre-redaction consent payload recoverable -- or left an old
+        # pending request approvable -- would not be a withdrawal.
+        await self._scrub_consent_payloads(kind, key, f"revoked_by:{revoked_by}")
 
         logger.info(
             "Revoked memory %s/%s by=%s (row present: %s)",

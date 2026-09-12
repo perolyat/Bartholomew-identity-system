@@ -3051,3 +3051,65 @@
     canonical identity, because a router without one is no longer a realistic real-backend
     configuration. No assertion in that file was relaxed.
 - **Date:** 2026-09-12
+
+## Decision: Membership of the consent inbox is itself the encryption policy (FND-03)
+
+- **Decision:** Every non-empty `pending_sensitive_writes.value` is encrypted at rest under one
+  authoritative policy owned by `MemoryStore` (`CONSENT_INBOX_ENCRYPTION_POLICY`, `encrypt:
+  strong`), applied at the single write point `record_pending_write()`. The payload exists only
+  while the decision is outstanding: approve, deny, forget and revoke all scrub it. If the payload
+  cannot be encrypted, the write is refused — there is no plaintext fallback.
+- **Alternatives:**
+  - *Keep deriving protection from the matched rule's `encrypt:` policy (the pre-FND-03
+    behaviour).* Rejected: it made the rawest copy in the system the least reliably protected
+    one. A privacy_guard-only write, and the trauma/confessional and third-party-private consent
+    categories, carry no `encrypt:` at all, so their pre-redaction payloads were stored in
+    plaintext.
+  - *Require every caller to ask for encryption.* Rejected: a policy that depends on each call
+    site remembering is a policy that is eventually forgotten, and the next caller of this inbox
+    has not been written yet.
+  - *Use `encrypt: standard`.* Rejected: `strong` is the class the rules engine already reserves
+    for passwords, bank details and auth codes, and an unredacted payload that needed human
+    consent belongs in it. `strong` is also the only choice that cannot *weaken* an existing
+    rule.
+  - *Retain the payload on resolved rows for audit richness.* Rejected: audit is answered by the
+    identity, reason, privacy class, timestamps and resolved memory id, none of which is content.
+    Retaining recoverable sensitive material for convenience is the thing this repair exists to
+    stop.
+  - *Delete resolved rows outright at forget/revoke.* Rejected: a content-free row still answers
+    "was this ever asked about, and what happened to it?". A tombstone is sufficient; destroying
+    the audit trail is not required to destroy the content.
+- **Why:** A row in this table exists *because* Bartholomew believes a human must consent before
+  the content is remembered. That is a stronger statement about sensitivity than any classifier's
+  `encrypt:` flag, and it is made by the act of queuing, not by the rule that triggered it. Three
+  concrete failures followed from tying protection to the rule instead: plaintext pre-redaction
+  payloads at rest; approval retaining an original raw copy *alongside* the governed redacted,
+  encrypted memory it created; and `forget`/`revoke` leaving the rawest copy in place — verified
+  to the point where `forget` → `reinstate` → `approve` recreated forgotten content verbatim.
+- **Consequences:**
+  - Approval is ordered: governed write first, scrub second. A failed approval releases its claim
+    and leaves the request pending and decidable rather than consuming the only copy of something
+    the user has not yet decided about. Success means all three of "memory stored", "payload
+    scrubbed" and "status truthful", or it is not reported as success.
+  - "Forget" now means forget all live copies. `forget_memory()` and `revoke_memory()` share one
+    cleanup helper that scrubs every consent payload for the identity and resolves unresolved
+    requests to `denied` with a `resolution_note` recording that it was a withdrawal, not a
+    review decision — so no later approval can resurrect withdrawn content, with or without a
+    reinstatement.
+  - Existing databases are reconciled by an idempotent, restart-safe `init()` migration. It never
+    double-encrypts, leaves an envelope it cannot open alone rather than destroying it, and
+    **raises** rather than reporting a migration that did not happen.
+  - A pending payload encrypted under a key the process no longer holds is reported unreadable
+    and refused for approval (storing the envelope as if it were reviewed content would be
+    worse than refusing); it can still be denied to clear it.
+  - **No new authentication was added.** The consent routes were already classified
+    `Capability.CONSENT_DECIDE` in `route_policy.py` and already run behind
+    `http_identity.authenticate_and_authorize()`. The route module's claim of "no authentication
+    today" was stale documentation, not a live bypass; it is corrected, and the boundary is now
+    pinned end-to-end by `tests/test_fnd03_consent_review_boundary.py` instead of asserted.
+    Adding route-local credential parsing was rejected outright: two competing authentication
+    systems is how the second one gets it wrong.
+  - Parking Brake semantics are unchanged: listing inspects, approve and deny mutate and are
+    refused while braked. Forget and revoke were already brake-refused mutations, and the consent
+    cleanup runs inside them, so it inherits that refusal rather than carving an exception.
+- **Date:** 2026-09-12
