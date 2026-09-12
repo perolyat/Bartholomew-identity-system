@@ -6,6 +6,8 @@ import pytest
 
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
 from bartholomew.kernel.redaction_engine import (
+    RedactionInstruction,
+    RedactionPolicyError,
     apply_redaction,
     mask_sensitive,
     remove_sensitive,
@@ -48,50 +50,75 @@ class TestRedactionEngine:
         assert result == "My SSN is [SSN REDACTED]"
         assert "123-45-6789" not in result
 
+    # FND-02 changed apply_redaction()'s contract. It used to take a rule
+    # dict and read its regex from rule["content"] -- the same key
+    # MemoryRulesEngine.evaluate() uses for the MEMORY'S OWN TEXT, which is
+    # how a user's memory came to be used as the regex that redacted it.
+    # It now takes an explicit RedactionInstruction and refuses a mapping.
+    #
+    # The three "returns original" cases below became "raises" cases. That
+    # is deliberately stricter, not looser: "I cannot apply this redaction,
+    # so here is the unredacted text" was the silent fail-open that let a
+    # broken privacy control read as a working one.
+
     def test_apply_redaction_mask(self):
         """Test apply_redaction with mask strategy"""
-        rule = {"content": r"password", "redact_strategy": "mask"}
+        instruction = RedactionInstruction(patterns=(r"password",), strategy="mask")
         text = "My password is secret123"
-        result = apply_redaction(text, rule)
+        result = apply_redaction(text, instruction)
         assert "****" in result
         assert "password" not in result.lower()
 
     def test_apply_redaction_remove(self):
         """Test apply_redaction with remove strategy"""
-        rule = {"content": r"confidential", "redact_strategy": "remove"}
+        instruction = RedactionInstruction(patterns=(r"confidential",), strategy="remove")
         text = "This is confidential information"
-        result = apply_redaction(text, rule)
+        result = apply_redaction(text, instruction)
         assert "confidential" not in result.lower()
         assert result == "This is  information"
 
     def test_apply_redaction_replace(self):
         """Test apply_redaction with replace strategy"""
-        rule = {"content": r"email@example\.com", "redact_strategy": "replace:[EMAIL REDACTED]"}
+        instruction = RedactionInstruction(
+            patterns=(r"email@example\.com",),
+            strategy="replace:[EMAIL REDACTED]",
+        )
         text = "Contact me at email@example.com"
-        result = apply_redaction(text, rule)
+        result = apply_redaction(text, instruction)
         assert "[EMAIL REDACTED]" in result
         assert "email@example.com" not in result
 
-    def test_apply_redaction_no_pattern(self):
-        """Test apply_redaction with no pattern returns original"""
-        rule = {"redact_strategy": "mask"}
-        text = "Original text"
-        result = apply_redaction(text, rule)
-        assert result == text
+    def test_apply_redaction_rejects_a_rule_dict(self):
+        """A mapping is refused outright -- the FND-02 structural guard."""
+        with pytest.raises(TypeError):
+            apply_redaction("Original text", {"content": r"x", "redact_strategy": "mask"})
 
-    def test_apply_redaction_unknown_strategy(self):
-        """Test apply_redaction with unknown strategy returns original"""
-        rule = {"content": r"test", "redact_strategy": "unknown_strategy"}
-        text = "Original test text"
-        result = apply_redaction(text, rule)
-        assert result == text
+    def test_apply_redaction_no_pattern_fails_closed(self):
+        """No pattern is a broken policy, not a no-op.
 
-    def test_apply_redaction_invalid_regex(self):
-        """Test apply_redaction with invalid regex returns original"""
-        rule = {"content": r"[invalid(regex", "redact_strategy": "mask"}
-        text = "Original text"
-        result = apply_redaction(text, rule)
-        assert result == text
+        Previously this returned the original text, so a rule that demanded
+        redaction and named nothing to redact stored the content raw.
+        """
+        with pytest.raises(RedactionPolicyError):
+            RedactionInstruction(patterns=(), strategy="mask")
+
+    def test_apply_redaction_unknown_strategy_fails_closed(self):
+        """An unrecognised strategy is rejected when the instruction is
+        built, so it can never reach storage as "unredacted, but logged"."""
+        with pytest.raises(RedactionPolicyError):
+            RedactionInstruction(patterns=(r"test",), strategy="unknown_strategy")
+
+    def test_apply_redaction_invalid_regex_fails_closed(self):
+        """An uncompilable pattern is rejected rather than answered with
+        the original text."""
+        with pytest.raises(RedactionPolicyError):
+            RedactionInstruction(patterns=(r"[invalid(regex",), strategy="mask")
+
+    def test_mask_sensitive_invalid_regex_fails_closed(self):
+        """The low-level helpers fail closed too -- they used to log the
+        error and hand back the unredacted input."""
+        with pytest.raises(RedactionPolicyError):
+            mask_sensitive("Original text", r"[invalid(regex")
 
 
 class TestMemoryRulesEnrichment:
@@ -152,10 +179,13 @@ class TestPhase2aIntegration:
 
     def test_redaction_in_memory_dict(self):
         """Test that redaction works with memory dict format"""
-        rule = {"content": r"(?i)my email is \S+@\S+", "redact_strategy": "mask"}
+        instruction = RedactionInstruction(
+            patterns=(r"(?i)my email is \S+@\S+",),
+            strategy="mask",
+        )
 
         text = "Hi, my email is user@example.com for contact"
-        result = apply_redaction(text, rule)
+        result = apply_redaction(text, instruction)
 
         assert "****" in result
         assert "user@example.com" not in result
@@ -165,17 +195,38 @@ class TestPhase2aIntegration:
         text = "My SSN is 123-45-6789 and email is user@example.com"
 
         # First redaction: SSN
-        rule1 = {"content": r"\d{3}-\d{2}-\d{4}", "redact_strategy": "replace:[SSN]"}
-        text = apply_redaction(text, rule1)
+        text = apply_redaction(
+            text,
+            RedactionInstruction(
+                patterns=(r"\d{3}-\d{2}-\d{4}",),
+                strategy="replace:[SSN]",
+            ),
+        )
 
         # Second redaction: email
-        rule2 = {"content": r"\S+@\S+", "redact_strategy": "mask"}
-        text = apply_redaction(text, rule2)
+        text = apply_redaction(
+            text,
+            RedactionInstruction(patterns=(r"\S+@\S+",), strategy="mask"),
+        )
 
         assert "[SSN]" in text
         assert "****" in text
         assert "123-45-6789" not in text
         assert "user@example.com" not in text
+
+    def test_one_instruction_applies_several_patterns_in_one_pass(self):
+        """FND-02: a rule can protect more than one shape at once, and the
+        patterns of every matching rule are unioned into one instruction."""
+        instruction = RedactionInstruction(
+            patterns=(r"\d{3}-\d{2}-\d{4}", r"\S+@\S+"),
+            strategy="mask",
+        )
+        result = apply_redaction(
+            "My SSN is 123-45-6789 and email is user@example.com",
+            instruction,
+        )
+        assert "123-45-6789" not in result
+        assert "user@example.com" not in result
 
     def test_phase2a_metadata_structure(self):
         """Test that Phase 2a metadata structure is correct"""

@@ -158,6 +158,11 @@ async def test_caller_supplied_summary_is_redacted_before_storage_and_fts(
     value already goes through, closing the asymmetry where `value` was
     redacted but a caller-supplied `summary` never was.
 
+    Since FND-02 both go through the *same resolved
+    `RedactionInstruction`*, not merely the same function, so the summary
+    cannot be redacted under a different policy than the value it
+    summarises.
+
     Genuinely queries `memory_fts` via MATCH -- not by reading its `value`
     column back directly. `memory_fts` is an FTS5 *external content* table
     (`content='memories'`, confirmed via its schema): reading a column back
@@ -166,10 +171,19 @@ async def test_caller_supplied_summary_is_redacted_before_storage_and_fts(
     it cannot prove anything about what's actually indexed/searchable --
     only a MATCH query exercises the real index.
     """
+    # FND-02: the redaction pattern is declared explicitly, under
+    # `redact_patterns`, instead of being smuggled in under `content`.
+    # `content` is where `evaluate()` puts the MEMORY'S OWN TEXT, and
+    # reading it back as a regex was the defect FND-02 removed -- so this
+    # test now expresses the policy the way real policy is expressed.
     monkeypatch.setattr(
         memory_store_module._rules_engine,
         "evaluate",
-        _fixed_evaluate(redact_strategy="mask", content=r"(?i)secretword"),
+        _fixed_evaluate(
+            redact=True,
+            redact_strategy="mask",
+            redact_patterns=[r"(?i)secretword"],
+        ),
     )
     result = await store.upsert_memory(
         kind="test_kind",

@@ -164,7 +164,28 @@
 - **What could go wrong:** A caller retrieves or surfaces a memory that should be excluded (never_store / ask_before_store / context_only).
 - **Current controls:** ConsentGate applied by default at FTS/vector layers; memory rules engine; redaction; encryption.
 - **Mitigation:** Add bypass-path red-team tests; audit any `apply_consent_gate=False` call sites; enforce “admin-only” paths.
-- **Status:** Mitigated (2026-07-24) — the "no red-team test suite exists yet" gap is now closed:
+- **Correction (2026-09-12, FND-02):** one of the four controls listed above was not
+  working. From Phase 2a until FND-02, **redaction never redacted anything through any live
+  path**, and the row above said it did. `memory_store.upsert_memory()` called
+  `apply_redaction(value, evaluated)`, and `apply_redaction()` read its regex from
+  `rule["content"]` — the key `MemoryRulesEngine.evaluate()` uses for **the memory's own
+  text**. A user's memory was therefore used as the regular expression that redacted it:
+  prose that happened to match itself was replaced in full (total data loss), and anything
+  containing a regex metacharacter matched nothing and was stored, FTS-indexed and embedded
+  raw. Separately, `memory_rules.yaml`'s entire `redact:` category was never loaded, so an
+  SSN matched no rule at all. Reproduced end to end: the account number in
+  `"bank details: acct 12345 (branch)"` was searchable in plaintext in `memory_fts` and sat
+  verbatim in `memory_fts_map.last_index_text`, in the same database as the (correctly)
+  encrypted row.
+  The other three controls held throughout — consent still gated, `never_store` still
+  blocked, encryption still encrypted — which is why this was a silent gap rather than an
+  open door, and why R1's overall Mitigated status stands. Repaired in FND-02: redaction
+  now takes an explicit `RedactionInstruction` that a memory dict cannot impersonate, fails
+  the write closed when a required policy is unusable, and is proven end to end by
+  `tests/test_fnd02_memory_redaction_contract.py`. Scope of what redaction now removes is
+  bounded — see **R-MEM-REDACT-SCOPE** below.
+- **Status:** Mitigated (2026-07-24; redaction control repaired 2026-09-12, see Correction
+  above) — the "no red-team test suite exists yet" gap is now closed:
   `tests/test_consent_bypass_redteam.py` (10 tests, see MASTER_PLAN.md item 11.20) drives content
   through the real `memories`/FTS/vector tables (bypassing `upsert_memory()`'s write-time guard,
   since `MemoryRulesEngine.should_store()` already hard-blocks `requires_consent` content there —
@@ -193,6 +214,25 @@
   earlier fail-closed bug (`Retriever`/`FTSOnlyRetriever`/`HybridRetriever` excluding every
   `requires_consent` memory unconditionally regardless of actual consent) stays fixed and covered
   by `tests/test_retrieval_consent_enforcement.py`, re-verified green as part of this pass.
+
+### R-MEM-REDACT-SCOPE — redaction removes known shapes, not all sensitive meaning
+- **Category:** Privacy
+- **What could go wrong:** A user stores something genuinely sensitive that does not match
+  any declared `redact_patterns` shape — a postal address, a person's name, a diagnosis, a
+  free-text secret with no label — and it is stored and FTS-indexed in plaintext even though
+  a governance rule classified the memory as sensitive.
+- **Current controls:** `redact_patterns` in `bartholomew/config/memory_rules.yaml` covers
+  email, phone, SSN, IBAN, card numbers, runs of 5+ digits, and labelled secret assignments
+  (`redaction_engine.REDACTION_PATTERNS`). A rule that requires redaction and names no usable
+  pattern refuses the write outright rather than storing raw. Consent (`ask_before_store`)
+  and encryption (`encrypt: strong`) still apply to this content independently — redaction
+  is not the only control standing between it and disclosure.
+- **Mitigation:** None planned in FND-02. Closing it properly means entity recognition over
+  free text, which is a substantially larger system than a regex table and was explicitly out
+  of scope. Postal addresses are the most likely real-world gap: the rule matching the word
+  `address` classifies and encrypts the memory but removes no street address from it.
+- **Status:** Open, accepted and bounded (2026-09-12). Recorded so the redaction contract is
+  not read as broader than it is: Bartholomew redacts *these shapes*, and says so.
 
 ### R2 — Over-automation / unsafe side effects
 - **Category:** Safety

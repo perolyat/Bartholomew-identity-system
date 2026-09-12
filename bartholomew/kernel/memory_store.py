@@ -21,9 +21,14 @@ from bartholomew.kernel.memory_rules import (
     _parse_iso,
     _rules_engine,
     expiry_from_rules,
+    redaction_required,
+    resolve_redaction_instruction,
 )
 from bartholomew.kernel.policy import can_index
-from bartholomew.kernel.redaction_engine import apply_redaction
+from bartholomew.kernel.redaction_engine import (
+    RedactionPolicyError,
+    apply_redaction,
+)
 from bartholomew.kernel.summarization_engine import _summarization_engine
 
 logger = logging.getLogger(__name__)
@@ -96,9 +101,25 @@ def compute_governed_index_text(
     if not evaluated.get("fts_index", True) or not can_index(evaluated):
         return None
 
+    # FND-02: resolve an explicit instruction rather than handing the
+    # evaluated memory (which carries the user's own text under `content`)
+    # to the redactor. If policy requires redaction and no usable
+    # instruction exists, decline to index: a reindex that cannot apply the
+    # policy must not publish the text into the search index instead.
     redacted_value = plaintext_value
-    if evaluated.get("redact_strategy"):
-        redacted_value = apply_redaction(plaintext_value, evaluated)
+    try:
+        instruction = resolve_redaction_instruction(evaluated)
+        if instruction is not None:
+            redacted_value = apply_redaction(plaintext_value, instruction)
+    except RedactionPolicyError:
+        logger.error(
+            "Refusing to index %s/%s: policy requires redaction but no usable "
+            "redaction instruction could be resolved.",
+            kind,
+            key,
+            exc_info=True,
+        )
+        return None
 
     fts_index_mode = evaluated.get("fts_index_mode", _load_fts_index_mode())
     index_text = (
@@ -806,6 +827,37 @@ class MemoryStore:
             print(f"[Bartholomew] Memory blocked by governance rules: {kind}/{key}")
             return StoreResult(stored=False, outcome="refused")
 
+        # FND-02: resolve the REDACTION INSTRUCTION here -- once, up front,
+        # before anything durable happens to this content.
+        #
+        # Up front, because the next gate queues the raw value into the
+        # pending-consent inbox: a policy that demands redaction and cannot
+        # supply a usable instruction must refuse the write outright rather
+        # than park the unredactable material in a table first and discover
+        # the problem at approval time.
+        #
+        # Once, because every downstream consumer (the stored value, the
+        # summary, the FTS index text, chunks, embeddings) must apply the
+        # SAME instruction. Re-deriving it per consumer is what let
+        # `_handle_embeddings()` carry its own second copy of the broken
+        # call.
+        try:
+            redaction = resolve_redaction_instruction(evaluated)
+        except RedactionPolicyError as exc:
+            logger.error(
+                "Refusing write %s/%s: policy requires redaction but no usable "
+                "redaction instruction could be resolved (%s). Storing raw "
+                "sensitive material is not an acceptable fallback.",
+                kind,
+                key,
+                exc,
+            )
+            print(
+                f"[Bartholomew] Memory refused: redaction policy is required "
+                f"but unusable for {kind}/{key}; nothing was stored.",
+            )
+            return StoreResult(stored=False, outcome="refused_redaction_unavailable")
+
         # S1.2: ask_before_store (requires_consent=true) -- unlike
         # never_store above, memory_rules.py's should_store() docstring has
         # always said this should use "a separate promotion path" rather
@@ -831,10 +883,29 @@ class MemoryStore:
             )
             return StoreResult(stored=False, outcome="queued_for_consent")
 
-        # Apply redaction if required by rules (Phase 2a)
+        # Apply redaction if required by rules (Phase 2a; contract repaired
+        # in FND-02).
+        #
+        # `redaction` was resolved above, before the consent gate, so a
+        # policy that cannot be applied refuses the write rather than
+        # parking the raw content in the pending inbox first.
         redacted_value = value
-        if evaluated.get("redact_strategy"):
-            redacted_value = apply_redaction(value, evaluated)
+        if redaction is not None:
+            try:
+                redacted_value = apply_redaction(value, redaction)
+            except RedactionPolicyError:
+                logger.error(
+                    "Refusing write %s/%s: redaction instruction (%s) failed "
+                    "to apply. Storing the value unredacted is not an option.",
+                    kind,
+                    key,
+                    redaction.source,
+                    exc_info=True,
+                )
+                return StoreResult(
+                    stored=False,
+                    outcome="refused_redaction_unavailable",
+                )
 
         # Phase 2c: Generate summary if required (before encryption).
         #
@@ -878,8 +949,20 @@ class MemoryStore:
         # summary is already redaction-safe by construction (summarize()
         # runs over redacted_value), so this leaves that path byte-for-byte
         # unchanged.
-        if caller_supplied_summary and summary is not None and evaluated.get("redact_strategy"):
-            summary = apply_redaction(summary, evaluated)
+        if caller_supplied_summary and summary is not None and redaction is not None:
+            try:
+                summary = apply_redaction(summary, redaction)
+            except RedactionPolicyError:
+                logger.error(
+                    "Refusing write %s/%s: the caller-supplied summary could not be redacted.",
+                    kind,
+                    key,
+                    exc_info=True,
+                )
+                return StoreResult(
+                    stored=False,
+                    outcome="refused_redaction_unavailable",
+                )
 
         # Plaintext, fully-governed summary (redacted, policy-gated) --
         # captured *before* the summary_only substitution below can clear
@@ -894,6 +977,16 @@ class MemoryStore:
         # to remove from the embedding, generically for any caller-supplied
         # summary, not just a competency one.
         resolved_summary = summary
+
+        # FND-02: the redacted value as governance produced it, captured
+        # before the `summary_only` substitution below reassigns
+        # `redacted_value`. `_handle_embeddings()` used to rebuild its own
+        # text from `memory_dict["value"]` -- the ORIGINAL, raw memory --
+        # and re-run redaction itself, which meant a second independent copy
+        # of the same broken call and a second chance to leak. It is now
+        # handed the governed text instead of re-deriving it, so there is
+        # exactly one place where raw memory becomes stored memory.
+        governed_value = redacted_value
 
         # Handle summary_only mode: whichever source produced `summary`
         # (caller-supplied or just auto-generated above), only the summary
@@ -1105,6 +1198,7 @@ class MemoryStore:
             evaluated=evaluated,
             kind=kind,
             resolved_summary=resolved_summary,
+            redacted_value=governed_value,
         )
 
         return result
@@ -1116,6 +1210,7 @@ class MemoryStore:
         evaluated: dict,
         kind: str,
         resolved_summary: str | None = None,
+        redacted_value: str | None = None,
     ) -> None:
         """
         Handle embedding generation and persistence OUTSIDE async context.
@@ -1135,6 +1230,13 @@ class MemoryStore:
                 over re-deriving a summary here from scratch when present,
                 generically for any caller-supplied summary, not just a
                 competency one.
+            redacted_value: The governed (redacted, pre-encryption) text
+                upsert_memory() produced for this write -- FND-02. Passed in
+                rather than re-derived here, because re-deriving it meant
+                this method held its own second copy of the redaction call
+                and could disagree with what was actually stored and
+                indexed. None only for callers predating FND-02, which then
+                fall back to the raw value; no such caller exists in-tree.
         """
         global _summary_fallback_warned
 
@@ -1179,10 +1281,24 @@ class MemoryStore:
         texts_to_embed = []
         sources = []
 
-        # Use ORIGINAL values before encryption for embedding
-        orig_value = memory_dict["value"]
-        if evaluated.get("redact_strategy"):
-            orig_value = apply_redaction(orig_value, evaluated)
+        # FND-02: the governed, redacted, pre-encryption text as
+        # upsert_memory() computed it. Never `memory_dict["value"]`, which
+        # is the RAW memory: rebuilding from raw here and re-applying
+        # redaction locally is precisely the "another path rebuilds the text
+        # from the original memory" hazard, and it leaked the unredacted
+        # value into embedding source text for as long as the redaction call
+        # itself was broken.
+        if redacted_value is not None:
+            orig_value = redacted_value
+        else:
+            orig_value = memory_dict["value"]
+            if redaction_required(evaluated):
+                logger.error(
+                    "Refusing to embed memory %s: policy requires redaction "
+                    "but no governed text was supplied to _handle_embeddings().",
+                    result.memory_id,
+                )
+                return
 
         # Check if we have summary. A caller-supplied summary (already
         # policy-gated and redacted by upsert_memory() -- see

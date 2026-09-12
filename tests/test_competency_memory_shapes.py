@@ -222,16 +222,28 @@ async def test_redaction_of_json_embedded_content_preserves_valid_json(store) ->
        reliably fails to compile/match meaningfully and silently returns
        the text unchanged via its own except-and-return-original fallback.
 
-    Net effect: redaction does not fire today through any live path, for any
-    kind. This test therefore checks two things separately instead: Part 1
-    exercises the real, unmodified `upsert_memory()` pipeline end-to-end for
-    a competency kind and asserts what it actually, currently does --
-    encryption fires (that part IS live), redaction does not -- proving no
-    competency-specific bypass exists either way. Part 2 tests the design
+    Net effect: redaction did not fire through any live path, for any kind.
+
+    **BOTH bugs were fixed in FND-02 (2026-09-12).** The `redact:` category
+    is now loaded (`MemoryRulesEngine.PRIORITY` includes it), and
+    `apply_redaction()` takes an explicit `RedactionInstruction` resolved
+    from a rule's `redact_patterns` instead of reading a regex out of the
+    evaluated memory. The two paragraphs above are kept as the record of
+    what was wrong, because this file is where it was first written down.
+
+    What this test asserts is unchanged, and still passes for a reason
+    worth stating: Part 1 exercises the real `upsert_memory()` pipeline
+    end-to-end for a competency kind, and the situation text still contains
+    the word "phone" afterwards. That is not redaction failing -- it is
+    redaction working as designed. "phone" is the *classifier* that made the
+    rule match; the rule's `redact_patterns` target actual phone numbers,
+    and this record contains none. Masking the word would be the
+    keyword-matching mistake `redact_pii()` already documents ("Answer
+    health question" -> "Answer **** question"). Part 2 tests the design
     doc's actual concern (JSON survives in-place regex redaction) directly
-    against `redaction_engine.apply_redaction()`, decoupled from the
-    `evaluate()` wiring bug above, so the JSON-shape guarantee itself is
-    verified independent of that bug and remains valid once it's fixed.
+    against `redaction_engine.apply_redaction()` with a synthetic
+    instruction, so the JSON-shape guarantee is verified independently of
+    which rules happen to be configured.
     """
     record = CompetencyEvidence(
         envelope=_envelope(classification="personal"),
@@ -275,10 +287,20 @@ async def test_redaction_of_json_embedded_content_preserves_valid_json(store) ->
     # redaction_engine so it doesn't depend on the evaluate()-wiring bug
     # above -- proves competency JSON is redaction-safe on its own, whenever
     # a real pattern does reach apply_redaction().
-    from bartholomew.kernel.redaction_engine import apply_redaction
+    from bartholomew.kernel.redaction_engine import (
+        RedactionInstruction,
+        apply_redaction,
+    )
 
-    synthetic_rule = {"content": r"(?i)phone", "redact_strategy": "mask"}
-    redacted = apply_redaction(json.dumps(record.to_dict()), synthetic_rule)
+    # FND-02: an explicit instruction, not a dict whose "content" key is
+    # read as a pattern. apply_redaction() now refuses a mapping outright,
+    # precisely so a memory dict can never again be mistaken for policy.
+    synthetic_instruction = RedactionInstruction(
+        patterns=(r"(?i)phone",),
+        strategy="mask",
+        source="test:synthetic",
+    )
+    redacted = apply_redaction(json.dumps(record.to_dict()), synthetic_instruction)
     reparsed = json.loads(redacted)
     assert "phone" not in json.dumps(reparsed).lower()
     assert "****" in reparsed["situation"]

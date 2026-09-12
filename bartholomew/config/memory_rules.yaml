@@ -8,12 +8,35 @@
 #     - true:     alias of standard
 #     - false or omitted: no encryption
 #
-# Redaction policy:
+# Redaction policy (FND-02):
 #   redact: true|false
 #   redact_strategy: mask|remove|replace:<text>
 #     - mask:    Replace matches with ****
 #     - remove:  Delete matches entirely
 #     - replace: Replace with custom text after colon
+#   redact_patterns: [<name>, ...]   <-- REQUIRED whenever redact is true
+#     Names from redaction_engine.REDACTION_PATTERNS:
+#       email                 an email address
+#       phone                 a 10-digit phone number
+#       ssn                   a US social security number
+#       long_digit_sequence   any run of 5+ digits (account/member/sort)
+#       card_number           13-19 digits, spaced or hyphenated
+#       iban                  an international bank account number
+#       secret_assignment     a labelled secret and its value
+#                             ("password: hunter2", "auth code = 4821")
+#
+#   A rule's `match.content` expression says WHICH MEMORIES this rule
+#   governs. `redact_patterns` says WHICH CHARACTERS must be removed from
+#   them. These are different questions and the file must answer both.
+#   Before FND-02 it answered only the first, and the code papered over
+#   the gap by reusing the memory's own text as the redaction regex -- so a
+#   memory could become the rule that redacted it.
+#
+#   A rule with `redact: true` and no `redact_patterns` is a policy that
+#   demands redaction and identifies nothing to redact. That now REFUSES
+#   the write (outcome="refused_redaction_unavailable") rather than storing
+#   the content raw. Fail closed: a mistake in this file must never widen
+#   what gets stored.
 #
 # Summarization policy:
 #   summarize: true|false
@@ -173,6 +196,11 @@ always_keep:
       recall_policy: context_only
 
 ask_before_store:
+  # The match expression is a CLASSIFIER -- it decides that a memory
+  # mentioning a password or an account is secure material. It is not, and
+  # never was, a description of the sensitive span: masking the word
+  # "password" leaves the password itself in place. `redact_patterns` is
+  # what actually removes the secret.
   - match:
       content: "(?i)(password|bank|account number|two-factor|auth code)"
     metadata:
@@ -181,14 +209,32 @@ ask_before_store:
       recall_policy: always
       redact: true
       redact_strategy: mask
+      redact_patterns:
+        - secret_assignment
+        - card_number
+        - iban
+        - long_digit_sequence
+        - ssn
+        - email
+        - phone
       encrypt: strong
 
+  # Same shape: "email" selects the rule, `email` (the pattern) removes the
+  # address. A postal address has no reliable machine-readable shape and is
+  # deliberately NOT claimed here -- see RISKS.md R-MEM-REDACT-SCOPE.
   - match:
       content: "(?i)(bank|medical|address|phone|email)"
     metadata:
       privacy_class: user.sensitive
       requires_consent: true
       redact: true
+      redact_patterns:
+        - email
+        - phone
+        - ssn
+        - card_number
+        - iban
+        - long_digit_sequence
       summarize: false
       encrypt: strong
 
@@ -202,6 +248,14 @@ ask_before_store:
       requires_consent: true
       recall_policy: always
       redact: true
+      redact_patterns:
+        - email
+        - phone
+        - ssn
+        - card_number
+        - iban
+        - long_digit_sequence
+        - secret_assignment
       summarize: false
       encrypt: strong
 
@@ -281,6 +335,17 @@ never_store:
       privacy_class: user.sensitive
       recall_policy: never
       redact: true
+      # Never reached in practice (allow_store: false refuses the write
+      # before redaction is resolved), but declared so this rule is not the
+      # one exception to "every redact: true rule names its patterns".
+      redact_patterns:
+        - email
+        - phone
+        - ssn
+        - card_number
+        - iban
+        - long_digit_sequence
+        - secret_assignment
       encrypt: strong
 
 context_only:
@@ -306,13 +371,25 @@ context_only:
     metadata:
       recall_policy: context_only
 
-# Redact-only rules: Apply redaction without blocking storage
+# Redact-only rules: apply redaction without blocking storage.
+#
+# FND-02: this category was NOT LOADED before FND-02.
+# `MemoryRulesEngine.PRIORITY` listed five categories and omitted `redact`,
+# so every rule below was dead config that read like live policy. The SSN
+# rule in particular matched nothing: an SSN written to memory was stored
+# raw, indexed raw in FTS, and not even encrypted, because no loaded rule
+# mentioned it. `redact` is now the lowest-priority loaded category.
 redact:
   - match:
       kind: user
       content: "(?i)my (email|phone|address) is .+"
     metadata:
+      redact: true
       redact_strategy: mask
+      redact_patterns:
+        - email
+        - phone
+        - long_digit_sequence
       encrypt: standard
       summarize: true
       summary_mode: summary_also
@@ -320,5 +397,8 @@ redact:
   - match:
       content: "(?i)ssn:?\\s*\\d{3}-\\d{2}-\\d{4}"
     metadata:
+      redact: true
       redact_strategy: replace:[SSN REDACTED]
+      redact_patterns:
+        - ssn
       encrypt: strong

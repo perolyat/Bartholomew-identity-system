@@ -59,8 +59,8 @@ from bartholomew.kernel.memory.privacy_guard import (
     is_sensitive,
     request_permission_to_store,
 )
-from bartholomew.kernel.memory_rules import _rules_engine
-from bartholomew.kernel.redaction_engine import apply_redaction
+from bartholomew.kernel.memory_rules import _rules_engine, resolve_redaction_instruction
+from bartholomew.kernel.redaction_engine import RedactionPolicyError, apply_redaction
 from bartholomew.kernel.time_utils import utc_now_iso
 
 # Schema version for migration management
@@ -409,13 +409,38 @@ class MemoryManager:
                     print("[Bartholomew] OK, I won't store that memory.")
                     return False
 
-            # Apply redaction if required by rules (Phase 2a)
-            if evaluated.get("redact_strategy"):
-                memory.content = apply_redaction(memory.content, evaluated)
-                strategy = evaluated["redact_strategy"]
-                self.logger.debug(
-                    f"Applied redaction strategy '{strategy}' to memory {memory.id}",
+            # Apply redaction if required by rules (Phase 2a; contract
+            # repaired in FND-02).
+            #
+            # This call used to be `apply_redaction(memory.content,
+            # evaluated)`, and `evaluated["content"]` is the memory's own
+            # text -- so the memory became the regex used to redact itself.
+            # The consequence here was worse than in the kernel store: this
+            # adapter's content is conversational prose, which is a valid
+            # regex that matches itself exactly, so an entire consented
+            # conversation turn was stored as the literal string "****".
+            # Total, silent data loss, and no actual redaction. Fixed the
+            # same way and with the same fail-closed rule as
+            # bartholomew/kernel/memory_store.py: one explicit instruction,
+            # resolved from policy, never from the content.
+            try:
+                instruction = resolve_redaction_instruction(evaluated)
+                if instruction is not None:
+                    memory.content = apply_redaction(memory.content, instruction)
+                    self.logger.debug(
+                        "Applied redaction strategy '%s' (%s) to memory %s",
+                        instruction.strategy,
+                        instruction.source,
+                        memory.id,
+                    )
+            except RedactionPolicyError:
+                self.logger.error(
+                    "Refusing to store memory %s: policy requires redaction but "
+                    "no usable redaction instruction could be resolved.",
+                    memory.id,
+                    exc_info=True,
                 )
+                return False
 
             # Inject enriched metadata from rules
             if evaluated.get("privacy_class"):
