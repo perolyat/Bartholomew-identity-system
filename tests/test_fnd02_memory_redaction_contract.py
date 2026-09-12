@@ -710,6 +710,97 @@ def test_compute_governed_index_text_fails_closed(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 10b. Two fail-opens found in review OF THIS REPAIR
+#
+# Both were introduced by FND-02's own first draft and caught by the review
+# bot on the PR. Both are the same shape as the defect FND-02 exists to
+# remove -- a redaction that appears to be applied and silently is not --
+# which is exactly why they are pinned here rather than just fixed.
+# ---------------------------------------------------------------------------
+
+
+def test_non_case_inline_flags_are_preserved_not_dropped() -> None:
+    """A leading `(?s)` must keep its meaning.
+
+    The first draft *stripped* any leading global flag group, on the
+    reasoning that `apply_redaction()` re-applies `re.IGNORECASE` anyway.
+    True for `i`, silently wrong for everything else: `(?s)BEGIN.*END`
+    became `BEGIN.*END`, which no longer crosses a newline. The stripped
+    pattern still compiled, so validation passed and the multiline secret
+    was stored unredacted with nothing logged -- fail-open.
+    """
+    from bartholomew.kernel.redaction_engine import (
+        RedactionInstruction,
+        apply_redaction,
+    )
+
+    instruction = RedactionInstruction(patterns=(r"(?s)BEGIN.*END",), strategy="mask")
+    redacted = apply_redaction("BEGIN\nsupersecret\nEND", instruction)
+    assert (
+        "supersecret" not in redacted
+    ), "a leading (?s) was dropped, so the pattern no longer spans newlines"
+
+
+def test_inline_flags_still_work_when_patterns_are_combined() -> None:
+    """The scoping must survive alternation with other patterns -- which is
+    the whole reason the flag group could not simply be left in place."""
+    from bartholomew.kernel.redaction_engine import (
+        RedactionInstruction,
+        apply_redaction,
+    )
+
+    instruction = RedactionInstruction(
+        patterns=(r"(?i)secretword", r"\d{5,}"),
+        strategy="mask",
+    )
+    redacted = apply_redaction("SecretWord and 987654321", instruction)
+    assert "SecretWord" not in redacted
+    assert "987654321" not in redacted
+
+
+def test_reindex_redacts_the_summary_not_only_the_value(monkeypatch) -> None:
+    """`compute_governed_index_text()` must put the summary through the
+    same instruction as the value.
+
+    This function exists to repair the index for rows already on disk, and
+    under the pre-FND-02 contract a stored summary could be built from
+    unredacted text. Those are exactly the rows a backfill visits. Applying
+    the instruction only to the value, then selecting the raw summary as
+    index text under `summary_preferred`, meant a repair pass could
+    re-publish the very secret it was run to remove -- into `memory_fts`
+    and into `memory_fts_map.last_index_text`.
+    """
+
+    def _summary_preferred(memory: dict) -> dict:
+        result = dict(memory)
+        result.update(
+            {
+                "allow_store": True,
+                "redact": True,
+                "redact_strategy": "mask",
+                "redact_patterns": ["long_digit_sequence"],
+                "fts_index_mode": "summary_preferred",
+                "matched_categories": ["ask_before_store"],
+            },
+        )
+        return result
+
+    monkeypatch.setattr(memory_store_module._rules_engine, "evaluate", _summary_preferred)
+
+    index_text = memory_store_module.compute_governed_index_text(
+        "user",
+        "bank",
+        "bank details: acct 987654321 (branch)",
+        "Summary: bank acct 987654321 at the branch.",
+        TS,
+    )
+    assert index_text is not None
+    assert (
+        "987654321" not in index_text
+    ), f"the stored summary bypassed redaction on reindex: {index_text!r}"
+
+
+# ---------------------------------------------------------------------------
 # 11. Unrelated, non-sensitive memory is untouched
 # ---------------------------------------------------------------------------
 

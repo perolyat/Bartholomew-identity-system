@@ -87,7 +87,11 @@ def compute_governed_index_text(
             redact_strategy is still applied for parity with upsert_memory,
             which is a no-op unless the redaction pattern was changed since
             the memory was first written)
-        plaintext_summary: Decrypted stored summary, or None
+        plaintext_summary: Decrypted stored summary, or None. Put through
+            the same resolved redaction instruction as `plaintext_value`
+            before it can be chosen as the index text (FND-02) -- a summary
+            written under the broken prior contract can still contain the
+            sensitive span.
         ts: Memory timestamp
 
     Returns:
@@ -107,10 +111,23 @@ def compute_governed_index_text(
     # instruction exists, decline to index: a reindex that cannot apply the
     # policy must not publish the text into the search index instead.
     redacted_value = plaintext_value
+    redacted_summary = plaintext_summary
     try:
         instruction = resolve_redaction_instruction(evaluated)
         if instruction is not None:
             redacted_value = apply_redaction(plaintext_value, instruction)
+            # The SUMMARY must go through the same instruction, not just the
+            # value. This function exists to repair the index for rows that
+            # are already on disk -- and under the pre-FND-02 contract a
+            # stored summary could be built from unredacted text, because
+            # redaction silently no-opped. Those are precisely the rows a
+            # backfill visits. Selecting `plaintext_summary` verbatim below
+            # would let a repair pass re-publish the secret it was run to
+            # remove, into `memory_fts` and into `memory_fts_map`'s
+            # plaintext `last_index_text` column. Caught in review of the
+            # FND-02 PR itself.
+            if redacted_summary:
+                redacted_summary = apply_redaction(redacted_summary, instruction)
     except RedactionPolicyError:
         logger.error(
             "Refusing to index %s/%s: policy requires redaction but no usable "
@@ -123,8 +140,8 @@ def compute_governed_index_text(
 
     fts_index_mode = evaluated.get("fts_index_mode", _load_fts_index_mode())
     index_text = (
-        plaintext_summary
-        if plaintext_summary and fts_index_mode == "summary_preferred"
+        redacted_summary
+        if redacted_summary and fts_index_mode == "summary_preferred"
         else redacted_value
     )
 

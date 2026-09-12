@@ -191,25 +191,42 @@ _KNOWN_STRATEGIES = ("mask", "remove")
 
 # A leading inline global flag group, e.g. the `(?i)` that every
 # `match.content` expression in memory_rules.yaml begins with.
-_LEADING_GLOBAL_FLAGS_RE = re.compile(r"^\(\?[aimsux]+\)")
+_LEADING_GLOBAL_FLAGS_RE = re.compile(r"^\(\?([aimsux]+)\)")
 
 
-def _strip_leading_global_flags(pattern: str) -> str:
-    """Drop a leading inline global flag group from a redaction pattern.
+def _scope_leading_global_flags(pattern: str) -> str:
+    """Rewrite a leading inline *global* flag group as a *scoped* one.
+
+    ``(?s)BEGIN.*END``  ->  ``(?s:BEGIN.*END)``
 
     Patterns are combined into one alternation before they are applied, and
     Python rejects a global inline flag anywhere but the very start of the
     *whole* expression -- so a perfectly valid-looking `(?i)secretword`
     becomes a compile error the moment it is combined with anything else.
-
     Before the helpers were made to fail closed, that compile error was
     swallowed and the text came back unredacted: one rule author's harmless
-    `(?i)` silently disabled the entire instruction. Stripping it is safe
-    because `apply_redaction()` already applies `re.IGNORECASE` to every
-    pattern. A global flag anywhere *else* in the pattern is not stripped
-    and is reported by the combined-compile check below.
+    `(?i)` silently disabled the entire instruction.
+
+    An earlier version of this function *deleted* the flag group instead.
+    That was correct only for `i`, which `apply_redaction()` re-applies as
+    `re.IGNORECASE` -- and silently wrong for every other flag, which is a
+    fail-open of exactly the kind FND-02 exists to remove. `(?s)BEGIN.*END`
+    became `BEGIN.*END`, which no longer crosses a newline, so a multiline
+    secret went unmatched; the stripped pattern still compiled, so
+    validation passed and the sensitive text was stored unredacted with
+    nothing logged. Caught in review of the FND-02 PR itself.
+
+    Scoping preserves the flag's meaning and is legal anywhere in a
+    combined expression. A flag character outside the supported set is left
+    alone and reported by the combined-compile check in
+    `RedactionInstruction.__post_init__`, which fails closed.
     """
-    return _LEADING_GLOBAL_FLAGS_RE.sub("", pattern, count=1)
+    match = _LEADING_GLOBAL_FLAGS_RE.match(pattern)
+    if not match:
+        return pattern
+    flags = match.group(1)
+    body = pattern[match.end() :]
+    return f"(?{flags}:{body})"
 
 
 @dataclass(frozen=True)
@@ -259,7 +276,7 @@ class RedactionInstruction:
             self,
             "patterns",
             tuple(
-                _strip_leading_global_flags(p) if isinstance(p, str) else p for p in self.patterns
+                _scope_leading_global_flags(p) if isinstance(p, str) else p for p in self.patterns
             ),
         )
         if not self.patterns:
