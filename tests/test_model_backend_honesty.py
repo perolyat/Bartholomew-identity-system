@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pytest
 
+from identity_interpreter.loader import load_identity
 from identity_interpreter.orchestrator.model_router import ModelBackendError, ModelRouter
 
 # Any casing of this must never come back from a real backend.
@@ -33,7 +34,7 @@ class _FailingAdapter:
     def __init__(self, reason: str = "connection_failed"):
         self.reason = reason
 
-    def generate(self, prompt, model, parameters, context=None):
+    def generate(self, prompt, model, parameters, context=None, system=None):
         return {
             "response": f"[ERROR] Could not connect to Ollama at http://localhost:11434 ({self.reason})",
             "tokens_used": 0,
@@ -47,14 +48,14 @@ class _FailingAdapter:
 class _RaisingAdapter:
     """Adapter that raises instead of returning a failure dict."""
 
-    def generate(self, prompt, model, parameters, context=None):
+    def generate(self, prompt, model, parameters, context=None, system=None):
         raise ConnectionError("socket closed")
 
 
 class _WorkingAdapter:
     """Adapter that genuinely generates."""
 
-    def generate(self, prompt, model, parameters, context=None):
+    def generate(self, prompt, model, parameters, context=None, system=None):
         return {
             "response": "The kettle is already on.",
             "tokens_used": 7,
@@ -65,14 +66,33 @@ class _WorkingAdapter:
 
 
 def _router_with(adapter) -> ModelRouter:
+    """A router with no canonical identity -- the stub-path fixture."""
     r = ModelRouter()
+    r.llm_adapter = adapter
+    return r
+
+
+def _real_router_with(adapter) -> ModelRouter:
+    """
+    A router configured the way a real deployment configures one: with the
+    canonical identity present.
+
+    FND-01 made canonical identity a precondition for any *real* backend, so
+    a router with no identity now refuses before it ever reaches the adapter
+    (`reason="identity_projection_unavailable"`). The tests below are about
+    what happens when the adapter itself fails, so they need a router that
+    gets as far as the adapter. No assertion below is relaxed by this; the
+    fixture is simply realistic, and the identity-absent refusal has its own
+    coverage in tests/test_fnd01_identity_projection.py.
+    """
+    r = ModelRouter(identity_config=load_identity("Identity.yaml"))
     r.llm_adapter = adapter
     return r
 
 
 class TestRealBackendNeverFabricates:
     def test_provider_unreachable_raises_rather_than_returning_mock(self):
-        router = _router_with(_FailingAdapter())
+        router = _real_router_with(_FailingAdapter())
         with pytest.raises(ModelBackendError) as exc:
             router.route({"prompt": "are you there?", "backend": "local"})
         assert exc.value.reason == "connection_failed"
@@ -83,13 +103,13 @@ class TestRealBackendNeverFabricates:
         ["connection_failed", "model_not_available", "timeout", "ollama_disabled"],
     )
     def test_every_adapter_failure_mode_is_truthful(self, reason):
-        router = _router_with(_FailingAdapter(reason))
+        router = _real_router_with(_FailingAdapter(reason))
         with pytest.raises(ModelBackendError) as exc:
             router.route({"prompt": "hello", "backend": "local"})
         assert exc.value.reason == reason
 
     def test_adapter_exception_is_not_swallowed_into_mock_text(self):
-        router = _router_with(_RaisingAdapter())
+        router = _real_router_with(_RaisingAdapter())
         with pytest.raises(ModelBackendError) as exc:
             router.route({"prompt": "hello", "backend": "ollama"})
         assert exc.value.reason == "adapter_exception"
@@ -119,7 +139,7 @@ class TestRealBackendNeverFabricates:
         adapters = [None, _FailingAdapter(), _RaisingAdapter()]
         backends = ["local", "ollama", "openai", "anthropic", "not-a-backend"]
         for adapter in adapters:
-            router = _router_with(adapter) if adapter else ModelRouter()
+            router = _real_router_with(adapter) if adapter else ModelRouter()
             for backend in backends:
                 try:
                     result = router.route({"prompt": "hello", "backend": backend})
@@ -153,7 +173,7 @@ class TestStubBackendUnchanged:
 
 class TestSuccessfulGenerationPassesThrough:
     def test_working_adapter_returns_its_own_text(self):
-        router = _router_with(_WorkingAdapter())
+        router = _real_router_with(_WorkingAdapter())
         result = router.route({"prompt": "is the kettle on?", "backend": "local"})
         assert result == "The kettle is already on."
         assert _MOCK_MARKER not in result.lower()

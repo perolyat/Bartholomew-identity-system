@@ -60,6 +60,32 @@ class ModelRouter:
         self.cloud_adapter = None
         self._ledger = None
 
+        # FND-01: the model-facing projection of canonical identity, built
+        # once here because this is the single place every real generation
+        # passes through. Building it at construction rather than per request
+        # is what makes it deterministic across a conversation and identical
+        # across restarts: the same Identity renders the same bytes, and
+        # nothing from a turn can contribute to it.
+        #
+        # A failure is recorded rather than raised. Constructing a router is
+        # not the moment to fail -- the stub backend neither needs nor claims
+        # an identity -- but selecting a *real* backend without one is, and
+        # route() refuses there. See `_require_identity_projection()`.
+        self.identity_projection = None
+        self._identity_projection_error: str | None = None
+        if identity_config is not None:
+            from ..identity_projection import (
+                IdentityProjectionError,
+                build_identity_projection,
+            )
+
+            try:
+                self.identity_projection = build_identity_projection(identity_config)
+            except IdentityProjectionError as exc:
+                self._identity_projection_error = f"{exc} (reason: {exc.reason})"
+            except Exception as exc:  # noqa: BLE001 -- reported truthfully below
+                self._identity_projection_error = f"Identity projection failed: {exc}"
+
         # Lazily initialize LLM adapter if identity config provided
         if identity_config:
             try:
@@ -371,12 +397,14 @@ class ModelRouter:
                     model=route["model"],
                     reason="adapter_unavailable",
                 )
+            system = self._require_identity_projection(backend, route["model"])
             try:
                 result = self.llm_adapter.generate(
                     prompt=prompt,
                     model=route["model"],
                     parameters=route["parameters"],
                     context=data,
+                    system=system,
                 )
             except Exception as exc:  # adapter raised rather than returning
                 raise ModelBackendError(
@@ -406,6 +434,45 @@ class ModelRouter:
             backend=backend,
             model=route["model"],
             reason="backend_not_implemented",
+        )
+
+    def _require_identity_projection(self, backend: str, model: str | None) -> str:
+        """
+        Return the canonical identity text a real generation must carry.
+
+        FND-01's load-bearing rule, enforced in the one place every real
+        backend passes through: **no real generation leaves Bartholomew
+        without his identity.** A provider that is about to speak as
+        Bartholomew either receives the canonical projection or does not run.
+
+        Refusing is the truthful outcome, and matches this module's existing
+        contract for provider failures: rather than generate a reply from a
+        model that was never told who it is -- which the caller could not
+        distinguish from a genuine Bartholomew reply -- the request fails with
+        a reason a caller can surface.
+
+        Args:
+            backend: The selected backend, for the raised error.
+            model: The selected model, for the raised error.
+
+        Returns:
+            The projected identity text, suitable as a provider system message.
+
+        Raises:
+            ModelBackendError: no canonical identity projection is available.
+        """
+        if self.identity_projection is not None:
+            return self.identity_projection.text
+
+        detail = self._identity_projection_error or (
+            "ModelRouter was constructed without a canonical identity."
+        )
+        raise ModelBackendError(
+            f"Backend {backend!r} was selected to speak as Bartholomew, but no "
+            f"canonical identity projection is available: {detail}",
+            backend=backend,
+            model=model,
+            reason="identity_projection_unavailable",
         )
 
     def _route_cloud(self, route: dict[str, Any], prompt: str, data: dict[str, Any]) -> str:
@@ -456,12 +523,15 @@ class ModelRouter:
                 reason="cloud_not_configured",
             )
 
+        system = self._require_identity_projection("cloud", route["model"])
+
         try:
             result = self.cloud_adapter.generate(
                 prompt=prompt,
                 model=route["model"],
                 parameters=route["parameters"],
                 context=data,
+                system=system,
             )
         except Exception as exc:
             raise ModelBackendError(

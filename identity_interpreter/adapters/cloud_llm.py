@@ -149,10 +149,17 @@ class CloudLLMAdapter:
         model: str,
         parameters: dict[str, Any],
         context: dict[str, Any] | None = None,
+        system: str | None = None,
     ) -> dict[str, Any]:
         """Generate a response. Never raises for expected failures -- returns
         `success: False` with a reason, the same contract the local adapter
-        uses, so callers handle both identically."""
+        uses, so callers handle both identically.
+
+        `system` is the canonical identity projection, carried into this
+        provider's own system parameter. It is transported, never authored
+        here: the text comes from `identity_interpreter.identity_projection`,
+        which is what keeps Bartholomew's identity identical across providers.
+        See FND-01."""
         resolved = map_model_name(model) or model
 
         if not prompt or not prompt.strip():
@@ -182,17 +189,21 @@ class CloudLLMAdapter:
         # carrying them is rejected outright with a 400 -- so passing the
         # Identity-declared parameters through, which is the obvious thing
         # to do and what the local adapter does, would make every cloud
-        # request fail. Model behaviour is steered by the prompt instead,
-        # which is where this runtime's persona and governance context
-        # already live.
+        # request fail. Behaviour is steered by the prompt and by the
+        # canonical identity projection carried in `system` below, which is
+        # where this runtime's identity context lives (FND-01).
         max_tokens = int(parameters.get("max_tokens") or DEFAULT_MAX_TOKENS)
 
+        request: dict[str, Any] = {
+            "model": resolved,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if system:
+            request["system"] = system
+
         try:
-            message = client.messages.create(
-                model=resolved,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            message = client.messages.create(**request)
         except Exception as exc:  # noqa: BLE001 -- classified below
             return self._failure(
                 resolved,
