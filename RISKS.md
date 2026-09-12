@@ -215,6 +215,62 @@
   `requires_consent` memory unconditionally regardless of actual consent) stays fixed and covered
   by `tests/test_retrieval_consent_enforcement.py`, re-verified green as part of this pass.
 
+### R-CONSENT-INBOX — the pending-consent inbox held the rawest copy of everything
+- **Category:** Privacy
+- **What could go wrong:** `pending_sensitive_writes` holds the **original, pre-redaction**
+  payload of a write Bartholomew wants a human decision about — by construction the rawest
+  copy of the most sensitive content in the system. Three defects, each reproduced against
+  `cb0458b` before repair (FND-03, 2026-09-12):
+  1. **Protection was a function of the matched rule.** The payload was encrypted only when
+     the caller supplied rules metadata carrying an `encrypt:` policy. A privacy_guard-only
+     write carried none, so its raw payload sat in the table as **plaintext** — and so did
+     any `ask_before_store` category with no explicit `encrypt:`, which includes the
+     trauma/confessional and third-party-private categories.
+  2. **Approval kept the payload.** `deny` cleared the row's `value`; `approve` did not. The
+     result of approving was a governed, redacted, encrypted memory **plus** an unnecessary
+     original raw copy retained in the consent table — approval left a *more* sensitive
+     artifact behind than denial did.
+  3. **Forget and revoke ignored the inbox entirely.** `forget_memory()` erased the governed
+     row and the search copies while leaving every matching consent row untouched. Worse, and
+     verified live: `forget` → `reinstate` → `approve(old_pending_id)` recreated the
+     forgotten content verbatim. The tombstone alone did not close this, because lifting it
+     is exactly what reinstating is for.
+- **Current controls (after FND-03):** membership of the inbox **is** the encryption policy —
+  every non-empty payload is encrypted at rest under one authoritative policy
+  (`MemoryStore.CONSENT_INBOX_ENCRYPTION_POLICY`, `encrypt: strong`), independent of any
+  rule; a payload that cannot be encrypted refuses the write rather than being parked in
+  plaintext (`outcome="refused_consent_inbox_unprotected"` — there is no plaintext fallback);
+  approve and deny scrub the payload symmetrically; approval scrubs only *after* the governed
+  write has succeeded, and releases its claim (leaving the payload decidable) if it has not;
+  `forget_memory()`/`revoke_memory()` scrub every consent payload for the identity and make
+  unresolved requests unapprovable. Resolved rows keep content-free audit metadata. An
+  idempotent, restart-safe `init()` migration encrypts historical plaintext pending rows and
+  scrubs historical resolved ones, and fails closed (raises) rather than reporting a migration
+  that did not happen. Proven against the persisted SQLite rows, not against helper return
+  values, by `tests/test_fnd03_consent_inbox_privacy.py`.
+- **Review round (2026-09-12, Codex on the FND-03 diff):** three findings on the repair itself,
+  each reproduced before being fixed. (1) **P1 — approval was not serialised against a
+  withdrawal.** `upsert_memory()` checks `is_revoked()` and inserts in separate transactions; a
+  `forget`/`revoke` landing inside that window committed its tombstone and scrubbed the consent
+  row while the approval stored its own decrypted local copy and reported `stored=True`, so the
+  forgotten content returned live on the next reinstatement. The final resolution is now a
+  compare-and-swap on the payload (the withdrawal always empties it), and an approval that loses
+  that race has its own write undone by id and is reported `refused_revoked`. (2) **P2 — a
+  withdrawal stamped its note over already-decided rows**, making the audit trail claim the
+  withdrawal caused a resolution a human had made earlier; the note and resolution now apply to
+  still-pending rows only, while payload clearing still covers every row. (3) **P2 — a
+  consent-only forget reported "not found"**; queued content is deliberately not in `memories`
+  yet, so the DELETE route answered 404 for a destructive operation that had just laid a
+  tombstone and scrubbed a raw payload. `forget_memory()` now reports success when it removed
+  either copy.
+- **Residual:** the review path necessarily decrypts in process memory to show a human what
+  they are deciding about — that is the inbox's purpose, and it is gated by the platform
+  identity boundary (`Capability.CONSENT_DECIDE`; see
+  `tests/test_fnd03_consent_review_boundary.py`). A payload encrypted under a key the process
+  no longer holds is reported unreadable and refused for approval rather than stored as
+  ciphertext; it can still be denied.
+- **Status:** Mitigated (2026-09-12, FND-03).
+
 ### R-MEM-REDACT-SCOPE — redaction removes known shapes, not all sensitive meaning
 - **Category:** Privacy
 - **What could go wrong:** A user stores something genuinely sensitive that does not match

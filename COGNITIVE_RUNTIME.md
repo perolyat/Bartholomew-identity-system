@@ -598,6 +598,13 @@ The consequence that forced this to be written down is **pending consent resolut
 | Deny a pending write | **Refused** — marks the row denied *and clears its payload*, irreversibly |
 | The pending request itself | **Left `pending`**, resolvable once released |
 
+FND-03 (2026-09-12) does not change any row of that table. It changes what the row's payload is
+while it waits: the pending value is the **original, pre-redaction** content and is now always
+encrypted at rest, decrypted only on the authorised review path, and scrubbed once the decision no
+longer needs it — by approval, by denial, or by the user forgetting or revoking the identity.
+Forgetting and revoking were already brake-refused mutations, so the consent cleanup inside them
+inherits the same refusal rather than carving an exception into "inspect, but do not mutate".
+
 Denial is refused despite looking like the "safe" direction. It is not a safe direction: it is
 destructive and irreversible, and a halted system should not be destroying the evidence of what it
 was asked to decide. The brake **defers** the decision; it does not make one.

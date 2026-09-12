@@ -184,6 +184,20 @@ queue into the same inbox** (`pending_sensitive_writes`) rather than dropping co
 Queued content is **not stored**. It waits for an explicit human decision. Nothing is lost, and
 nothing is written without you.
 
+> **Storage contract (FND-03, 2026-09-12).** The queued row holds the **original, pre-redaction**
+> content — that is the point, since you are being asked to review what Bartholomew wants to
+> remember. It is therefore always **encrypted at rest**, whatever rule queued it: `sqlite3`
+> against `pending_sensitive_writes` shows an encryption envelope, not your words. The inbox
+> decrypts for review on the authorised path only. Before FND-03 a `privacy_guard` row — and any
+> `ask_before_store` category with no explicit `encrypt:` — sat there in plaintext.
+>
+> The payload also exists only while your decision is outstanding. **Approve** and **deny** both
+> clear it (approve only after the governed write has actually succeeded), and forgetting or
+> revoking a `(kind, key)` clears every consent copy for that identity and makes any still-pending
+> request unapprovable — so an old request cannot later be approved to resurrect something you
+> asked Bartholomew to forget. Resolved rows keep content-free audit metadata, which is why the
+> `status` query in §5's checklist still works.
+
 **One authority, not two.** If an interactive consent handler *is* registered (the CLI case), that
 handler decides and the item is **not** also queued — pinned by
 `tests/test_memory_store_sensitive_consent.py::test_explicit_decline_is_not_queued`. The web/API
@@ -217,7 +231,8 @@ line naming the pending id and reason. That the endpoint distinguishes *stored* 
 **Approve** / **Deny** buttons. It refreshes every 30 seconds and highlights itself while anything
 needs attention.
 
-**Or over HTTP:**
+**Or over HTTP** (loopback development, where authentication is not enforced — see the auth note
+below):
 
 ```bash
 curl -s http://127.0.0.1:5173/api/consent/pending-writes            # list
@@ -240,6 +255,21 @@ curl -s -X POST http://127.0.0.1:5173/api/consent/pending-writes/<id>/approve
    now exists. Consent granted through the API is honoured by the governed write.
 
 All three were verified live on 2026-08-18 against a fresh database.
+
+### Authentication on the consent endpoints
+
+The bare `curl` commands above work because this walkthrough runs the server **loopback-only**,
+which is the established platform contract for every route in this API bridge, not a
+consent-specific exception. It cannot leak into a deployment: a non-loopback bind forces both
+authentication and TLS on and refuses to start otherwise
+(`bartholomew/platform/exposure.py`).
+
+With authentication enforced, all three consent endpoints — **including the listing**, because
+what it returns is the raw pre-redaction payload — require `Capability.CONSENT_DECIDE` through the
+platform identity boundary. An anonymous call is `401`, an authenticated principal without that
+capability is `403`, and a principal belonging to a different runtime is `403`. Identity comes
+from a verified session only; no `X-User-Id`-style header is read anywhere. Add
+`-H "Authorization: Bearer <token>"` from `/api/auth/login` in that mode.
 
 ### Do not use `chat.py` for this step
 
