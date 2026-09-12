@@ -141,7 +141,12 @@ def test_principal_without_consent_decide_is_refused(client, users, method, path
 
 @pytest.mark.parametrize("method,path,_template", CONSENT_ROUTES)
 def test_authorised_principal_for_another_runtime_is_refused(
-    client, users, monkeypatch, method, path, _template,
+    client,
+    users,
+    monkeypatch,
+    method,
+    path,
+    _template,
 ):
     """23. `other` holds CONSENT_DECIDE, but not over `owner`'s Bartholomew.
     A consent inbox is per-runtime by construction."""

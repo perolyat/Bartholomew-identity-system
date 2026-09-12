@@ -557,7 +557,10 @@ async def test_migration_scrubs_old_resolved_rows(tmp_path) -> None:
     store = MemoryStore(str(tmp_path / "resolved.db"))
     await store.init()
     approved = _legacy_row(
-        store.db_path, key="old_approved", value=PRIVACY_GUARD_CONTENT, status="approved",
+        store.db_path,
+        key="old_approved",
+        value=PRIVACY_GUARD_CONTENT,
+        status="approved",
     )
     denied = _legacy_row(store.db_path, key="old_denied", value=THIRDPARTY_CONTENT, status="denied")
 
