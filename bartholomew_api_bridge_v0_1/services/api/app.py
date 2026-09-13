@@ -61,6 +61,7 @@ from .routes import (
     consent,
     device_actions,
     device_consent,
+    eci,
     governance,
     inbound,
     learning,
@@ -149,6 +150,22 @@ app.include_router(inbound.router)
 # shutdown windows like every other real ingress point.
 app.include_router(actions.router)
 app.include_router(device_actions.router)
+
+# The External Capability Interface (FND-04). The governed boundary through
+# which an external capability endpoint -- an avatar or voice presence, a
+# companion, a browser, a home bridge -- submits observations and requests,
+# receives a governed directive Bartholomew decided to issue, and reports the
+# result back for correlation.
+#
+# A third trust channel, and separable from both above: it is authenticated by
+# its own fail-closed resolver (`bartholomew/eci/endpoint_auth.py`), a
+# different module global from the inbound observation resolver's and from the
+# action channel's. Opening any one of the three does not open the others.
+#
+# Deliberately NOT added to `_ADMISSION_EXEMPT_PATHS`: it writes governed state
+# and needs the runtime, so it must be refused during the startup and shutdown
+# windows like every other real ingress point.
+app.include_router(eci.router)
 
 # The operator console's own routes (W03-E). Registration is W03-F's step by
 # the W03 manifest, and this is it: W03-E built the routes and deliberately
@@ -601,9 +618,10 @@ async def startup():
     # as the one device truth for Packages B and C, and Session A's ingress
     # as the one destination for Package C's events.
     #
-    # It opens nothing on its own: the action channel stays behind its own
-    # environment gate, and a seam that fails to install leaves its package's
-    # fail-closed default in force rather than killing startup.
+    # It opens nothing on its own: the action channel and the External
+    # Capability Interface channel each stay behind their own environment
+    # gate, and a seam that fails to install leaves its package's fail-closed
+    # default in force rather than killing startup.
     import logging as _logging
 
     try:
@@ -613,6 +631,10 @@ async def startup():
         app.state.seam_report = install_seams(
             db_path=resolve_db_path(),
             tenant_id=bound_runtime_user_id(),
+            # The loaded kernel config, so the External Capability Interface
+            # responder reads `voice.spoken_output` from `config/kernel.yaml`
+            # rather than from a second opinion about where enablement lives.
+            runtime_cfg=getattr(_kernel, "cfg", None) if _kernel is not None else None,
         )
     except Exception:
         _logging.getLogger(__name__).exception(

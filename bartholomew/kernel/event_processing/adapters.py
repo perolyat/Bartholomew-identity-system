@@ -58,6 +58,30 @@ OBSERVATION_NOTE = "observation.note"
 #: A verified source reports the state of something.
 OBSERVATION_STATUS = "observation.status"
 
+# -- the External Capability Interface family (FND-04) ----------------------
+#
+# `bartholomew/eci/` captures every exchange on this same canonical ingress
+# rather than opening a second one, so these three names are what a swept row
+# from that boundary carries. They are declared *here* because this module is
+# "the only place the backbone learns a type" -- the ECI imports them from
+# this module, so the dependency points from the consumer to the owner.
+#
+# Observations and requests are handled by `handle_observation`, unchanged and
+# not copied: the seam it calls is domain-blind, drawing text from the
+# payload's string leaves by structure alone, which is exactly as true of an
+# avatar reporting what it heard as of a webhook reporting a delivery.
+
+#: An endpoint reports something that happened where it is.
+ECI_OBSERVATION = "eci.observation"
+
+#: An endpoint reports something the person asked it for. Still an observation
+#: about the person -- an endpoint never states an intent for Bartholomew --
+#: which is why it is interpreted by the same handler rather than a special one.
+ECI_REQUEST = "eci.request"
+
+#: An endpoint reports how a governed directive ended.
+ECI_RESULT = "eci.result"
+
 #: Largest payload object this parser will accept, in JSON characters.
 #: Capture already bounds the request body; this bounds what processing is
 #: willing to walk, independently of how the row got there (a row restored
@@ -310,7 +334,83 @@ OBSERVATION_STATUS_SPEC = register(
 )
 
 
+async def handle_eci_result(
+    ctx: Any,
+    event: CanonicalEvent,
+    payload: ObservationPayload,
+) -> HandlerResult:
+    """An endpoint's report of how a directive ended. Already durable elsewhere.
+
+    `processed`, and deliberately not `irrelevant`. A result *does* bear on
+    something Bartholomew is carrying -- the directive that caused it -- and
+    its durable effect was written synchronously at the boundary, by
+    `bartholomew/eci/store.settle_directive()`, under a conditional UPDATE
+    that settles exactly once. The backbone re-deriving that here would be a
+    second writer racing the first for the same row.
+
+    So this handler asserts the record exists and says so. It writes nothing,
+    interprets nothing, and never attaches a result to an objective: what a
+    result means for Bartholomew's work is a question for whoever reads the
+    directive ledger, not for the sweep that noticed the row.
+    """
+    correlation_id = payload.raw.get("correlation_id")
+    return HandlerResult(
+        disposition=STATE_PROCESSED,
+        reason="correlated_at_the_boundary",
+        detail={
+            "correlation_id": correlation_id if isinstance(correlation_id, str) else None,
+            "recorded_by": "bartholomew.eci.store.settle_directive",
+        },
+    )
+
+
+ECI_OBSERVATION_SPEC = register(
+    RegisteredEventType(
+        event_type=ECI_OBSERVATION,
+        parse=ObservationPayload.parse,
+        handler=handle_observation,
+        description=(
+            "An external capability endpoint reports something that happened where "
+            "it is. Interpreted against open objectives by the same domain-blind "
+            "seam every other observation uses."
+        ),
+    ),
+)
+
+ECI_REQUEST_SPEC = register(
+    RegisteredEventType(
+        event_type=ECI_REQUEST,
+        parse=ObservationPayload.parse,
+        handler=handle_observation,
+        description=(
+            "An external capability endpoint reports what the person asked it for. "
+            "Handled identically to an observation: a request is something observed "
+            "about the person, never an instruction an endpoint may give Bartholomew."
+        ),
+    ),
+)
+
+ECI_RESULT_SPEC = register(
+    RegisteredEventType(
+        event_type=ECI_RESULT,
+        parse=ObservationPayload.parse,
+        handler=handle_eci_result,
+        description=(
+            "An external capability endpoint reports how a governed directive ended. "
+            "Correlated and settled synchronously at the boundary; the backbone "
+            "records that it was seen and writes nothing further."
+        ),
+    ),
+)
+
+
 __all__ = [
+    "ECI_OBSERVATION",
+    "ECI_OBSERVATION_SPEC",
+    "ECI_REQUEST",
+    "ECI_REQUEST_SPEC",
+    "ECI_RESULT",
+    "ECI_RESULT_SPEC",
     "MAX_PAYLOAD_CHARS",
     "MAX_PAYLOAD_DEPTH",
     "OBSERVATION_NOTE",
@@ -320,5 +420,6 @@ __all__ = [
     "BrakeDeferredError",
     "ObservationPayload",
     "TransientProcessingError",
+    "handle_eci_result",
     "handle_observation",
 ]

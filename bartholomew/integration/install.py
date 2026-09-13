@@ -12,9 +12,10 @@ answered by a stand-in that a later line was about to replace.
 
 Nothing here is enabled by a side effect of importing it. `install_seams()`
 is called from application startup, and every part of it that opens a channel
-to the outside world -- specifically the action-channel resolver -- stays
-behind its own explicit environment gate. Installing the seams makes the
-system coherent; it does not make it permissive.
+to the outside world -- the action-channel resolver, and the External
+Capability Interface's endpoint channel -- stays behind its own explicit
+environment gate. Installing the seams makes the system coherent; it does not
+make it permissive.
 """
 
 from __future__ import annotations
@@ -34,6 +35,11 @@ class SeamReport:
     capability_resolver: str = "not installed"
     multimodal_sink: str = "not installed"
     action_resolver: str = "closed"
+    #: FND-04. Two independent facts, kept apart because they fail
+    #: independently: whether the boundary will admit an endpoint at all, and
+    #: whether Bartholomew has a seam able to answer one.
+    eci_endpoint_channel: str = "closed"
+    eci_responder: str = "not installed"
     event_types: tuple[str, ...] = ()
     #: The Wave 3 cross-package adapters (`integration/seams.py`), keyed by
     #: seam name. Reported alongside the wave-two seams so "is this deployment
@@ -47,6 +53,8 @@ class SeamReport:
             "capability_resolver": self.capability_resolver,
             "multimodal_sink": self.multimodal_sink,
             "action_resolver": self.action_resolver,
+            "eci_endpoint_channel": self.eci_endpoint_channel,
+            "eci_responder": self.eci_responder,
             "event_types": list(self.event_types),
             "w03_seams": dict(self.w03_seams),
             "errors": list(self.errors),
@@ -68,6 +76,7 @@ def install_seams(
     db_path: str,
     tenant_id: str | None = None,
     platform_db_path: str | None = None,
+    runtime_cfg: dict[str, Any] | None = None,
 ) -> SeamReport:
     """Put every Session F seam in place. Returns what happened.
 
@@ -76,6 +85,13 @@ def install_seams(
     package default -- which refuses -- stays in force. That is the correct
     outcome for an unbound process: there is no tenant whose devices could be
     resolved, so resolving none is right.
+
+    `runtime_cfg` is the loaded kernel config. It is passed through to the
+    External Capability Interface responder so that `voice.spoken_output` is
+    read from `config/kernel.yaml` rather than from a second opinion about
+    where enablement lives. With none, `spoken_output.enabled_for(None)`
+    returns False and the responder issues nothing -- the right answer for a
+    caller that has no kernel config.
     """
     report = SeamReport()
 
@@ -198,6 +214,49 @@ def install_seams(
         report.errors.append(f"action resolver: {type(e).__name__}: {e}")
         report.action_resolver = "closed (installation failed)"
         logger.exception("Could not install the device action resolver")
+
+    # -- FND-04: the External Capability Interface -------------------------
+    #
+    # Two separate installs, in this order, because they are two separate
+    # decisions and either may be made without the other.
+    #
+    # The responder goes in FIRST. It is what lets Bartholomew *answer* an
+    # exchange, and installing it changes nothing about who may reach the
+    # boundary -- the spoken-output seam it delegates to still runs its own
+    # enablement, brake and policy gates, and with `voice.spoken_output` off
+    # (the default) it produces no directive at all. Installing it before the
+    # channel means there is no window in which an endpoint could be admitted
+    # by a boundary that had no seam able to answer it.
+    #
+    # The endpoint channel goes in second and stays behind its own explicit
+    # environment gate, exactly as the action channel does. Opening a boundary
+    # to external endpoints is a deployment decision, not a consequence of
+    # integrating the system.
+    try:
+        from bartholomew.integration.eci_responder import install_eci_responder
+
+        report.eci_responder = install_eci_responder(
+            db_path=db_path,
+            runtime_cfg=runtime_cfg,
+        )
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"eci responder: {type(e).__name__}: {e}")
+        logger.exception("Could not install the External Capability Interface responder")
+
+    try:
+        from bartholomew.eci import endpoint_auth
+
+        if endpoint_auth.maybe_install_from_env(db_path=platform_db_path):
+            report.eci_endpoint_channel = "open (registry device credentials)"
+        else:
+            report.eci_endpoint_channel = (
+                f"closed (set {endpoint_auth.ENDPOINT_AUTH_ENV} to open the boundary "
+                "to enrolled endpoints)"
+            )
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"eci endpoint channel: {type(e).__name__}: {e}")
+        report.eci_endpoint_channel = "closed (installation failed)"
+        logger.exception("Could not open the External Capability Interface channel")
 
     # -- W03: the Wave 3 cross-package adapters ---------------------------
     #
