@@ -208,6 +208,21 @@ _JSON_OBJECT = re.compile(r"\{.*\}", re.S)
 #: object, find it in no referent list, and let a sentence naming nothing reach
 #: deliberation. `intent.py`'s `_OPEN_VERBS` orders itself for the same reason.
 _REFERENT_VERBS = (
+    # Vague-action verbs. "Take care of it" names a target exactly as precisely
+    # as "open it" does, which is to say not at all, and an earlier cut missed
+    # every one of these because it only knew verbs that name an *operation*.
+    "take care of",
+    "carry on with",
+    "get on with",
+    "deal with",
+    "see to",
+    "sort out",
+    "work on",
+    "handle",
+    "finish",
+    "sort",
+    "fix",
+    # Operation verbs.
     "bring up",
     "pull up",
     "show me",
@@ -233,9 +248,11 @@ _REFERENT_VERB = re.compile(
     r"\b(?:" + "|".join(re.escape(v) for v in _REFERENT_VERBS) + r")\b\s+(?:up\s+)?(.*)$",
 )
 
-#: The separable forms: "bring it up", "pull it up". The object sits *inside*
+#: The separable forms: "bring it up", "sort it out". The object sits *inside*
 #: the verb, so the phrase-form pattern above cannot see it.
-_SEPARABLE_VERB = re.compile(r"\b(?:bring|pull|open)\s+(.+?)\s+up\b")
+_SEPARABLE_VERB = re.compile(
+    r"\b(?:bring|pull|open|sort|figure|work|clear|sift)\s+(.+?)\s+(?:up|out|through)\b",
+)
 
 #: Words that carry no referent and so must not rescue one. Stripped from both
 #: ends before the comparison: "please open it now" names exactly what "open it"
@@ -888,6 +905,18 @@ def names_no_referent(instruction: str) -> bool:
     The guard is deliberately one-directional. Misjudging a real goal as
     referent-less costs a clarifying question; misjudging a referent-less
     sentence as a goal costs a guess about somebody's computer.
+
+    **What this is not.** It is a bounded backstop over the phrasings people
+    actually use, not a referent resolver for English, and it will not catch
+    every way of pointing at nothing. That limit is stated here rather than
+    papered over, because the module's own standard --- "a rule a model is asked
+    to follow is a request and a rule the parser enforces is a property" ---
+    applies to this function too. What bounds the residual is not this list: a
+    deliberated plan still reaches only allowlisted targets, still carries a
+    *deterministic* description of what it will do rather than the model's
+    account of it, and still runs nothing without a human approving that exact
+    action. Growing this list without limit would be the regex-enlarging habit
+    EXEC-01 exists to get away from; each entry here is one somebody reviewed.
     """
     text = re.sub(r"\s+", " ", (instruction or "")).strip().lower()
     text = _strip_filler(text)

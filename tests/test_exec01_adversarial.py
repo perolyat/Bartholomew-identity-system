@@ -376,6 +376,21 @@ class TestAmbiguityBecomesAQuestion:
             "open that thing now",
             "open this file",
             "show me that document",
+            # Vague-action verbs. An independent verifier found these still
+            # reaching deliberation after the first referent fix: the verb list
+            # only knew verbs that name an *operation*, and "take care of it"
+            # names a target exactly as precisely as "open it" does.
+            "take care of it",
+            "sort it out",
+            "deal with that",
+            "handle it",
+            "fix it",
+            "finish it",
+            "see to it",
+            "work on that",
+            "get on with it",
+            "carry on with it",
+            "sort that out",
         ],
     )
     def test_a_vague_referent_is_never_deliberated_into_a_guess(self, instruction):
@@ -412,6 +427,17 @@ class TestAmbiguityBecomesAQuestion:
             "launch wordpad now",
             "open my documents folder",
             "Get a blank note open so I can write in it.",
+            # The same verbs with a real object. Adding them must not swallow
+            # the goals they appear in.
+            "sort out my shopping list",
+            "take care of the shopping list",
+            "work on the quarterly report",
+            "fix the formatting in notepad",
+            "finish the shopping list",
+            "deal with the notepad window",
+            # "it" with its antecedent inside the same sentence: the shopping
+            # list is named right there, so this is a goal, not a bare pointer.
+            "Start a shopping list and then open it.",
         ],
     )
     def test_a_request_that_does_name_something_still_reaches_deliberation(self, instruction):
