@@ -328,6 +328,15 @@ live API/daemon was silently and permanently discarded, with zero record anywher
   matching how every other route already calls `MemoryStore` (no runtime-contract seam involved —
   that's specific to skill execution, per the S1.3 CI lesson).
 - A "🔏 Pending Memory Consent" UI card.
+- **Amended by FND-03 (2026-09-12).** As built, the inbox's privacy contract had three gaps, all
+  reproduced against `cb0458b`: the queued payload was encrypted only when the matched rule
+  happened to carry an `encrypt:` policy (so `privacy_guard` rows were plaintext at rest);
+  `approve` left the original pre-redaction payload in the table while also creating the governed
+  memory; and `forget_memory()`/`revoke_memory()` ignored the inbox entirely, to the point where
+  `forget` → `reinstate` → `approve` recreated forgotten content verbatim. FND-03 makes membership
+  of the inbox itself the encryption policy, scrubs the payload on every resolution path, and
+  migrates historical rows. See `DECISIONS.md`, "Membership of the consent inbox is itself the
+  encryption policy (FND-03)", and `RISKS.md` R-CONSENT-INBOX.
 - Tests: extended `tests/test_memory_store_sensitive_consent.py` (queuing, explicit-decline is
   never queued, `skip_privacy_guard`, approve/deny, unknown/already-resolved ids) and new
   `tests/test_consent_api.py`; existing consent-security suites

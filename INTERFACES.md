@@ -105,6 +105,23 @@ implemented"; a fresh database actually contains 37.)*
   → **fail the write** (`outcome="refused_redaction_unavailable"`), before the consent
   queue, so unredactable content is not parked in the pending inbox either. Storing or
   indexing the content unredacted is never the fallback (FND-02).
+- If a write is queued for a human consent decision, the **original, pre-redaction** payload is
+  parked in `pending_sensitive_writes` and is **always encrypted at rest**, under the inbox's own
+  policy rather than the matched rule's `encrypt:` (FND-03). If that payload cannot be encrypted
+  → **fail the write** (`outcome="refused_consent_inbox_unprotected"`): nothing is stored and
+  nothing is queued. Parking it in plaintext is never the fallback. The payload lives only while
+  the decision is outstanding — approve, deny, `forget_memory()` and `revoke_memory()` all scrub
+  it, leaving content-free audit metadata (identity, reason, privacy class, timestamps,
+  resolution, resolved memory id). A withdrawal clears the payload on every
+  matching row but writes its resolution note only to rows still awaiting a
+  decision, so a request a human already approved or denied keeps its own
+  audit record. `forget_memory()` reports success when it removed either the
+  governed row or a consent payload.
+- Approving a pending write is serialised against a concurrent withdrawal by a
+  compare-and-swap on the payload: if a `forget_memory()`/`revoke_memory()`
+  lands between `upsert_memory()`'s revocation check and its insert, the
+  approval's own write is undone and reported as `refused_revoked` rather than
+  stored (FND-03).
 - If summarization fails → store redacted content and mark summary as missing; never crash the kernel loop.
 
 ---

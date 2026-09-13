@@ -34,15 +34,44 @@ raised by `MemoryStore`, not by these handlers: enforcement belongs at the
 execution boundary so bypassing this API cannot bypass the halt. These
 handlers only translate it into an honest status code.
 
-Auth note: same as every other route in this API bridge -- no
-authentication today; ROADMAP.md's Stage 1 section defers that to a
-separate future project.
+Auth (corrected in FND-03; the previous note here claimed "no
+authentication today" and had been untrue since the platform identity
+boundary landed): these routes are NOT special-cased and carry no
+route-local authentication of their own -- deliberately, because a second
+auth framework beside the authoritative one is how bypasses happen. They
+are protected by `bartholomew.platform.http_identity`, installed as the
+API bridge's request boundary in `app.py`:
+
+- `bartholomew/platform/route_policy.py` classifies all three endpoints
+  (listing included -- reading the inbox is reading the raw pre-redaction
+  payload) as requiring `Capability.CONSENT_DECIDE`;
+- `bartholomew/platform/exposure.py` decides whether authentication is
+  enforced. A non-loopback bind forces both authentication and TLS, and
+  refuses to start otherwise, so the loopback-only development mode below
+  cannot become an exposed deployment;
+- identity comes from a verified session alone -- never a client-supplied
+  header -- and `assert_principal_owns_this_process()` refuses a principal
+  belonging to another runtime/user.
+
+So: under enforced auth an anonymous caller gets 401, an authenticated
+principal without CONSENT_DECIDE gets 403, and a principal from another
+runtime gets refused. Under loopback-only development auth is not
+enforced, which is the established platform contract for every route here,
+not a consent-specific exception.
+
+Storage contract (FND-03): the pending payload is the ORIGINAL,
+pre-redaction content and is always encrypted at rest. It is decrypted
+only here, on the authorised review path, and is scrubbed from the inbox
+once the decision is made -- by approval, by denial, or by the user
+forgetting/revoking the identity. Resolved rows keep content-free audit
+metadata only.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from bartholomew.kernel.memory_store import ConsentInboxProtectionError
 from bartholomew.orchestrator.safety.governance_store import ParkingBrakeEngagedError
 
 router = APIRouter(prefix="/api/consent", tags=["consent"])
@@ -73,6 +102,12 @@ async def approve_pending_write(pending_id: int) -> dict:
         result = await kernel.mem.approve_pending_sensitive_write(pending_id)
     except ParkingBrakeEngagedError as e:
         raise HTTPException(503, str(e)) from e
+    except ConsentInboxProtectionError as e:
+        # FND-03: the stored payload cannot be decrypted with this process's
+        # key, so there is nothing reviewable to approve. The request stays
+        # pending and decidable (denial still clears it); reporting success
+        # here would be a lie, and storing the envelope would be worse.
+        raise HTTPException(409, str(e)) from e
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
 
