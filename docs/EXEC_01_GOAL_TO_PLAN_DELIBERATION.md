@@ -116,8 +116,25 @@ implementation is an adapter over the **existing** `ModelRouter`, which already
 chooses between the local Ollama adapter and the opt-in, budget-capped cloud one.
 
 The executive therefore cannot reach a model on its own. It can only use one a
-caller handed it, and installation is explicit (`install_deliberation_port`)
-rather than automatic on startup.
+caller handed it, and installation is explicit rather than automatic on startup:
+
+```python
+from bartholomew.integration.deliberation_adapter import install_deliberation_port
+
+# `orch` is the identity_interpreter Orchestrator the API already builds;
+# `orch.router` is the ModelRouter it already owns. `kernel` is the ctx the
+# operator route already passes to the executive seam.
+install_deliberation_port(kernel, orch.router)
+```
+
+**Nothing in the shipped code calls this.** That is deliberate, and it matches
+how this repository already gates consequential capability — `voice.spoken_output`
+defaults to false, the ECI sits behind `BARTH_ECI_ENDPOINT_AUTH`. Giving
+Bartholomew the ability to reason his way to a course of action on somebody's
+computer is an operator's decision, not a side effect of a provider being
+reachable. Until someone makes it, `POST /api/operator/tasks` passes a `kernel`
+with no `deliberation_port`, `getattr` returns `None`, and the executive reads
+instructions literally exactly as it did before EXEC-01.
 
 ### Edits to existing files
 
