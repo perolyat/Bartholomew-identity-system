@@ -133,11 +133,24 @@ class _ExplodingPort:
         raise RuntimeError("the provider is unreachable")
 
 
-class _ForbiddenPort:
-    """A port that fails the test if it is consulted at all."""
+class _RecordingPort:
+    """A port that records every consultation, so absence can be asserted.
+
+    Deliberately **not** a port that raises. `deliberate_task` catches every
+    exception from a port on purpose --- a cognition layer that could make the
+    executive fail open would be worse than none --- so an `AssertionError`
+    raised in here is swallowed and the test that depended on it could not fail.
+    That was a real hole in this file, found by mutation testing: deleting the
+    `if literal.actionable` shortcut left the suite green.
+    """
+
+    def __init__(self, payload="{}"):
+        self.payload = payload
+        self.prompts: list[str] = []
 
     def deliberate(self, prompt: str) -> str:
-        raise AssertionError("a model must not be consulted for this instruction")
+        self.prompts.append(prompt)
+        return self.payload
 
 
 def _answer(steps, **overrides):
@@ -276,11 +289,55 @@ class TestTheRepairedGoalToPlanPath:
         assert CapabilityKind.FOCUS_WINDOW.value not in [s.capability for s in literal.steps]
 
     def test_every_step_carries_the_parameters_the_real_validator_produced(self):
-        """Not the model's raw parameters: the canonical, governed shape."""
-        port = _Port(_answer(SHOPPING_LIST_STEPS))
+        """Not the model's raw parameters: the canonical, governed shape.
+
+        Asserted on a value the validator actually **rewrites**. An earlier cut
+        of this test used `app_id="notepad"`, which is identical before and
+        after canonicalisation, so it passed just as happily against a mutant
+        that kept the model's raw dict --- the property was asserted by the test
+        name and by nothing else.
+
+        A URL is discriminating: the validator lower-cases the host and leaves
+        the path alone, so `https://EXAMPLE.com/Lists` becomes
+        `https://example.com/Lists`. The envelope fingerprints and approves this
+        shape, so it is the shape that must reach the step.
+        """
+        port = _Port(
+            _answer(
+                [
+                    {
+                        "capability": "windows.open_url",
+                        "parameters": {"url": "https://EXAMPLE.com/Lists"},
+                    },
+                ],
+            ),
+        )
         intent = deliberate_task("Start a shopping list for me.", device=_device(), port=port)
-        launch = next(s for s in intent.steps if s.capability == CapabilityKind.LAUNCH_APP.value)
-        assert launch.parameters == {"app_id": "notepad"}
+        assert intent.actionable
+        assert intent.steps[0].parameters == {"url": "https://example.com/Lists"}
+
+    def test_the_canonical_parameters_are_what_the_envelope_would_fingerprint(self):
+        """The reason the previous test matters, made explicit."""
+        from bartholomew.actuation.parameters import validate
+
+        port = _Port(
+            _answer(
+                [
+                    {
+                        "capability": "windows.open_url",
+                        "parameters": {"url": "https://EXAMPLE.com/Lists"},
+                    },
+                ],
+            ),
+        )
+        intent = deliberate_task("Start a shopping list for me.", device=_device(), port=port)
+        step = intent.steps[0]
+        revalidated = validate(
+            CapabilityKind(step.capability),
+            step.parameters,
+            _device().validation_context(),
+        )
+        assert revalidated.canonical == step.parameters, "the step must already be canonical"
 
     def test_the_reasoning_is_recorded_as_provenance(self):
         """Acceptance requirement 14: a reviewer can see that cognition happened."""
@@ -304,19 +361,28 @@ class TestTheRepairedGoalToPlanPath:
         assert any("deliberated" in note for note in intent.notes)
 
     def test_an_explicit_instruction_never_consults_a_model(self):
-        """The strongest compatibility property, asserted rather than asserted about.
+        """The strongest compatibility property, and it must be able to fail.
 
-        `_ForbiddenPort` raises if it is called at all. An instruction the
-        recogniser can read is answered by the recogniser, so deliberation can
-        only ever turn a refusal into a proposal --- never one proposal into a
-        different one.
+        The port here would happily return a different plan; the assertion is
+        that it is never asked. An instruction the recogniser can read is
+        answered by the recogniser, so deliberation can only ever turn a refusal
+        into a proposal --- never one proposal into a different one.
         """
-        intent = deliberate_task(EXPLICIT_REQUEST, device=_device(), port=_ForbiddenPort())
+        port = _RecordingPort(_answer(SHOPPING_LIST_STEPS))
+        intent = deliberate_task(EXPLICIT_REQUEST, device=_device(), port=port)
+
+        assert port.prompts == [], "the model was consulted for an instruction that did not need it"
         assert intent.actionable
         assert [s.capability for s in intent.steps] == [
             CapabilityKind.LAUNCH_APP.value,
             CapabilityKind.TYPE_TEXT.value,
         ]
+
+    def test_a_partly_recognised_instruction_never_consults_a_model_either(self):
+        """The same guarantee for the half-dictated case. See the adversarial suite."""
+        port = _RecordingPort(_answer(SHOPPING_LIST_STEPS))
+        deliberate_task("Open notepad and then open it.", device=_device(), port=port)
+        assert port.prompts == []
 
     def test_with_no_port_configured_behaviour_is_exactly_todays(self):
         """A deployment that configures no model keeps the pre-EXEC-01 executive."""
@@ -413,8 +479,51 @@ class TestThePromptBoundary:
         assert ".exe" not in prompt
 
     def test_a_long_instruction_is_bounded(self):
-        prompt = build_prompt("x" * 50_000, catalogue=build_catalogue(_device()))
-        assert len(prompt) < 30_000
+        """Pinned to the bound itself, not to a number comfortably above it.
+
+        Two things were wrong before. The threshold was about three times the
+        real prompt size, so raising `MAX_INSTRUCTION_CHARS` fivefold left the
+        suite green. And the obvious repair --- comparing against the imported
+        constant --- is a tautology: a test that reads the value it is pinning
+        moves whenever that value moves. The expectation is therefore a literal.
+        """
+        from bartholomew.executive.deliberation import MAX_INSTRUCTION_CHARS
+
+        marker = "Z" * 50_000
+        prompt = build_prompt(marker, catalogue=build_catalogue(_device()))
+        # Count the marker specifically: the catalogue text contains ordinary
+        # letters (example.com has an "x" in it), so a generic character count
+        # measures the wrong thing.
+        assert prompt.count("Z") == 4000
+        assert MAX_INSTRUCTION_CHARS == 4000, "the bound moved; change this test deliberately"
+        assert marker not in prompt
+
+    def test_an_enormous_model_answer_is_bounded_before_parsing(self):
+        """`MAX_COGNITION_RESPONSE_CHARS` is a real bound, not a documented one.
+
+        A text field reachable from a request feeds this, so unbounded work on
+        unbounded output is a denial-of-service surface. Nothing tested it.
+
+        The filler length is a literal rather than `MAX + n`, for the same
+        reason the instruction bound above is: sizing the input from the
+        constant means raising the constant raises the input too, and the test
+        never notices.
+        """
+        from bartholomew.executive.deliberation import MAX_COGNITION_RESPONSE_CHARS
+
+        assert (
+            MAX_COGNITION_RESPONSE_CHARS == 20000
+        ), "the bound moved; change this test deliberately"
+
+        # The object sits beyond the bound, so it survives only if the
+        # truncation did not happen. Non-whitespace filler on purpose:
+        # `parse_deliberation` strips before it truncates, so blank padding
+        # would test nothing.
+        filler = "z" * 25_000
+        assert parse_deliberation(filler + _answer(SHOPPING_LIST_STEPS)) is None
+
+        # Non-vacuity: the same object inside the bound parses perfectly well.
+        assert parse_deliberation(_answer(SHOPPING_LIST_STEPS)) is not None
 
 
 # ---------------------------------------------------------------------------

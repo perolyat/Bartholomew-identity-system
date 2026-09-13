@@ -1028,3 +1028,86 @@ class TestTheAuditRowCarriesNoParameterValues:
         record = DeliberationRecord()
         _plan(_answer([LAUNCH]), record=record)
         json.dumps(record.as_dict())
+
+
+class TestAnEmptyReadingIsAQuestionNotASilentNothing:
+    """Regression from mutation testing: this branch had zero coverage.
+
+    A model that answers with `steps: []` and no `clarification` and no
+    `refusal` has said nothing at all. If that fell through, `deliberate_task`
+    would return an intent with no steps, no ambiguities and no refusals --- and
+    the seam branches on exactly those: `if intent.ambiguities or
+    intent.unsupported` would be false, so it would skip the clarification path
+    and go on to propose a plan with nothing in it. The person would be told
+    nothing and asked nothing.
+
+    Removing the branch left the whole suite green, which is the definition of
+    the gap. These tests close it.
+    """
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            _answer([]),
+            json.dumps({"objective": "o", "steps": []}),
+            json.dumps({"steps": []}),
+            json.dumps({}),
+        ],
+    )
+    def test_an_answer_with_no_steps_becomes_a_question(self, payload):
+        intent = _plan(payload)
+        assert intent.steps == ()
+        assert intent.ambiguities, "an empty reading must ask, not fall through silently"
+        assert not intent.actionable
+
+    async def test_the_seam_raises_a_clarification_rather_than_an_empty_plan(self, tmp_path):
+        """The consequence at the seam, on real stores: a question, not a no-op."""
+
+        from bartholomew.actuation import store as action_store
+        from bartholomew.executive import store as executive_store
+        from bartholomew.executive.seam import (
+            OUTCOME_CLARIFICATION,
+            run_executive_task_through_runtime_contract,
+        )
+        from bartholomew.kernel.memory_store import MemoryStore
+        from bartholomew.orchestrator.safety import governance_store as gs
+
+        path = str(tmp_path / "empty.db")
+        await MemoryStore(path).init()
+        gs.ensure_schema(path)
+        action_store.ensure_schema(path)
+        executive_store.ensure_schema(path)
+
+        class _Ctx:
+            def __init__(self):
+                self.mem = MemoryStore(path)
+                self.db_path = path
+                self.identity_context = None
+                self.governance_store = None
+                self.blocking_executor = None
+                self.awaiting_response_store = None
+                self.deliberation_port = _Port(_answer([]))
+
+        class _Registry:
+            LABEL = "exec01-empty"
+
+            def lookup(self, *, tenant_id, device_id):
+                return _device() if device_id == "desk-pc" else None
+
+        registry = _Registry()
+        devices.install_registry(registry)
+        try:
+            result = await run_executive_task_through_runtime_contract(
+                _Ctx(),
+                tenant_id="tenant-a",
+                device_id="desk-pc",
+                requested_by="taylor",
+                instruction=GOAL,
+                registry=registry,
+            )
+        finally:
+            devices.install_registry(None)
+
+        assert result.outcome == OUTCOME_CLARIFICATION
+        assert result.proposed_action_ids == []
+        assert result.plan.clarification
