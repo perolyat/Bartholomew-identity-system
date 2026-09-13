@@ -76,6 +76,19 @@ class Capability(str, Enum):
     # multimodal surface, because seeing what is being observed and deciding
     # to observe are different powers.
     MULTIMODAL_SESSION_START = "multimodal:session_start"
+    # The External Capability Interface (FND-04). Two capabilities, not one,
+    # on the same reasoning as INBOUND_SUBMIT/INBOUND_READ: submitting an
+    # exchange across the boundary and reading back what Bartholomew has
+    # directed are different powers, and an endpoint that may speak should not
+    # thereby be able to read the directive history.
+    #
+    # Neither is Governance, and neither is a capability in the *endpoint*
+    # sense. Holding ECI_EXCHANGE means the request is allowed to reach the
+    # boundary; whether an exchange is then recorded is still the Parking
+    # Brake's and the Identity policy's decision, and whether a directive is
+    # issued is still the deciding Bartholomew seam's.
+    ECI_EXCHANGE = "eci:exchange"
+    ECI_READ = "eci:read"
 
     # Learning and Memory Control Centre (Package D). Five capabilities, not
     # one, and the split follows the architecture rather than the screen: the
@@ -134,6 +147,12 @@ _USER_CAPABILITIES = frozenset(
         # -- so holding these is permission to ask, not permission to proceed.
         Capability.ACTION_ARM,
         Capability.MULTIMODAL_SESSION_START,
+        # A person may let their own endpoints reach their own Bartholomew.
+        # Holding these is permission to ask: the boundary still authenticates
+        # the endpoint separately, the brake still halts it, and a declared
+        # capability still confers no authority to decide when it is used.
+        Capability.ECI_EXCHANGE,
+        Capability.ECI_READ,
         Capability.LEARNING_READ,
         Capability.LEARNING_REVIEW,
         # A person holds this over their own Bartholomew: reviewing what it

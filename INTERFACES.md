@@ -2,11 +2,16 @@
 
 > Contracts between core modules. If a contract changes, update this doc and add/adjust tests.
 >
-> **Last updated:** 2026-08-17 (§6's security stance sharpened with the verified fact that the
+> **Last updated:** 2026-09-13 (the External Capability Interface is implemented as a core
+> boundary — a new section below, and the two "Proposed contracts" entries it partially discharges
+> narrowed in place to say exactly what now exists and what still does not. No capability broker,
+> provider registry, selection or routing exists or is authorised.)
+>
+> **Previously (2026-08-17):** §6's security stance sharpened with the verified fact that the
 > Parking Brake engage/disengage endpoints answer 200 unauthenticated, and repointed to the
 > superseding server-centric deployment decision; a device-capability declaration shape added to
 > §6's "Proposed contracts" subsection — **not implemented, not approved for implementation**, and
-> no device agent or capability protocol exists.)
+> no device agent or capability protocol exists.
 >
 > **Previously (2026-07-28):** documentation reconciliation pass 2: §6's security stance updated
 > for the hybrid local-first deployment decision; a new "Proposed contracts" subsection added
@@ -311,11 +316,17 @@ Listing them here does not authorise building them.
   Stage 6 design scope.
 - **`awaiting_response` queue.** Per `COGNITIVE_RUNTIME.md`'s `awaiting_response` obligation-state
   section: list/resolve open obligations, minimum viable version scoped to Stage 1.
-- **Device-capability declaration (added 2026-08-17).** Per `DECISIONS.md`'s "Deployment
-  architecture — server-centric Bartholomew with local/edge capability agents". **Nothing of this
-  exists**: there is no device agent, no capability protocol, no transport, and no authentication to
-  carry one. Recorded so a future, separately-approved implementation has one agreed shape rather
-  than three invented ones. Required properties, not a schema:
+- **Device-capability declaration (added 2026-08-17; largely implemented 2026-09-13 — see
+  "External Capability Interface" below).** Per `DECISIONS.md`'s "Deployment architecture —
+  server-centric Bartholomew with local/edge capability agents". **Corrected 2026-09-13:** this
+  entry read "Nothing of this exists: there is no device agent, no capability protocol, no
+  transport, and no authentication to carry one." That is no longer true of any of the four. Device
+  enrolment, per-device identity, capability declaration, rotation and revocation landed with
+  Package E (`bartholomew/platform/devices.py`); FND-04 added the capability protocol and one
+  transport (`bartholomew/eci/`, `POST /api/eci/exchanges`). The four required properties below are
+  now implemented, the fourth partially — see the implemented section for exactly which. What still
+  does not exist is a *device agent*: the endpoint proven against this boundary is a reference
+  client, not a shipped companion. The properties, which remain the contract:
   - **Declared, not assumed.** An agent states which capabilities it offers (files, applications,
     notifications, sensors, camera/microphone, screen/context, peripherals, local-network
     resources). The platform must never infer a capability from the device's *kind* — Windows,
@@ -336,12 +347,15 @@ Listing them here does not authorise building them.
     the authentication design that `DECISIONS.md` gates behind a reviewed threat model. This bullet
     does not pre-empt that design; it only records that the capability contract cannot be built
     before it.
-- **External capability provider boundary (added 2026-08-27).** Per `DECISIONS.md`'s "Bartholomew
-  is the persistent executive above an ecosystem of external intelligence and capability providers"
-  and `CONSTITUTION.md`'s "Bartholomew employs an ecosystem; it does not become it". **Nothing of
-  this exists** beyond the model adapters already behind `ModelRouter`: there is no capability
-  broker, no provider registry, no selection or routing mechanism, and none is authorised. Recorded
-  only so a future, separately-approved integration has one agreed shape. The required properties
+- **External capability provider boundary (added 2026-08-27; the boundary implemented 2026-09-13,
+  the broker still not).** Per `DECISIONS.md`'s "Bartholomew is the persistent executive above an
+  ecosystem of external intelligence and capability providers" and `CONSTITUTION.md`'s "Bartholomew
+  employs an ecosystem; it does not become it". **Corrected 2026-09-13:** this entry read "Nothing
+  of this exists beyond the model adapters already behind `ModelRouter`". The *boundary* now exists
+  — see "External Capability Interface" below — and the first of the three supplier-specific
+  properties is what it is built on. **Still true, and still unauthorised:** there is no capability
+  broker, no provider registry, no selection or routing mechanism, and no provider-performance
+  learning. `CONSTITUTION.md` authorises none of those and none is present. The required properties
   are **the same four already stated for device capabilities above** — declared rather than assumed;
   availability reported distinctly from declaration; every invocation passing the same Governance
   checkpoints and haltable by the Parking Brake; consent per-capability and revocable — plus three
@@ -597,3 +611,183 @@ See `tests/test_device_registry_trust.py`, `tests/test_device_inbound_identity.p
 `tests/test_trusted_groups_isolation.py`, `tests/test_trusted_share_sanitization.py`,
 `tests/test_share_adoption_governance.py`, and
 `docs/E_DEVICE_TRUST_AND_TRUSTED_GROUPS.md`.
+
+---
+
+## External Capability Interface — implemented 2026-09-13 (FND-04)
+
+Bartholomew is the executive. Everything outside it — an avatar or voice presence, a Windows or
+phone companion, a browser, a home-automation bridge, a camera, a speaker, a specialist tool — is a
+**capability endpoint**, and the **External Capability Interface** (ECI) is the governed boundary
+between them. That is the architectural term and it does not change when a transport does.
+
+```
+endpoint --> observation / request / context --> ECI --> Bartholomew
+(identity + memory + executive reasoning + governance)
+--> governed directive --> ECI --> endpoint executes
+--> result --> ECI --> Bartholomew correlates and continues
+```
+
+**Capability is not authority.** An endpoint advertising `multimodal.spoken_output` has said *"I am
+able to perform this operation"*. It has not said, and has no field in which to say, *"I may decide
+when this operation happens"*. The first is the endpoint's to state; the second is Bartholomew's
+executive and Governance, and nothing in this boundary converts one into the other.
+
+**Inbound content is data, never authority.** A payload is carried, digested and never branched on.
+An external page, tool response, device reading or person's words are material Bartholomew may
+reason *about*; there is no path from payload content to a governance decision, an identity, a
+capability grant or a directive's parameters.
+
+### Core contract — `bartholomew/eci/contract.py`
+
+Transport-independent value objects. No decisions, no I/O, no store. A WebSocket, local-IPC or
+queue adapter added later carries these same values without this module changing.
+
+**Fields:**
+- `EndpointIdentity` — `endpoint_id`, `user_id`, `verified_by`, `endpoint_kind`. Every one
+  established by the platform from the verified credential; **none is read from a submission**, and
+  there is no anonymous or provisional value, so "we could not tell which endpoint this is" is
+  unrepresentable rather than a permissive default.
+- `InboundExchange` — `endpoint`, `exchange_id`, `kind` (`observation` | `request` | `result`),
+  `payload`, `occurred_at`, `correlation_id` and `status` (results only), `contract_version`.
+- `GovernedDirective` — `directive_id`, `correlation_id`, `endpoint_id`, `capability`,
+  `parameters`, `issued_at`, `expires_at`, `issued_by`. Expiring, bound to one endpoint, typed
+  parameters; there is no `command`, `script`, `shell` or free-form field.
+- `ExchangeReceipt` — `outcome`, `exchange_id`, `detail`, `reason`, optional `directive`,
+  `provenance_degraded` / `provenance_error`.
+- `ExchangeOutcome` — `accepted`, `duplicate`, `refused_identity`, `refused_malformed`,
+  `refused_capability`, `refused_governance`, `refused_brake`, `uncorrelated`, `expired`,
+  `already_settled`, `unavailable`. Deliberately wide: an endpoint that cannot tell a halt from a
+  malformed message from an unauthorised capability will retry the wrong one.
+- `DirectiveStatus` — `succeeded` | `failed` | `unknown`. **`unknown` is never folded into
+  `failed`**; `bartholomew/actuation/recovery.py` remains this repository's authority on what
+  follows a failed or unknown outcome, and nothing here contradicts it.
+
+`ECI_CONTRACT_VERSION = 1`. An unknown revision is refused, never downgraded.
+
+### Capability standing — `bartholomew/eci/capabilities.py`
+
+Three separate facts, all of which must hold before a directive may name a capability:
+
+1. **This deployment understands it** — `platform/device_capabilities.supports()`, the frozen
+   vocabulary. FND-04 added no capability kind and widened no vocabulary.
+2. **The endpoint declared it and the operator admitted it** —
+   `platform.devices.VerifiedDevice.authorizes()`, which already composes the manifest claim and
+   the approval ceiling. Not re-implemented here.
+3. **The endpoint says it can serve it right now** — the fact nothing in the repository held
+   before, and the one this module adds. *This is the "availability is distinct from declaration"
+   property §6 required.*
+
+`CapabilityStanding` — `available` (the only directable one), `unsupported`, `undeclared`,
+`unauthorised`, `unreported`, `unavailable`. Silence is `unreported` and is **not** directable: a
+directive issued on a declaration alone would claim exactly the readiness `cloud_llm.readiness()`
+exists to stop us claiming. A report goes stale after `AVAILABILITY_TTL_SECONDS` (300) and reads as
+`unreported` again — the honest handling of an endpoint that has gone away without a heartbeat
+protocol.
+
+### The admission order — `bartholomew/eci/boundary.py`
+
+Every submission passes these in order. Each is an authority already in use elsewhere, or a check
+this boundary owns:
+
+| # | check | authority |
+|---|-------|-----------|
+| 1 | authenticated principal | the platform boundary, before this is reached |
+| 2 | verified endpoint identity | `platform.devices.verify_device_credential` |
+| 3 | runtime binding | the platform's, never the endpoint's claim |
+| 4 | contract + envelope shape | `contract.InboundExchange` |
+| 5 | Parking Brake, both tiers | `governance_store`, fail-closed, **inside (7)** |
+| 6 | event-backbone backpressure | ditto |
+| 7 | Identity policy + durable capture + provenance | `runtime_contract.run_inbound_through_runtime_contract()` |
+| 8 | correlation (results only) | `eci/store.settle_directive()`, exactly-once |
+| 9 | capability standing | `capabilities.resolve_standing()` |
+| 10 | the Bartholomew responder | a registered Bartholomew-owned seam, which runs its **own** governance |
+
+Steps 5–7 are **one existing call**, not a re-implementation. There is no brake in this package, no
+second consent gate, no second audit store and no second identity.
+
+**The brake gates on *engaged at all*, not on a scope.** Any engaged scope closes the boundary,
+matching the inbound and memory-mutation gates, because an exchange belongs to no subsystem scope.
+Nothing is recorded while it is engaged, so the sender's own retry is the recovery.
+
+**The responder seam is empty by default.** `install_responder()` is called from
+`bartholomew/integration/install.py`; with none installed an exchange is captured and the endpoint
+is told so, and no directive is ever produced. A responder is handed a `DirectiveIssuer` that
+refuses to mint a directive for a capability the endpoint has not declared, is not authorised for,
+or has not reported itself able to serve — so "may this be asked of this endpoint" is answered by
+the platform's registration state, not by the component that wants the answer to be yes. **One
+exchange carries at most one directive.**
+
+### Durable state — `bartholomew/eci/store.py`
+
+Two tables, both `CREATE TABLE IF NOT EXISTS` (additive; an existing database gains two and loses
+nothing):
+
+- `eci_directives` — the correlation ledger. Settlement is a single conditional
+  `UPDATE ... WHERE state = 'issued'`, so a replay settles nothing and is reported as already
+  settled. A result naming a directive issued to a **different** endpoint is refused outright as a
+  cross-endpoint write attempt; an uncorrelatable result is never attached to a plausible
+  directive; a late result is recorded as `timed_out` rather than as what was reported.
+  `expire_overdue_directives()` settles abandoned rows as `timed_out` and **creates no retry** — a
+  fresh attempt is a new directive decided by a Bartholomew seam, never manufactured by a sweep.
+- `eci_availability` — the endpoint's last statement per capability. Last write wins.
+
+The exchange itself is **not** stored here: it is captured in `inbound_events` by the same governed
+path `/api/inbound/events` uses, so there is no second event table, no second idempotency key and
+no second provenance record.
+
+### HTTP transport — `bartholomew_api_bridge_v0_1/services/api/routes/eci.py`
+
+The first and only transport, chosen because every external surface this repository has is already
+a route on this app and therefore already carries the control plane, route policy, admission
+middleware and exposure guard. A second transport would need its own answer to all four before it
+carried a byte.
+
+| Route | Capability |
+|-------|-----------|
+| `POST /api/eci/exchanges` | `eci:exchange` |
+| `POST /api/eci/availability` | `eci:exchange` |
+| `GET /api/eci/endpoint` | `eci:read` |
+| `GET /api/eci/directives` | `eci:read` |
+
+**Status codes:** 202 recorded (may carry one directive) · 200 duplicate exchange · 401 endpoint not
+verified or boundary closed · 403 Governance refused · 409 capability standing did not admit a
+directive, or a result could not be correlated / was already settled · 413 too large · 422
+malformed · 503 brake engaged, backlog full, or persistence unavailable.
+
+**Wiring:** the endpoint channel has its own fail-closed resolver
+(`bartholomew/eci/endpoint_auth.py`) behind `BARTH_ECI_ENDPOINT_AUTH`, a different module global
+from `inbound_auth`'s and `device_action_auth`'s. **Opening any one of the three does not open the
+others.** `install_seams()` installs the responder and reports both facts on the health surface as
+`eci_responder` and `eci_endpoint_channel`.
+
+### Relationship to the governed Windows action channel
+
+`bartholomew/actuation/` is unchanged and is **not** superseded. It keeps its own envelope, its
+eleven-point admission, its human-bound approvals, its lease and its closed nine-kind Windows
+vocabulary, and it remains the only path by which a Windows action reaches a machine. It is best
+read as a **specialisation** of this boundary's pattern for the one family of capabilities whose
+risk demands per-action human approval. The ECI is the general boundary for capabilities whose
+governance is owned by the Bartholomew seam that issues them. Expressing the action channel as an
+ECI transport is possible later; nothing in FND-04 requires or does it.
+
+### Event types
+
+`eci.observation`, `eci.request`, `eci.result`, registered in the one backbone registry
+(`kernel/event_processing/adapters.py`) because the ECI captures on the canonical ingress rather
+than opening a second one. Observations and requests reuse the existing domain-blind observation
+handler unchanged — a request is an observation *about the person*, never an instruction an
+endpoint may give Bartholomew. A result is recorded as correlated at the boundary; the backbone
+writes nothing further, because the settlement already happened there under a conditional UPDATE.
+
+### Not implemented, and not authorised
+
+No capability broker, provider registry, selection, routing or provider-performance learning. No
+second transport. No AIRI, companion, browser, phone, home-automation or computer-control
+integration — those are expected to *use* this boundary rather than each becoming an independent
+assistant architecture, which is the whole point of having one. The endpoint proven against it is
+`bartholomew/eci/reference_endpoint.py`, a deliberately minimal client with no intent model, no
+planner and no memory.
+
+See `tests/test_fnd04_eci_boundary.py`, `tests/test_fnd04_eci_vertical_slice.py`, and
+`docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md`.

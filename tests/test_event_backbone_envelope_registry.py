@@ -168,6 +168,12 @@ def test_the_registered_types_are_the_declared_ones():
     integration module is imported explicitly so the expected set does not
     depend on whether some earlier test in the session happened to import it.
 
+    FND-04 added the External Capability Interface's three types to this same
+    registry for the same reason: the ECI captures every exchange on the one
+    canonical ingress rather than opening a second one, so its rows are swept
+    like any other and must be processable rather than perpetually refused as
+    an unknown type.
+
     A new event type appearing here without being added to this list is what
     this test is for: registration is how something becomes processable, and
     it should not be possible to do quietly.
@@ -181,6 +187,12 @@ def test_the_registered_types_are_the_declared_ones():
         EVENT_TYPE_TRANSCRIPT,
     )
 
+    from bartholomew.kernel.event_processing.adapters import (
+        ECI_OBSERVATION,
+        ECI_REQUEST,
+        ECI_RESULT,
+    )
+
     assert set(registry.registered_types()) == {
         OBSERVATION_NOTE,
         OBSERVATION_STATUS,
@@ -189,6 +201,9 @@ def test_the_registered_types_are_the_declared_ones():
         EVENT_TYPE_ACCESSIBILITY,
         EVENT_TYPE_SPEECH,
         EVENT_TYPE_SESSION_STATE,
+        ECI_OBSERVATION,
+        ECI_REQUEST,
+        ECI_RESULT,
     }
     for spec in registry.describe_registry():
         assert spec["description"]

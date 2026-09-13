@@ -61,6 +61,16 @@ _MEMORY = Capability.MEMORY_READ
 _MEMW = Capability.MEMORY_WRITE
 
 ROUTE_CAPABILITIES: dict[tuple[str, str], Capability] = {
+    # --- External Capability Interface (FND-04) ---------------------------
+    # Submitting an exchange and reading back what was directed are separate
+    # powers. Neither exempts the caller from anything: the boundary verifies
+    # the endpoint's own credential independently of the account session, and
+    # the Parking Brake, the Identity policy and the capability standing all
+    # still decide after this table has admitted the request.
+    ("POST", "/api/eci/exchanges"): Capability.ECI_EXCHANGE,
+    ("POST", "/api/eci/availability"): Capability.ECI_EXCHANGE,
+    ("GET", "/api/eci/endpoint"): Capability.ECI_READ,
+    ("GET", "/api/eci/directives"): Capability.ECI_READ,
     # --- authentication ------------------------------------------------
     # Logout requires a session: it is an action on a specific session, and
     # an unauthenticated logout endpoint is a way to revoke other people's.

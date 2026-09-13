@@ -3113,3 +3113,94 @@
     refused while braked. Forget and revoke were already brake-refused mutations, and the consent
     cleanup runs inside them, so it inherits that refusal rather than carving an exception.
 - **Date:** 2026-09-12
+
+## Decision: External systems reach Bartholomew through one governed capability boundary, and capability advertisement confers no authority (FND-04)
+
+- **Decision:** External systems — an avatar or voice presence, a Windows or phone companion, a
+  browser, a home-automation bridge, a camera, a speaker, a specialist tool — are **capability
+  endpoints**, and they reach Bartholomew through one named architectural boundary: the **External
+  Capability Interface** (ECI), `bartholomew/eci/`. An endpoint may identify itself, advertise what
+  it can do, say whether it can currently do it, submit observations and user-originated requests,
+  receive a governed directive Bartholomew decided to issue, and report the result for correlation.
+  It may not determine overall user intent, executive priorities or system-wide behaviour.
+  **Capability and authority are separate:** advertising `multimodal.spoken_output` says "I am able
+  to perform this operation", never "I may decide when this operation happens". The boundary is
+  transport-independent (`eci/contract.py`) with HTTP as its first and only transport
+  (`routes/eci.py`); the architectural term does not change when a transport does.
+- **Alternatives:**
+  - *Let each integration build its own assistant architecture (an AIRI bridge, a Windows
+    companion brain, a phone agent).* Rejected: that is the failure mode this repository's
+    executive-authority invariant exists to prevent. Each would accumulate its own intent model,
+    and Bartholomew would become one voice among several rather than the executive above them.
+  - *Extend the existing inbound-capture surface to answer.* Rejected on its own terms:
+    `/api/inbound/events` is deliberately capture-only, and its 202 means "recorded, explicitly not
+    processed". Making it answer would have destroyed the honesty of that acknowledgement, which
+    `docs/D_ALWAYS_ON_AND_INBOUND.md` §5 is emphatic about. The ECI reuses that path for capture
+    and adds the response half beside it rather than inside it.
+  - *Generalise the governed Windows action channel (`bartholomew/actuation/`) into the boundary.*
+    Rejected for this work package: that channel carries per-action human approvals, a lease, an
+    eleven-point admission and a closed nine-kind Windows vocabulary, all of which exist because
+    of what those actions can do. Collapsing it into a general boundary would either weaken it or
+    impose approvals on capabilities that do not need them. It stays as it is, and is described as
+    a specialisation of this pattern rather than a competitor to it.
+  - *Build a capability broker with provider selection and routing.* Rejected, and explicitly not
+    authorised: `CONSTITUTION.md`'s "Bartholomew employs an ecosystem; it does not become it"
+    authorises no broker, no provider registry, no selection or routing logic. None is present.
+  - *Let the boundary compose Bartholomew's answer.* Rejected: it would make the ECI an executive.
+    The boundary holds an empty responder seam; the answer is produced by a Bartholomew-owned seam
+    installed at startup (`integration/eci_responder.py`), which runs its own governance first.
+  - *Trust a declared capability as permission to use it.* Rejected: declaring is not authorising
+    is already the platform's rule (`platform/device_capabilities.py`), and FND-04 adds the third
+    fact `INTERFACES.md` required and nothing had — **availability is distinct from declaration**.
+  - *Open the boundary whenever a device is enrolled.* Rejected: it stays behind its own
+    environment gate (`BARTH_ECI_ENDPOINT_AUTH`) and its own fail-closed resolver, like the action
+    channel. Integrating the system must not make it permissive.
+- **Why:** The recent foundational work (FND-01 to FND-03) hardened identity, memory redaction and
+  the consent inbox. What it did not produce was a stable place for real-world loops to attach. The
+  repository had five product-specific external seams — inbound capture, the event backbone, the
+  device action channel, the platform device registry and the observation companion — every one of
+  them real and none of them a *named boundary*. `INTERFACES.md` had already recorded the agreed
+  shape twice ("Device-capability declaration", 2026-08-17; "External capability provider
+  boundary", 2026-08-27), both marked **"Nothing of this exists"**. FND-04 builds the core of that
+  agreed shape and narrows those entries to what is now true. The alternative to having one
+  boundary is not "no boundary": it is one per product, each an assistant architecture in its own
+  right, discovered too late.
+- **Consequences:**
+  - **No new authority anywhere.** Authentication is the platform's `Principal` plus the registry's
+    device credential; the Parking Brake is read exactly once through
+    `run_inbound_through_runtime_contract()`, which composes the Personal brake and the S8
+    Platform/Admin halt at Governance's own composition point; provenance is the `ActionReflection`
+    that path already writes plus the captured row. The boundary owns **two** tables —
+    `eci_directives` (the correlation ledger) and `eci_availability` — both `CREATE TABLE IF NOT
+    EXISTS`, so an existing database gains two tables and loses nothing.
+  - **Any engaged brake scope closes the boundary**, not just `voice`. Capture gates on the brake
+    being engaged *at all*, matching the inbound and memory-mutation gates, because an exchange
+    belongs to no subsystem scope. Pulling the brake stops Bartholomew talking to the outside
+    world, and nothing is recorded while it is engaged — so the sender's own retry is the recovery.
+  - **A directive cannot exist unless a Bartholomew seam allowed it.** The reference responder
+    delegates to `run_spoken_output_through_runtime_contract()` and mints the directive *inside*
+    the `speak_fn` that seam invokes only after its enablement, brake and Identity-policy gates
+    pass. `speak_fn` was already an injected capability seam a wave before this boundary existed;
+    FND-04 makes the ECI be that capability.
+  - **`started` means issued, not heard.** For a delegated capability the seam's "started" outcome
+    means the directive was issued to a capable endpoint. Whether the words were actually said is
+    the endpoint's correlated result, recorded in the directive ledger. Reading one as the other
+    would be the same mistake as reading capture's 202 as "processed".
+  - **Results settle exactly once, or are refused.** A single conditional `UPDATE` settles a
+    directive; a replay is reported as already settled and changes nothing. A result naming a
+    directive issued to a *different* endpoint is refused outright as a cross-endpoint write
+    attempt, and an uncorrelatable result is never attached to a plausible directive.
+  - **Two new route capabilities** (`eci:exchange`, `eci:read`) and four classified routes. Neither
+    capability is Governance; holding one means the request is allowed to ask.
+  - **Three new event types** (`eci.observation`, `eci.request`, `eci.result`) registered in the one
+    backbone registry, because the ECI captures on the canonical ingress rather than opening a
+    second one. Observations and requests reuse the existing domain-blind observation handler
+    unchanged; a result is recorded as correlated at the boundary and nothing further is written.
+  - **A request is an observation about the person, never an instruction.** There is no field
+    through which an endpoint can state an intent for Bartholomew, and the reference responder
+    never echoes endpoint-supplied text — an endpoint that could put words in Bartholomew's mouth
+    would have acquired Bartholomew's voice.
+  - **What this does not yet prove** is recorded honestly in
+    `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md` §7: the reference responder is an
+    acknowledgement, not Bartholomew's reasoning; one transport exists; and the boundary has been
+    exercised against a reference endpoint, not against AIRI, a companion or any real product.

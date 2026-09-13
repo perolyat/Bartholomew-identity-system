@@ -1184,3 +1184,72 @@
 - **Mitigation:** Chunk/map-reduce processing; reference files instead of pasting; keep prompts under a hard cap; prefer local parsing for huge artifacts.
 - **Test/Proof:** A scripted chunking run that produces stable intermediate artifacts + a final merge.
 - **Status:** Active
+
+## Risk: The External Capability Interface becomes a second executive (FND-04)
+
+- **Why it matters:** A boundary that external systems speak through sits in exactly the place an
+  agent framework would occupy. Each of the following would make it one, and each is individually
+  plausible as a convenience: letting the boundary read a payload to decide what to do; letting an
+  endpoint state an intent rather than an observation; letting a declared capability imply
+  permission to use it; letting a responder skip the Governance seam "because the boundary already
+  checked"; adding provider selection so that one endpoint can be preferred over another. The cost
+  of getting this wrong is not a bug — it is `CONSTITUTION.md` invariant 10 violated structurally,
+  with Bartholomew reduced to one voice among several.
+- **Current controls (FND-04):** the responder seam is **empty by default** and holds no logic —
+  the answer is produced by a Bartholomew-owned seam (`integration/eci_responder.py`) that runs its
+  own enablement, `ParkingBrake("voice")` and Identity-policy gates, and the directive is minted
+  *inside* the callback that seam invokes only after all three pass, so a directive cannot exist
+  without Bartholomew's governance. `payload` is opaque and never branched on. There is no field in
+  which an endpoint can state an intent — a `request` is an observation *about the person*, handled
+  by the same domain-blind handler as any other observation. Capability standing requires three
+  separate facts (understood, declared-and-approved, currently available) and the issuer raises
+  rather than minting when any fails. `tests/test_fnd04_eci_boundary.py::TestStructuralProhibitions`
+  asserts over the package's **source** that it contains no `GovernanceStore(`, no `.engage(`/
+  `.disengage(`, no account or session minting, no `CREATE TABLE` outside its own two, no
+  `subprocess`/`ctypes`/`Popen`, and no payload-content branching.
+- **Residual risk:** the controls are structural but the *pressure* is permanent — every future
+  integration will have a reason to want one of the five conveniences above. The named mitigation
+  is that `CONSTITUTION.md` invariant 10 makes each one a conflict to surface rather than an
+  implementation detail to decide. **Status:** Active, mitigated.
+- **Risk category:** architectural authority.
+
+## Risk: An endpoint acquires Bartholomew's voice through content (FND-04)
+
+- **Why it matters:** The boundary carries text from outside — a web page, a tool response, a
+  device reading, a person's words. The moment any of it reaches a directive's parameters, an
+  endpoint can make Bartholomew *say* arbitrary things, which is indistinguishable to a listener
+  from Bartholomew having decided to say them. The same class of defect would let payload content
+  reach a governance decision or a capability grant.
+- **Current controls (FND-04):** the reference responder speaks **one fixed phrase** and reads no
+  part of the payload. `tests/test_fnd04_eci_vertical_slice.py::TestContentIsNotAuthority` submits a
+  request whose payload is an instruction to say something else *and* to release the Parking Brake,
+  and asserts the utterance is unchanged and the brake still engaged. Inbound content reaches the
+  durable record as an opaque payload and a SHA-256 digest, never as a code-path selector.
+- **Residual risk:** a future responder that answers *what was actually asked* — which is the
+  natural next step and is explicitly not in FND-04 — necessarily reads user content to compose a
+  reply. At that point this control moves from "does not read content" to "reads content through the
+  chat/executive path with its own redaction, consent and privacy rules", and the test above must be
+  rewritten to prove the new property rather than deleted. **Status:** Active, mitigated for the
+  current responder only.
+- **Risk category:** instruction/data boundary.
+
+## Risk: The boundary's honesty erodes at the edges (FND-04)
+
+- **Why it matters:** A boundary that reports a halt as a malformed message, a delegated directive
+  as speech that occurred, or an uncorrelatable result as a plausible match, is worse than no
+  boundary: the endpoint retries the wrong thing and the audit trail records something that did not
+  happen.
+- **Current controls (FND-04):** eleven distinct `ExchangeOutcome` values, none collapsible into
+  another, with an explicit `NOTHING_RECORDED` set so the transport and the core agree on what
+  "nothing happened" means. `unknown` is a first-class directive status and is never folded into
+  `failed`. A late result is recorded as `timed_out` rather than as the outcome reported. A result
+  for another endpoint's directive is refused outright and leaks nothing about it. Settlement is a
+  single conditional `UPDATE`, so a replay changes nothing and says so. `started` is documented, in
+  code and in `INTERFACES.md`, to mean *issued*, not *heard*.
+- **Residual risk:** the delegated-`started` semantic is the sharpest edge. The seam's
+  `ActionReflection` records `outcome="started"` on the `voice_output` surface when a directive was
+  issued, and an auditor reading only the Reflection stream — without the directive ledger beside it
+  — could read that as "Bartholomew spoke". The ledger is the authoritative record of whether it
+  actually did, and the two are not joined by a shared correlation id today. **Status:** Active,
+  partially mitigated; a correlation id on the Reflection would close it and is not in FND-04.
+- **Risk category:** auditability/provenance.
