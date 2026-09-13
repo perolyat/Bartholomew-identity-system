@@ -818,91 +818,97 @@ class TestTheEvidenceFrameCannotBeClosedFromInside:
         ]
 
 
-class TestNamingAnActionIsNotLicensingItsCategory:
-    """Regression. The inference rule binds to the *action*, not to the kind.
+class TestAPartlyDictatedInstructionIsNeverDeliberated:
+    """Regression, and the strongest of them. Two cuts of this were wrong.
 
-    The first cut of `_validate_step` waived `INFERABLE_CAPABILITIES` for any
-    capability whose *name* appeared in the person's literal reading. Because
-    deliberation runs precisely when that reading is non-actionable --- which it
-    is whenever any fragment is ambiguous, even though other fragments produced
-    real steps --- an instruction like "expand 'File' in notepad and then start a
-    shopping list" named `accessibility_action` and thereby licensed *any*
-    accessibility action, against any control, anywhere in the deliberated plan.
+    `deliberate_task` runs only when the literal reading is non-actionable ---
+    but a reading is non-actionable whenever *any* fragment is ambiguous, even
+    though other fragments produced perfectly good steps. So "open notepad and
+    then open it" reached deliberation carrying a recognised `launch_app`
+    step... and the executive proposed launching **WordPad**, discarding the
+    application the person had named and the unresolved half alike.
 
-    Reproduced before fixing: the executive proposed
-    `collapse 'Recent Documents'` off the back of the person asking to expand
-    'File'. The waiver is now keyed on the capability *and* the validated
-    parameter fingerprint --- the same value the envelope binds an approval to.
+    That is a direct contradiction of this module's headline property --- that
+    deliberation "can never turn one proposal into a different proposal" --- so
+    the property is now enforced rather than asserted: an instruction whose own
+    words produced any step keeps the recogniser's reading, and the model is
+    never consulted. Half an instruction is a question about the other half,
+    which is what the seam already does with it.
+
+    The first attempt at this fixed a narrower symptom (the waiver was keyed on
+    the capability *name*, so naming one accessibility action licensed every
+    other). That fix was real but insufficient: it still let a named step be
+    replaced. This rule subsumes it, and makes `INFERABLE_CAPABILITIES` absolute
+    --- there is no longer any "but the person asked for it" case to carve out,
+    because such an instruction never reaches validation at all.
     """
 
-    INSTRUCTION = "Expand 'File' in notepad and then start a shopping list"
-
-    def _literal_named_accessibility(self):
-        from bartholomew.executive.intent import parse_task
-
-        literal = parse_task(self.INSTRUCTION)
-        assert (
-            not literal.actionable
-        ), "the premise: deliberation only runs on a non-actionable read"
-        assert [s.capability for s in literal.steps] == [
-            CapabilityKind.ACCESSIBILITY_ACTION.value,
-        ], "the premise: the person's own words did name an accessibility action"
-        return literal
-
-    def test_the_exact_action_the_person_named_is_still_allowed(self):
-        """Non-vacuity: the waiver still works for what was actually asked for."""
-        self._literal_named_accessibility()
-        same = {
-            "capability": "windows.accessibility_action",
-            "parameters": {
-                "app_id": "notepad",
-                "operation": "expand",
-                "element_name": "File",
-            },
-        }
-        intent = _plan(_answer([same]), instruction=self.INSTRUCTION)
-        assert intent.actionable
-        assert intent.steps[0].parameters["element_name"] == "File"
-
     @pytest.mark.parametrize(
-        "parameters",
+        "instruction,expected",
         [
-            {"app_id": "notepad", "operation": "collapse", "element_name": "Recent Documents"},
-            {"app_id": "notepad", "operation": "expand", "element_name": "Recent Documents"},
-            {"app_id": "wordpad", "operation": "expand", "element_name": "File"},
-            {"app_id": "notepad", "operation": "scroll_down"},
+            ("Open notepad and then open it.", "windows.launch_app"),
+            (
+                "Expand 'File' in notepad and then start a shopping list",
+                "windows.accessibility_action",
+            ),
+            ('Type "milk" and then sort out the rest', "windows.type_text"),
+            ("Read my clipboard and then start a shopping list", "windows.clipboard_read"),
         ],
     )
-    def test_a_different_action_of_the_same_kind_is_refused(self, parameters):
-        self._literal_named_accessibility()
-        intent = _plan(
-            _answer([{"capability": "windows.accessibility_action", "parameters": parameters}]),
-            instruction=self.INSTRUCTION,
-        )
+    def test_a_named_step_is_never_replaced_by_a_deliberated_one(self, instruction, expected):
+        from bartholomew.executive.intent import parse_task
+
+        literal = parse_task(instruction)
+        assert not literal.actionable, "the premise: this is where deliberation used to run"
+        assert [s.capability for s in literal.steps] == [expected], "the premise: a step was named"
+
+        substitute = {
+            "capability": "windows.launch_app",
+            "parameters": {"app_id": "wordpad"},
+            "purpose": "a different application entirely",
+        }
+        record = DeliberationRecord()
+        intent = _plan(_answer([substitute]), instruction=instruction, record=record)
+
+        assert not record.attempted, "a partly dictated instruction must not reach a model"
+        assert intent.as_dict() == literal.as_dict(), "the recogniser's reading must stand"
+        assert "wordpad" not in str(intent.as_dict())
+
+    def test_the_person_is_still_asked_about_the_unresolved_half(self):
+        """Nothing is proposed, and the question is the recogniser's own."""
+        intent = _plan(_answer([LAUNCH]), instruction="Open notepad and then open it.")
+        assert intent.ambiguities
+        assert not intent.actionable
+
+    def test_a_goal_naming_no_steps_at_all_still_deliberates(self):
+        """Non-vacuity: this gate must not switch EXEC-01 off.
+
+        Without this, a `deliberate_task` that simply never deliberated would
+        pass every other test in this class.
+        """
+        from bartholomew.executive.intent import parse_task
+
+        assert parse_task(GOAL).steps == ()
+        record = DeliberationRecord()
+        intent = _plan(_answer([LAUNCH]), record=record)
+        assert record.attempted and record.used
+        assert intent.actionable
+
+    @pytest.mark.parametrize(
+        "capability,parameters",
+        [
+            ("windows.clipboard_read", {}),
+            (
+                "windows.accessibility_action",
+                {"app_id": "notepad", "operation": "expand", "element_name": "File"},
+            ),
+        ],
+    )
+    def test_the_inference_rule_now_has_no_waiver_at_all(self, capability, parameters):
+        """Absolute: a non-inferable capability cannot be deliberated, full stop."""
+        intent = _plan(_answer([{"capability": capability, "parameters": parameters}]))
         assert _asked(intent)
         assert intent.steps == ()
-
-    def test_naming_one_capability_does_not_license_the_other_non_inferable_one(self):
-        self._literal_named_accessibility()
-        intent = _plan(
-            _answer([{"capability": "windows.clipboard_read", "parameters": {}}]),
-            instruction=self.INSTRUCTION,
-        )
-        assert _asked(intent)
-
-    def test_a_literal_step_that_would_not_validate_licenses_nothing(self):
-        """A signature only exists for an action that could actually be proposed."""
-        from bartholomew.executive.deliberation import named_signatures
-        from bartholomew.executive.intent import IntentStep
-
-        bogus = (
-            IntentStep(
-                capability=CapabilityKind.LAUNCH_APP.value,
-                parameters={"app_id": "never-allowlisted"},
-                described_as="x",
-            ),
-        )
-        assert named_signatures(bogus, _device()) == frozenset()
 
 
 class TestTheApproverIsToldWhatTheStepActuallyDoes:

@@ -497,7 +497,7 @@ def parse_deliberation(raw: Any) -> Deliberation | None:
     payload: Any = None
     try:
         payload = json.loads(text)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         # A model that wrapped the object in prose or a fence is a formatting
         # miss, not a different answer. One bounded attempt to find the object;
         # anything still unreadable is refused.
@@ -505,7 +505,7 @@ def parse_deliberation(raw: Any) -> Deliberation | None:
         if match is not None:
             try:
                 payload = json.loads(match.group(0))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RecursionError):
                 return None
     if not isinstance(payload, dict):
         return None
@@ -546,9 +546,27 @@ def parse_deliberation(raw: Any) -> Deliberation | None:
         steps=tuple(steps),
         clarification=_optional_text(payload.get("clarification")),
         refusal=_optional_text(payload.get("refusal")),
-        confidence=_text_field(payload.get("confidence")).lower(),
+        confidence=_confidence(payload.get("confidence")),
         raw=text,
     )
+
+
+def _confidence(value: Any) -> str:
+    """The model's stated confidence, read in the cautious direction.
+
+    A value that is present but not a string --- `0.01`, `true`, a list --- is
+    read as `low` rather than as nothing. Reading it as nothing is what an
+    earlier cut did, and it meant `{"confidence": 0.01}` sailed past the check
+    that `{"confidence": "low"}` was stopped by: the one shape a model is most
+    likely to produce when it is *least* sure was the one shape that bypassed
+    the caution. Absent entirely is still absent --- the model said nothing, and
+    saying nothing is not a claim of uncertainty.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return "low"
+    return _text_field(value).lower()
 
 
 def _text_field(value: Any, *, maximum: int = 500) -> str:
@@ -573,7 +591,6 @@ def intent_from_deliberation(
     instruction: str,
     catalogue: CapabilityCatalogue,
     device: Any,
-    named: frozenset[tuple[str, str]] = frozenset(),
     record: DeliberationRecord | None = None,
 ) -> TaskIntent:
     """Validate a reading into a `TaskIntent`, refusing every step that does not hold.
@@ -585,11 +602,10 @@ def intent_from_deliberation(
     its parameters against the real allowlists --- never because the model
     asserted that it was valid or safe.
 
-    `named` are the signatures of the actions the person's own words asked for
-    (`named_signatures`). They widen `INFERABLE_CAPABILITIES` for exactly those
-    actions, because an action the person asked for is not one the executive
-    inferred --- and only for those actions, because naming one is not licensing
-    a category.
+    `INFERABLE_CAPABILITIES` is applied here with no exception. An instruction
+    whose own words named a capability never reaches this function at all ---
+    `deliberate_task` returns the literal reading for those --- so there is no
+    "but the person asked for it" case left to carve out.
     """
     log = record if record is not None else DeliberationRecord()
 
@@ -670,7 +686,6 @@ def intent_from_deliberation(
             proposed,
             catalogue=catalogue,
             device=device,
-            named=named,
         )
         if step is None:
             log.rejected_steps.append(
@@ -711,42 +726,11 @@ def intent_from_deliberation(
     )
 
 
-def named_signatures(steps: tuple[IntentStep, ...], device: Any) -> frozenset[tuple[str, str]]:
-    """The exact actions the person's own words asked for, as (capability, fingerprint).
-
-    A **signature**, not a capability name, and the distinction is the whole
-    point. Waiving `INFERABLE_CAPABILITIES` for a capability *kind* would mean
-    that "expand 'File' in notepad, and start a shopping list" --- one
-    accessibility action the person named, plus one goal they described ---
-    licensed the executive to propose *any* accessibility action at all,
-    against any control. The person named one action; they did not license a
-    category.
-
-    The fingerprint is `ValidatedParameters.fingerprint()`, which is what the
-    envelope binds an approval to, so "the same action" means the same thing
-    here as it does at the point of approval. A literal step whose parameters
-    do not validate contributes no signature: it could not have been proposed
-    anyway, so it licenses nothing.
-    """
-    context = getattr(device, "validation_context", None)
-    resolved = context() if callable(context) else None
-    signatures: set[tuple[str, str]] = set()
-    for step in steps:
-        try:
-            kind = CapabilityKind(step.capability)
-            validated = validate_parameters(kind, step.parameters, resolved)
-        except (ValueError, ParameterError, UnsupportedCapabilityError):
-            continue
-        signatures.add((kind.value, validated.fingerprint()))
-    return frozenset(signatures)
-
-
 def _validate_step(
     proposed: DeliberatedStep,
     *,
     catalogue: CapabilityCatalogue,
     device: Any,
-    named: frozenset[tuple[str, str]],
 ) -> tuple[IntentStep | None, str | None]:
     """One step, or the reason there is no step. Never a step and a reason."""
     try:
@@ -774,14 +758,16 @@ def _validate_step(
     except (ParameterError, UnsupportedCapabilityError) as error:
         return None, f"the {kind.value} step would not be valid on this device: {error}"
 
-    # The inference rule is checked *after* validation, because it is checked
-    # against the canonical fingerprint rather than the capability name --- see
-    # `named_signatures`. A non-inferable capability is permitted only when the
-    # person asked for precisely this action, not merely for one of this kind.
-    if kind not in INFERABLE_CAPABILITIES and (kind.value, validated.fingerprint()) not in named:
+    # Absolute, with no waiver. `deliberate_task` never reaches here for an
+    # instruction whose own words named a capability --- a literal reading that
+    # produced any step is returned untouched --- so there is no "but the person
+    # asked for this one" case left to carve out. An earlier cut did carve one
+    # out, keyed on the capability *name*, and it licensed the whole category:
+    # naming one accessibility action let the executive propose any other.
+    if kind not in INFERABLE_CAPABILITIES:
         return None, (
             f"{kind.value} is not something I will decide to do on my own from a "
-            "described outcome. Ask for exactly what you want and I will propose it."
+            "described outcome. Ask for it directly and I will propose it."
         )
 
     return (
@@ -922,7 +908,6 @@ def deliberate_task(
     """
     log = record if record is not None else DeliberationRecord()
     literal = parse_task(instruction or "")
-    named = named_signatures(literal.steps, device)
 
     if literal.actionable:
         log.reason = "the instruction named its own steps; no deliberation was needed"
@@ -930,6 +915,26 @@ def deliberate_task(
 
     if literal.unsupported:
         log.reason = "the instruction asks for something outside the capability vocabulary"
+        return literal
+
+    if literal.steps:
+        # The person dictated part of this and left part of it unresolved:
+        # "open notepad and then open it". Deliberating here would let the
+        # executive rewrite the half they *did* specify --- an earlier cut
+        # proposed launching WordPad in answer to "open notepad and then open
+        # it", which is precisely the thing this module claims cannot happen.
+        #
+        # So it does not happen. Partial recognition keeps the recogniser's
+        # question, which is also what the seam already does with such an
+        # instruction: "half of an instruction is not the instruction", and
+        # every understood step is blocked rather than proposed. Deliberation
+        # is for a goal the person described, not for finishing a sentence they
+        # started.
+        log.reason = (
+            "the instruction named some of its own steps and left others "
+            "unresolved; that is a question about the unresolved half, not a "
+            "goal to be worked out"
+        )
         return literal
 
     if names_no_referent(instruction):
@@ -990,7 +995,6 @@ def deliberate_task(
         instruction=literal.instruction,
         catalogue=catalogue,
         device=device,
-        named=named,
         record=log,
     )
     if not log.used and log.reason is None:
@@ -1015,7 +1019,6 @@ __all__ = [
     "build_prompt",
     "deliberate_task",
     "intent_from_deliberation",
-    "named_signatures",
     "names_no_referent",
     "parse_deliberation",
 ]

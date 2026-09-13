@@ -167,13 +167,14 @@ class Plan:
     #: from it, and `plan_status`, `next_actionable_step` and `recovery.py` do
     #: not read it at all.
     #:
-    #: Deliberately **not** persisted on the task row: the durable record of a
-    #: cognition decision is the `ActionReflection` this reaches through
-    #: `explanation.explanation_details`, which is the audit path, and adding a
-    #: column would need a schema migration this repair does not otherwise
-    #: require. A plan reloaded from the store therefore carries `None` here,
-    #: which is honest --- `advance` decides from verification and recovery, and
-    #: reads nothing from this field.
+    #: Persisted, and it has to be. The steps a person approves on the *second*
+    #: and later passes are exactly the inferred ones --- the account explains
+    #: the reasoning when a task is first proposed, and `advance` then proposes
+    #: step 2 to somebody who was never told it was worked out rather than
+    #: asked for. Leaving this in memory only meant that disclosure vanished at
+    #: precisely the point it mattered most, so `store.py` carries a nullable
+    #: `deliberation_json` column and an additive migration for databases an
+    #: earlier build wrote.
     deliberation: dict[str, Any] | None = None
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)

@@ -651,3 +651,106 @@ class TestTheAccountThePersonReads:
         result = await _run(ctx, registry, instruction="focus notepad")
         assert "i took you to mean" not in result.explanation.lower()
         assert result.plan.deliberation["used"] is False
+
+
+class TestTheDisclosureSurvivesIntoLaterApprovals:
+    """Regression. The inferred steps are the ones approved *later*.
+
+    The account explains the reasoning on the first pass. `advance` then
+    proposes step 2 --- `focus_window`, which nobody named --- to a person who,
+    if the provenance had stayed in memory only, would be told nothing about
+    where it came from. That is the point at which disclosure matters most, so
+    it is the point it must not vanish.
+
+    `Plan.deliberation` is therefore persisted, with an additive migration for
+    databases written by a build that predates the column.
+    """
+
+    async def test_provenance_survives_a_reload(self, ctx, registry, db_path):
+        started = await _run(ctx, registry)
+        reloaded = executive_store.load_plan(
+            db_path,
+            tenant_id=TENANT,
+            task_id=started.plan.task_id,
+        )
+        assert reloaded is not None
+        assert reloaded.deliberation is not None
+        assert reloaded.deliberation["used"] is True
+        assert reloaded.deliberation["deliberation"]["objective"]
+
+    async def test_the_second_step_is_still_disclosed_when_it_is_proposed(
+        self,
+        ctx,
+        registry,
+        db_path,
+    ):
+        started = await _run(ctx, registry)
+        await _approve_dispatch_and_report(ctx, registry, started.proposed_action_ids[0])
+        advanced = await advance_executive_task_through_runtime_contract(
+            ctx,
+            tenant_id=TENANT,
+            task_id=started.plan.task_id,
+            registry=registry,
+            read_back_port=_window_read_back(),
+        )
+        # The inferred step is the one now waiting for a human.
+        assert advanced.plan.steps[1].capability == CapabilityKind.FOCUS_WINDOW.value
+        assert advanced.plan.steps[1].status is StepStatus.AWAITING_AUTHORIZATION
+        # And the account they read still says it was worked out, not asked for.
+        assert "i took you to mean" in advanced.explanation.lower()
+
+    async def test_the_advance_reflection_still_records_the_reasoning(
+        self,
+        ctx,
+        registry,
+        db_path,
+    ):
+        started = await _run(ctx, registry)
+        await _approve_dispatch_and_report(ctx, registry, started.proposed_action_ids[0])
+        await advance_executive_task_through_runtime_contract(
+            ctx,
+            tenant_id=TENANT,
+            task_id=started.plan.task_id,
+            registry=registry,
+            read_back_port=_window_read_back(),
+        )
+        metas = _reflection_meta(db_path, started.plan.task_id)
+        used = [m for m in metas if (m.get("deliberation") or {}).get("used")]
+        assert len(used) >= 2, "every pass of a deliberated task must record that it was one"
+
+    async def test_a_database_written_before_the_column_existed_still_opens(self, tmp_path):
+        """Additive migration, against a table of the old shape with a row in it."""
+        import sqlite3
+
+        path = str(tmp_path / "old.db")
+        connection = sqlite3.connect(path)
+        connection.executescript(
+            """
+            CREATE TABLE executive_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id TEXT NOT NULL, task_id TEXT NOT NULL, device_id TEXT NOT NULL,
+                requested_by TEXT NOT NULL, instruction TEXT NOT NULL, status TEXT NOT NULL,
+                clarification TEXT, clarification_entry_id INTEGER,
+                notes_json TEXT NOT NULL DEFAULT '[]',
+                cautions_json TEXT NOT NULL DEFAULT '[]',
+                evidence_refused_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                UNIQUE (tenant_id, task_id)
+            );
+            """,
+        )
+        connection.execute(
+            "INSERT INTO executive_tasks (tenant_id, task_id, device_id, requested_by,"
+            " instruction, status, created_at, updated_at)"
+            " VALUES ('tenant-a', 'old-1', 'desk-pc', 'taylor', 'old task', 'in_progress', 'x', 'y')",
+        )
+        connection.commit()
+        connection.close()
+
+        executive_store.ensure_schema(path)
+        executive_store.ensure_schema(path)  # idempotent
+
+        reloaded = executive_store.load_plan(path, tenant_id="tenant-a", task_id="old-1")
+        assert reloaded is not None, "a row written before the column must still load"
+        assert reloaded.deliberation is None
+        assert reloaded.instruction == "old task"

@@ -442,6 +442,54 @@ class TestParsingCognitionOutput:
     def test_unreadable_output_is_refused_rather_than_guessed_at(self, raw):
         assert parse_deliberation(raw) is None
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "[" * 2000 + "]" * 2000,
+            "note: " + '{"a":' * 2000 + "1" + "}" * 2000,
+            '{"steps": ' + "[" * 5000 + "]" * 5000 + "}",
+        ],
+    )
+    def test_deeply_nested_json_is_refused_rather_than_crashing(self, raw):
+        """Regression. This function documents itself as total; it was not.
+
+        `json.loads` recurses per nesting level and raises `RecursionError`,
+        which is not a `ValueError` and so escaped the handler. A text field is
+        reachable from a request, so an unbounded-depth payload was a crash
+        anybody could cause. `RecursionError` is now caught in both the direct
+        and the prose-wrapped parse.
+        """
+        assert parse_deliberation(raw) is None
+
+    @pytest.mark.parametrize("confidence", [0.01, 0, True, ["low"], {"level": "low"}])
+    def test_an_unreadable_confidence_is_read_as_low_not_as_nothing(self, confidence):
+        """Regression, and it ran the wrong way.
+
+        `_text_field` returned "" for a non-string, so `{"confidence": 0.01}`
+        --- the shape a model is most likely to emit when it is *least* sure ---
+        sailed past the check that stopped `{"confidence": "low"}`. Confidence
+        may only ever make the executive more careful, so an unreadable value is
+        read as low.
+        """
+        parsed = parse_deliberation(
+            json.dumps(
+                {
+                    "confidence": confidence,
+                    "steps": [
+                        {"capability": "windows.launch_app", "parameters": {"app_id": "notepad"}},
+                    ],
+                },
+            ),
+        )
+        assert parsed is not None
+        assert parsed.confidence == "low"
+
+    def test_an_absent_confidence_is_not_treated_as_a_claim_of_uncertainty(self):
+        """Non-vacuity: saying nothing is not the same as saying "low"."""
+        parsed = parse_deliberation(json.dumps({"steps": []}))
+        assert parsed is not None
+        assert parsed.confidence == ""
+
     def test_a_fenced_object_is_still_read(self):
         """A formatting miss is not a different answer."""
         fenced = "```json\n" + _answer(SHOPPING_LIST_STEPS) + "\n```"

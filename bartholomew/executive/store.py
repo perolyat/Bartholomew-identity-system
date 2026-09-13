@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS executive_tasks (
     notes_json TEXT NOT NULL DEFAULT '[]',
     cautions_json TEXT NOT NULL DEFAULT '[]',
     evidence_refused_json TEXT NOT NULL DEFAULT '[]',
+    deliberation_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (tenant_id, task_id)
@@ -96,11 +97,32 @@ def ensure_schema(db_path: str) -> None:
         with wal_db(db_path, timeout=30.0, label="executive_ensure_schema") as conn:
             conn.execute("PRAGMA busy_timeout = 5000")
             conn.executescript(EXECUTIVE_SCHEMA)
+            _add_missing_columns(conn)
             conn.commit()
     except sqlite3.Error as e:
         raise ExecutivePersistenceError(
             f"the executive task schema is unavailable: {type(e).__name__}: {e}",
         ) from e
+
+
+#: Columns added to `executive_tasks` after its first release. `CREATE TABLE IF
+#: NOT EXISTS` leaves an existing table alone, so a column added later has to be
+#: added explicitly or a database created by an earlier build will not have it.
+#: Every entry must be nullable or carry a default: this runs against databases
+#: with rows already in them.
+_ADDED_COLUMNS = (("deliberation_json", "TEXT"),)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """Bring an existing `executive_tasks` table up to the current shape.
+
+    Additive only --- no column is dropped, renamed or retyped --- so it is safe
+    to run on every open and safe to run on a database an older build wrote.
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(executive_tasks)").fetchall()}
+    for column, declaration in _ADDED_COLUMNS:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE executive_tasks ADD COLUMN {column} {declaration}")
 
 
 def _dumps(value: Any) -> str:
@@ -118,8 +140,8 @@ def save_plan(db_path: str, plan: Plan) -> None:
                 INSERT INTO executive_tasks (
                     tenant_id, task_id, device_id, requested_by, instruction, status,
                     clarification, clarification_entry_id, notes_json, cautions_json,
-                    evidence_refused_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_refused_json, deliberation_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tenant_id, task_id) DO UPDATE SET
                     status = excluded.status,
                     clarification = excluded.clarification,
@@ -127,6 +149,7 @@ def save_plan(db_path: str, plan: Plan) -> None:
                     notes_json = excluded.notes_json,
                     cautions_json = excluded.cautions_json,
                     evidence_refused_json = excluded.evidence_refused_json,
+                    deliberation_json = excluded.deliberation_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -141,6 +164,7 @@ def save_plan(db_path: str, plan: Plan) -> None:
                     _dumps(plan.notes),
                     _dumps(plan.cautions),
                     _dumps(plan.evidence_refused),
+                    _dumps(plan.deliberation) if plan.deliberation else None,
                     plan.created_at,
                     plan.updated_at,
                 ),
@@ -198,7 +222,7 @@ def load_plan(db_path: str, *, tenant_id: str, task_id: str) -> Plan | None:
                 """
                 SELECT device_id, requested_by, instruction, status, clarification,
                        clarification_entry_id, notes_json, cautions_json,
-                       evidence_refused_json, created_at, updated_at
+                       evidence_refused_json, deliberation_json, created_at, updated_at
                 FROM executive_tasks WHERE tenant_id = ? AND task_id = ?
                 """,
                 (tenant_id, task_id),
@@ -217,8 +241,9 @@ def load_plan(db_path: str, *, tenant_id: str, task_id: str) -> Plan | None:
                 notes=list(json.loads(row[6] or "[]")),
                 cautions=list(json.loads(row[7] or "[]")),
                 evidence_refused=list(json.loads(row[8] or "[]")),
-                created_at=row[9],
-                updated_at=row[10],
+                deliberation=json.loads(row[9]) if row[9] else None,
+                created_at=row[10],
+                updated_at=row[11],
             )
             for step_row in conn.execute(
                 """
