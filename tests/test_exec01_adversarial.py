@@ -1111,3 +1111,143 @@ class TestAnEmptyReadingIsAQuestionNotASilentNothing:
         assert result.outcome == OUTCOME_CLARIFICATION
         assert result.proposed_action_ids == []
         assert result.plan.clarification
+
+
+class TestModelOutputCannotBreakPersistence:
+    """Regression. A lone surrogate in a model's answer crashed the seam.
+
+    `'\\ud800'` is a valid Python `str` character and valid JSON input, but it
+    cannot be encoded as UTF-8. One in a model's `objective` reached
+    `store.save_plan`, raised `UnicodeEncodeError` out of the whole seam, and
+    left an approvable action row behind with no task row and no audit row to
+    explain where it came from. A truncated generation is a far likelier cause
+    than an attack; either way the executive must not crash on it.
+    """
+
+    SURROGATE = "\ud800"
+
+    def _answer_containing_surrogates(self):
+        return json.dumps(
+            {
+                "objective": f"start a list {self.SURROGATE} here",
+                "situation": f"nothing open {self.SURROGATE}",
+                "sub_goals": [f"a{self.SURROGATE}b"],
+                "steps": [
+                    {
+                        "capability": "windows.launch_app",
+                        "parameters": {f"app{self.SURROGATE}_id": "notepad", "app_id": "notepad"},
+                        "purpose": f"open it {self.SURROGATE}",
+                        "necessary_because": f"because {self.SURROGATE}",
+                    },
+                ],
+                "clarification": None,
+                "refusal": None,
+                "confidence": "high",
+            },
+        )
+
+    def test_the_record_can_always_be_encoded_as_utf8(self):
+        record = DeliberationRecord()
+        _plan(self._answer_containing_surrogates(), record=record)
+        # This is the exact operation `store.save_plan` performs.
+        json.dumps(record.as_dict(), ensure_ascii=False, default=str).encode("utf-8")
+
+    def test_no_surrogate_survives_into_any_field(self):
+        import re
+
+        record = DeliberationRecord()
+        _plan(self._answer_containing_surrogates(), record=record)
+        blob = json.dumps(record.as_dict(), default=str)
+        assert not re.search(r"[\ud800-\udfff]", blob)
+
+    def test_a_surrogate_in_prose_is_dropped_and_the_reading_survives(self):
+        """Non-vacuity: the character goes, the plan does not.
+
+        Prose only here. The payload above also puts a surrogate in a parameter
+        *key*, which the real validator refuses as an unknown parameter --- the
+        right answer, and a different one, so it is asserted separately below.
+        """
+        intent = _plan(
+            json.dumps(
+                {
+                    "objective": f"an editable note {self.SURROGATE} is open",
+                    "situation": f"nothing open {self.SURROGATE}",
+                    "sub_goals": [f"a{self.SURROGATE}b"],
+                    "steps": [
+                        {
+                            "capability": "windows.launch_app",
+                            "parameters": {"app_id": "notepad"},
+                            "purpose": f"open it {self.SURROGATE}",
+                            "necessary_because": f"because {self.SURROGATE}",
+                        },
+                    ],
+                    "confidence": "high",
+                },
+            ),
+        )
+        assert intent.actionable
+        assert intent.steps[0].capability == CapabilityKind.LAUNCH_APP.value
+        assert self.SURROGATE not in json.dumps(intent.as_dict(), default=str)
+
+    def test_a_surrogate_in_a_parameter_key_is_refused_not_crashed_on(self):
+        """A key the capability does not have is refused, whatever it contains."""
+        intent = _plan(self._answer_containing_surrogates())
+        assert _asked(intent)
+        assert intent.steps == ()
+
+    def test_surrogates_in_the_instruction_do_not_crash_it_either(self):
+        intent = deliberate_task(
+            f"Start a shopping list {self.SURROGATE} for me.",
+            device=_device(),
+            port=_Port(_answer([LAUNCH])),
+        )
+        assert intent is not None
+
+
+class TestModelFreeTextIsRedactedBeforeItIsAudited:
+    """Regression. `redact_pii` never descended into the nested deliberation dict.
+
+    `ActionReflection.to_memory_row` redacts the top-level string values of
+    `details` and spreads them into `meta`. The deliberation record is nested,
+    so it passed through untouched --- and a model that echoed an address or a
+    passphrase out of the person's own instruction wrote it to the audit row in
+    clear. Redaction is now applied at any depth, in `explanation_details`,
+    which is where the nesting was introduced.
+    """
+
+    def _details(self, objective, purpose="x"):
+        from bartholomew.executive.explanation import explanation_details
+        from bartholomew.executive.plan import Plan
+
+        plan = Plan(
+            task_id="t",
+            tenant_id="tenant-a",
+            device_id="desk-pc",
+            requested_by="taylor",
+            instruction="Start a shopping list",
+            deliberation={
+                "used": True,
+                "deliberation": {
+                    "objective": objective,
+                    "sub_goals": [objective],
+                    "steps": [{"capability": "windows.type_text", "purpose": purpose}],
+                },
+            },
+        )
+        return json.dumps(explanation_details(plan))
+
+    @pytest.mark.parametrize(
+        "secret",
+        ["alice.smith@example.com", "555-123-4567"],
+    )
+    def test_pii_in_model_prose_does_not_reach_the_audit_row(self, secret):
+        assert secret not in self._details(f"write down {secret}", purpose=f"record {secret}")
+
+    def test_redaction_reaches_nested_lists_and_step_prose(self):
+        blob = self._details("email bob@example.org now", purpose="open it for bob@example.org")
+        assert "bob@example.org" not in blob
+
+    def test_ordinary_prose_survives(self):
+        """Non-vacuity: it redacts PII, it does not blank the record."""
+        blob = self._details("an editable note is open and the list is started")
+        assert "an editable note is open" in blob

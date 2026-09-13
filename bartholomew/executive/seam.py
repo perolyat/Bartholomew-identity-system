@@ -271,10 +271,18 @@ async def _understand(
     """Read one instruction: recognised literally, or deliberated from the outcome.
 
     Off the event loop, because a `DeliberationPort` implementation is expected
-    to be a blocking call to something else's process. The rest of this seam is
-    async for the stores' sake; cognition is the one step here that may take
-    real time, and it gets the same treatment every other blocking call in this
-    package gets.
+    to be a blocking call to something else's process.
+
+    **Deliberately not on the kernel's shared executor**, which every other
+    blocking call in this package does use. That executor has a single worker,
+    and a model call is the one piece of work here whose duration is somebody
+    else's to decide: a slow or hanging provider would sit in that one worker
+    and queue every unrelated piece of kernel blocking work behind it, and
+    would hold up a clean shutdown drain. Passing `executor=None` sends it to
+    `asyncio.to_thread` instead, so a slow provider costs latency on this task
+    and on nothing else. The trade is an unpooled thread per deliberation,
+    which is the right way round: this path is one governed task at a time, and
+    the alternative is head-of-line blocking the kernel.
 
     Never raises. `deliberate_task` degrades to the deterministic reading on any
     failure of the cognition layer, and a failure to even reach it is treated
@@ -291,7 +299,7 @@ async def _understand(
             evidence=evidence,
             port=port,
             record=record,
-            executor=getattr(ctx, "blocking_executor", None),
+            executor=None,
         )
     except Exception:
         logger.exception("Deliberation could not be run; falling back to the literal reading")

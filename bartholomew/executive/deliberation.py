@@ -154,6 +154,15 @@ DELIBERATION_NOT_INFERABLE = "capability_not_inferable"
 #: in the explanation and in the audit. Provenance, not decoration: a reviewer
 #: asking "did a model contribute to this proposal?" must be able to answer it
 #: from the recorded plan alone.
+#:
+#: Scope, stated because it is easy to assume otherwise: this reaches
+#: `TaskIntent.notes`, and `TaskIntent.notes` is **not** copied onto the plan.
+#: `build_plan` fills `plan.notes` from admitted *evidence* only, and
+#: `explanation.py` counts its length as `evidence_admitted`, so appending to it
+#: here would mis-state how much memory was recalled. The plan-level record of a
+#: cognition decision is `Plan.deliberation`, which is persisted and audited;
+#: this note travels with the intent itself, which is what a caller reading
+#: `TaskIntent.as_dict()` sees.
 DELIBERATION_PROVENANCE_NOTE = (
     "this course of action was deliberated by the executive from the stated "
     "outcome, not dictated step by step; every step was then validated against "
@@ -346,7 +355,9 @@ class Deliberation:
             "steps": [
                 {
                     "capability": s.capability,
-                    "parameter_names": sorted(str(k) for k in s.parameters),
+                    "parameter_names": sorted(
+                        _text_field(str(k), maximum=100) for k in s.parameters
+                    ),
                     "purpose": s.purpose,
                     "necessary_because": s.necessary_because,
                 }
@@ -569,10 +580,28 @@ def _confidence(value: Any) -> str:
     return _text_field(value).lower()
 
 
+#: Lone UTF-16 surrogates. Valid in a Python `str` and valid in JSON input, but
+#: **not encodable as UTF-8** --- so one in a model's answer reached
+#: `store.save_plan`, raised `UnicodeEncodeError` out of the seam, and left an
+#: approvable action row behind with no task row and no audit row to explain it.
+#: A model that emits one is far likelier to be a truncated generation than an
+#: attack, but either way the executive must not crash on it.
+_SURROGATES = re.compile(r"[\ud800-\udfff]")
+
+
 def _text_field(value: Any, *, maximum: int = 500) -> str:
+    """One bounded, whitespace-collapsed, storable string from a model.
+
+    Every piece of free text a model produces passes through here, which makes
+    it the right place to guarantee the text can actually be persisted. Anything
+    that cannot be encoded as UTF-8 is dropped rather than escaped: the value is
+    prose for a person to read, and a mangled escape sequence in an audit row is
+    worth less than the character being absent.
+    """
     if not isinstance(value, str):
         return ""
-    return re.sub(r"\s+", " ", value).strip()[:maximum]
+    cleaned = _SURROGATES.sub("", value)
+    return re.sub(r"\s+", " ", cleaned).strip()[:maximum]
 
 
 def _optional_text(value: Any) -> str | None:

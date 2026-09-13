@@ -33,6 +33,7 @@ import sqlite3
 from typing import Any
 
 from bartholomew.kernel.db_ctx import wal_db
+from bartholomew.kernel.redaction_engine import redact_pii
 from bartholomew.kernel.reflection import REFLECTION_KIND
 
 from .plan import Plan, PlanStep, StepStatus, TaskStatus
@@ -227,6 +228,27 @@ def _deliberation_account(plan: Plan) -> list[str]:
     return lines
 
 
+def _redacted(value: Any) -> Any:
+    """`value` with every string inside it put through `redact_pii`, at any depth.
+
+    `ActionReflection.to_memory_row` redacts the *top-level* string values of
+    `details` and then spreads them into `meta`. A nested structure therefore
+    passes through untouched, and the deliberation record is nested --- so a
+    model that echoed an address or a passphrase out of the person's own
+    instruction wrote it to the audit row in clear.
+
+    Redacting here rather than widening the Reflection's own rule keeps the
+    change local to the thing that introduced the nesting.
+    """
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {key: _redacted(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redacted(item) for item in value]
+    return value
+
+
 def explanation_details(plan: Plan) -> dict[str, Any]:
     """The same account in structured form, for a Reflection's `details`.
 
@@ -239,7 +261,7 @@ def explanation_details(plan: Plan) -> dict[str, Any]:
     return {
         "task_id": plan.task_id,
         "status": plan.status.value,
-        "deliberation": plan.deliberation,
+        "deliberation": _redacted(plan.deliberation),
         "steps": [
             {
                 "index": s.index,
