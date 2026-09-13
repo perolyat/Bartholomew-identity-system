@@ -160,6 +160,21 @@ class Plan:
     #: Evidence that was recalled and refused, with the reason, so the
     #: explanation can say so rather than silently omitting it.
     evidence_refused: list[dict[str, Any]] = field(default_factory=list)
+    #: How the executive arrived at these steps, when it deliberated them from a
+    #: described outcome rather than recognising them in the person's own words
+    #: (`deliberation.DeliberationRecord.as_dict()`). Provenance, never
+    #: authority: no capability, parameter or approval on this plan was decided
+    #: from it, and `plan_status`, `next_actionable_step` and `recovery.py` do
+    #: not read it at all.
+    #:
+    #: Deliberately **not** persisted on the task row: the durable record of a
+    #: cognition decision is the `ActionReflection` this reaches through
+    #: `explanation.explanation_details`, which is the audit path, and adding a
+    #: column would need a schema migration this repair does not otherwise
+    #: require. A plan reloaded from the store therefore carries `None` here,
+    #: which is honest --- `advance` decides from verification and recovery, and
+    #: reads nothing from this field.
+    deliberation: dict[str, Any] | None = None
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 
@@ -191,6 +206,7 @@ class Plan:
             "notes": list(self.notes),
             "cautions": list(self.cautions),
             "evidence_refused": list(self.evidence_refused),
+            "deliberation": self.deliberation,
             "steps": [s.as_dict() for s in self.steps],
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -210,6 +226,7 @@ def build_plan(
     device: Any,
     evidence: AdmittedEvidence | None = None,
     task_id: str | None = None,
+    deliberation: dict[str, Any] | None = None,
 ) -> Plan:
     """Turn a recognised intent into a plan against one enrolled device.
 
@@ -224,6 +241,12 @@ def build_plan(
     was read from an evidence record --- which is the property
     `tests/test_w03b_evidence.py` proves by substituting a poisoned corpus for
     a benign one and asserting the plans are identical.
+
+    `deliberation` is carried onto the plan for the explanation and the audit
+    and is read by nothing that decides anything. A deliberated intent and a
+    recognised one are the same value of the same type by the time they arrive
+    here, and this function cannot tell them apart --- which is the point:
+    every step is selected against the device's enrolment either way.
     """
     admitted = evidence or AdmittedEvidence()
     plan = Plan(
@@ -237,6 +260,7 @@ def build_plan(
         evidence_refused=[
             {"content": record.bounded_content(), "reason": why} for record, why in admitted.refused
         ],
+        deliberation=deliberation,
     )
     for position, step in enumerate(intent.steps):
         plan.steps.append(_plan_step(position, step, device))
