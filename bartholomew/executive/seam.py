@@ -67,6 +67,7 @@ from bartholomew.orchestrator.safety.governance_store import (
 )
 
 from . import store as executive_store
+from .deliberation import DeliberationPort, DeliberationRecord, deliberate_task
 from .evidence import AdmittedEvidence, admit_evidence
 from .explanation import explain_task, explanation_details, load_task_reflections
 from .intent import TaskIntent, clarification_subject, parse_task
@@ -258,6 +259,54 @@ async def _record(
     return bool(getattr(write, "error", None)), getattr(write, "error", None)
 
 
+async def _understand(
+    ctx: Any,
+    instruction: str,
+    *,
+    device: Any,
+    evidence: AdmittedEvidence,
+    port: DeliberationPort | None,
+    record: DeliberationRecord,
+) -> TaskIntent:
+    """Read one instruction: recognised literally, or deliberated from the outcome.
+
+    Off the event loop, because a `DeliberationPort` implementation is expected
+    to be a blocking call to something else's process.
+
+    **Deliberately not on the kernel's shared executor**, which every other
+    blocking call in this package does use. That executor has a single worker,
+    and a model call is the one piece of work here whose duration is somebody
+    else's to decide: a slow or hanging provider would sit in that one worker
+    and queue every unrelated piece of kernel blocking work behind it, and
+    would hold up a clean shutdown drain. Passing `executor=None` sends it to
+    `asyncio.to_thread` instead, so a slow provider costs latency on this task
+    and on nothing else. The trade is an unpooled thread per deliberation,
+    which is the right way round: this path is one governed task at a time, and
+    the alternative is head-of-line blocking the kernel.
+
+    Never raises. `deliberate_task` degrades to the deterministic reading on any
+    failure of the cognition layer, and a failure to even reach it is treated
+    the same way: the executive asks a question rather than proposing something.
+    """
+    if port is None:
+        record.reason = "no deliberation port is configured"
+        return parse_task(instruction)
+    try:
+        return await run_off_loop(
+            deliberate_task,
+            instruction,
+            device=device,
+            evidence=evidence,
+            port=port,
+            record=record,
+            executor=None,
+        )
+    except Exception:
+        logger.exception("Deliberation could not be run; falling back to the literal reading")
+        record.reason = "the deliberation step could not be run"
+        return parse_task(instruction)
+
+
 async def _open_clarification(ctx: Any, plan: Plan, question: str) -> None:
     """Raise the question as a real `awaiting_response` obligation.
 
@@ -377,6 +426,7 @@ async def run_executive_task_through_runtime_contract(
     registry: Any = None,
     task_id: str | None = None,
     ttl_seconds: int | None = None,
+    deliberation: DeliberationPort | None = None,
 ) -> ExecutiveTaskResult:
     """Turn one instruction into a governed plan and at most one proposal.
 
@@ -390,6 +440,15 @@ async def run_executive_task_through_runtime_contract(
     `admit_evidence` (the retrieval-side validity verdict) and then used only
     for notes and cautions. No capability, parameter, device or approval on the
     returned plan was read from any of it.
+
+    `deliberation` is the optional cognition port (`deliberation.py`). It is
+    consulted only for an instruction the deterministic recogniser could not
+    turn into steps --- that is, only where the executive would otherwise have
+    asked a question --- so it can widen what Bartholomew understands and cannot
+    change what he already understood. When it is absent, or when what it
+    returns does not survive validation, the recogniser's reading stands. The
+    caller may pass one explicitly or hang one on `ctx.deliberation_port`; a
+    runtime with neither behaves exactly as this seam did before EXEC-01.
 
     Returns without proposing anything when the instruction is ambiguous or
     asks for something outside the capability vocabulary: the question becomes
@@ -424,15 +483,31 @@ async def run_executive_task_through_runtime_contract(
         executor=getattr(ctx, "blocking_executor", None),
     )
 
-    intent: TaskIntent = parse_task(instruction or "")
     admitted: AdmittedEvidence = (
         evidence if isinstance(evidence, AdmittedEvidence) else admit_evidence(evidence)
     )
 
+    # The device is resolved *before* the instruction is understood, which is
+    # the one ordering change this repair makes. Deliberation reasons from the
+    # capabilities this machine actually declares, so it cannot be asked what to
+    # do until there is a machine to answer for. `resolve_device` is a pure
+    # registry lookup with no side effect, and the branch order below is
+    # unchanged: a question about what was meant is still raised before anything
+    # is said about enrolment.
     device, admission = action_seam.resolve_device(
         tenant_id=tenant_id,
         device_id=device_id,
         registry=registry,
+    )
+
+    deliberation_record = DeliberationRecord()
+    intent: TaskIntent = await _understand(
+        ctx,
+        instruction or "",
+        device=device,
+        evidence=admitted,
+        port=deliberation if deliberation is not None else getattr(ctx, "deliberation_port", None),
+        record=deliberation_record,
     )
 
     plan = build_plan(
@@ -443,6 +518,7 @@ async def run_executive_task_through_runtime_contract(
         device=device,
         evidence=admitted,
         task_id=task_id,
+        deliberation=deliberation_record.as_dict(),
     )
 
     # Ambiguity and refusal come first, and they come before any device

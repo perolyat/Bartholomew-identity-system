@@ -3204,3 +3204,104 @@
     `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md` §7: the reference responder is an
     acknowledgement, not Bartholomew's reasoning; one transport exists; and the boundary has been
     exercised against a reference endpoint, not against AIRI, a companion or any real product.
+
+## Decision: The Executive deliberates a course of action from an outcome, and deliberation proposes without ever authorising (EXEC-01)
+
+- **Decision:** Bartholomew's Executive gains a **cognition step** that turns an outcome-level goal
+  ("start a shopping list for me") into a bounded, structured, validated proposal, including the
+  intermediate steps the person did not state. It lives inside the existing Executive
+  (`bartholomew/executive/deliberation.py` and `capability_catalogue.py`), produces the **existing**
+  `TaskIntent` contract, and is reached only from the existing seam. A language model may supply the
+  semantic reasoning, through a one-method port (`DeliberationPort.deliberate(prompt) -> str`) whose
+  only implementation is an adapter over the **existing** `ModelRouter`
+  (`bartholomew/integration/deliberation_adapter.py`). **Cognition proposes; Governance authorises;
+  capability executes; verification establishes outcome.** Those four remain separate, and the
+  cognition step gained no authority by reasoning.
+- **Alternatives:**
+  - *Keep broadening `intent.py`'s `_RECOGNISERS`.* Rejected: the gap is not vocabulary coverage,
+    it is that a recogniser has no notion of what a step is *for*. No number of regexes produces the
+    `focus_window` step that `type_text` requires, because that step follows from a fact about the
+    capability rather than from a phrase in the sentence.
+  - *Adopt an agent framework (LangGraph, PydanticAI, smolagents, Letta).* Rejected, and not on
+    principle: nothing on the list solved a problem this repository could not already solve. The
+    only thing a framework would have supplied is structured output from a model, which is ~120
+    lines of total, defensive parsing here. What each would have cost is exactly what this
+    architecture refuses — a second planner above Bartholomew, a tool-calling runtime that executes,
+    and a place for governance to end up *inside* somebody else's component.
+  - *Let the model call tools directly.* Rejected outright: it is the same act as collapsing
+    proposing into authorising, which the action envelope's eleven gates exist to keep apart.
+  - *Let cognition replace `parse_task`.* Rejected in favour of running the recogniser **first** and
+    deliberating only where it produced no actionable reading. This buys the strongest compatibility
+    property available: deliberation can turn a refusal into a proposal, and can never turn one
+    proposal into a different one. Every instruction that worked before produces an identical plan.
+  - *Trust the model's parameters.* Rejected: proposed parameters go through the **real**
+    `actuation.parameters.validate()` against the device's **real** allowlists, and the step carries
+    the validator's canonical output. A proposed `app_id` the operator never allowlisted is refused
+    by the allowlist itself, not by a list of known-bad names.
+  - *Let the model resolve ambiguity.* Rejected for referents: "open it" is not a goal that reasoning
+    can decompose, it is a missing subject, and it never reaches a model. Deliberation answers
+    *how*, never *what did you mean*.
+  - *Let cognition reopen a refusal.* Rejected: a request outside the capability vocabulary
+    (`delete`, `install`, `send`, `buy`) is refused by the recogniser and never reaches a model at
+    all. Cognition gets no second vote on a refusal.
+  - *Implement the port inside the executive.* Rejected structurally: `tests/test_w03b_no_bypass.py`
+    forbids that package from importing any HTTP client or socket, and it is right to. The executive
+    declares the port and cannot reach a model on its own; an adapter outside implements it.
+  - *Install a model on startup whenever one is reachable.* Rejected: giving Bartholomew the ability
+    to reason his way to a course of action on somebody's computer is an operator's decision, not a
+    side effect of a provider being up. A deployment opts in by calling `install_deliberation_port`.
+- **Why:** The Executive already had the hard half — capability validation, the action envelope,
+  human authorisation, Parking Brake precedence, independent verification, the `FAILED`/`UNKNOWN`
+  distinction and bounded recovery. What it did not have was the ability to decide *what to propose*.
+  `seam.py` fed the instruction to `parse_task`, `intent.py` described its own pattern set as POC
+  scaffolding, `intent.py:161` recorded that a plan is "a sequence the user actually asked for, never
+  a decomposition the executive invented", and `selection.py` answered "may this device be asked for
+  the capability you named?" rather than "what would this outcome require?". The result was an
+  executive that could follow a plan but made the person write it: "start a shopping list for me"
+  produced a question asking whether that was an application, a file path or a URL.
+- **Consequences:**
+  - **No new authority anywhere.** The executive package still never calls `grant_action_approval`;
+    a proposal still stops at `pending_approval`; the Parking Brake is still read *before* the
+    instruction is understood, so an engaged brake means no model is consulted at all. Nothing was
+    added to `Identity.yaml` and no gate was moved.
+  - **The output type is unchanged, and that is the integration strategy.** Deliberation returns the
+    same `TaskIntent` the recogniser returns, so `build_plan`, `select_capability`, the envelope,
+    verification and recovery cannot tell a deliberated plan from a recognised one and needed no
+    change. Every downstream guarantee applies to both.
+  - **Inference is held to a stricter standard than instruction.** `INFERABLE_CAPABILITIES` is the
+    one new judgement: a step the *person named* carries their authority for its scope, a step the
+    *executive inferred* carries only Bartholomew's reading of an outcome. `clipboard_read` (which
+    returns the person's content to Bartholomew) and `accessibility_action` (which reaches into a
+    live UI tree) are therefore never inferred. Both stay available to an instruction naming them.
+  - **A model's confidence runs one way only.** `low` becomes a question; no value of it permits
+    anything, and it is not consulted when a step is validated — the same direction `evidence.py`
+    already holds for recalled memory.
+  - **Recalled memory reaches the prompt as framed data, and the claim about it is narrowed.**
+    `evidence.py`'s "a poisoned row and a benign row produce the same plan" was written when
+    nothing sent recalled text to a model; `render_evidence_for_prompt` had no production caller
+    until this work package. Two separate statements replace it. Evidence reaches **no part of the
+    deterministic path** — not the catalogue, the device check, parameter validation, the plan
+    bound or the inference rule — so it cannot make an invalid plan valid, introduce an undeclared
+    capability, widen a bound or authorise anything. Evidence **is** in the prompt, so it can
+    influence *which valid plan* a model proposes, which is what context is for. Both halves are
+    tested separately, the second against a port that actually reads the prompt and obeys it.
+    Relatedly, a recalled row containing the frame's own close marker used to end the frame early;
+    that is fixed in `evidence.py` by neutralising the delimiter runs rather than the two marker
+    strings, since neutralising the markers alone would be a filter.
+  - **Failure degrades to a question, never to an action.** No port, a port that raised, unreadable
+    output, a plan over `MAX_PLAN_STEPS`, or any step failing validation all leave the deterministic
+    reading in place. There is no path on which a cognition failure makes the executive fail open.
+  - **The person is told what was worked out.** A step nobody named is a step they are owed an
+    account of before approving it, so the explanation says "I took you to mean…" and names the
+    inferred sub-goals. The full deliberation is written to the `ActionReflection` audit trail; it is
+    deliberately *not* persisted on the task row, which would have needed migration machinery this
+    repair did not otherwise require.
+  - **This does not reach the chat surface.** `kernel/runtime_contract.py` has no reference to the
+    executive package, so a goal typed into `/api/chat` still falls through to a conversational
+    reply. EXEC-01 closed the gap *within* the Executive; connecting that surface is separate work
+    and is recorded as the next bottleneck, not done here.
+  - **`kernel/planner.py` is not the Executive and was not touched.** `Planner.decide()` returns
+    `None` unconditionally; its live method is a single-skill dispatcher for the chat surface.
+    `COGNITIVE_RUNTIME.md`'s "Planning" ownership row is narrowed accordingly: it named
+    `planner.py` as the implementation of planning, which has not been true since device tasks
+    moved to `bartholomew/executive/`.

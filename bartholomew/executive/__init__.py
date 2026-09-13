@@ -45,6 +45,18 @@ reported success with nothing to read back leaves the step `unknown`, and an
 
 from __future__ import annotations
 
+from .capability_catalogue import (
+    CapabilityCatalogue,
+    CapabilityOffer,
+    build_catalogue,
+)
+from .deliberation import (
+    INFERABLE_CAPABILITIES,
+    Deliberation,
+    DeliberationPort,
+    DeliberationRecord,
+    deliberate_task,
+)
 from .evidence import (
     EVIDENCE_FRAME_CLOSE,
     EVIDENCE_FRAME_OPEN,
@@ -87,9 +99,15 @@ __all__ = [
     "EXECUTIVE_BRAKE_SCOPE",
     "EXECUTIVE_KIND_ADVANCE",
     "EXECUTIVE_KIND_TASK",
+    "INFERABLE_CAPABILITIES",
     "STEP_TERMINAL_STATUSES",
     "Ambiguity",
+    "CapabilityCatalogue",
+    "CapabilityOffer",
     "CapabilitySelection",
+    "Deliberation",
+    "DeliberationPort",
+    "DeliberationRecord",
     "EvidenceRecord",
     "EvidenceVerdict",
     "ExecutiveTaskResult",
@@ -103,8 +121,10 @@ __all__ = [
     "Verification",
     "admit_evidence",
     "advance_executive_task_through_runtime_contract",
+    "build_catalogue",
     "build_plan",
     "decide_recovery",
+    "deliberate_task",
     "explain_task",
     "next_actionable_step",
     "parse_task",

@@ -33,6 +33,7 @@ import sqlite3
 from typing import Any
 
 from bartholomew.kernel.db_ctx import wal_db
+from bartholomew.kernel.redaction_engine import redact_pii
 from bartholomew.kernel.reflection import REFLECTION_KIND
 
 from .plan import Plan, PlanStep, StepStatus, TaskStatus
@@ -126,6 +127,10 @@ def explain_task(plan: Plan, *, reflections: list[Any] | None = None) -> str:
             + ". I am not calling that success.",
         )
 
+    reasoning = _deliberation_account(plan)
+    if reasoning:
+        lines.extend(reasoning)
+
     if plan.notes:
         lines.append(
             "Context I recalled (evidence only --- it authorized nothing): "
@@ -188,11 +193,75 @@ def load_task_reflections(db_path: str, task_id: str) -> list[str]:
     return lines
 
 
+#: How many inferred sub-goals the account lists. A bound on prose, not on
+#: reasoning: the whole deliberation is in the Reflection's details either way.
+MAX_REASONING_LINES = 6
+
+
+def _deliberation_account(plan: Plan) -> list[str]:
+    """What the person is told about reasoning the executive did on their behalf.
+
+    A step the person did not ask for in so many words is a step they are owed
+    an account of *before* they approve it. Said plainly, and said as reasoning
+    rather than as fact: "I took you to mean" is the honest verb for a reading
+    of an outcome, and it invites the correction that "you asked me to" would
+    not.
+    """
+    record = plan.deliberation or {}
+    if not record.get("used"):
+        return []
+    deliberation = record.get("deliberation") or {}
+    lines = [
+        "You described what you wanted rather than the steps, so I worked the steps "
+        "out. Nothing here is something you named; every one of them still needs "
+        "your approval.",
+    ]
+    objective = deliberation.get("objective")
+    if objective:
+        lines.append(f"  I took you to mean: {objective}")
+    situation = deliberation.get("situation")
+    if situation:
+        lines.append(f"  What I assumed about right now: {situation}")
+    sub_goals = [g for g in (deliberation.get("sub_goals") or []) if g][:MAX_REASONING_LINES]
+    if sub_goals:
+        lines.append("  To get there I judged these necessary: " + "; ".join(sub_goals))
+    return lines
+
+
+def _redacted(value: Any) -> Any:
+    """`value` with every string inside it put through `redact_pii`, at any depth.
+
+    `ActionReflection.to_memory_row` redacts the *top-level* string values of
+    `details` and then spreads them into `meta`. A nested structure therefore
+    passes through untouched, and the deliberation record is nested --- so a
+    model that echoed an address or a passphrase out of the person's own
+    instruction wrote it to the audit row in clear.
+
+    Redacting here rather than widening the Reflection's own rule keeps the
+    change local to the thing that introduced the nesting.
+    """
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {key: _redacted(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redacted(item) for item in value]
+    return value
+
+
 def explanation_details(plan: Plan) -> dict[str, Any]:
-    """The same account in structured form, for a Reflection's `details`."""
+    """The same account in structured form, for a Reflection's `details`.
+
+    `deliberation` is included whenever the executive reasoned its way to the
+    steps. This is the durable provenance of a cognition decision: the
+    Reflection is the audit trail, and a reviewer asking "did a model
+    contribute to this proposal, and what did it actually say?" answers it from
+    here rather than from a log line.
+    """
     return {
         "task_id": plan.task_id,
         "status": plan.status.value,
+        "deliberation": _redacted(plan.deliberation),
         "steps": [
             {
                 "index": s.index,
@@ -209,4 +278,10 @@ def explanation_details(plan: Plan) -> dict[str, Any]:
     }
 
 
-__all__ = ["MAX_REFLECTION_LINES", "explain_task", "explanation_details", "load_task_reflections"]
+__all__ = [
+    "MAX_REASONING_LINES",
+    "MAX_REFLECTION_LINES",
+    "explain_task",
+    "explanation_details",
+    "load_task_reflections",
+]

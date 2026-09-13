@@ -395,7 +395,7 @@ concept" entry; this file is the reference copy going forward.)
 | Concept | Authoritative owner | Implementations |
 |---|---|---|
 | Identity | Identity System (`identity_interpreter`) | YAML today (`Identity.yaml`), database tomorrow. Two typed projections of that one authority, and no others: `identity_context.py` for Governance ("may this happen?", read by `policy_engine`) and `identity_projection.py` for the model ("who is speaking?", delivered by `ModelRouter` as the provider system message on every real generation — FND-01, 2026-09-12). |
-| Planning | Kernel Executive | `daemon.py` / `planner.py` / `scheduler/*` |
+| Planning | Kernel Executive | **Device tasks: `bartholomew/executive/` — the authoritative Executive, and the only planner that decomposes a goal (`deliberation.py`, EXEC-01, 2026-09-13).** Proactive nudges: `scheduler/*`. `planner.py`'s `decide()` returns `None` unconditionally and is not a planner; its live method routes one named skill for the chat surface. |
 | Memory | Memory Substrate | SQLite now, Postgres later |
 | Experience | Experience Kernel | `experience_kernel.py`, `narrator.py`, `working_memory.py` |
 | Governance | Governance (`ParkingBrake` + `skill_permissions.py`) | — |
