@@ -243,6 +243,44 @@ def admit_evidence(rows: Any) -> AdmittedEvidence:
     return AdmittedEvidence(admitted=tuple(admitted), refused=tuple(refused))
 
 
+#: The delimiter runs the frame markers are built from. Content that could
+#: contain either of these could contain a marker, so neither survives
+#: `neutralise_frame_delimiters` --- see that function for why this is about
+#: the delimiter rather than about the markers themselves.
+_DELIMITER_RUNS = ("<<<", ">>>")
+
+#: What a delimiter run becomes. Visually recognisable so a reader of the
+#: prompt (or of an audit row) can see that something was neutralised, and not
+#: the delimiter, so it cannot close or open a frame.
+_NEUTRALISED = {"<<<": "‹‹‹", ">>>": "›››"}
+
+
+def neutralise_frame_delimiters(text: str) -> str:
+    """Make `text` unable to open or close an evidence frame.
+
+    A frame is only a boundary if the material inside it cannot write one. A
+    recalled row containing the literal close marker would otherwise end the
+    frame early, and everything after it would read as though it had been
+    written outside the quoted region --- which is the whole property the frame
+    exists to provide.
+
+    The substitution is on the **delimiter runs** rather than on the two marker
+    strings, and that is the point: neutralising only the exact markers would
+    be a filter, and a filter invites the next spelling. There is no text that
+    survives this and still contains `<<<` or `>>>`, so there is no text that
+    survives it and still contains a marker.
+
+    Truthfulness note: this changes the rendered characters, so a row that
+    genuinely contained `<<<` is shown with that run replaced. That is a
+    visible, explicable transformation of *presentation*; the stored row is
+    untouched, and `bounded_content()` still returns the real text to
+    everything that is not building a prompt.
+    """
+    for run in _DELIMITER_RUNS:
+        text = text.replace(run, _NEUTRALISED[run])
+    return text
+
+
 def render_evidence_for_prompt(evidence: AdmittedEvidence) -> str:
     """The delimited, explicitly non-instructional frame. Empty when nothing survived.
 
@@ -250,13 +288,20 @@ def render_evidence_for_prompt(evidence: AdmittedEvidence) -> str:
     preamble. There is no branch here that renders a row outside the frame, and
     the frame markers are module constants so a test can prove the rendered
     text is the framed one.
+
+    Every row is put through `neutralise_frame_delimiters` first, so no recalled
+    content can close the frame it is inside. That mattered from the moment
+    something actually sent this text to a model: before EXEC-01 this function
+    had no production caller at all, and `deliberation.build_prompt` is the
+    first. `tests/test_w03b_evidence.py` asserts the frame survives a row that
+    tries to end it.
     """
     if not evidence.admitted:
         return ""
     lines = [EVIDENCE_PREAMBLE, EVIDENCE_FRAME_OPEN]
     for record in evidence.admitted:
-        label = f"{record.source}/{record.kind}"
-        lines.append(f"- [{label}] {record.bounded_content()}")
+        label = neutralise_frame_delimiters(f"{record.source}/{record.kind}")
+        lines.append(f"- [{label}] {neutralise_frame_delimiters(record.bounded_content())}")
     lines.append(EVIDENCE_FRAME_CLOSE)
     return "\n".join(lines)
 
@@ -274,5 +319,6 @@ __all__ = [
     "admit_evidence",
     "coerce_verdict",
     "evidence_from_row",
+    "neutralise_frame_delimiters",
     "render_evidence_for_prompt",
 ]
