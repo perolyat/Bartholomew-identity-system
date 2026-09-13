@@ -190,11 +190,29 @@ Recalled memory reaches the prompt through `evidence.render_evidence_for_prompt`
 contract already required. Nothing else from the system reaches the prompt: no
 executable paths, no device identifiers, no credentials, no store contents.
 
-The safety argument is structural, not lexical, and it is the same one
-`evidence.py` already made: a poisoned corpus and a benign one **produce the same
-plan**, because no capability, parameter, count or ordering is ever read from an
-evidence row. `tests/test_exec01_adversarial.py` proves it by substitution rather
-than by asserting that a particular hostile string was detected.
+Two things are true here and they need separating, because `evidence.py`'s
+original sentence — "a poisoned row and a benign row produce the same plan" —
+was written when nothing sent recalled text to a model, and EXEC-01 is the first
+thing that does.
+
+**Evidence reaches no part of the deterministic path.** It is not consulted when
+the catalogue is built, when a capability is checked against the device, when
+parameters are validated, when the plan bound is applied, or when the inference
+rule is decided. It cannot make an invalid plan valid, introduce a capability
+that does not exist or was not declared, widen a bound, or authorise anything.
+
+**Evidence is in the prompt, so it can influence which valid plan a model
+proposes.** A note that the person keeps lists in WordPad may well produce a
+WordPad plan rather than a Notepad one. That is context doing its job. The
+guarantee is not that evidence changes nothing — it is that evidence changes
+nothing the validation layer would not have allowed from any source, and that it
+confers no authority at all.
+
+`tests/test_exec01_adversarial.py` proves both halves separately, the second
+against a port that actually reads the prompt and obeys what the poisoned memory
+told it to do. The frame those rows are rendered inside is also now escape-proof:
+a row containing the literal close marker used to end the frame early, which is
+fixed at the frame's owner and pinned by regression tests.
 
 ## 6. Why cognition still cannot authorise anything
 

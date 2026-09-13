@@ -3276,10 +3276,18 @@
   - **A model's confidence runs one way only.** `low` becomes a question; no value of it permits
     anything, and it is not consulted when a step is validated — the same direction `evidence.py`
     already holds for recalled memory.
-  - **Recalled memory reaches the prompt as framed data and nothing else.** The frame is W03-D's
-    existing one. The property proved is structural rather than lexical: a poisoned corpus and a
-    benign one produce the *same* plan, because no capability, parameter, count or ordering is read
-    from an evidence row.
+  - **Recalled memory reaches the prompt as framed data, and the claim about it is narrowed.**
+    `evidence.py`'s "a poisoned row and a benign row produce the same plan" was written when
+    nothing sent recalled text to a model; `render_evidence_for_prompt` had no production caller
+    until this work package. Two separate statements replace it. Evidence reaches **no part of the
+    deterministic path** — not the catalogue, the device check, parameter validation, the plan
+    bound or the inference rule — so it cannot make an invalid plan valid, introduce an undeclared
+    capability, widen a bound or authorise anything. Evidence **is** in the prompt, so it can
+    influence *which valid plan* a model proposes, which is what context is for. Both halves are
+    tested separately, the second against a port that actually reads the prompt and obeys it.
+    Relatedly, a recalled row containing the frame's own close marker used to end the frame early;
+    that is fixed in `evidence.py` by neutralising the delimiter runs rather than the two marker
+    strings, since neutralising the markers alone would be a filter.
   - **Failure degrades to a question, never to an action.** No port, a port that raised, unreadable
     output, a plan over `MAX_PLAN_STEPS`, or any step failing validation all leave the deterministic
     reading in place. There is no path on which a cognition failure makes the executive fail open.

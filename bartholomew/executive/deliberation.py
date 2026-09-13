@@ -78,6 +78,30 @@ the consequence of a mistaken element is not visible in the request. Either may
 still appear in a plan --- when the person's own words asked for it, which
 `intent.py` establishes --- but neither may be introduced by deliberation.
 
+What recalled memory can and cannot do, stated exactly
+--------------------------------------------------------
+`evidence.py` records that "a poisoned row and a benign row produce the same
+plan, because the fields a plan is built from are never read from a row at
+all." That sentence was written when nothing sent recalled text to a model ---
+`render_evidence_for_prompt` had no production caller until this module --- and
+it needs narrowing now that something does.
+
+What remains exactly true: evidence reaches **no part of the deterministic
+path**. It is not consulted when the catalogue is built, when a capability is
+checked against the device, when parameters are validated, when the plan bound
+is applied, or when the inference rule is decided. It cannot make an invalid
+plan valid, cannot introduce a capability that does not exist or that this
+device did not declare, cannot widen a bound, and cannot authorise anything.
+
+What is now also true, and is the point of having context at all: recalled text
+is *in the prompt*, so it can influence **which valid plan a model proposes**.
+A note saying the person keeps lists in WordPad may well produce a WordPad plan
+rather than a Notepad one. That is context working. The guarantee is not that
+evidence changes nothing; it is that evidence changes nothing *the validation
+layer would not have allowed from any source*, and that it confers no authority
+whatsoever. `tests/test_exec01_adversarial.py` proves both halves separately,
+the second against a port that actually reads the prompt and obeys it.
+
 Confidence, and what it is not
 -------------------------------
 A model's stated confidence may make the executive *more* cautious and never
@@ -200,6 +224,54 @@ _REFERENT_VERB = re.compile(
     r"\b(?:" + "|".join(re.escape(v) for v in _REFERENT_VERBS) + r")\b\s+(?:up\s+)?(.*)$",
 )
 
+#: The separable forms: "bring it up", "pull it up". The object sits *inside*
+#: the verb, so the phrase-form pattern above cannot see it.
+_SEPARABLE_VERB = re.compile(r"\b(?:bring|pull|open)\s+(.+?)\s+up\b")
+
+#: Words that carry no referent and so must not rescue one. Stripped from both
+#: ends before the comparison: "please open it now" names exactly what "open it"
+#: names, which is nothing.
+_FILLER = (
+    "please",
+    "now",
+    "again",
+    "quickly",
+    "for me",
+    "would you",
+    "could you",
+    "can you",
+    "will you",
+    "i want you to",
+    "i need you to",
+    "just",
+    "thanks",
+    "thank you",
+)
+
+_PUNCTUATION = " .,!?;:'\""
+
+
+#: Determiners that point at something without naming it. "That thing" names
+#: exactly what "thing" names, so the determiner is stripped before the object
+#: is compared. Note this cannot make a *real* referent disappear: "that report"
+#: becomes "report", which is not a bare referent and is let through.
+_DETERMINER = re.compile(r"^(?:that|this|these|those|the|my|a|an)\s+")
+
+
+def _strip_filler(text: str) -> str:
+    """`text` with politeness, punctuation, filler and a leading determiner removed."""
+    cleaned = _DETERMINER.sub("", text.strip(_PUNCTUATION)).strip(_PUNCTUATION)
+    changed = True
+    while changed:
+        changed = False
+        for word in _FILLER:
+            for pattern in (rf"^{re.escape(word)}\b", rf"\b{re.escape(word)}$"):
+                stripped = re.sub(pattern, "", cleaned).strip(_PUNCTUATION)
+                if stripped != cleaned:
+                    cleaned = stripped
+                    changed = True
+    return cleaned
+
 
 @runtime_checkable
 class DeliberationPort(Protocol):
@@ -251,6 +323,22 @@ class Deliberation:
     raw: str = ""
 
     def as_dict(self) -> dict[str, Any]:
+        """The reading, in a form that is safe to persist.
+
+        **Parameter values are not included, only their names.** This dict
+        reaches an `ActionReflection` through `explanation.explanation_details`,
+        and `seam._record` holds one rule about that sink: "nothing here writes
+        a parameter value ... the text somebody asked to have typed never
+        appears --- the envelope's own Reflection already records it as a digest,
+        and a second copy in cleartext here would undo that."
+
+        These are the *raw* parameters a model proposed, so they are worse than
+        the validated ones: they include values the validator went on to refuse,
+        which is precisely the material --- a mistyped password, something that
+        tripped the secret detector --- that must not be copied into an audit
+        row. The shape is kept because "the model proposed a `type_text` with a
+        `text` parameter" is what a reviewer needs; the content is not.
+        """
         return {
             "objective": self.objective,
             "situation": self.situation,
@@ -258,7 +346,7 @@ class Deliberation:
             "steps": [
                 {
                     "capability": s.capability,
-                    "parameters": dict(s.parameters),
+                    "parameter_names": sorted(str(k) for k in s.parameters),
                     "purpose": s.purpose,
                     "necessary_because": s.necessary_because,
                 }
@@ -485,7 +573,7 @@ def intent_from_deliberation(
     instruction: str,
     catalogue: CapabilityCatalogue,
     device: Any,
-    named_capabilities: frozenset[str] = frozenset(),
+    named: frozenset[tuple[str, str]] = frozenset(),
     record: DeliberationRecord | None = None,
 ) -> TaskIntent:
     """Validate a reading into a `TaskIntent`, refusing every step that does not hold.
@@ -497,9 +585,11 @@ def intent_from_deliberation(
     its parameters against the real allowlists --- never because the model
     asserted that it was valid or safe.
 
-    `named_capabilities` are the capabilities the person's own words named, per
-    `intent.py`. They widen `INFERABLE_CAPABILITIES` for this instruction only,
-    because a capability the person asked for is not one the executive inferred.
+    `named` are the signatures of the actions the person's own words asked for
+    (`named_signatures`). They widen `INFERABLE_CAPABILITIES` for exactly those
+    actions, because an action the person asked for is not one the executive
+    inferred --- and only for those actions, because naming one is not licensing
+    a category.
     """
     log = record if record is not None else DeliberationRecord()
 
@@ -580,7 +670,7 @@ def intent_from_deliberation(
             proposed,
             catalogue=catalogue,
             device=device,
-            named_capabilities=named_capabilities,
+            named=named,
         )
         if step is None:
             log.rejected_steps.append(
@@ -621,12 +711,42 @@ def intent_from_deliberation(
     )
 
 
+def named_signatures(steps: tuple[IntentStep, ...], device: Any) -> frozenset[tuple[str, str]]:
+    """The exact actions the person's own words asked for, as (capability, fingerprint).
+
+    A **signature**, not a capability name, and the distinction is the whole
+    point. Waiving `INFERABLE_CAPABILITIES` for a capability *kind* would mean
+    that "expand 'File' in notepad, and start a shopping list" --- one
+    accessibility action the person named, plus one goal they described ---
+    licensed the executive to propose *any* accessibility action at all,
+    against any control. The person named one action; they did not license a
+    category.
+
+    The fingerprint is `ValidatedParameters.fingerprint()`, which is what the
+    envelope binds an approval to, so "the same action" means the same thing
+    here as it does at the point of approval. A literal step whose parameters
+    do not validate contributes no signature: it could not have been proposed
+    anyway, so it licenses nothing.
+    """
+    context = getattr(device, "validation_context", None)
+    resolved = context() if callable(context) else None
+    signatures: set[tuple[str, str]] = set()
+    for step in steps:
+        try:
+            kind = CapabilityKind(step.capability)
+            validated = validate_parameters(kind, step.parameters, resolved)
+        except (ValueError, ParameterError, UnsupportedCapabilityError):
+            continue
+        signatures.add((kind.value, validated.fingerprint()))
+    return frozenset(signatures)
+
+
 def _validate_step(
     proposed: DeliberatedStep,
     *,
     catalogue: CapabilityCatalogue,
     device: Any,
-    named_capabilities: frozenset[str],
+    named: frozenset[tuple[str, str]],
 ) -> tuple[IntentStep | None, str | None]:
     """One step, or the reason there is no step. Never a step and a reason."""
     try:
@@ -644,12 +764,6 @@ def _validate_step(
         )
         return None, f"{kind.value} is not available here: {reason}"
 
-    if kind not in INFERABLE_CAPABILITIES and kind.value not in named_capabilities:
-        return None, (
-            f"{kind.value} is not something I will decide to do on my own from a "
-            "described outcome. Ask for it directly and I will propose it."
-        )
-
     context = getattr(device, "validation_context", None)
     try:
         validated = validate_parameters(
@@ -660,7 +774,16 @@ def _validate_step(
     except (ParameterError, UnsupportedCapabilityError) as error:
         return None, f"the {kind.value} step would not be valid on this device: {error}"
 
-    described = proposed.purpose or _describe(kind, validated.redacted)
+    # The inference rule is checked *after* validation, because it is checked
+    # against the canonical fingerprint rather than the capability name --- see
+    # `named_signatures`. A non-inferable capability is permitted only when the
+    # person asked for precisely this action, not merely for one of this kind.
+    if kind not in INFERABLE_CAPABILITIES and (kind.value, validated.fingerprint()) not in named:
+        return None, (
+            f"{kind.value} is not something I will decide to do on my own from a "
+            "described outcome. Ask for exactly what you want and I will propose it."
+        )
+
     return (
         IntentStep(
             capability=kind.value,
@@ -668,16 +791,55 @@ def _validate_step(
             # the model wrote. The envelope fingerprints and approves exactly
             # this shape, so the step carries the form that will be governed.
             parameters=dict(validated.canonical),
-            described_as=described[:200],
+            # Deterministic, and deliberately *not* the model's own `purpose`.
+            # `described_as` is the only thing `explanation._step_line` prints
+            # about a step, so it is what a person reads when deciding whether
+            # to approve. Letting model-authored text be that line would let a
+            # step be labelled "add milk to your shopping list" while actually
+            # typing something else entirely. The model's reasoning is kept ---
+            # it reaches the account and the audit through the deliberation
+            # record --- but it never describes the act itself.
+            described_as=_describe(kind, validated.redacted),
         ),
         None,
     )
 
 
+#: How a step is described to the person who has to approve it. Phrased like
+#: `intent.py`'s own `described_as` strings, because a deliberated step and a
+#: recognised one should read the same way to an approver: what matters is what
+#: the action *is*, not how the executive arrived at it.
+_DESCRIPTIONS = {
+    CapabilityKind.LAUNCH_APP: "start the allowlisted application {app_id}",
+    CapabilityKind.FOCUS_WINDOW: "bring {app_id}'s window to the foreground",
+    CapabilityKind.MANAGE_WINDOW: "{operation} {app_id}'s window",
+    CapabilityKind.OPEN_URL: "open {url} in the default browser",
+    CapabilityKind.OPEN_PATH: "open {path}",
+    CapabilityKind.CLIPBOARD_READ: "read the clipboard once",
+    CapabilityKind.CLIPBOARD_WRITE: "put the given text on the clipboard",
+    CapabilityKind.TYPE_TEXT: "type the given text into the focused control",
+    CapabilityKind.ACCESSIBILITY_ACTION: "{operation} in {app_id}",
+}
+
+
 def _describe(kind: CapabilityKind, redacted: dict[str, Any]) -> str:
-    """A fallback one-liner when the model did not say what a step is for."""
-    detail = ", ".join(f"{k}={v}" for k, v in sorted(redacted.items()))
-    return f"{kind.value}({detail})" if detail else kind.value
+    """What this step actually does, said in the person's language.
+
+    Built from the **validated, redacted** parameters, so it can neither
+    misdescribe the act nor reprint content the validator marked sensitive:
+    `type_text` and `clipboard_write` say "the given text" rather than the text,
+    exactly as `intent.py` does, because the envelope already records that value
+    as a digest and a cleartext copy here would undo it.
+    """
+    template = _DESCRIPTIONS.get(kind)
+    if template is None:  # pragma: no cover - unreachable while the enum is closed
+        return kind.value
+    try:
+        described = template.format(**redacted)
+    except (KeyError, IndexError):
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(redacted.items()))
+        described = f"{kind.value}({detail})" if detail else kind.value
+    return described[:200]
 
 
 # --------------------------------------------------------------------------
@@ -692,15 +854,40 @@ def names_no_referent(instruction: str) -> bool:
     whose subject is missing, and the only correct answer is a question. This
     predicate keeps such a sentence away from deliberation entirely, so no
     amount of capability knowledge can turn it into a guess.
+
+    Three things a first cut of this got wrong, each fixed here and each pinned
+    by a regression test, because all three are ordinary English rather than
+    contrived evasions:
+
+    * **Politeness and filler.** "Open it now", "open it please", "could you
+      open it" all name exactly as much as "open it" does. Trailing filler is
+      stripped before the comparison, and leading filler is why the verb is
+      *searched* for rather than anchored.
+    * **Separable verbs.** "Bring it up" and "pull it up" are the ordinary word
+      order; "bring up" and "pull up" as adjacent phrases are not. Both forms
+      are matched.
+    * **Ordering.** Regex alternation is first-match, so the verb list is sorted
+      longest-first: a bare `show` before `show me` would match "show me this"
+      at `show` and leave "me this" as the object.
+
+    The guard is deliberately one-directional. Misjudging a real goal as
+    referent-less costs a clarifying question; misjudging a referent-less
+    sentence as a goal costs a guess about somebody's computer.
     """
-    text = re.sub(r"\s+", " ", (instruction or "")).strip().lower().rstrip(".!?")
+    text = re.sub(r"\s+", " ", (instruction or "")).strip().lower()
+    text = _strip_filler(text)
     if not text:
         return True
+
+    # "bring it up" / "pull it up": the object sits inside the verb.
+    separable = _SEPARABLE_VERB.search(text)
+    if separable is not None and _strip_filler(separable.group(1)) in _BARE_REFERENTS:
+        return True
+
     match = _REFERENT_VERB.search(text)
     if match is None:
         return False
-    rest = match.group(1).strip().rstrip(".!?")
-    return rest in _BARE_REFERENTS
+    return _strip_filler(match.group(1)) in _BARE_REFERENTS
 
 
 def deliberate_task(
@@ -735,7 +922,7 @@ def deliberate_task(
     """
     log = record if record is not None else DeliberationRecord()
     literal = parse_task(instruction or "")
-    named = frozenset(step.capability for step in literal.steps)
+    named = named_signatures(literal.steps, device)
 
     if literal.actionable:
         log.reason = "the instruction named its own steps; no deliberation was needed"
@@ -803,7 +990,7 @@ def deliberate_task(
         instruction=literal.instruction,
         catalogue=catalogue,
         device=device,
-        named_capabilities=named,
+        named=named,
         record=log,
     )
     if not log.used and log.reason is None:
@@ -828,6 +1015,7 @@ __all__ = [
     "build_prompt",
     "deliberate_task",
     "intent_from_deliberation",
+    "named_signatures",
     "names_no_referent",
     "parse_deliberation",
 ]
