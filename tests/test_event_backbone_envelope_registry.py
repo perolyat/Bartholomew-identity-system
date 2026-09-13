@@ -179,18 +179,17 @@ def test_the_registered_types_are_the_declared_ones():
     it should not be possible to do quietly.
     """
     import bartholomew.integration.multimodal_events  # noqa: F401
+    from bartholomew.kernel.event_processing.adapters import (
+        ECI_OBSERVATION,
+        ECI_REQUEST,
+        ECI_RESULT,
+    )
     from bartholomew.multimodal.events import (
         EVENT_TYPE_ACCESSIBILITY,
         EVENT_TYPE_SCREEN,
         EVENT_TYPE_SESSION_STATE,
         EVENT_TYPE_SPEECH,
         EVENT_TYPE_TRANSCRIPT,
-    )
-
-    from bartholomew.kernel.event_processing.adapters import (
-        ECI_OBSERVATION,
-        ECI_REQUEST,
-        ECI_RESULT,
     )
 
     assert set(registry.registered_types()) == {
