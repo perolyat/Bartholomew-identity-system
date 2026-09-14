@@ -6,7 +6,11 @@
 > document had not been updated since 2026-08-20 and had become the *stalest* canonical
 > document while still declaring itself the Single Source of Truth: it knew nothing of
 > Wave 3 (PR #101), BGPR-01 (#102), FND-01 to FND-04 (#104–#107) or EXEC-01 (#108), and
-> its "Next 3 Moves" still pointed at an Approval-Gate review completed on 2026-08-20.
+> its "Next 3 Moves" still pointed at an Approval-Gate review completed on 2026-08-20. *(Extended
+> 2026-09-14, second pass: the gap was wider than six pull requests. Usable POC slice 2 and the two
+> late-August acceleration sprints — PRs #65 and #66, which delivered conversational task control,
+> Memory Agency and the conversational-primary UI — were also absent here, so this document
+> understated what a user can actually do today, not merely what was merged.)*
 > Three changes, all documentation:
 >
 > **(1) Authority narrowed, not moved.** A new canonical document, **`START_HERE.md`**,
@@ -790,6 +794,25 @@ The 2026-08-12 list below is preserved and remains accurate as history; it stops
 record of completed, merged, Taylor-approved work plus one identified-but-unauthorised next
 package. **Listing a package is not authorisation to start it.**
 
+- ✅ **Usable POC slice 2 — Proactive Schedule Reminders.** Implemented 2026-08-25,
+  `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md`. Opt-in, **default OFF** (`schedule_reminders` in
+  `config/kernel.yaml`, deliberately the only switch): a drive notices date-bearing facts falling
+  due and surfaces one reminder per (fact, due date) plus one governed outbound delivery. With
+  slice 1 this demonstrates the loop end to end. **It does not authorise unattended operation** —
+  that sits inside Band A's envelope and needs its own decision. *(Recorded here 2026-09-14: item 5
+  of the 2026-08-12 list below still says subsequent-slice scope is "deliberately not fixed yet",
+  which `docs/TILT.md` had already overtaken.)*
+- ✅ **Capability Acceleration Sprint.** PR #66, merged 2026-08-25/26 under Taylor's explicit
+  instruction. Conversational task control — an ordinary sentence performs a real `TasksSkill`
+  operation through the existing governed Runtime Contract chokepoint — plus a default-OFF local
+  spoken-output prototype, and a Parking Brake repair for the sight and voice device seams.
+- ✅ **UX Acceleration Sprint.** PR #65, merged 2026-08-26 at Taylor's explicit instruction after
+  independent adversarial review. Test #1 UI defect repairs; ordinary-user vs Workshop separation
+  with safety controls kept in the ordinary view; **Memory Agency** (list, search, correct, forget,
+  export) through the single governed `MemoryStore`; conversational-primary UX; a truthful
+  expressive-presence prototype; obligation legibility and first-use orientation. Review
+  corrections included making correction a conditional write, so a stale correction cannot destroy
+  a newer legitimate one, and reporting governance metadata as unknown rather than fabricating it.
 - ✅ **Wave 3 — Windows observe → reason → act → verify integration.** PR #101, merged
   2026-09-09 (the builder packages W03-A to W03-F, integrated on the wave branch and merged as
   one candidate — see the `merge(W03-F): integrate …` commits). This is the integrated runtime
