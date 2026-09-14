@@ -14,10 +14,14 @@
 > **`START_HERE.md` is the authority for the current-state snapshot**; this document remains
 > the authority for stages, gates, exit criteria and the Band 0/A/B/C/D readiness structure.
 >
-> **(2) EXEC-02 is identified and NOT started.** Connecting the conversational surface to
-> the existing Executive is the identified next implementation package (`MASTER_PLAN.md`'s
-> "Next 3 Moves"). **It is not authorised**, it creates no new stage, and it does not move
-> any band. The readiness bands still govern real-world testing: Band A before further
+> **(2) EXEC-02 is identified, sequenced, and NOT started.** Deepening the existing Executive so the
+> conversational surface reaches its goal-to-plan deliberation is the identified next implementation
+> package (`MASTER_PLAN.md`'s "Next 3 Moves"). **Taylor sequenced it on 2026-09-14**: it follows a
+> narrow Windows writer-lock/WAL reliability repair and one attended **Band 0** checkpoint, and
+> proceeds unless Band 0 reveals a material blocker (`DECISIONS.md`, "The approved sequence"). **It
+> is not started and not itself authorised to begin**, it creates no new stage, and it does not move
+> any band. The reliability repair is now a **pre-Band-0 requirement** so that Band 0 evidence is not
+> contaminated by a known defect. The readiness bands still govern real-world testing: Band A before further
 > unattended testing, Band B before real ambient sensing, Band C before full Real-World
 > Test #2. **Listing a package or a band is not authorisation to start work in it.**
 >

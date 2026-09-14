@@ -1137,8 +1137,18 @@
 
 - **(2026-09-09, amended 2026-09-14) Windows Merge Candidate intermittent failures — deferred out
   of Wave 3 as a separate reliability task (User Approval Gate exception, PR #101).**
-  **Amendment (2026-09-14, Project Control & Documentation Reset — recording current state, not a
-  new risk and not a change of disposition):** this condition **still holds on today's `main`**.
+  **Disposition changed 2026-09-14 (Taylor, User Approval Gate): this is now a PRE-BAND-0 REPAIR
+  REQUIREMENT, no longer simply deferred.** The objective is to restore a clean, trustworthy Windows
+  baseline so that attended Band 0 evidence is not contaminated by a known reliability defect. It is
+  its own narrowly-scoped work package, sequenced after PR #109 merges and before the checkpoint —
+  scoped to **this writer-lock / WAL reliability class only**, explicitly not general database
+  cleanup, unrelated refactoring, broad technical-debt reduction or EXEC-02 work. See `DECISIONS.md`,
+  "The approved sequence". **`tests/test_fnd04_eci_vertical_slice.py` is a separate unresolved defect**
+  unless and until root-cause evidence shows it belongs to this class: its classification is to be
+  investigated during that work, shared causation must not be assumed merely because it fails in the
+  same Windows run, and if the evidence proves a shared root cause that evidence is recorded —
+  otherwise it stays independently tracked.
+  **Amendment (2026-09-14, Project Control & Documentation Reset — recording current state):** this condition **still holds on today's `main`**.
   The Merge Candidate tier on the push of `a64f5af` (the EXEC-01 merge) failed one job of seven,
   *Windows full default suite + actuation (py3.11)*, at **3 failed, 4,987 passed, 79 skipped**;
   every other job passed, including real-Win32 governed actuation, both Ubuntu coverage jobs
@@ -1317,7 +1327,19 @@ inside a work-package document is a limitation the next session will not find.
 - **R-EXEC01-4 — The capability domain is bounded.** The same nine Windows capability kinds;
   cognition got better at using them and no new ones were added. Outcome-level competence is
   claimed *inside* that domain only.
-- **R-EXEC01-5 — `INFERABLE_CAPABILITIES` is an unresolved policy judgement.** That
+- **R-EXEC01-5 — `INFERABLE_CAPABILITIES` — POLICY RESOLVED 2026-09-14; the review obligation
+  stands.** Taylor approved the standing principle **"infer the means, not additional authority"**
+  (`DECISIONS.md`): Bartholomew may infer the ordinary means necessary to achieve an authorised
+  goal, inferred actions carry less authority than named ones, capabilities involving materially
+  greater authority, privacy exposure, external commitment or destructive consequence are
+  **deny-by-default for inference** unless explicitly reviewed and approved, and every inferred
+  action still passes capability validation, governance, approval, the Parking Brake, the envelope,
+  verification and recovery. The current set is **the implementation baseline for the existing
+  vocabulary, not a frozen architectural list**, and **a future capability does not become inferable
+  merely by being implemented** — each addition or removal requires deliberate review of authority,
+  privacy and consequence. What remains is that standing review obligation, not an open question.
+  The original entry follows.
+  **(Superseded framing)** `INFERABLE_CAPABILITIES` is an unresolved policy judgement. That
   `clipboard_read` and `accessibility_action` are never *inferred* (while remaining available
   to an instruction that names them) is a reasoned judgement about the difference between a
   step the person authorised by naming it and a step Bartholomew inferred — not a derived
@@ -1333,7 +1355,13 @@ inside a work-package document is a limitation the next session will not find.
   `CI.md`'s header as the interim authority on which workflow runs when. **Residual:** the body of
   that document is still written around the older structure, and its test counts and Phase A
   statements are historical. A full rewrite is real work and should be proposed on its own rather
-  than folded into a documentation pass. **Risk category:** tech debt / documentation currency.
+  than folded into a documentation pass. **Approved 2026-09-14 (Taylor):** a separate, tightly
+  scoped documentation-maintenance task will rewrite `CI.md` around the current four-tier structure
+  and refresh `TEST_MATRIX.md` so its structure, counts and evidence references reflect the current
+  repository. It is **not** part of PR #109, must not expand into unrelated cleanup, and is **not a
+  prerequisite for the Band 0 checkpoint or for EXEC-02** — it becomes blocking only if a concrete
+  documentation inconsistency is shown to compromise test interpretation or project control.
+  **Risk category:** tech debt / documentation currency.
 
 - **R-CTRL-1 — Documentation currency is itself a project risk.** The 2026-09-14 reset found
   the canonical control plane roughly a month behind `main`: `MASTER_PLAN.md`, the document

@@ -848,10 +848,9 @@ package. **Listing a package is not authorisation to start it.**
   `TaskIntent` through the existing seam. **Deliberately not connected to the
   conversational surface, and not enabled in production wiring.** See
   `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` and `START_HERE.md` §5.
-- ⏳ **Project Control & Documentation Reset.** 2026-09-14 — **prepared, not merged and not
-  approved**: branch `claude/bartholomew-control-reset-rdszk7`, PR #109, awaiting Taylor at the User
-  Approval Gate. It is listed here for sequence, and it is the one item in this list that is *not*
-  completed, merged, Taylor-approved work. This pass: `START_HERE.md`
+- ✅ **Project Control & Documentation Reset.** 2026-09-14 — **approved by Taylor at the User
+  Approval Gate**, conditional on required CI being green on the final pull-request head; branch
+  `claude/bartholomew-control-reset-rdszk7`, PR #109. This pass: `START_HERE.md`
   created, EXEC-01 provenance and CI record corrected, this document's currency restored,
   the GitHub/Airtable source hierarchy recorded, Airtable aligned.
 - ⏭ **NEXT, identified and NOT started: EXEC-02 — connect the conversational surface to
@@ -859,21 +858,21 @@ package. **Listing a package is not authorisation to start it.**
   Executive path; `bartholomew/kernel/runtime_contract.py` holds no import from the executive
   package, and `install_deliberation_port` has no production caller. Until both are
   addressed, EXEC-01's cognition is invisible to the user. **This requires its own
-  separate, explicit approval before any work begins.** Its scope is for its own brief to set, not
-  this document; what the existing invariants already require of any such package is that it
+  separate, explicit approval before any work begins, and Taylor sequenced it on 2026-09-14 to
+  follow the Windows reliability repair and the attended Band 0 checkpoint** (`DECISIONS.md`, "The
+  approved sequence"). Its scope is for its own brief to set, not this document; what the existing invariants already require of any such package is that it
   develop **outward from the Executive stage the runtime already has** — no second planner, no
   governance bypass, deterministic recognition first, the existing `ModelRouter` and `TaskIntent`
   contracts — and a recommendation, not a requirement set here, is that live-model end-to-end
   evidence form part of its definition of done, because no such evidence exists today.
-  **Sequencing question for Taylor, raised 2026-09-14 and deliberately not decided here:**
-  `docs/TILT.md` remains the binding near-term sequencing authority, and its principle — real-world
-  testing takes priority once a slice can generate meaningful feedback — points at something before
-  EXEC-02. Neither **slice 2** (default OFF, no attended checkpoint run) nor the **UX Acceleration
-  Sprint** (which exists to answer Test #1's burden finding) has ever been in real use. An attended
-  **Band 0** checkpoint of the existing surface needs no new code and tests the project's largest
-  risk directly. The counter-argument is that a user cannot fairly judge the product while the
-  Executive is unreachable. **Recommended: the attended checkpoint first, then EXEC-02** — Taylor's
-  call, and neither is authorised by being listed here.
+  **Sequencing decided by Taylor 2026-09-14** (raised by this reset, resolved at the User Approval
+  Gate). The approved order is: **merge PR #109 → a narrow Windows writer-lock / WAL reliability
+  repair, classifying the FND-04 vertical-slice failure → restore a trustworthy Windows baseline →
+  one attended Band 0 real-world checkpoint → EXEC-02**, unless Band 0 reveals a material blocker
+  serious enough to justify changing course. The Band 0 checkpoint is an evidence/validation step,
+  not a new implementation architecture; the reliability repair is its own narrowly-scoped package
+  and is not to be widened. `CI.md` / `TEST_MATRIX.md` maintenance is approved as separate,
+  non-blocking work. `DECISIONS.md`'s "The approved sequence" entry is the durable authority.
 
 **Historical — the actual next moves, as of 2026-08-12 (each step below requires its own separate, explicit
 approval before work begins — this list records sequencing, not authorisation):**
@@ -1041,6 +1040,17 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
   dependencies, workflows, configuration or schema touched) — **not yet committed**
 
 ### Approval Ledger
+
+- 2026-09-14 — **Project Control & Documentation Reset** (PR #109, branch
+  `claude/bartholomew-control-reset-rdszk7`): approved by Taylor at the User Approval Gate,
+  conditional on required CI being green on the final pull-request head. Documentation and
+  project-control only; no code, tests, schemas, migrations or runtime configuration. The same
+  approval resolved nine open decisions — the GitHub/Airtable authority split, the
+  merge → Windows-reliability-repair → Band 0 → EXEC-02 sequence, governed in-place updates as a
+  standing product constraint, the "infer the means, not additional authority" principle, the
+  Windows writer-lock/WAL repair as a pre-Band-0 requirement, separate tracking of
+  `tests/test_fnd04_eci_vertical_slice.py`, an Airtable `Proposed` status, and `CI.md` /
+  `TEST_MATRIX.md` maintenance as separate non-blocking work. See `DECISIONS.md`.
 Record of approved changes with commit tracking (most recent 5):
 
 - 2026-08-22 — **WP-A2: audit-write integrity and truthful governed-action failure** (register

@@ -70,6 +70,7 @@ runtime semantics. This list is an index, not a substitute.
 | **Governance above autonomy** | Capability never outranks the rules. Growth in cognition never grants growth in authority. |
 | **Parking Brake precedence** | The brake is read *before* an instruction is understood, sits below the presentation layer, and cannot be overridden by cognition, a capability or a UI. An engaged brake means no model is consulted at all. It has **two approved authority tiers** — a Personal/User brake that never halts other users, and a higher-scope Platform/Admin brake a user cannot override — orthogonal to the six subsystem scopes. `COGNITIVE_RUNTIME.md`'s "Authority tiers" is canonical for the semantics. |
 | **Cognition may propose, never authorise** | The Executive package never grants its own approval (AST-enforced). A proposal stops at `pending_approval` and waits for a human. |
+| **Infer the means, not additional authority** | *(Approved 2026-09-14.)* Bartholomew may infer the ordinary means necessary to achieve an authorised goal, but inference must never silently create additional authority. An inferred step carries less authority than one the person named; capabilities involving materially greater authority, privacy exposure, external commitment or destructive consequence are **deny-by-default for inference** unless explicitly reviewed and approved; and every inferred action still passes capability validation, governance, approval, the Parking Brake, the envelope, verification and recovery. |
 | **Evidence is not authority** | Recalled memory and endpoint reports are framed, non-instructional data. They can influence *which valid option* is chosen; they can never make an invalid action valid, widen a bound, or authorise anything. |
 | **Prospective reasoning is hypothetical** | Simulated or predicted state must never be presented or recorded as observation. |
 | **Verification is independent** | A device's own report of success, with nothing read back, is `unknown`. `unknown` is never rendered as success. |
@@ -79,8 +80,13 @@ runtime semantics. This list is an index, not a substitute.
 
 ## 3. Source hierarchy — who owns what
 
-**The rule, in one line: GitHub owns durable truth; Airtable owns live status; a
-conversation owns nothing.**
+**The rule, in one line: GitHub owns durable authority; Airtable owns live operational control
+within it; a conversation owns nothing.**
+
+**The boundary that matters (approved 2026-09-14):** Airtable may reorder ordinary operational work
+inside approved direction. It must **never silently change durable project direction**. If the live
+queue would materially change an approved sequencing decision, architectural prerequisite, gate or
+direction, **update the durable repository authority first**, then the queue.
 
 | Question | Authority |
 |---|---|
@@ -90,7 +96,8 @@ conversation owns nothing.**
 | What are the risks? | **GitHub** — `RISKS.md` (durable), mirrored as a working queue in Airtable. |
 | What is the state of work *right now* — status, priority, next action, evidence pointers? | **Airtable** — `Bartholomew Master Project`. (It has no blockers or dependencies field today; a blocker is carried in the next-action text. Representing dependencies structurally would be a separate controlled schema change.) |
 | What was proven, and by what evidence? | **GitHub** — the work-package document and `docs/evidence/`; Airtable holds the pointer and the tier. |
-| What should I work on next? | **GitHub** — `docs/TILT.md` and `MASTER_PLAN.md`'s "Next 3 Moves" are the sequencing authority. **Airtable** `Work Packages` carries the live queue and must agree with them. *(Whether Airtable should instead own the queue outright is an open question for Taylor — see `DECISIONS.md`'s source-of-truth entry. This row records the conservative reading actually implemented, not a decision.)* |
+| What should I work on next **right now**? | **Airtable** — it owns live operational control: the queue, current priority, status, active owner/session, blockers and dependencies. It may reorder ordinary operational work. |
+| What sequence or direction has been **formally approved**? | **GitHub** — architecture, approved decisions, constraints, contracts, major roadmap commitments, sequencing decisions, milestone order, architectural prerequisites, project gates and durable evidence. |
 
 **These are project-management systems, not parts of Bartholomew.** GitHub and Airtable hold the
 *project's* control information — what humans and AI sessions need in order to build the thing.
@@ -204,35 +211,33 @@ inferred), and every proposed parameter goes through the real device allowlists.
   better at using them; there are no new ones. Deliberation provenance is not
   persisted on the task row (it reaches the `ActionReflection` audit trail).
 
-### What comes next — and the one open sequencing question
+### What comes next — the approved sequence
 
-**The identified next implementation package is EXEC-02:** connect the conversational surface to
-the existing Executive, so ordinary goals reach it. It is **not started and not authorised.** It is
-the right implementation package on the evidence — it is the only gap that turns already-merged,
-already-reviewed cognition into something a user can reach, and the seam it needs is proven (an
-ordinary sentence already performs a governed `TasksSkill` operation through the Runtime Contract
-chokepoint; what it does not do is reach the Executive).
+**Taylor approved this sequence at the User Approval Gate on 2026-09-14.** It is the durable
+sequencing decision; `DECISIONS.md` carries it in full.
 
-**But `docs/TILT.md` is the binding near-term sequencing authority, and read literally it puts
-something before EXEC-02.** Its principle is that *once a vertical slice is sufficiently functional
-to generate meaningful real-user feedback, real-world testing takes priority over additional polish
-or hardening*, with six exceptions (safety, governance, privacy, data integrity, architectural
-validity, validity of the experiment). And two substantial things have never been in real use:
-**slice 2** (proactive reminders — default OFF, no attended checkpoint run) and the **whole UX
-Acceleration Sprint**, which exists specifically to answer Test #1's burden finding and has never
-been retested against a real person.
+1. **Merge PR #109** (this reset) once its required CI is green on the final head.
+2. **A narrow Windows writer-lock / WAL reliability repair**, and classify the FND-04 vertical-slice
+   failure while doing it. **Scope is deliberately narrow** — this reliability class only, not
+   general database cleanup, unrelated refactoring, broad tech-debt reduction or EXEC-02 work.
+3. **Restore a trustworthy Windows baseline**, so that Band 0 evidence is not contaminated by a
+   known reliability defect. That is the whole purpose of step 2.
+4. **One attended Band 0 real-world checkpoint** on the resulting system. This is an
+   **evidence/validation step, not a new implementation architecture.**
+5. **EXEC-02**, unless the Band 0 checkpoint reveals a material blocker serious enough to justify
+   changing course.
 
-So there is a genuine choice, and it is **Taylor's, not a builder's**:
+`CI.md` and `TEST_MATRIX.md` maintenance is approved as **separate, non-blocking** work. It is not a
+prerequisite for Band 0 or for EXEC-02, and becomes blocking only if a concrete documentation
+inconsistency is shown to compromise test interpretation or project control.
 
-- **(a) Run an attended Band 0 real-use checkpoint of what already exists, then EXEC-02.** Cheap —
-  it needs no new code — and it tests the project's single biggest risk (that the product is
-  burdensome) against the work that was done to fix it. If the existing surface is still a chore,
-  EXEC-02 built on top of it inherits that, and we would find out later at higher cost.
-- **(b) EXEC-02 first**, on the argument that a user cannot fairly judge the product while the
-  Executive is unreachable, so the checkpoint is more informative afterwards.
-
-This document does not decide it. **Recommendation: (a), then EXEC-02** — but nothing here
-authorises either, and neither starts without Taylor's explicit approval.
+**EXEC-02 remains the next major Executive implementation package after the checkpoint**, and it is
+still **not started**. Read what it is precisely: Bartholomew **already has an Executive stage** in
+the runtime, and EXEC-02 **deepens and connects the existing Executive architecture** so that
+outcome-level goals reach the deliberation that already exists inside it. It does not attach, bolt
+on or wire in a separate Executive brain, and it must develop outward from the existing runtime,
+identity, memory, governance, capability and execution systems rather than introduce a parallel
+planner or agent architecture.
 
 ## 6. Evidence tiers
 
@@ -296,9 +301,11 @@ package, and repairing it is separate, unauthorised work.
 7. **Parking Brake read/write authority split** remains open (constraint C6,
    gated at Band B / safety gate S5). Not closed by Test #1.
 8. **`main`'s Merge Candidate tier is red** — the Windows writer-lock / WAL-contention class
-   (§7). Known, analysed, and deferred with Taylor's approval, but it means "CI is green" is only
-   true of the two tiers a pull request runs, and it will make real-world Windows acceptance
-   evidence harder to read until it is repaired.
+   (§7). **No longer deferred: as of 2026-09-14 this is a pre-Band-0 repair requirement**, because
+   Band 0 evidence must not be contaminated by a known reliability defect. The repair is its own
+   narrowly-scoped work package after PR #109 merges. `tests/test_fnd04_eci_vertical_slice.py`
+   stays **separately tracked** unless root-cause evidence proves it shares this class — shared
+   causation is not to be assumed from failing in the same Windows run.
 9. **Documentation currency is itself a risk.** This reset repaired a control plane
    that had drifted roughly a month behind `main`. See §10.
 

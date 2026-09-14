@@ -3394,13 +3394,23 @@
     away from reading them wholesale.
   - Nothing about governance, autonomy, the Parking Brake, approval, evidence or verification is
     touched. This entry concerns project control only.
-- **Open — for Taylor:** whether Airtable should hold the **authoritative next-action queue** (so
-  a session takes its next task from Airtable and the repository never states one), or whether
-  `MASTER_PLAN.md`'s "Next 3 Moves" and `docs/TILT.md` remain the sequencing authority with
-  Airtable reflecting them. The reset implemented the conservative reading — repository sequencing
-  remains authoritative, Airtable carries the live queue and must agree with it — because moving
-  sequencing authority out of version control is a larger project-control change than a
-  documentation pass should make by itself.
+- **Resolved by Taylor 2026-09-14 (User Approval Gate) — the split is by *kind of authority*, not
+  by document.**
+  - **GitHub owns durable authority:** architecture, approved decisions, constraints, contracts,
+    major roadmap commitments, **sequencing decisions**, milestone order, architectural
+    prerequisites, project gates, and durable evidence.
+  - **Airtable owns authoritative live operational control *within those approved bounds*:** what
+    should be worked on next right now, current priority, current status, active owner/session,
+    blockers, dependencies, and operational queue ordering. **Airtable may reorder ordinary
+    operational work** inside approved direction.
+  - **Airtable must not silently change durable project direction.** If the live queue would
+    materially change an approved sequencing decision, architectural prerequisite, gate or
+    direction, **the durable repository authority is updated first**, and the queue follows.
+  - So: *"What should we do next right now?"* → **Airtable**. *"What sequence or direction has been
+    formally approved?"* → **GitHub**.
+  This supersedes the conservative reading the reset implemented while the question was open. Note
+  the practical consequence: Airtable gained real operational authority, and with it the obligation
+  to escalate rather than quietly re-sequence approved work.
 
 ## Decision: EXEC-01's merge provenance and CI record are corrected to a single final truth
 
@@ -3441,17 +3451,20 @@
 
 ## Decision: A clean acceptance-test installation is not the model for ordinary governed updates
 
-- **Status:** recorded 2026-09-14 by the Project Control & Documentation Reset. The **testing
-  procedure** half is established practice (the standing real-world acceptance workflow agreed
-  September 2026). The **update-mechanism** half is a **proposed constraint for Taylor**, not an
-  approved decision: no update mechanism exists, and nothing here authorises building one.
+- **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate as a standing product
+  constraint (the entry was recorded the same day as a proposal and is now approved). **It remains
+  emphatically not authorisation to implement an Update & Migration System**, and it must not be
+  used to freeze detailed updater mechanics that have not separately been approved.
 - **Decision:** Two things that look alike must not be conflated.
-  - A **real-world acceptance test** installs from a **clean checkout at the exact accepted head**,
+  - **Clean/disposable installations remain the standard for acceptance testing.** A **real-world
+    acceptance test** installs from a **clean checkout at the exact accepted head**,
     so that what is tested is what was approved and nothing carries over from a developer's working
     state. That is a property of the test, and it is why a test result can be attributed to a commit.
-  - An **ordinary future update** of a person's Bartholomew is **governed and in-place**, and must
-    **preserve their personal identity, memory and state**. A user's Bartholomew is not reinstalled
-    to receive an improvement.
+  - **Ordinary Bartholomew deployments should support governed in-place upgrades as the normal
+    routine update path**, preserving the person's identity, memory and state. A user's Bartholomew
+    is not reinstalled to receive an improvement. **A clean reinstall may still be required where it
+    is technically necessary or safer** — that remains a legitimate option, not a failure of the
+    constraint.
   - Neither pattern is evidence about the other: a clean-install acceptance pass says nothing about
     whether an in-place update preserves state, and vice versa.
 - **Why:** the two were being conflated in discussion, and the distinction matters in both
@@ -3467,5 +3480,84 @@
   - **No implementation is authorised.** No update, migration or upgrade mechanism exists; designing
     one is separate, separately-approved work, and this entry does not scope it.
   - `docs/FIRST_REAL_WORLD_TEST.md` remains the procedure for the test half.
-- **Open — for Taylor:** whether to approve the update-mechanism half as a standing constraint on any
-  future update design, or leave it as a recorded expectation until such work is actually proposed.
+- **Closed 2026-09-14:** approved as a standing constraint on any future update design. What is
+  *not* decided, and is deliberately left open, is every detail of how such an update mechanism
+  works — that is for its own separately-approved package.
+
+## Decision: The approved sequence — merge #109, repair Windows reliability, run Band 0, then EXEC-02
+
+- **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate. This is the durable
+  sequencing authority; the Airtable queue reflects it and may not silently change it.
+- **Decision:** Work proceeds in this order.
+  1. **Merge PR #109** (the Project Control & Documentation Reset) once its required CI is green on
+     the final pull-request head. Approval is conditional on that, verified on the exact head rather
+     than inherited from an earlier commit's CI.
+  2. **A narrow Windows writer-lock / WAL reliability repair**, as its own controlled work package
+     after #109 merges, with the classification of `tests/test_fnd04_eci_vertical_slice.py`
+     investigated as part of it.
+  3. **Restore a clean, trustworthy Windows baseline** — the objective of step 2, and the reason it
+     precedes Band 0.
+  4. **One attended Band 0 real-world checkpoint** on the resulting current system.
+  5. **EXEC-02**, unless the Band 0 checkpoint reveals a material blocker serious enough to justify
+     changing course.
+- **Why this order:** Band 0 exists to produce trustworthy evidence about whether Bartholomew is
+  useful rather than burdensome. Evidence gathered on a Windows baseline with a known, unrepaired
+  reliability defect cannot answer that question cleanly — a failure during the checkpoint could not
+  be distinguished from the defect. Repairing first is what makes the checkpoint's evidence mean
+  something. And running the checkpoint before EXEC-02 tests the largest known product risk against
+  the work already done to address it, rather than building further on an unmeasured surface.
+- **Consequences and boundaries:**
+  - **The Band 0 checkpoint is an evidence/validation step, not a new implementation architecture.**
+  - **The reliability repair is narrowly scoped** to the writer-lock / WAL class. It is explicitly
+    **not** general database cleanup, unrelated refactoring, broad technical-debt reduction, or
+    EXEC-02 work, and it is not to be started inside PR #109.
+  - **`tests/test_fnd04_eci_vertical_slice.py` is a separate unresolved defect** unless and until
+    root-cause evidence shows it belongs to the same class. Shared causation must not be assumed
+    from co-occurrence in the same Windows run. If evidence proves a shared root cause, that
+    evidence is recorded; otherwise it stays independently tracked.
+  - **`CI.md` and `TEST_MATRIX.md` maintenance is approved as separate, tightly-scoped work** — a
+    rewrite of `CI.md` around the current four-tier structure and a refresh of `TEST_MATRIX.md`'s
+    structure, counts and evidence references. It is **not** part of PR #109, **not** a prerequisite
+    for Band 0 or EXEC-02, and must not expand into unrelated cleanup. It becomes blocking only if a
+    concrete documentation inconsistency is shown to compromise test interpretation or project
+    control.
+  - **EXEC-02 remains the next major Executive implementation package** after the checkpoint, and
+    remains unstarted. It **deepens and connects the Executive architecture that already exists** —
+    the runtime already has an Executive stage — rather than attaching a separate Executive brain.
+
+## Decision: Infer the means, not additional authority
+
+- **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate as a standing
+  Executive/governance principle. It closes the open policy question EXEC-01 left behind about
+  `INFERABLE_CAPABILITIES` (`RISKS.md` R-EXEC01-5).
+- **Decision:** **Bartholomew may infer the ordinary means necessary to achieve an authorised user
+  goal, but inference must not silently create additional authority.** In practice:
+  - The Executive **may** work out the intermediate steps needed to accomplish the user's authorised
+    outcome.
+  - **Inferred actions carry less authority than actions the user explicitly named.**
+  - Capabilities involving **materially greater authority, privacy exposure, external commitments,
+    destructive consequence, or similarly consequential scope are deny-by-default for inference**
+    unless explicitly reviewed and approved.
+  - Inferred actions remain fully subject to capability validation, governance, approval
+    requirements, the Parking Brake, the action envelope, verification and recovery.
+  - The current `INFERABLE_CAPABILITIES` set is **the implementation baseline for the existing
+    vocabulary, not an eternally frozen architectural list**.
+  - **Future capabilities must not automatically become inferable merely because they are
+    implemented.** Additions and removals require deliberate review of authority, privacy and
+    consequence.
+- **Why:** the purpose is to preserve useful autonomy without turning Bartholomew into a system that
+  constantly asks the user to specify obvious intermediate steps. A person who says "start a
+  shopping list" has authorised the list, and should not have to name the window focus that makes it
+  possible. What they have *not* authorised is a step that reaches further than their goal —
+  reading their clipboard, reaching into a live UI tree, spending money, contacting someone. The
+  distinction is not risk in the abstract: it is whether the step stays inside the authority the
+  goal already carried.
+- **Consequences:**
+  - EXEC-01's existing rule — `clipboard_read` and `accessibility_action` are never inferred, while
+    remaining available to an instruction that names them — is the correct application of this
+    principle, and is now derived from a stated rule rather than standing as a bare judgement.
+  - Every future capability addition inherits an explicit question: may this be *inferred*, or only
+    *instructed*? Silence is answered by deny-by-default for the consequential classes above.
+  - **No implementation change is authorised by this entry.** It states the policy that governs
+    future review; the current code already matches it.
+- **Shorthand:** *infer the means, not additional authority.*
