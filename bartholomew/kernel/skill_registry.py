@@ -11,6 +11,7 @@ Part of Stage 4: Skill Registry + Starter Skills.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import importlib
 import inspect
 import json
@@ -431,7 +432,37 @@ class SkillRegistry:
             db_path=self._db_path,
             manifest=manifest,
             check_permission=check_permission,
+            # So a skill's own sqlite3 writes join the daemon's off-loop
+            # worker and its confirmed drain at shutdown (Phase B stage B2);
+            # see SkillBase._run_off_loop().
+            blocking_executor=self._blocking_executor,
         )
+
+    async def _permission_call(self, fn: Any, *args: Any) -> Any:
+        """
+        Run one `PermissionChecker` call off the event loop, under a copy of
+        the current task's context.
+
+        `check()` and `grant_session()` read persistent grants and write the
+        required `permission_audit` row with synchronous sqlite3. Made on the
+        event-loop thread, such a write can only wait for the write lock by
+        blocking the loop -- and the lock's holder may be an aiosqlite
+        transaction (a `MemoryStore` Reflection write from a scheduler drive)
+        whose commit needs that same loop, so the wait can never succeed and
+        fails after exactly `busy_timeout` with ``database is locked``. That
+        is the mechanism behind the intermittent HTTP 400 on
+        `/api/notifications/quiet-hours` and the Windows Merge Candidate
+        failures of the writer-lock / WAL class.
+
+        The context copy matters: WP-A2's per-action collector of failed
+        permission-audit writes is a `ContextVar`, and a plain executor thread
+        carries no context. Running `fn` inside `context.run` lets a failure
+        recorded on the worker thread land in the collector `_finish()` drains.
+        """
+        from .blocking_executor import run_off_loop
+
+        context = contextvars.copy_context()
+        return await run_off_loop(context.run, fn, *args, executor=self._blocking_executor)
 
     def _setup_subscriptions(
         self,
@@ -816,7 +847,11 @@ class SkillRegistry:
             SkillResult.denied(...) for the first permission that wasn't.
         """
         for permission in manifest.permissions.requires:
-            result = self._permission_checker.check(manifest.skill_id, permission)
+            result = await self._permission_call(
+                self._permission_checker.check,
+                manifest.skill_id,
+                permission,
+            )
             if result.granted:
                 continue
 
@@ -840,7 +875,11 @@ class SkillRegistry:
             if not approved:
                 return SkillResult.denied(permission)
 
-            self._permission_checker.grant_session(manifest.skill_id, permission)
+            await self._permission_call(
+                self._permission_checker.grant_session,
+                manifest.skill_id,
+                permission,
+            )
 
         return None
 

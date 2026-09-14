@@ -62,6 +62,7 @@ from bartholomew.eci.contract import (
     parse_iso,
 )
 from bartholomew.eci.store import EciPersistenceError, list_directives
+from bartholomew.kernel.blocking_executor import run_off_loop
 
 from ..db import resolve_db_path
 
@@ -283,7 +284,10 @@ async def report_capability_availability(request: Request) -> Any:
 
     db_path = resolve_db_path()
     try:
-        decision = report_availability(
+        # Synchronous sqlite3 writes (schema + the availability row), so off
+        # the event loop -- see `bartholomew.eci.boundary.submit()`.
+        decision = await run_off_loop(
+            report_availability,
             db_path,
             identity,
             capability,

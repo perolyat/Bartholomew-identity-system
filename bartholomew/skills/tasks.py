@@ -139,7 +139,7 @@ class TasksSkill(SkillBase):
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._run_off_loop(self._init_database)
 
         # Subscribe to events
         if context.workspace:
@@ -219,7 +219,7 @@ class TasksSkill(SkillBase):
     async def _action_create(self, params: dict[str, Any]) -> SkillResult:
         """Create a new task."""
         # Check permission
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -237,7 +237,7 @@ class TasksSkill(SkillBase):
         )
 
         # Save to database
-        self._save_task(task)
+        await self._run_off_loop(self._save_task, task)
 
         # Emit event
         self._emit_event("tasks", "task_created", task.to_dict())
@@ -251,7 +251,7 @@ class TasksSkill(SkillBase):
     async def _action_list(self, params: dict[str, Any]) -> SkillResult:
         """List tasks with optional filters."""
         # Check permission
-        perm_error = self._require_permission("memory.read")
+        perm_error = await self._require_permission("memory.read")
         if perm_error:
             return perm_error
 
@@ -272,7 +272,7 @@ class TasksSkill(SkillBase):
 
     async def _action_get(self, params: dict[str, Any]) -> SkillResult:
         """Get a specific task."""
-        perm_error = self._require_permission("memory.read")
+        perm_error = await self._require_permission("memory.read")
         if perm_error:
             return perm_error
 
@@ -288,7 +288,7 @@ class TasksSkill(SkillBase):
 
     async def _action_complete(self, params: dict[str, Any]) -> SkillResult:
         """Mark a task as complete."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -308,7 +308,7 @@ class TasksSkill(SkillBase):
 
         task.status = TaskStatus.COMPLETED
         task.completed_at = datetime.utcnow().isoformat() + "Z"
-        self._save_task(task)
+        await self._run_off_loop(self._save_task, task)
 
         # Emit event
         self._emit_event("tasks", "task_completed", task.to_dict())
@@ -321,7 +321,7 @@ class TasksSkill(SkillBase):
 
     async def _action_delete(self, params: dict[str, Any]) -> SkillResult:
         """Delete a task."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -333,7 +333,7 @@ class TasksSkill(SkillBase):
         if not task:
             return SkillResult.fail(f"Task not found: {task_id}")
 
-        self._delete_task(task_id)
+        await self._run_off_loop(self._delete_task, task_id)
 
         # Emit event
         self._emit_event("tasks", "task_deleted", {"task_id": task_id})
@@ -343,7 +343,7 @@ class TasksSkill(SkillBase):
 
     async def _action_update(self, params: dict[str, Any]) -> SkillResult:
         """Update a task."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -367,7 +367,7 @@ class TasksSkill(SkillBase):
         if "tags" in params:
             task.tags = params["tags"]
 
-        self._save_task(task)
+        await self._run_off_loop(self._save_task, task)
 
         # Emit event
         self._emit_event("tasks", "task_updated", task.to_dict())

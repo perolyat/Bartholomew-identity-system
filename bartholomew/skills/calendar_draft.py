@@ -188,7 +188,7 @@ class CalendarDraftSkill(SkillBase):
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._run_off_loop(self._init_database)
 
         # Create exports directory
         self._exports_dir = Path("./exports/calendar")
@@ -272,7 +272,7 @@ class CalendarDraftSkill(SkillBase):
 
     async def _action_create(self, params: dict[str, Any]) -> SkillResult:
         """Create a draft calendar event."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -306,7 +306,7 @@ class CalendarDraftSkill(SkillBase):
             reminder_minutes=params.get("reminder_minutes"),
         )
 
-        self._save_event(event)
+        await self._run_off_loop(self._save_event, event)
 
         # Emit event
         self._emit_event("calendar", "event_drafted", event.to_dict())
@@ -319,7 +319,7 @@ class CalendarDraftSkill(SkillBase):
 
     async def _action_list(self, params: dict[str, Any]) -> SkillResult:
         """List calendar events."""
-        perm_error = self._require_permission("memory.read")
+        perm_error = await self._require_permission("memory.read")
         if perm_error:
             return perm_error
 
@@ -340,7 +340,7 @@ class CalendarDraftSkill(SkillBase):
 
     async def _action_get(self, params: dict[str, Any]) -> SkillResult:
         """Get a specific event."""
-        perm_error = self._require_permission("memory.read")
+        perm_error = await self._require_permission("memory.read")
         if perm_error:
             return perm_error
 
@@ -356,7 +356,7 @@ class CalendarDraftSkill(SkillBase):
 
     async def _action_update(self, params: dict[str, Any]) -> SkillResult:
         """Update an event."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -388,7 +388,7 @@ class CalendarDraftSkill(SkillBase):
         if "reminder_minutes" in params:
             event.reminder_minutes = params["reminder_minutes"]
 
-        self._save_event(event)
+        await self._run_off_loop(self._save_event, event)
 
         # Emit event
         self._emit_event("calendar", "event_updated", event.to_dict())
@@ -401,7 +401,7 @@ class CalendarDraftSkill(SkillBase):
 
     async def _action_delete(self, params: dict[str, Any]) -> SkillResult:
         """Delete an event."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -413,7 +413,7 @@ class CalendarDraftSkill(SkillBase):
         if not event:
             return SkillResult.fail(f"Event not found: {event_id}")
 
-        self._delete_event(event_id)
+        await self._run_off_loop(self._delete_event, event_id)
 
         # Emit event
         self._emit_event("calendar", "event_deleted", {"event_id": event_id})
@@ -423,7 +423,7 @@ class CalendarDraftSkill(SkillBase):
 
     async def _action_export_ics(self, params: dict[str, Any]) -> SkillResult:
         """Export events to .ics file."""
-        perm_error = self._require_permission("memory.read")
+        perm_error = await self._require_permission("memory.read")
         if perm_error:
             return perm_error
 

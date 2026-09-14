@@ -183,7 +183,7 @@ class NotifySkill(SkillBase):
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._run_off_loop(self._init_database)
 
         # Stage 1, S1.3: load persisted quiet-hours/mute settings (seeding
         # the singleton row with the class defaults on first run) instead
@@ -193,7 +193,7 @@ class NotifySkill(SkillBase):
         self._muted = False
         self._muted_until: str | None = None
         if self._db_path:
-            self._load_settings()
+            await self._run_off_loop(self._load_settings)
 
         # Usable POC slice 1: the outbound webhook delivery channel. Read from
         # the environment rather than persisted, so no credential-bearing
@@ -355,7 +355,7 @@ class NotifySkill(SkillBase):
     async def _action_send(self, params: dict[str, Any]) -> SkillResult:
         """Send a notification immediately (respects quiet hours)."""
         # Check permission
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -368,7 +368,9 @@ class NotifySkill(SkillBase):
         # Check mute/quiet hours (urgent notifications bypass both -- mute
         # is treated the same as an always-on quiet-hours window rather
         # than a separate gate, per Stage 1 S1.3's design).
-        if (self._is_muted() or self._is_quiet_hours()) and priority != NotificationPriority.URGENT:
+        if (
+            await self._is_muted() or self._is_quiet_hours()
+        ) and priority != NotificationPriority.URGENT:
             # Queue for later
             return await self._action_queue(
                 {
@@ -388,7 +390,7 @@ class NotifySkill(SkillBase):
         )
 
         # Save to database
-        self._save_notification(notification)
+        await self._run_off_loop(self._save_notification, notification)
 
         # Emit event
         self._emit_event("alerts", "notification_sent", notification.to_dict())
@@ -407,7 +409,7 @@ class NotifySkill(SkillBase):
     async def _action_queue(self, params: dict[str, Any]) -> SkillResult:
         """Queue a notification for later delivery."""
         # Check permission
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -427,7 +429,7 @@ class NotifySkill(SkillBase):
         )
 
         # Save to database
-        self._save_notification(notification)
+        await self._run_off_loop(self._save_notification, notification)
 
         # Emit event
         self._emit_event("alerts", "notification_queued", notification.to_dict())
@@ -441,7 +443,7 @@ class NotifySkill(SkillBase):
     async def _action_list_pending(self, params: dict[str, Any]) -> SkillResult:
         """List pending notifications."""
         # Check permission
-        perm_error = self._require_permission("nudge.read")
+        perm_error = await self._require_permission("nudge.read")
         if perm_error:
             return perm_error
 
@@ -456,7 +458,7 @@ class NotifySkill(SkillBase):
     async def _action_cancel(self, params: dict[str, Any]) -> SkillResult:
         """Cancel a queued notification."""
         # Check permission
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -472,7 +474,7 @@ class NotifySkill(SkillBase):
             return SkillResult.fail("Can only cancel pending notifications")
 
         notification.status = NotificationStatus.CANCELLED
-        self._save_notification(notification)
+        await self._run_off_loop(self._save_notification, notification)
 
         # Emit event
         self._emit_event(
@@ -500,7 +502,7 @@ class NotifySkill(SkillBase):
 
     async def _action_set_quiet_hours(self, params: dict[str, Any]) -> SkillResult:
         """Set and persist quiet hours (Stage 1, S1.3)."""
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -513,7 +515,7 @@ class NotifySkill(SkillBase):
 
         self._quiet_hours_start = start
         self._quiet_hours_end = end
-        self._save_settings()
+        await self._run_off_loop(self._save_settings)
 
         return SkillResult.ok(
             data={"start": start, "end": end, "is_active": self._is_quiet_hours()},
@@ -522,7 +524,7 @@ class NotifySkill(SkillBase):
 
     async def _action_mute(self, params: dict[str, Any]) -> SkillResult:
         """Mute non-urgent notifications, optionally until a given time (Stage 1, S1.3)."""
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -535,7 +537,7 @@ class NotifySkill(SkillBase):
 
         self._muted = True
         self._muted_until = normalized_until
-        self._save_settings()
+        await self._run_off_loop(self._save_settings)
 
         return SkillResult.ok(
             data={"muted": True, "muted_until": normalized_until},
@@ -544,13 +546,13 @@ class NotifySkill(SkillBase):
 
     async def _action_unmute(self, params: dict[str, Any]) -> SkillResult:
         """Clear mute (Stage 1, S1.3)."""
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
         self._muted = False
         self._muted_until = None
-        self._save_settings()
+        await self._run_off_loop(self._save_settings)
 
         return SkillResult.ok(data={"muted": False}, message="Notifications unmuted")
 
@@ -560,7 +562,7 @@ class NotifySkill(SkillBase):
         # the clear) an expired muted_until, so muted/muted_until below
         # must be read after that check runs, not before, or a just-expired
         # mute would report a self-contradictory muted=true/effective=false.
-        effective_muted = self._is_muted()
+        effective_muted = await self._is_muted()
         return SkillResult.ok(
             data={
                 "quiet_hours": {
@@ -620,11 +622,15 @@ class NotifySkill(SkillBase):
         else:
             return start <= current_time < end
 
-    def _is_muted(self) -> bool:
+    async def _is_muted(self) -> bool:
         """
         Check if notifications are currently muted, lazily clearing (and
         persisting the clear, not just computing a value) an expired
         `muted_until` so a stale mute doesn't silently outlive its window.
+
+        Awaitable because that persisted clear is a synchronous sqlite3 write,
+        which must not run on the event-loop thread (see
+        `SkillBase._run_off_loop()`).
         """
         if not self._muted:
             return False
@@ -640,7 +646,7 @@ class NotifySkill(SkillBase):
             if until_dt is None or datetime.now(timezone.utc) >= until_dt:
                 self._muted = False
                 self._muted_until = None
-                self._save_settings()
+                await self._run_off_loop(self._save_settings)
                 return False
         return True
 
@@ -768,7 +774,7 @@ class NotifySkill(SkillBase):
         Called periodically to deliver due notifications.
         """
         now = datetime.utcnow().isoformat() + "Z"
-        is_suppressed = self._is_muted() or self._is_quiet_hours()
+        is_suppressed = await self._is_muted() or self._is_quiet_hours()
         delivered = 0
 
         notifications = self._get_pending_notifications(limit=100)
@@ -793,7 +799,7 @@ class NotifySkill(SkillBase):
             if should_deliver:
                 notification.status = NotificationStatus.SENT
                 notification.sent_at = now
-                self._save_notification(notification)
+                await self._run_off_loop(self._save_notification, notification)
                 await self._deliver_notification(notification)
 
                 self._emit_event(

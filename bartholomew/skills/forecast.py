@@ -294,7 +294,7 @@ class ForecastSkill(SkillBase):
         stack -- see `SkillBase._require_permission()`'s docstring and the
         registry's `_resolve_permissions()`.
         """
-        perm_error = self._require_permission("network.fetch")
+        perm_error = await self._require_permission("network.fetch")
         if perm_error:
             return perm_error
 
