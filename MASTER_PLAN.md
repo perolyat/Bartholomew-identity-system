@@ -2,7 +2,32 @@
 
 > **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
 >
-> **Last updated:** 2026-08-20 — **Real-World Test #1 is complete and its Decision Register is
+> **Last updated:** 2026-09-14 — **Project Control & Documentation Reset.** This
+> document had not been updated since 2026-08-20 and had become the *stalest* canonical
+> document while still declaring itself the Single Source of Truth: it knew nothing of
+> Wave 3 (PR #101), BGPR-01 (#102), FND-01 to FND-04 (#104–#107) or EXEC-01 (#108), and
+> its "Next 3 Moves" still pointed at an Approval-Gate review completed on 2026-08-20.
+> Three changes, all documentation:
+>
+> **(1) Authority narrowed, not moved.** A new canonical document, **`START_HERE.md`**,
+> is the project bootstrap and is the authority for the **source hierarchy**, the
+> **current-state snapshot** and the **new-session bootstrap procedure**. This document
+> remains canonical and remains the authority for the **programme plan, the backlog, the
+> stage structure, doc governance and the approval ledger**. The phrase "Single Source of
+> Truth" was never true of one document — the canonical *set* is the SSOT, and
+> `START_HERE.md` is now its index. Where this document's status statements and
+> `START_HERE.md` disagree, `START_HERE.md` is current and this document is stale.
+>
+> **(2) Currency restored.** The September work is recorded under "Next 3 Moves" below.
+>
+> **(3) The canonical registry** below goes from 14 documents to **15**.
+>
+> **No production code, tests, schemas, migrations or runtime configuration changed by
+> this pass, and nothing in it authorises implementation.** In particular it does not
+> authorise EXEC-02 (connecting the conversational surface to the Executive), which is
+> identified and **not started**.
+>
+> **Previously (2026-08-20):** **Real-World Test #1 is complete and its Decision Register is
 > approved.** Taylor approved **Post-Test #1 Decision Register v2.2** on 2026-08-20 as the
 > authoritative Post-Test #1 Decision Register, establishing decisions D1–D15, safety gates S1–S11,
 > product gates P1–P9, readiness Bands 0/A/B/C/D and implementation Tracks 1–7 as project authority.
@@ -129,7 +154,12 @@ See [DECISIONS.md](DECISIONS.md) for the "User Approval Gate" decision and [CHEC
 
 ## Canonical docs
 
-**14 documents.** This list is the registry; `DECISIONS.md`'s "Canonical SSOT docs" entry and
+**15 documents.** *(Amended 2026-09-14: `START_HERE.md` added as the 15th — the project
+bootstrap, and the authority for the source hierarchy, the current-state snapshot and the
+new-session bootstrap procedure. It exists because orientation previously required reading
+a large pile of planning material, and because no document owned the GitHub/Airtable
+division of responsibility. It is an index and a snapshot, not a competing authority on
+architecture, decisions, risks or roadmap.)* This list is the registry; `DECISIONS.md`'s "Canonical SSOT docs" entry and
 `CONSTITUTION.md`'s handover note describe the same set. (Corrected 2026-07-27: this list
 previously omitted `CONSTITUTION.md`, contradicting `DECISIONS.md`'s "Adopt `CONSTITUTION.md`
 as a canonical SSOT doc" entry, which explicitly puts the count at 13. **Amended 2026-08-12:**
@@ -138,7 +168,9 @@ as a canonical SSOT doc" entry, which explicitly puts the count at 13. **Amended
 same way `ROADMAP.md` and `DECISIONS.md` do. See `DECISIONS.md`'s "Usable POC / time-to-real-use
 prioritisation" entry.)
 
-- **MASTER_PLAN.md** (this doc)
+- [START_HERE.md](START_HERE.md) — **read first.** Project bootstrap; authority for the
+  source hierarchy (GitHub vs Airtable), the current-state snapshot and evidence tiers
+- **MASTER_PLAN.md** (this doc) — programme plan, backlog, doc governance, approval ledger
 - [CONSTITUTION.md](CONSTITUTION.md)
 - [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md)
 - [ROADMAP.md](ROADMAP.md)
@@ -752,7 +784,49 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 > sequencing is why S5.1–S5.3 were the right things to build before this pivot, and S5.4–S5.7
 > remain real, deferred (not abandoned) work — see `docs/TILT.md`'s "What is deferred" section.
 
-**The actual next moves, as of 2026-08-12 (each step below requires its own separate, explicit
+**Current sequence, as of 2026-09-14 (added in the Project Control & Documentation Reset).**
+The 2026-08-12 list below is preserved and remains accurate as history; it stops at
+2026-08-22 and therefore no longer describes the front of the queue. Everything here is a
+record of completed, merged, Taylor-approved work plus one identified-but-unauthorised next
+package. **Listing a package is not authorisation to start it.**
+
+- ✅ **Wave 3 — Windows observe → reason → act → verify integration.** PR #101, merged
+  2026-09-09 (builder PRs #93–#97 contained within it). This is the integrated runtime
+  baseline; it is not to be rebuilt. See `docs/waves/W03/`.
+- ✅ **BGPR-01 — Golden Path runtime repair.** PR #102, merged 2026-09-11. Local-model
+  generation, truthful readiness, blocking generation moved off the event loop. See
+  `docs/BARTHOLOMEW_BGPR_01_FINAL_HANDOFF.md`.
+- ✅ **FND-01 — Canonical identity projection.** PR #104, merged 2026-09-12.
+  Provider-independent, structurally required identity into every real model path.
+- ✅ **FND-02 — Memory redaction contract repair.** PR #105, merged 2026-09-12. Redaction
+  policy structurally separated from classifier rules; fails closed.
+- ✅ **FND-03 — Consent inbox privacy and lifecycle repair.** PR #106, merged 2026-09-13.
+  Pending consent payloads protected at rest, scrubbed after resolution, included in
+  forget/revoke semantics.
+- ✅ **FND-04 — External Capability Interface core boundary.** PR #107, merged 2026-09-13.
+  Endpoint identity, advertised capability, availability, governed request/directive flow
+  and result correlation, proven by a reference vertical slice. **No real external product
+  is attached.** See `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md`.
+- ✅ **EXEC-01 — Goal-to-plan deliberation.** PR #108, reviewed head `2813c7b`, merge
+  commit `a64f5af`, merged 2026-09-14. The Executive can turn an outcome-level goal into a
+  bounded, validated proposal, inferring unstated intermediate steps, as the existing
+  `TaskIntent` through the existing seam. **Deliberately not connected to the
+  conversational surface, and not enabled in production wiring.** See
+  `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` and `START_HERE.md` §5.
+- ✅ **Project Control & Documentation Reset.** 2026-09-14. This pass: `START_HERE.md`
+  created, EXEC-01 provenance and CI record corrected, this document's currency restored,
+  the GitHub/Airtable source hierarchy recorded, Airtable aligned.
+- ⏭ **NEXT, identified and NOT started: EXEC-02 — connect the conversational surface to
+  the existing Executive.** Ordinary user goals arriving at `/api/chat` do not enter the
+  Executive path; `kernel/runtime_contract.py` holds no reference to the executive
+  package, and `install_deliberation_port` has no production caller. Until both are
+  addressed, EXEC-01's cognition is invisible to the user. **This requires its own
+  separate, explicit approval before any work begins,** and a bounded scope defined from
+  current `main` — no second planner, no governance bypass, deterministic recognition
+  first, existing `ModelRouter` and `TaskIntent` contracts. Live-model end-to-end evidence
+  is part of its definition of done, because no such evidence exists today.
+
+**Historical — the actual next moves, as of 2026-08-12 (each step below requires its own separate, explicit
 approval before work begins — this list records sequencing, not authorisation):**
 
 1. ✅ **Done.** Documentation reconciliation, the hybrid local-first deployment decision, Phase B

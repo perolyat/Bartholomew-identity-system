@@ -1,7 +1,14 @@
 # EXEC-01 — Goal-to-Plan Deliberation
 
-**Status:** implemented, not merged. Awaiting the User Approval Gate.
-**Baseline:** `origin/main` at `31279b9` (the merge of PR #107 / FND-04).
+**Status:** **merged.** Approved by Taylor at the User Approval Gate and merged to
+`main` in PR #108.
+**Provenance:** reviewed head `2813c7b`; merge commit / `main` after merge `a64f5af`.
+**Baseline it was built on:** `origin/main` at `31279b9` (the merge of PR #107 / FND-04).
+
+> **Provenance corrected 2026-09-14** (Project Control & Documentation Reset). This
+> header previously read *"implemented, not merged. Awaiting the User Approval Gate"*
+> — true when written, stale from the moment PR #108 merged. The CI record below is
+> reconciled in the same pass: see §9.
 **Scope:** Executive cognition only. No governance, actuation, verification,
 recovery, memory, ECI, identity or consent system was redesigned.
 
@@ -258,3 +265,49 @@ recovery, and asserts the fourteen acceptance conditions in order.
 * **It does not claim general competence.** It claims that outcome-level goals
   inside the supported Windows capability domain now become bounded, validated,
   governed proposals.
+
+## 9. CI and merge record — the single final truth
+
+*Added 2026-09-14 (Project Control & Documentation Reset), to replace two
+inconsistent records with one.*
+
+| Item | Value |
+|---|---|
+| Pull request | #108 |
+| Reviewed head | `2813c7b` |
+| Merge commit / `main` after merge | `a64f5af` |
+| Approval | Taylor, at the User Approval Gate |
+| CI at the reviewed head | PR Fast/CI tier: **success**. Integration / merge-candidate tier: **success**. |
+| Targeted/default test evidence | 493 tests green, of which 218 are EXEC-01 tests |
+| Independent adversarial review | 23 findings raised; 18 substantive findings fixed; zero live defects reported at the reviewed head |
+
+**The CI contradiction, resolved.** An earlier record stated that the Integration /
+merge-candidate jobs were *skipped under normal pull-request behaviour*. That was
+written while #108 was still a draft and was accurate then. **Marking the pull request
+ready for review caused the Integration tier to run, and those checks completed
+successfully before merge.** The merge-time truth is that **both tiers ran and both
+passed** at `2813c7b`. Any statement to the contrary, anywhere in the repository or in
+a prior handoff, is superseded by this table.
+
+## 10. Evidence tier — what this evidence does and does not prove
+
+The evidence above is **unit/integration, CI, adversarial-review and mocked-model**
+evidence. It proves the plumbing around a model is correct and defensive.
+
+It is **not** real-model evidence, not real-Windows/device evidence for the
+deliberated path, and not manual acceptance evidence. **No live model has yet been
+exercised through this path, so nothing here says a real model produces good plans.**
+`START_HERE.md` §6 holds the project-wide tier definitions.
+
+## 11. Residual risks carried forward
+
+Recorded in `RISKS.md` and summarised in `START_HERE.md` §8:
+
+1. **Executive cognition is not reachable from normal chat.** `/api/chat` has no path
+   to the Executive.
+2. **The deliberation port is not enabled in shipped production wiring.**
+   `install_deliberation_port` has no production caller — verified at `a64f5af`.
+3. **No real-model plan-quality evidence exists.**
+4. **The capability domain is bounded** — the same nine Windows capability kinds.
+5. **`INFERABLE_CAPABILITIES` remains a policy judgement**, not a derived fact, and
+   will need revisiting as the capability vocabulary grows.

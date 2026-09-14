@@ -1,5 +1,10 @@
 # Handoff: live Windows golden-path verification
 
+> **HISTORICAL — superseded (banner added 2026-09-14, Project Control & Documentation Reset).**
+> This document records a moment that has since been overtaken. It is preserved as record and is
+> **not** a briefing, **not** current status, and **not** an authority on anything. For current
+> state read `START_HERE.md`. The live verification it commissions has been overtaken by Wave 3 (PR #101) and the subsequent BGPR-01, FND-01 to FND-04 and EXEC-01 packages. Do not execute its instructions as a current task.
+
 **Your only job is to run the live verification described here and record what
 you observe.** Do not develop, do not merge, do not start Wave Three. If you
 find a defect, record it; repairing it is a separate, separately-authorised

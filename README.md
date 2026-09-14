@@ -1,5 +1,12 @@
 # Bartholomew Identity Interpreter
 
+> **New here? Read [START_HERE.md](START_HERE.md) first.** It is the project bootstrap: what
+> Bartholomew is, the architectural invariants, which system owns which kind of information,
+> what is actually operational today, the major open risks, and the current work package.
+> **This file is a developer README for running the code in this workspace — it is not an
+> authority on project status.** (Pointer added 2026-09-14, Project Control & Documentation
+> Reset.)
+
 **This workspace is Bartholomew's Brain** - a cognitive architecture implementing identity, memory, planning, safety, and decision-making systems.
 
 Python implementation of the Identity Interpreter for Bartholomew AI system.

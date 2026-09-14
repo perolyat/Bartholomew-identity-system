@@ -2,7 +2,16 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-22 (WP-A2 reconciliation). Changes in this pass: (1) the
+> **Last updated:** 2026-09-14 (**Project Control & Documentation Reset**). One new entry is
+> added at the end of this document — **EXEC-01 residual risks** — recording the five risks the
+> merged EXEC-01 package (PR #108, merge `a64f5af`) deliberately carries forward, and one
+> project-control risk about documentation currency itself. Nothing below is amended, removed or
+> weakened, and no resolved risk is revived. **No production code, tests, schemas, migrations or
+> runtime configuration changed by this pass.** `START_HERE.md` §8 carries the short list a new
+> session needs; **this document remains the durable authority** and wins on any disagreement
+> about a risk's substance.
+>
+> **Previously (2026-08-22, WP-A2 reconciliation).** Changes in this pass: (1) the
 > **OP-W004 bullet** in the Post-Test #1 confirmed-risks entry is **amended, not duplicated** — the
 > root cause is now established and the S2 audit-failure semantics are implemented and merged
 > (WP-A2, PR #61, merge `6c3fb8a`); the historical Test #1 statement is preserved as written.
@@ -1253,3 +1262,48 @@
   actually did, and the two are not joined by a shared correlation id today. **Status:** Active,
   partially mitigated; a correlation id on the Reflection would close it and is not in FND-04.
 - **Risk category:** auditability/provenance.
+
+
+## EXEC-01 residual risks, and one project-control risk (recorded 2026-09-14)
+
+Recorded by the Project Control & Documentation Reset. These are **carried-forward
+limitations of merged work**, not defects and not new findings: every one of them is stated in
+the EXEC-01 package record (`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §8, §10, §11) and in
+`DECISIONS.md`'s EXEC-01 entry. They are gathered here because a limitation that lives only
+inside a work-package document is a limitation the next session will not find.
+
+- **R-EXEC01-1 — Executive cognition is not reachable from normal conversation.** `/api/chat`
+  has no path to the Executive; `kernel/runtime_contract.py` holds no reference to the
+  executive package (verified at `a64f5af`). A goal typed into chat falls through to a
+  conversational reply. **Consequence:** the most capable cognition in the system is invisible
+  to the user, so no amount of further cognition work improves the product until this is
+  addressed. This is the reason EXEC-02 is the identified next package.
+- **R-EXEC01-2 — The deliberation port is not enabled in shipped production wiring.**
+  `install_deliberation_port` has no production caller (verified at `a64f5af`). A deployment
+  that does not call it keeps exactly the pre-EXEC-01 Executive. **This is deliberate** — see
+  `DECISIONS.md` — and the risk is not the design but the *misreading*: "EXEC-01 is merged"
+  must never be read as "Bartholomew now plans from goals in production".
+- **R-EXEC01-3 — No real-model plan-quality evidence exists.** All EXEC-01 evidence is
+  unit/integration, CI, adversarial-review and **mocked-model** evidence. Deterministic fake
+  ports prove the plumbing and the defences; they say nothing about whether a live model
+  produces useful, sensible plans. **Nothing may describe live plan quality as proven** until
+  real-model evidence exists. `START_HERE.md` §6 holds the tier definitions.
+- **R-EXEC01-4 — The capability domain is bounded.** The same nine Windows capability kinds;
+  cognition got better at using them and no new ones were added. Outcome-level competence is
+  claimed *inside* that domain only.
+- **R-EXEC01-5 — `INFERABLE_CAPABILITIES` is an unresolved policy judgement.** That
+  `clipboard_read` and `accessibility_action` are never *inferred* (while remaining available
+  to an instruction that names them) is a reasoned judgement about the difference between a
+  step the person authorised by naming it and a step Bartholomew inferred — not a derived
+  fact. It will need revisiting each time the capability vocabulary grows, and it is a
+  standing question for Taylor rather than a settled rule.
+- **R-CTRL-1 — Documentation currency is itself a project risk.** The 2026-09-14 reset found
+  the canonical control plane roughly a month behind `main`: `MASTER_PLAN.md`, the document
+  that declared itself the SSOT, knew nothing of six merged pull requests, and its "next
+  moves" pointed at a review completed three weeks earlier. Meanwhile EXEC-01's own record
+  still described its pull request as unmerged. **Mitigation now in place:** `START_HERE.md`
+  is a single short bootstrap that must be updated when `main` moves materially, Airtable
+  owns live status so the repository is no longer the only place status can rot, and
+  `START_HERE.md` §3 rule 3 requires material chat-only findings to be promoted to a durable
+  record. **Residual risk:** all three depend on discipline at the end of a session, and
+  nothing enforces them mechanically.

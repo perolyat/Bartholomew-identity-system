@@ -1,9 +1,12 @@
 # Bartholomew Identity Interpreter
 
-> **Scope note (2026-07-27):** this is a module reference for the `identity_interpreter`
-> package. It is **not** an authority on project status — see `MASTER_PLAN.md` (the SSOT),
-> `ROADMAP.md` for stage gates, and `COGNITIVE_RUNTIME.md` for how the runtime actually fits
-> together today.
+> **Scope note (2026-07-27, amended 2026-09-14):** this is a module reference for the
+> `identity_interpreter` package. It is **not** an authority on project status — start at
+> `START_HERE.md` (the project bootstrap and current-state snapshot), then `MASTER_PLAN.md`
+> for the programme plan and backlog, `ROADMAP.md` for stage gates, and `COGNITIVE_RUNTIME.md`
+> for how the runtime actually fits together today. *(Amended 2026-09-14: this note named
+> `MASTER_PLAN.md` as "the SSOT"; the canonical set is the SSOT and `START_HERE.md` is its
+> index — see `DECISIONS.md`'s source-of-truth entry.)*
 >
 > **Corrected 2026-07-27:** this document described three modules that no longer exist —
 > `policies/tool_policy.py`, `policies/persona.py` and `adapters/kill_switch.py` — as current

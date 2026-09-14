@@ -2,7 +2,15 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation — sixteen new entries added
+> **Last updated:** 2026-09-14 (**Project Control & Documentation Reset**) — two new entries at
+> the end of this document: the **GitHub/Airtable source-of-truth division and the project
+> bootstrap**, and the **EXEC-01 merge provenance and CI record correction**. The first is a
+> project-control decision Taylor directed in the reset brief and whose open sub-question is
+> flagged inside it; the second is a correction of stale records, not a new decision. **No
+> production code, tests, schemas, migrations or runtime configuration changed**, and **neither
+> entry authorises implementation** — in particular neither authorises EXEC-02.
+>
+> **Previously (2026-08-20, Post-Test #1 documentation propagation — sixteen new entries added
 > under the new "Post-Test #1 decisions (approved 2026-08-20)" heading at the end of this document:
 > the fifteen decisions Taylor approved on 2026-08-20 as part of **Post-Test #1 Decision Register
 > v2.2**, plus one entry recording the register's §14 items that remain deliberately unresolved.
@@ -3305,3 +3313,103 @@
     `COGNITIVE_RUNTIME.md`'s "Planning" ownership row is narrowed accordingly: it named
     `planner.py` as the implementation of planning, which has not been true since device tasks
     moved to `bartholomew/executive/`.
+
+
+## Decision: GitHub owns durable truth, Airtable owns live status, and `START_HERE.md` is the single bootstrap
+
+- **Status:** approved in substance by Taylor in the 2026-09-14 Project Control & Documentation
+  Reset brief, which set the direction this entry records. One sub-question remains open for
+  Taylor's judgement — see **Open** below.
+- **Decision:** Project information has one owner per category.
+  - **GitHub is canonical** for code and for durable technical and project documentation tied to
+    the implementation: architecture, decisions, constraints, contracts, interfaces, risks,
+    evidence, and each work package's record.
+  - **Airtable** (base `Bartholomew Master Project`) is the **live project-control layer**:
+    current status, priority, blockers, next action, dependencies, evidence pointers and the
+    next-action queue, across `Project Areas`, `Work Packages`, `Checkpoints`, `Decisions &
+    Constraints` and `Risks & Open Questions`.
+  - **`START_HERE.md`** is a new canonical document (the 15th) and the **single bootstrap**. It is
+    the authority for the source hierarchy, the current-state snapshot, the evidence tiers and the
+    new-session procedure. It is an index and a snapshot — **not** a competing authority on
+    architecture, decisions, risks or roadmap.
+  - **Three binding rules.** (i) *Airtable points; it does not duplicate.* A record carries
+    status, priority, short rationale and a reference to the authoritative repository document,
+    pull request or commit — never a copy of an architecture document. (ii) *Conflict
+    resolution:* for **live status**, Airtable wins; for **everything else**, the repository
+    wins. A standing disagreement is a defect in one of the two systems and is resolved in the
+    owning system in that pass. (iii) *A material decision or discovery that exists only in a
+    chat does not exist* — promote it to `DECISIONS.md`, a work-package document, or an Airtable
+    record before the session ends.
+- **Alternatives:**
+  - *Declare the repository authoritative for everything, including status.* Rejected on
+    evidence: it was already the arrangement, and it failed. On 2026-09-14 `MASTER_PLAN.md` — the
+    document declaring itself the SSOT — was a month behind `main` and unaware of six merged pull
+    requests, while EXEC-01's own record still called its pull request unmerged. Status decays
+    fastest and is the worst fit for a document that needs review and approval to change.
+  - *Declare Airtable authoritative for everything.* Rejected: architecture, decisions and
+    contracts must be versioned, reviewable, diffable and co-located with the code they govern.
+    Database rows are none of those things, and a decision without a diff has no history.
+  - *Duplicate the prose in both systems.* Rejected: two copies of a rule is two rules, and the
+    reset exists precisely because duplicate near-identical records had stopped agreeing.
+  - *Add another "start here" alongside the existing entry points.* Rejected: the problem was
+    plurality, not absence. `START_HERE.md` is one document and the canonical registry names it
+    first; adding a second orientation document would recreate the fault.
+  - *Leave orientation to whatever context Taylor pastes into each session.* Rejected — it is the
+    burden this reset exists to remove, and it makes every session's starting understanding
+    different.
+- **Why:** Bartholomew's project control had the same failure mode Bartholomew's product is
+  built to avoid: information existed, but no one owned it, and a reader could not tell which
+  record to trust. Four interested parties (Taylor, ChatGPT, Claude, future builder sessions) were
+  reconstructing project state from a large historical corpus, each arriving somewhere slightly
+  different. Splitting ownership by *volatility* — durable truth in version control, live status
+  in a database, nothing load-bearing in a conversation — puts each category where it can
+  actually be kept correct.
+- **Consequences:**
+  - The canonical registry goes from 14 documents to **15**; `MASTER_PLAN.md` remains canonical
+    and remains the authority for the programme plan, backlog, doc governance and approval
+    ledger, but is no longer the entry point and no longer the authority for the current-state
+    snapshot. Its "Single Source of Truth" self-description is narrowed accordingly: the
+    canonical *set* is the SSOT and `START_HERE.md` is its index.
+  - `START_HERE.md` must be updated whenever `main` moves materially. It is short specifically so
+    that this is cheap; if it grows into another large planning document, the mechanism has
+    failed and should be repaired rather than supplemented.
+  - Historical documents (waves, phases, implementation notes, handoffs) are explicitly *record,
+    not briefing*. They remain valuable and are not to be deleted, but a new session is directed
+    away from reading them wholesale.
+  - Nothing about governance, autonomy, the Parking Brake, approval, evidence or verification is
+    touched. This entry concerns project control only.
+- **Open — for Taylor:** whether Airtable should hold the **authoritative next-action queue** (so
+  a session takes its next task from Airtable and the repository never states one), or whether
+  `MASTER_PLAN.md`'s "Next 3 Moves" and `docs/TILT.md` remain the sequencing authority with
+  Airtable reflecting them. The reset implemented the conservative reading — repository sequencing
+  remains authoritative, Airtable carries the live queue and must agree with it — because moving
+  sequencing authority out of version control is a larger project-control change than a
+  documentation pass should make by itself.
+
+## Decision: EXEC-01's merge provenance and CI record are corrected to a single final truth
+
+- **Status:** a correction of stale records, recorded for traceability. It decides nothing new.
+- **Decision:** The authoritative EXEC-01 record is: **PR #108, reviewed head `2813c7b`, merge
+  commit / `main` after merge `a64f5af`**, approved by Taylor at the User Approval Gate. At the
+  reviewed head, **both** the PR Fast/CI tier **and** the Integration / merge-candidate tier ran
+  and **passed**. Where any document, handoff or record says otherwise, this entry and
+  `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 supersede it.
+- **Why:** two statements had been left behind by the merge. (i) The EXEC-01 package record's
+  header still read *"implemented, not merged. Awaiting the User Approval Gate"* — true when
+  written, stale from the moment #108 merged, and precisely the kind of residue that makes a
+  reader distrust every other status line in the same document. (ii) The CI discussion carried
+  pre-merge wording saying the Integration / merge-candidate jobs were *skipped under normal
+  pull-request behaviour*, while the closeout correctly recorded that **marking the pull request
+  ready for review caused the Integration tier to run and those checks completed successfully
+  before merge.** Both statements described real moments; neither described the merge. A durable
+  record may contain history, but it may not contain two live answers to the same question.
+- **Consequences:**
+  - `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` gains a provenance correction in its header and a
+    §9 "CI and merge record" table that is the single final truth, plus §10 (evidence tier) and
+    §11 (residual risks).
+  - **The evidence tier is stated explicitly and does not improve.** EXEC-01's evidence is
+    unit/integration, CI, adversarial-review and **mocked-model** evidence. It is **not**
+    real-model, real-device or manual-acceptance evidence. Green tests against deterministic fake
+    ports must never be reported as proof that a live model produces useful plans.
+  - EXEC-01's five carried-forward limitations are now recorded in `RISKS.md` as R-EXEC01-1 to
+    R-EXEC01-5, rather than living only inside the package document.
