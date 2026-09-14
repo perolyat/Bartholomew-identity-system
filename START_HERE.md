@@ -283,6 +283,21 @@ pre-existing, rotating between runs, passing in isolation, seen on `main` since 
 **None is an EXEC-01 test.** This is the state of `main`, not a defect introduced by the last
 package, and repairing it is separate, unauthorised work.
 
+**The repair exists and is awaiting Taylor's gate (2026-09-14, PR #110, not merged).** Its record
+is `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`; the rule it establishes is in `DECISIONS.md` ("A SQLite
+statement that can wait for a lock never runs on the event-loop thread"). Read the reclassification
+before reading any older statement about these tests: the FND-04 slice failure is **the same root
+cause** (proved from the `a64f5af` log, not assumed), the two `test_event_backbone_drive.py`
+failures were **never** lock failures (a test-side ordering race, corrected), and
+`test_sqlite_wal_concurrent_processes.py` was a **second, independent** SQLite defect (a fresh-file
+WAL conversion race), also repaired. The push of `57f86f8` (PR #109, unmodified `main`) was
+**cancelled at the 40-minute cap** with the Windows suite stalled after 99 % — the "stalled tail"
+symptom, which is a hang rather than a lock error, **recurred on the repaired branch** (run
+34857413080, same shape), and so is independent of this repair and remains **separately tracked**
+(record §8). Consequence: the Windows baseline is **not yet trustworthy** and Band 0 is **NOT
+READY** on today's evidence (record §9); the Windows CI jobs now run `-vv` so the next stall names
+its tests.
+
 ## 8. Major open risks
 
 `RISKS.md` is the durable authority; this is the short list a new session needs.
@@ -304,10 +319,12 @@ package, and repairing it is separate, unauthorised work.
    gated at Band B / safety gate S5). Not closed by Test #1.
 8. **`main`'s Merge Candidate tier is red** — the Windows writer-lock / WAL-contention class
    (§7). **No longer deferred: as of 2026-09-14 this is a pre-Band-0 repair requirement**, because
-   Band 0 evidence must not be contaminated by a known reliability defect. The repair is its own
-   narrowly-scoped work package after PR #109 merges. `tests/test_fnd04_eci_vertical_slice.py`
-   stays **separately tracked** unless root-cause evidence proves it shares this class — shared
-   causation is not to be assumed from failing in the same Windows run.
+   Band 0 evidence must not be contaminated by a known reliability defect. **The repair is built,
+   root-caused and regression-tested in PR #110 (not merged; User Approval Gate)** —
+   `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. `tests/test_fnd04_eci_vertical_slice.py` is now
+   classified **same root cause, by log evidence**. What that PR does **not** close: the Windows
+   "stalled tail" hang that cancelled the `57f86f8` run at the job cap, which is a different
+   symptom and is tracked separately in `RISKS.md`.
 9. **Documentation currency is itself a risk.** This reset repaired a control plane
    that had drifted roughly a month behind `main`. See §10.
 
@@ -341,6 +358,7 @@ package, and repairing it is separate, unauthorised work.
 | Test strategy / CI tiers | `CI.md` (its header tier table is current; its body predates the four-tier structure) and `TEST_MATRIX.md` (**counts are of 2026-07-27 — it states a 915-test suite; the default suite is now roughly 4,987 tests**) |
 | The last Executive package in full | `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` |
 | The External Capability Interface in full | `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md` |
+| The Windows writer-lock / WAL repair: root cause, evidence, reclassifications | `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` |
 | Real-World Test #1 evidence and the approved register | `docs/evidence/test-1/` |
 | Wave 3 contracts and handoffs | `docs/waves/W03/` |
 | Superseded history | `docs/archive/` |

@@ -3527,6 +3527,48 @@
     remains unstarted. It **deepens and connects the Executive architecture that already exists** —
     the runtime already has an Executive stage — rather than attaching a separate Executive brain.
 
+## Decision: A SQLite statement that can wait for a lock never runs on the event-loop thread
+
+- **Status:** established 2026-09-14 by the Windows writer-lock / WAL reliability repair (step 2 of
+  "The approved sequence" above; PR #110, **not merged — awaiting Taylor's User Approval Gate**).
+  Record: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. This entry generalises the Phase B stage B2
+  discipline (`docs/B2_EVENT_LOOP_ISOLATION.md`) from "scheduler persistence and the callers B2
+  named" to a rule that binds every path in the process.
+- **Decision:** In Bartholomew's process, a synchronous `sqlite3` statement that may wait for the
+  write lock — INSERT/UPDATE/DELETE, DDL, `BEGIN IMMEDIATE`, a `wal_checkpoint` — is executed off
+  the event-loop thread, through `bartholomew.kernel.blocking_executor.run_off_loop()` (the
+  daemon's shared `SingleWorkerExecutor` when the caller has one, `asyncio.to_thread()` otherwise).
+  A permission check that writes its audit row is a write for this purpose. Where such a call must
+  observe the calling task's context (WP-A2's `ContextVar` collector of failed audit writes), it is
+  run under `contextvars.copy_context().run`, because a plain executor thread carries no context.
+- **Why:** `MemoryStore` writes through aiosqlite, whose `execute` and `commit` are two separate
+  event-loop round trips. Between them SQLite's single write lock is held by a worker thread that
+  can release it only when the event loop submits the commit. A synchronous write on the loop
+  thread in that window waits for a lock whose release needs the loop it is blocking, so it fails
+  after exactly its `busy_timeout` with `database is locked`, deterministically once the window is
+  hit. That is the mechanism behind the Windows Merge Candidate failures of the writer-lock / WAL
+  class (`RISKS.md`, 2026-09-09 entry), the intermittent HTTP 400 on
+  `/api/notifications/quiet-hours`, and the FND-04 vertical-slice failure — all reproduced
+  deterministically on Linux and all evidenced in the `a64f5af` Windows log. The repair removes the
+  dependency, not the contention: the same contention now resolves in milliseconds.
+- **Alternatives considered:** (a) widening `busy_timeout` — lengthens the stall, cannot end it;
+  (b) making `MemoryStore`'s transactions single-worker-call atomic — would remove the dominant
+  holder but not the discipline violation, needs aiosqlite's private API for multi-statement
+  transactions, and leaves loop-blocking writes in place; (c) disabling WAL — irrelevant to the
+  two-round-trip transaction; (d) retrying writers — hides the defect. The 2026-08-22 decision to
+  retain the effective 5 s `busy_timeout` is unchanged.
+- **Consequences:** `SkillBase._require_permission()` and `NotifySkill._is_muted()` are now
+  awaitable; `SkillContext` carries the daemon's `blocking_executor`; the ECI boundary's ledger and
+  schema writes, the four skills' writes, the registry's pre-action permission gate and the
+  `fts_optimize` drive run off the loop. `tests/helpers/event_loop_sqlite.py` detects violations,
+  and `tests/test_sqlite_event_loop_convoy.py` plus
+  `tests/test_fnd04_eci_vertical_slice.py::TestTheLoopStaysOffTheEventLoop` fail if one returns.
+  A separate defect of the same class — SQLite refusing to wait for the lock when two connections
+  race to convert a *fresh* database file to WAL — is repaired in `db_ctx.set_wal_pragmas()` by a
+  bounded retry of that one pragma. Writers that run only at daemon construction, start or stop,
+  and writers on the separate platform database, are outside the class and were left alone
+  (recorded in the work-package document §8).
+
 ## Decision: Infer the means, not additional authority
 
 - **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate as a standing
