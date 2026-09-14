@@ -211,8 +211,12 @@ Smoke tests verify core functionality and can run in seconds.
 
 ## Documentation
 
-**Start with [MASTER_PLAN.md](MASTER_PLAN.md)** — it is the Single Source of Truth for what
-exists, where the project is, and what is authorised next. It lists the 14 canonical documents.
+**Start with [START_HERE.md](START_HERE.md)** — the project bootstrap and the authority for the
+source hierarchy and the current-state snapshot. Then **[MASTER_PLAN.md](MASTER_PLAN.md)** for the
+programme plan, backlog and approval ledger; it carries the registry of the 15 canonical documents.
+*(Amended 2026-09-14: this paragraph named `MASTER_PLAN.md` as "the Single Source of Truth" and put
+the count at 14. The canonical set is the SSOT and `START_HERE.md` is its index — see `DECISIONS.md`'s
+source-of-truth entry.)*
 Everything else in this repository, including this README and most of `docs/`, is a reference and
 is **not** an authority on project status — the one deliberate exception is `docs/TILT.md`, listed
 below, which is itself canonical.

@@ -198,7 +198,7 @@ Bartholomew design conclusion) so external claims cannot harden into assumed fac
 `docs/waves/W04/W04_CANDIDATE_REGISTER.md` holds forward **candidates** with per-candidate evidence
 thresholds; it selects nothing — **Wave 4 is not chosen**, and Wave 3's scope, contracts and
 deferral register are unchanged by it. Like `docs/evidence/test-1/`, these are locations and
-registers, **not authorities**: the count above stays at 14, principles live in `CONSTITUTION.md`,
+registers, **not authorities**: the count above stays at 15 *(14 before 2026-09-14)*, principles live in `CONSTITUTION.md`,
 runtime semantics in `COGNITIVE_RUNTIME.md`, and decisions in `DECISIONS.md`.
 
 Every other `*.md` in the repository (implementation notes, the rest of `docs/*`, `STATUS_*`,

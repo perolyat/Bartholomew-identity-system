@@ -125,6 +125,19 @@
 ---
 
 ## Decision: Canonical SSOT docs (no doc sprawl)
+
+> **Membership amended 2026-09-14** (Project Control & Documentation Reset): `START_HERE.md` is
+> added, bringing the set to **15**. It is the project bootstrap and the authority for the source
+> hierarchy, the current-state snapshot, the evidence tiers and the new-session procedure — an
+> index over this set, not a competing authority on architecture, decisions, risks or roadmap.
+> Rationale, alternatives and the one open sub-question are in this document's "GitHub owns durable
+> truth, Airtable owns live status, and `START_HERE.md` is the single bootstrap" entry.
+> **This is a membership amendment only** — the anti-sprawl rule below is unchanged, and adding a
+> document to reduce reading is only consistent with it because `START_HERE.md` replaces the
+> unwritten orientation that was previously pasted into each session by hand.
+> *(Earlier membership amendments: `CONSTITUTION.md` as the 13th, `docs/TILT.md` as the 14th.
+> Counts stated in older entries below are historical and are not restated here.)*
+
 - **Decision:** Adopt the canonical docs set as the only SSOT: `MASTER_PLAN.md`, `ROADMAP.md`, `DECISIONS.md`, `RISKS.md`, `ASSUMPTIONS.md`, `INTERFACES.md`, `CHECKLISTS.md`, `REVIEWS.md`, `CI.md`, `TEST_MATRIX.md`, `PERF_BUDGETS.md`.
 - **Alternatives:** Keep ad-hoc notes across multiple files; keep stage notes as SSOT.
 - **Why:** Prevent drift; force dependency-aware planning; keep governance verifiable.

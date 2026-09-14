@@ -1,7 +1,7 @@
 # Bartholomew — Vision and Personal-First Deployment
 
 > **Status:** PROPOSED (2026-08-15). **Non-canonical** — this is a reference/proposal document
-> under `docs/`, not one of the 14 canonical SSOT docs. It records product intent, the personal-first
+> under `docs/`, not one of the canonical SSOT docs. It records product intent, the personal-first
 > deployment target, and the sequence to reach it. Where it would change canonical content, §10
 > names exactly what and leaves those documents untouched pending approval.
 >

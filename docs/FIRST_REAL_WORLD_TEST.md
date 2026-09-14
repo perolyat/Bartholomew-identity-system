@@ -1,7 +1,7 @@
 # First controlled real-world test — procedure
 
 > **Status:** Working procedure (2026-08-17). **Non-canonical** — a reference document under
-> `docs/`, not one of the 14 canonical SSOT docs. `MASTER_PLAN.md` remains the authority on whether
+> `docs/`, not one of the canonical SSOT docs. `MASTER_PLAN.md` remains the authority on whether
 > this test is authorised and what stage the project is in. This document says *how* to run it and
 > *what counts as a pass*, not *that it may proceed*.
 >
