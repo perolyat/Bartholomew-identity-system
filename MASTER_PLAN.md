@@ -791,7 +791,8 @@ record of completed, merged, Taylor-approved work plus one identified-but-unauth
 package. **Listing a package is not authorisation to start it.**
 
 - ✅ **Wave 3 — Windows observe → reason → act → verify integration.** PR #101, merged
-  2026-09-09 (builder PRs #93–#97 contained within it). This is the integrated runtime
+  2026-09-09 (the builder packages W03-A to W03-F, integrated on the wave branch and merged as
+  one candidate — see the `merge(W03-F): integrate …` commits). This is the integrated runtime
   baseline; it is not to be rebuilt. See `docs/waves/W03/`.
 - ✅ **BGPR-01 — Golden Path runtime repair.** PR #102, merged 2026-09-11. Local-model
   generation, truthful readiness, blocking generation moved off the event loop. See

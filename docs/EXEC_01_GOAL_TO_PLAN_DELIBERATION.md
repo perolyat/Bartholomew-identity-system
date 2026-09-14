@@ -271,23 +271,83 @@ recovery, and asserts the fourteen acceptance conditions in order.
 *Added 2026-09-14 (Project Control & Documentation Reset), to replace two
 inconsistent records with one.*
 
+> **Corrected 2026-09-14, second pass.** The first version of this section said the
+> "Integration / merge-candidate tier" passed, treating two separate CI tiers as one. That was
+> copied from a shorthand rather than checked, and it is wrong: the Merge Candidate tier never ran
+> on this pull request. The table below is rebuilt from the GitHub check-run record itself.
+
 | Item | Value |
 |---|---|
 | Pull request | #108 |
 | Reviewed head | `2813c7b` |
 | Merge commit / `main` after merge | `a64f5af` |
 | Approval | Taylor, at the User Approval Gate |
-| CI at the reviewed head | PR Fast/CI tier: **success**. Integration / merge-candidate tier: **success**. |
-| Targeted/default test evidence | 493 tests green, of which 218 are EXEC-01 tests |
-| Independent adversarial review | 23 findings raised; 18 substantive findings fixed; zero live defects reported at the reviewed head |
+| Independent adversarial review | 23 findings raised across five angles; 18 substantive fixed, each reproduced first and each given regression coverage; zero live defects at the reviewed head (recorded in the #108 merge-commit message) |
 
-**The CI contradiction, resolved.** An earlier record stated that the Integration /
-merge-candidate jobs were *skipped under normal pull-request behaviour*. That was
-written while #108 was still a draft and was accurate then. **Marking the pull request
-ready for review caused the Integration tier to run, and those checks completed
-successfully before merge.** The merge-time truth is that **both tiers ran and both
-passed** at `2813c7b`. Any statement to the contrary, anywhere in the repository or in
-a prior handoff, is superseded by this table.
+**The three CI tiers, separately.** This repository runs four workflows — `ci.yml` (PR Fast),
+`integration.yml` (Integration), `merge-candidate.yml` (Merge Candidate) and `nightly.yml` — with
+different triggers. They are not interchangeable, and the contradiction this section exists to
+settle came from writing as though they were.
+
+| Tier | Ran on #108? | Result at `2813c7b` |
+|---|---|---|
+| **PR Fast** (`ci.yml`) | Yes, on every push | **Success** — Quality, PR Fast tests (Ubuntu py3.11), Windows fast, smoke |
+| **Integration** (`integration.yml`) | **Yes — once the pull request was marked ready for review** | **Success** — Tests + coverage (Ubuntu py3.11), Critical integration + lifecycle (Ubuntu py3.11), Windows lifecycle + compatibility (py3.11) |
+| **Merge Candidate** (`merge-candidate.yml`) | **No — every job skipped** | n/a. This tier runs on a push to `main`, in a merge queue, on the `ci:merge-candidate` label, or on a wave integration branch — not on an ordinary ready-for-review pull request. |
+
+**The draft/ready distinction, which is the whole of the original confusion.** `integration.yml`
+states its own rule: it runs when a pull request is **ready for review (not a draft)**, and
+"builder iterations on draft PRs get the PR Fast tier only." So while #108 was a draft, the
+Integration tier registered with every job skipped — the state the pre-merge wording described,
+correctly for its moment. **Marking the pull request ready caused that tier to run, and it passed
+before merge.** Both statements were true in sequence; only the second is true of the merge.
+
+**What the earlier record got wrong, and this corrects:** the Merge Candidate tier was never
+"skipped under normal PR behaviour and then ran" — it does not run on pull requests at all without
+the label. Nothing about that weakens the merge: the Integration tier is the gate a ready pull
+request is held to, and it was green.
+
+### Post-merge state on `main` — recorded because no other document states it
+
+The Merge Candidate tier ran **after** the merge, on the push of `a64f5af` to `main`, and
+**failed one job of seven**: *Windows full default suite + actuation (py3.11)*, at
+**3 failed, 4,987 passed, 79 skipped**. Every other job passed, including the real-Win32 governed
+actuation step, both Ubuntu coverage jobs (≥70 % gate) and both Critical integration jobs.
+
+The three failures are **not EXEC-01 tests and not in the EXEC-01 diff**:
+
+- `tests/test_event_backbone_drive.py::test_the_running_scheduler_processes_a_captured_event`
+  (`claimed` never became `processed`)
+- `tests/test_event_backbone_drive.py::test_the_running_scheduler_records_a_tick_for_the_drive`
+  (no tick recorded)
+- `tests/test_fnd04_eci_vertical_slice.py::TestTheCompleteLoop::test_the_exchange_and_the_result_are_both_captured_with_provenance`
+  (`assert 'eci.result' in ['eci.request']`)
+
+The first two are **named members** of the writer-lock / WAL-contention class already recorded in
+`RISKS.md` (entries of 2026-08-18, 2026-08-22 and 2026-09-09) and analysed in
+`docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7 — pre-existing, rotating between runs, passing
+in isolation, with failures on `main` as early as 2026-08-15, and deferred out of Wave 3 as a
+separate reliability task **with Taylor's explicit approval** (PR #101, User Approval Gate
+exception). The third is in FND-04 code (merged 2026-09-13) and is **not** yet listed among that
+class's members; whether it belongs to it is unestablished, and this document does not decide it.
+
+**This is a statement of fact about `main`'s CI, not a claim that EXEC-01 regressed anything, and
+not an authorisation to repair it.** `RISKS.md` remains the authority.
+
+### Test-count figures, and where each comes from
+
+Two different numbers have circulated, measuring different things:
+
+- **From CI (primary evidence, the run above):** the Windows full default suite executed **4,987
+  passing tests** at `a64f5af`. That is the whole default suite, not an EXEC-01 subset.
+- **EXEC-01's own tests:** **117 test functions** across the four `tests/test_exec01_*.py` modules
+  (verified by static count 2026-09-14: 60 adversarial, 28 goal-to-plan, 18 vertical slice, 11
+  deliberation adapter), expanding to a larger number of executed cases under the 19
+  `@pytest.mark.parametrize` decorators they carry.
+- The figures **"493 targeted/default tests green, of which 218 EXEC-01"** come from the EXEC-01
+  builder session's own targeted run and are **reported, not independently verified here**. They
+  are consistent with 117 parametrised functions but describe a narrower selection than CI ran.
+  They are recorded as attribution rather than as this document's own claim.
 
 ## 10. Evidence tier — what this evidence does and does not prove
 

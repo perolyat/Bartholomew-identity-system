@@ -186,25 +186,43 @@ Never collapse these. A claim must name its tier.
 
 | Tier | What it proves | EXEC-01 |
 |---|---|---|
-| **Unit / integration tests** | The code does what the author intended, in isolation. | Yes — 4 test modules, 218 EXEC-01 tests; 493 targeted/default tests green at `2813c7b`. |
-| **CI** | It holds on clean infrastructure, not just one laptop. | Yes — see §7. |
+| **Unit / integration tests** | The code does what the author intended, in isolation. | Yes — 4 modules, 117 test functions (verified), parametrised further. The "218 EXEC-01 / 493 targeted" figures are the builder session's own, reported not re-verified. |
+| **CI** | It holds on clean infrastructure, not just one laptop. | Yes, on the two tiers a pull request runs — see §7. |
 | **Adversarial review** | Someone competent tried to break it. | Yes — 23 findings raised, 18 substantive fixed, zero live defects at the reviewed head. |
 | **Mocked-model evidence** | The *plumbing* around a model is correct. | Yes — and this is the ceiling of EXEC-01's evidence. |
 | **Real-model evidence** | A live model produces useful, safe output. | **No.** |
 | **Real Windows / device evidence** | It works on actual hardware. | **No** for the deliberated path. |
 | **Manual acceptance evidence** | A person found it genuinely useful and not a chore. | **No.** Test #1 (pre-EXEC-01) found the opposite. |
 
-## 7. CI status of EXEC-01 — the single final truth
+## 7. CI, and the state of `main`
 
-This was recorded twice, inconsistently, and is settled here:
+**Four workflows, different triggers. They are not interchangeable** — treating them as one is how
+the EXEC-01 record ended up contradicting itself, and it is worth knowing before you read any CI
+claim in this repository:
 
-PR #108 was **marked ready for review before merge, which caused the Integration /
-merge-candidate tier to run.** Those checks **completed successfully** at reviewed
-head `2813c7b`, alongside the PR Fast/CI tier. Any earlier statement that the
-Integration or merge-candidate jobs were *skipped under normal PR behaviour* was
-written while the PR was still a draft, describes a state that no longer held at
-merge, and is **superseded by this section**. The merge-time truth is: both tiers
-ran and both passed.
+| Tier | Workflow | Runs when |
+|---|---|---|
+| **PR Fast** | `ci.yml` | every push to a pull request — what a draft gets |
+| **Integration** | `integration.yml` | a pull request is **ready for review (not a draft)**, the `ci:integration` label, a merge queue, or by hand |
+| **Merge Candidate** | `merge-candidate.yml` | a push to `main`, a merge queue, the `ci:merge-candidate` label, or a wave integration branch — **not** an ordinary ready-for-review pull request |
+| **Nightly** | `nightly.yml` | on schedule |
+
+**EXEC-01 (PR #108) at reviewed head `2813c7b`:** PR Fast **passed**; Integration **ran, because the
+pull request was marked ready for review, and passed**; Merge Candidate **did not run** (it does not
+run on pull requests without the label). Earlier wording that the Integration jobs were "skipped
+under normal PR behaviour" described the draft phase only and is superseded —
+`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 holds the full record with the check-run evidence.
+
+**`main` is currently red on the Merge Candidate tier**, and you should know this before you read a
+green-looking status anywhere else. At `a64f5af` that tier failed one job of seven — *Windows full
+default suite* — at **3 failed, 4,987 passed, 79 skipped**. Two failures
+(`test_event_backbone_drive.py` ×2) are named members of the writer-lock / WAL-contention class
+recorded in `RISKS.md` and analysed in `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7:
+pre-existing, rotating between runs, passing in isolation, seen on `main` since 2026-08-15, and
+**deferred out of Wave 3 as a separate reliability task with Taylor's explicit approval**. The third
+(`test_fnd04_eci_vertical_slice.py`) is in FND-04 code and is not yet listed among that class.
+**None is an EXEC-01 test.** This is the state of `main`, not a defect introduced by the last
+package, and repairing it is separate, unauthorised work.
 
 ## 8. Major open risks
 
@@ -223,7 +241,11 @@ ran and both passed.
    capability vocabulary grows.
 7. **Parking Brake read/write authority split** remains open (constraint C6,
    gated at Band B / safety gate S5). Not closed by Test #1.
-8. **Documentation currency is itself a risk.** This reset repaired a control plane
+8. **`main`'s Merge Candidate tier is red** — the Windows writer-lock / WAL-contention class
+   (§7). Known, analysed, and deferred with Taylor's approval, but it means "CI is green" is only
+   true of the two tiers a pull request runs, and it will make real-world Windows acceptance
+   evidence harder to read until it is repaired.
+9. **Documentation currency is itself a risk.** This reset repaired a control plane
    that had drifted roughly a month behind `main`. See §10.
 
 ## 9. How to bootstrap a new session
