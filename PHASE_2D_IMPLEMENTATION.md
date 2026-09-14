@@ -1,5 +1,13 @@
 # Phase 2d — Vector Embeddings Implementation
 
+> **Reference, not an authority on project status** (banner added 2026-09-14, Project Control &
+> Documentation Reset). This is an implementation note: it describes a subsystem as it was built,
+> and is useful for that. Any "complete" or "✅" below means **the implementation work described
+> here was finished** — it is not a statement that the capability is reachable by a user today, nor
+> that it has real-world evidence. For current project state, and for the distinction between
+> implemented, integrated, enabled and proven, read `START_HERE.md`. Where this note and a canonical
+> document disagree, the canonical document wins.
+
 ## Overview
 
 Privacy-first, offline-first vector embeddings for memory retrieval in Bartholomew. Embeddings happen **after** summarization and **before** encryption in the pipeline: Rules → Redact → Summarize → **Embed** → Encrypt → Store.

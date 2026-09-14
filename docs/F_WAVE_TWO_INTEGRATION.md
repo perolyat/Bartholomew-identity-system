@@ -1,5 +1,10 @@
 # Session F — wave-two integration closeout
 
+> **HISTORICAL — superseded (banner added 2026-09-14, Project Control & Documentation Reset).**
+> This document records a moment that has since been overtaken. It is preserved as record and is
+> **not** a briefing, **not** current status, and **not** an authority on anything. For current
+> state read `START_HERE.md`. Its statements that no A–E pull request and no Session F pull request were merged to `main` describe wave two only; the wave-two work was subsequently carried forward and Wave 3 was merged in PR #101 (2026-09-09). Do not read "not merged" here as a statement about today's `main`, which is `a64f5af`.
+
 The five wave-two builder packages, integrated into one Bartholomew, verified,
 and left as a draft candidate for the next main-branch baseline.
 

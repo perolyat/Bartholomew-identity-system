@@ -2,7 +2,15 @@
 
 > Meaningful decisions, alternatives considered, and consequences.
 >
-> **Last updated:** 2026-08-20 (Post-Test #1 documentation propagation — sixteen new entries added
+> **Last updated:** 2026-09-14 (**Project Control & Documentation Reset**) — two new entries at
+> the end of this document: the **GitHub/Airtable source-of-truth division and the project
+> bootstrap**, and the **EXEC-01 merge provenance and CI record correction**. The first is a
+> project-control decision Taylor directed in the reset brief (its one open sub-question was
+> resolved by Taylor on 2026-09-14 and is recorded inside it); the second is a correction of stale records, not a new decision. **No
+> production code, tests, schemas, migrations or runtime configuration changed**, and **neither
+> entry authorises implementation** — in particular neither authorises EXEC-02.
+>
+> **Previously (2026-08-20, Post-Test #1 documentation propagation — sixteen new entries added
 > under the new "Post-Test #1 decisions (approved 2026-08-20)" heading at the end of this document:
 > the fifteen decisions Taylor approved on 2026-08-20 as part of **Post-Test #1 Decision Register
 > v2.2**, plus one entry recording the register's §14 items that remain deliberately unresolved.
@@ -117,6 +125,20 @@
 ---
 
 ## Decision: Canonical SSOT docs (no doc sprawl)
+
+> **Membership amended 2026-09-14** (Project Control & Documentation Reset): `START_HERE.md` is
+> added, bringing the set to **15**. It is the project bootstrap and the authority for the source
+> hierarchy, the current-state snapshot, the evidence tiers and the new-session procedure — an
+> index over this set, not a competing authority on architecture, decisions, risks or roadmap.
+> Rationale, alternatives and the resolution of its one formerly-open sub-question are in this
+> document's "GitHub owns durable
+> truth, Airtable owns live status, and `START_HERE.md` is the single bootstrap" entry.
+> **This is a membership amendment only** — the anti-sprawl rule below is unchanged, and adding a
+> document to reduce reading is only consistent with it because `START_HERE.md` replaces the
+> unwritten orientation that was previously pasted into each session by hand.
+> *(Earlier membership amendments: `CONSTITUTION.md` as the 13th, `docs/TILT.md` as the 14th.
+> Counts stated in older entries below are historical and are not restated here.)*
+
 - **Decision:** Adopt the canonical docs set as the only SSOT: `MASTER_PLAN.md`, `ROADMAP.md`, `DECISIONS.md`, `RISKS.md`, `ASSUMPTIONS.md`, `INTERFACES.md`, `CHECKLISTS.md`, `REVIEWS.md`, `CI.md`, `TEST_MATRIX.md`, `PERF_BUDGETS.md`.
 - **Alternatives:** Keep ad-hoc notes across multiple files; keep stage notes as SSOT.
 - **Why:** Prevent drift; force dependency-aware planning; keep governance verifiable.
@@ -3305,3 +3327,239 @@
     `COGNITIVE_RUNTIME.md`'s "Planning" ownership row is narrowed accordingly: it named
     `planner.py` as the implementation of planning, which has not been true since device tasks
     moved to `bartholomew/executive/`.
+
+
+## Decision: GitHub owns durable truth, Airtable owns live status, and `START_HERE.md` is the single bootstrap
+
+- **Status:** approved in substance by Taylor in the 2026-09-14 Project Control & Documentation
+  Reset brief, which set the direction this entry records, and **fully approved by Taylor on
+  2026-09-14** at the User Approval Gate — including the sub-question this entry originally left
+  open, which is now settled under **Resolved** below.
+- **Decision:** Project information has one owner per category.
+  - **GitHub is canonical** for code and for durable technical and project documentation tied to
+    the implementation: architecture, decisions, constraints, contracts, interfaces, risks,
+    evidence, and each work package's record.
+  - **Airtable** (base `Bartholomew Master Project`) is the **live project-control layer**:
+    current status, priority, next action, evidence pointers and the live queue, across
+    `Project Areas`, `Work Packages`, `Checkpoints`, `Decisions & Constraints` and
+    `Risks and Open Questions`. *(Narrowed 2026-09-14: an earlier wording also claimed "blockers"
+    and "dependencies". The base has no field for either — a blocker is carried in next-action
+    prose, and representing dependencies structurally would be a separate controlled schema change.
+    Sequencing authority stays in the repository; see **Open** below.)*
+  - **`START_HERE.md`** is a new canonical document (the 15th) and the **single bootstrap**. It is
+    the authority for the source hierarchy, the current-state snapshot, the evidence tiers and the
+    new-session procedure. It is an index and a snapshot — **not** a competing authority on
+    architecture, decisions, risks or roadmap.
+  - **Three binding rules.** (i) *Airtable points; it does not duplicate.* A record carries
+    status, priority, short rationale and a reference to the authoritative repository document,
+    pull request or commit — never a copy of an architecture document. (ii) *Conflict
+    resolution:* for **live status**, Airtable wins; for **everything else**, the repository
+    wins. A standing disagreement is a defect in one of the two systems and is resolved in the
+    owning system in that pass. (iii) *A material decision or discovery that exists only in a
+    chat does not exist* — promote it to `DECISIONS.md`, a work-package document, or an Airtable
+    record before the session ends.
+- **Alternatives:**
+  - *Declare the repository authoritative for everything, including status.* Rejected on
+    evidence: it was already the arrangement, and it failed. On 2026-09-14 `MASTER_PLAN.md` — the
+    document declaring itself the SSOT — was a month behind `main` and unaware of six merged pull
+    requests, while EXEC-01's own record still called its pull request unmerged. Status decays
+    fastest and is the worst fit for a document that needs review and approval to change.
+  - *Declare Airtable authoritative for everything.* Rejected: architecture, decisions and
+    contracts must be versioned, reviewable, diffable and co-located with the code they govern.
+    Database rows are none of those things, and a decision without a diff has no history.
+  - *Duplicate the prose in both systems.* Rejected: two copies of a rule is two rules, and the
+    reset exists precisely because duplicate near-identical records had stopped agreeing.
+  - *Add another "start here" alongside the existing entry points.* Rejected: the problem was
+    plurality, not absence. `START_HERE.md` is one document and the canonical registry names it
+    first; adding a second orientation document would recreate the fault.
+  - *Leave orientation to whatever context Taylor pastes into each session.* Rejected — it is the
+    burden this reset exists to remove, and it makes every session's starting understanding
+    different.
+- **Why:** Bartholomew's project control had the same failure mode Bartholomew's product is
+  built to avoid: information existed, but no one owned it, and a reader could not tell which
+  record to trust. Four interested parties (Taylor, ChatGPT, Claude, future builder sessions) were
+  reconstructing project state from a large historical corpus, each arriving somewhere slightly
+  different. Splitting ownership by *volatility* — durable truth in version control, live status
+  in a database, nothing load-bearing in a conversation — puts each category where it can
+  actually be kept correct.
+- **Consequences:**
+  - The canonical registry goes from 14 documents to **15**; `MASTER_PLAN.md` remains canonical
+    and remains the authority for the programme plan, backlog, doc governance and approval
+    ledger, but is no longer the entry point and no longer the authority for the current-state
+    snapshot. Its "Single Source of Truth" self-description is narrowed accordingly: the
+    canonical *set* is the SSOT and `START_HERE.md` is its index.
+  - `START_HERE.md` must be updated whenever `main` moves materially. It is short specifically so
+    that this is cheap; if it grows into another large planning document, the mechanism has
+    failed and should be repaired rather than supplemented.
+  - Historical documents (waves, phases, implementation notes, handoffs) are explicitly *record,
+    not briefing*. They remain valuable and are not to be deleted, but a new session is directed
+    away from reading them wholesale.
+  - Nothing about governance, autonomy, the Parking Brake, approval, evidence or verification is
+    touched. This entry concerns project control only.
+- **Resolved by Taylor 2026-09-14 (User Approval Gate) — the split is by *kind of authority*, not
+  by document.**
+  - **GitHub owns durable authority:** architecture, approved decisions, constraints, contracts,
+    major roadmap commitments, **sequencing decisions**, milestone order, architectural
+    prerequisites, project gates, and durable evidence.
+  - **Airtable owns authoritative live operational control *within those approved bounds*:** what
+    should be worked on next right now, current priority, current status, active owner/session,
+    blockers, dependencies, and operational queue ordering. **Airtable may reorder ordinary
+    operational work** inside approved direction.
+  - **Airtable must not silently change durable project direction.** If the live queue would
+    materially change an approved sequencing decision, architectural prerequisite, gate or
+    direction, **the durable repository authority is updated first**, and the queue follows.
+  - So: *"What should we do next right now?"* → **Airtable**. *"What sequence or direction has been
+    formally approved?"* → **GitHub**.
+  This supersedes the conservative reading the reset implemented while the question was open. Note
+  the practical consequence: Airtable gained real operational authority, and with it the obligation
+  to escalate rather than quietly re-sequence approved work.
+
+## Decision: EXEC-01's merge provenance and CI record are corrected to a single final truth
+
+- **Status:** a correction of stale records, recorded for traceability. It decides nothing new.
+- **Decision:** The authoritative EXEC-01 record is: **PR #108, reviewed head `2813c7b`, merge
+  commit / `main` after merge `a64f5af`**, approved by Taylor at the User Approval Gate. At the
+  reviewed head: the **PR Fast** tier (`ci.yml`) ran and passed; the **Integration** tier
+  (`integration.yml`) ran **because the pull request was marked ready for review** and passed; and
+  the **Merge Candidate** tier (`merge-candidate.yml`) **did not run on the pull request at all** —
+  it triggers on a push to `main`, a merge queue, the `ci:merge-candidate` label or a wave branch.
+  It ran post-merge on `main` at `a64f5af` and failed one job of seven (Windows full default suite),
+  which `RISKS.md`'s amended 2026-09-09 entry covers and of which no EXEC-01 test is part. Where any
+  document, handoff or record says otherwise, this entry and
+  `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 supersede it.
+  *(Corrected 2026-09-14, second pass: this paragraph first said "both the PR Fast/CI tier and the
+  Integration / merge-candidate tier ran and passed" — the same two-tiers-as-one conflation this
+  entry exists to remove, inside the sentence claiming supersession authority. Rebuilt from the
+  GitHub check-run record.)*
+- **Why:** two statements had been left behind by the merge. (i) The EXEC-01 package record's
+  header still read *"implemented, not merged. Awaiting the User Approval Gate"* — true when
+  written, stale from the moment #108 merged, and precisely the kind of residue that makes a
+  reader distrust every other status line in the same document. (ii) The CI discussion carried
+  pre-merge wording saying the Integration / merge-candidate jobs were *skipped under normal
+  pull-request behaviour*, while the closeout correctly recorded that **marking the pull request
+  ready for review caused the Integration tier to run and those checks completed successfully
+  before merge.** Both statements described real moments; neither described the merge. A durable
+  record may contain history, but it may not contain two live answers to the same question.
+- **Consequences:**
+  - `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` gains a provenance correction in its header and a
+    §9 "CI and merge record" table that is the single final truth, plus §10 (evidence tier) and
+    §11 (residual risks).
+  - **The evidence tier is stated explicitly and does not improve.** EXEC-01's evidence is
+    unit/integration, CI, adversarial-review and **mocked-model** evidence. It is **not**
+    real-model, real-device or manual-acceptance evidence. Green tests against deterministic fake
+    ports must never be reported as proof that a live model produces useful plans.
+  - EXEC-01's five carried-forward limitations are now recorded in `RISKS.md` as R-EXEC01-1 to
+    R-EXEC01-5, rather than living only inside the package document.
+
+## Decision: A clean acceptance-test installation is not the model for ordinary governed updates
+
+- **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate as a standing product
+  constraint (the entry was recorded the same day as a proposal and is now approved). **It remains
+  emphatically not authorisation to implement an Update & Migration System**, and it must not be
+  used to freeze detailed updater mechanics that have not separately been approved.
+- **Decision:** Two things that look alike must not be conflated.
+  - **Clean/disposable installations remain the standard for acceptance testing.** A **real-world
+    acceptance test** installs from a **clean checkout at the exact accepted head**,
+    so that what is tested is what was approved and nothing carries over from a developer's working
+    state. That is a property of the test, and it is why a test result can be attributed to a commit.
+  - **Ordinary Bartholomew deployments should support governed in-place upgrades as the normal
+    routine update path**, preserving the person's identity, memory and state. A user's Bartholomew
+    is not reinstalled to receive an improvement. **A clean reinstall may still be required where it
+    is technically necessary or safer** — that remains a legitimate option, not a failure of the
+    constraint.
+  - Neither pattern is evidence about the other: a clean-install acceptance pass says nothing about
+    whether an in-place update preserves state, and vice versa.
+- **Why:** the two were being conflated in discussion, and the distinction matters in both
+  directions. Treating acceptance installs as the update model would imply a user loses their
+  Bartholomew's accumulated self to get a fix — which `CONSTITUTION.md`'s portability principle and
+  the platform/personal-identity decision both forbid. Treating updates as the acceptance model
+  would let a test inherit developer state and silently stop being attributable to a commit.
+- **Consequences:**
+  - The rule is now in this repository rather than only in Airtable. The reset found it recorded as
+    an Airtable `Decisions & Constraints` row whose "canonical authority" pointed at repository
+    material that did not contain it — a durable rule surviving only in the live status layer, which
+    is exactly what this document's source-of-truth entry forbids.
+  - **No implementation is authorised.** No update, migration or upgrade mechanism exists; designing
+    one is separate, separately-approved work, and this entry does not scope it.
+  - `docs/FIRST_REAL_WORLD_TEST.md` remains the procedure for the test half.
+- **Closed 2026-09-14:** approved as a standing constraint on any future update design. What is
+  *not* decided, and is deliberately left open, is every detail of how such an update mechanism
+  works — that is for its own separately-approved package.
+
+## Decision: The approved sequence — merge #109, repair Windows reliability, run Band 0, then EXEC-02
+
+- **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate. This is the durable
+  sequencing authority; the Airtable queue reflects it and may not silently change it.
+- **Decision:** Work proceeds in this order.
+  1. **Merge PR #109** (the Project Control & Documentation Reset) once its required CI is green on
+     the final pull-request head. Approval is conditional on that, verified on the exact head rather
+     than inherited from an earlier commit's CI.
+  2. **A narrow Windows writer-lock / WAL reliability repair**, as its own controlled work package
+     after #109 merges, with the classification of `tests/test_fnd04_eci_vertical_slice.py`
+     investigated as part of it.
+  3. **Restore a clean, trustworthy Windows baseline** — the objective of step 2, and the reason it
+     precedes Band 0.
+  4. **One attended Band 0 real-world checkpoint** on the resulting current system.
+  5. **EXEC-02**, unless the Band 0 checkpoint reveals a material blocker serious enough to justify
+     changing course.
+- **Why this order:** Band 0 exists to produce trustworthy evidence about whether Bartholomew is
+  useful rather than burdensome. Evidence gathered on a Windows baseline with a known, unrepaired
+  reliability defect cannot answer that question cleanly — a failure during the checkpoint could not
+  be distinguished from the defect. Repairing first is what makes the checkpoint's evidence mean
+  something. And running the checkpoint before EXEC-02 tests the largest known product risk against
+  the work already done to address it, rather than building further on an unmeasured surface.
+- **Consequences and boundaries:**
+  - **The Band 0 checkpoint is an evidence/validation step, not a new implementation architecture.**
+  - **The reliability repair is narrowly scoped** to the writer-lock / WAL class. It is explicitly
+    **not** general database cleanup, unrelated refactoring, broad technical-debt reduction, or
+    EXEC-02 work, and it is not to be started inside PR #109.
+  - **`tests/test_fnd04_eci_vertical_slice.py` is a separate unresolved defect** unless and until
+    root-cause evidence shows it belongs to the same class. Shared causation must not be assumed
+    from co-occurrence in the same Windows run. If evidence proves a shared root cause, that
+    evidence is recorded; otherwise it stays independently tracked.
+  - **`CI.md` and `TEST_MATRIX.md` maintenance is approved as separate, tightly-scoped work** — a
+    rewrite of `CI.md` around the current four-tier structure and a refresh of `TEST_MATRIX.md`'s
+    structure, counts and evidence references. It is **not** part of PR #109, **not** a prerequisite
+    for Band 0 or EXEC-02, and must not expand into unrelated cleanup. It becomes blocking only if a
+    concrete documentation inconsistency is shown to compromise test interpretation or project
+    control.
+  - **EXEC-02 remains the next major Executive implementation package** after the checkpoint, and
+    remains unstarted. It **deepens and connects the Executive architecture that already exists** —
+    the runtime already has an Executive stage — rather than attaching a separate Executive brain.
+
+## Decision: Infer the means, not additional authority
+
+- **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate as a standing
+  Executive/governance principle. It closes the open policy question EXEC-01 left behind about
+  `INFERABLE_CAPABILITIES` (`RISKS.md` R-EXEC01-5).
+- **Decision:** **Bartholomew may infer the ordinary means necessary to achieve an authorised user
+  goal, but inference must not silently create additional authority.** In practice:
+  - The Executive **may** work out the intermediate steps needed to accomplish the user's authorised
+    outcome.
+  - **Inferred actions carry less authority than actions the user explicitly named.**
+  - Capabilities involving **materially greater authority, privacy exposure, external commitments,
+    destructive consequence, or similarly consequential scope are deny-by-default for inference**
+    unless explicitly reviewed and approved.
+  - Inferred actions remain fully subject to capability validation, governance, approval
+    requirements, the Parking Brake, the action envelope, verification and recovery.
+  - The current `INFERABLE_CAPABILITIES` set is **the implementation baseline for the existing
+    vocabulary, not an eternally frozen architectural list**.
+  - **Future capabilities must not automatically become inferable merely because they are
+    implemented.** Additions and removals require deliberate review of authority, privacy and
+    consequence.
+- **Why:** the purpose is to preserve useful autonomy without turning Bartholomew into a system that
+  constantly asks the user to specify obvious intermediate steps. A person who says "start a
+  shopping list" has authorised the list, and should not have to name the window focus that makes it
+  possible. What they have *not* authorised is a step that reaches further than their goal —
+  reading their clipboard, reaching into a live UI tree, spending money, contacting someone. The
+  distinction is not risk in the abstract: it is whether the step stays inside the authority the
+  goal already carried.
+- **Consequences:**
+  - EXEC-01's existing rule — `clipboard_read` and `accessibility_action` are never inferred, while
+    remaining available to an instruction that names them — is the correct application of this
+    principle, and is now derived from a stated rule rather than standing as a bare judgement.
+  - Every future capability addition inherits an explicit question: may this be *inferred*, or only
+    *instructed*? Silence is answered by deny-by-default for the consequential classes above.
+  - **No implementation change is authorised by this entry.** It states the policy that governs
+    future review; the current code already matches it.
+- **Shorthand:** *infer the means, not additional authority.*

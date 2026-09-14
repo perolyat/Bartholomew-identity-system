@@ -2,7 +2,42 @@
 
 > How to run quality checks locally and what CI enforces.
 >
-> **Last updated:** 2026-07-28 (documentation reconciliation pass 2: the "CI Philosophy → Linux
+> **Last updated:** 2026-09-14 (**Project Control & Documentation Reset** — currency note only;
+> no workflow, gate, threshold or command changed by this pass).
+>
+> **This document had gone materially stale, and it caused a real contradiction.** It describes
+> three workflows (`ci.yml`, `pre-commit.yml`, `smoke.yml`) and the Phase A structure of
+> 2026-07-27. The repository now runs a **four-tier** structure, and three of those four tiers are
+> not described anywhere below. A reader relying on this file could not tell that an Integration
+> tier exists, still less that it does not run on a draft pull request — which is exactly how the
+> EXEC-01 record came to hold two contradictory statements about whether Integration jobs ran on
+> PR #108. The tier table below is added as the interim authority on **which workflow runs when**;
+> everything else in this document (local commands, marker semantics, coverage gates, quarantine
+> strategy, failure patterns) still stands and is unchanged.
+>
+> **The four workflows, and their triggers, read from the workflow files at `a64f5af`:**
+>
+> | Tier | Workflow | Runs when | Roughly what it runs |
+> |---|---|---|---|
+> | **PR Fast** | `.github/workflows/ci.yml` | every push to a pull request; manual dispatch | Quality (format, lint, packaging), PR Fast tests (Ubuntu py3.11, parallel), Windows fast, smoke |
+> | **Integration** | `.github/workflows/integration.yml` | a pull request is **ready for review (not a draft)**; the `ci:integration` label; a merge queue; manual dispatch | Default suite **with** branch coverage and the 70 % gate; the `integration`/`slow` tests the default marker expression excludes, plus clean-start lifecycle, scheduler readiness and parking-brake governance; Windows lifecycle + compatibility |
+> | **Merge Candidate** | `.github/workflows/merge-candidate.yml` | a **push to `main`**; a merge queue; the `ci:merge-candidate` label; a wave integration branch (`wave/w03-f-*`); manual dispatch | Everything Integration runs, widened to both supported Pythons, **plus the full default suite on Windows** |
+> | **Nightly** | `.github/workflows/nightly.yml` | on schedule; manual dispatch | — |
+>
+> **Two consequences worth stating plainly.** (1) **A draft pull request gets the PR Fast tier
+> only**; the Integration workflow still registers, with every job skipped, which reads as
+> "skipped" rather than "not applicable". (2) **The full Windows default suite runs only in the
+> Merge Candidate tier**, so it is normally first exercised *after* a merge, on the push to `main`.
+> That is why a Windows-only failure can be invisible on a pull request and appear on `main`
+> immediately afterwards — see `RISKS.md`'s 2026-09-09 Windows Merge Candidate entry, which is the
+> authority on the currently-deferred instances of exactly that.
+>
+> **Not done by this pass, and deliberately:** the body below is **not** rewritten around the four
+> tiers, the Phase A statement is left as the dated historical record it is, and no test count is
+> refreshed. That is a larger piece of work than a project-control pass should attempt, and it
+> should be proposed on its own.
+>
+> **Previously (2026-07-28, documentation reconciliation pass 2: the "CI Philosophy → Linux
 > is the Baseline" section rewritten — it self-contradicted this file's own "Quarantine Strategy"
 > section by still saying Windows failures are "documented as environmental noise unless proven
 > to be logic bugs," when the rest of this file, `DECISIONS.md`, and `ASSUMPTIONS.md` had already

@@ -2,7 +2,22 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-08-22 (WP-A2 reconciliation). Changes in this pass: (1) the
+> **Last updated:** 2026-09-14 (**Project Control & Documentation Reset**). Three changes.
+> **(1)** A new section at the end of this document records the five residual risks the merged
+> EXEC-01 package (PR #108, merge `a64f5af`) deliberately carries forward (**R-EXEC01-1** to
+> **R-EXEC01-5**), plus two project-control risks: **R-CTRL-1**, documentation currency itself,
+> and **R-CTRL-2**, `CI.md` describing a CI structure the repository no longer has.
+> **(2)** The existing **2026-09-09 Windows Merge Candidate entry is amended, not duplicated**, to
+> record that the condition still holds on today's `main`: the tier failed one job of seven on the
+> push of `a64f5af`, two of the three failures being named members of the class that entry already
+> covers and the third being a not-yet-classified FND-04 test. **The deferral, its approval and its
+> disposition are unchanged.** **(3)** No other entry is amended, no risk is removed, and no
+> resolved risk is revived. **No production code, tests, schemas, migrations or
+> runtime configuration changed by this pass.** `START_HERE.md` §8 carries the short list a new
+> session needs; **this document remains the durable authority** and wins on any disagreement
+> about a risk's substance.
+>
+> **Previously (2026-08-22, WP-A2 reconciliation).** Changes in this pass: (1) the
 > **OP-W004 bullet** in the Post-Test #1 confirmed-risks entry is **amended, not duplicated** — the
 > root cause is now established and the S2 audit-failure semantics are implemented and merged
 > (WP-A2, PR #61, merge `6c3fb8a`); the historical Test #1 statement is preserved as written.
@@ -1120,8 +1135,38 @@
   fixed in WP-A2** (Taylor, 2026-08-22): repository-wide test/runtime behaviour could shift;
   requires its own bounded investigation. **Risk category:** tech debt/test isolation.
 
-- **(2026-09-09) Windows Merge Candidate intermittent failures — deferred out of Wave 3 as a
-  separate reliability task (User Approval Gate exception, PR #101).** The Wave 3 candidate was
+- **(2026-09-09, amended 2026-09-14) Windows Merge Candidate intermittent failures — deferred out
+  of Wave 3 as a separate reliability task (User Approval Gate exception, PR #101).**
+  **Disposition changed 2026-09-14 (Taylor, User Approval Gate): this is now a PRE-BAND-0 REPAIR
+  REQUIREMENT, no longer simply deferred.** The objective is to restore a clean, trustworthy Windows
+  baseline so that attended Band 0 evidence is not contaminated by a known reliability defect. It is
+  its own narrowly-scoped work package, sequenced after PR #109 merges and before the checkpoint —
+  scoped to **this writer-lock / WAL reliability class only**, explicitly not general database
+  cleanup, unrelated refactoring, broad technical-debt reduction or EXEC-02 work. See `DECISIONS.md`,
+  "The approved sequence". **`tests/test_fnd04_eci_vertical_slice.py` is a separate unresolved defect**
+  unless and until root-cause evidence shows it belongs to this class: its classification is to be
+  investigated during that work, shared causation must not be assumed merely because it fails in the
+  same Windows run, and if the evidence proves a shared root cause that evidence is recorded —
+  otherwise it stays independently tracked.
+  **Amendment (2026-09-14, Project Control & Documentation Reset — recording current state):** this condition **still holds on today's `main`**.
+  The Merge Candidate tier on the push of `a64f5af` (the EXEC-01 merge) failed one job of seven,
+  *Windows full default suite + actuation (py3.11)*, at **3 failed, 4,987 passed, 79 skipped**;
+  every other job passed, including real-Win32 governed actuation, both Ubuntu coverage jobs
+  against the 70 % gate, and both Critical integration jobs. Two of the three are **named members
+  of the writer-lock / WAL-contention class below** — `test_event_backbone_drive.py`'s
+  `test_the_running_scheduler_processes_a_captured_event` and
+  `test_the_running_scheduler_records_a_tick_for_the_drive`. The third,
+  `tests/test_fnd04_eci_vertical_slice.py::TestTheCompleteLoop::
+  test_the_exchange_and_the_result_are_both_captured_with_provenance`
+  (`assert 'eci.result' in ['eci.request']`), is in FND-04 code merged 2026-09-13 and is **not**
+  listed among that class's members; **whether it belongs to the same class is unestablished and
+  this amendment does not decide it** — it is recorded so that the next person to look does not
+  have to rediscover it. **None of the three is an EXEC-01 test or in the EXEC-01 diff.** The
+  deferral and its approval are unchanged; nothing here authorises repair. Two consequences for how
+  status is read: "CI is green" for a merged package means the **PR Fast and Integration** tiers,
+  because the full Windows suite runs only in the Merge Candidate tier (see `CI.md`'s tier table);
+  and while this stands, real-world Windows acceptance evidence will be harder to interpret,
+  because a failure there cannot be assumed distinct from this class. The Wave 3 candidate was
   merged with the Merge Candidate tier not literally green; the user approved the exception on the
   evidence in `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7. Every *deterministic* Windows
   failure was repaired first (§3, §5b, §5c there: 13 → 0 on a complete run). **What remains, all
@@ -1253,3 +1298,79 @@
   actually did, and the two are not joined by a shared correlation id today. **Status:** Active,
   partially mitigated; a correlation id on the Reflection would close it and is not in FND-04.
 - **Risk category:** auditability/provenance.
+
+
+## EXEC-01 residual risks, and one project-control risk (recorded 2026-09-14)
+
+Recorded by the Project Control & Documentation Reset. These are **carried-forward
+limitations of merged work**, not defects and not new findings: every one of them is stated in
+the EXEC-01 package record (`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §8, §10, §11) and in
+`DECISIONS.md`'s EXEC-01 entry. They are gathered here because a limitation that lives only
+inside a work-package document is a limitation the next session will not find.
+
+- **R-EXEC01-1 — Executive cognition is not reachable from normal conversation.** `/api/chat`
+  has no path to the Executive; `bartholomew/kernel/runtime_contract.py` holds no import from the
+  executive package (verified at `a64f5af`). A goal typed into chat falls through to a
+  conversational reply. **Consequence:** the most capable cognition in the system is invisible
+  to the user, so no amount of further cognition work improves the product until this is
+  addressed. This is the reason EXEC-02 is the identified next package.
+- **R-EXEC01-2 — The deliberation port is not enabled in shipped production wiring.**
+  `install_deliberation_port` has no production caller (verified at `a64f5af`). A deployment
+  that does not call it keeps exactly the pre-EXEC-01 Executive. **This is deliberate** — see
+  `DECISIONS.md` — and the risk is not the design but the *misreading*: "EXEC-01 is merged"
+  must never be read as "Bartholomew now plans from goals in production".
+- **R-EXEC01-3 — No real-model plan-quality evidence exists.** All EXEC-01 evidence is
+  unit/integration, CI, adversarial-review and **mocked-model** evidence. Deterministic fake
+  ports prove the plumbing and the defences; they say nothing about whether a live model
+  produces useful, sensible plans. **Nothing may describe live plan quality as proven** until
+  real-model evidence exists. `START_HERE.md` §6 holds the tier definitions.
+- **R-EXEC01-4 — The capability domain is bounded.** The same nine Windows capability kinds;
+  cognition got better at using them and no new ones were added. Outcome-level competence is
+  claimed *inside* that domain only.
+- **R-EXEC01-5 — `INFERABLE_CAPABILITIES` — POLICY RESOLVED 2026-09-14; the review obligation
+  stands.** Taylor approved the standing principle **"infer the means, not additional authority"**
+  (`DECISIONS.md`): Bartholomew may infer the ordinary means necessary to achieve an authorised
+  goal, inferred actions carry less authority than named ones, capabilities involving materially
+  greater authority, privacy exposure, external commitment or destructive consequence are
+  **deny-by-default for inference** unless explicitly reviewed and approved, and every inferred
+  action still passes capability validation, governance, approval, the Parking Brake, the envelope,
+  verification and recovery. The current set is **the implementation baseline for the existing
+  vocabulary, not a frozen architectural list**, and **a future capability does not become inferable
+  merely by being implemented** — each addition or removal requires deliberate review of authority,
+  privacy and consequence. What remains is that standing review obligation, not an open question.
+  The original entry follows.
+  **(Superseded framing)** `INFERABLE_CAPABILITIES` is an unresolved policy judgement. That
+  `clipboard_read` and `accessibility_action` are never *inferred* (while remaining available
+  to an instruction that names them) is a reasoned judgement about the difference between a
+  step the person authorised by naming it and a step Bartholomew inferred — not a derived
+  fact. It will need revisiting each time the capability vocabulary grows, and it is a
+  standing question for Taylor rather than a settled rule.
+- **R-CTRL-2 — `CI.md` describes a CI structure the repository no longer has.** The canonical CI
+  authority documents `ci.yml`, `pre-commit.yml` and `smoke.yml` and the Phase A shape of
+  2026-07-27; the repository runs four tiers (`ci.yml`, `integration.yml`, `merge-candidate.yml`,
+  `nightly.yml`), three of which appear nowhere in its body. This is not cosmetic: it is the
+  proximate cause of the EXEC-01 record holding two contradictory statements about whether the
+  Integration tier ran, because nothing canonical said that tier exists or that it skips on a draft
+  pull request. **Partially mitigated 2026-09-14:** a tier table with triggers was added to
+  `CI.md`'s header as the interim authority on which workflow runs when. **Residual:** the body of
+  that document is still written around the older structure, and its test counts and Phase A
+  statements are historical. A full rewrite is real work and should be proposed on its own rather
+  than folded into a documentation pass. **Approved 2026-09-14 (Taylor):** a separate, tightly
+  scoped documentation-maintenance task will rewrite `CI.md` around the current four-tier structure
+  and refresh `TEST_MATRIX.md` so its structure, counts and evidence references reflect the current
+  repository. It is **not** part of PR #109, must not expand into unrelated cleanup, and is **not a
+  prerequisite for the Band 0 checkpoint or for EXEC-02** — it becomes blocking only if a concrete
+  documentation inconsistency is shown to compromise test interpretation or project control.
+  **Risk category:** tech debt / documentation currency.
+
+- **R-CTRL-1 — Documentation currency is itself a project risk.** The 2026-09-14 reset found
+  the canonical control plane roughly a month behind `main`: `MASTER_PLAN.md`, the document
+  that declared itself the SSOT, knew nothing of the seven merged pull requests of the September
+  implementation arc (#101, #102, #104-#107, #108), and its "next
+  moves" pointed at a review completed three weeks earlier. Meanwhile EXEC-01's own record
+  still described its pull request as unmerged. **Mitigation now in place:** `START_HERE.md`
+  is a single short bootstrap that must be updated when `main` moves materially, Airtable
+  owns live status so the repository is no longer the only place status can rot, and
+  `START_HERE.md` §3 rule 3 requires material chat-only findings to be promoted to a durable
+  record. **Residual risk:** all three depend on discipline at the end of a session, and
+  nothing enforces them mechanically.

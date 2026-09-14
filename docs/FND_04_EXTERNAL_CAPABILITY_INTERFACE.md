@@ -1,7 +1,7 @@
 # The External Capability Interface
 
 > **Status:** Working reference (2026-09-13). **Non-canonical** — a document
-> under `docs/`, not one of the 14 canonical SSOT docs. It describes a
+> under `docs/`, not one of the canonical SSOT docs. It describes a
 > mechanism, how to operate it, and what it does not close. It does **not**
 > authorise remote exposure, an AIRI integration, a companion, browser, phone
 > or home-automation integration, or any capability broker;

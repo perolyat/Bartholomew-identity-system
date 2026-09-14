@@ -1,5 +1,13 @@
 # FTS Ingestion Wiring Implementation
 
+> **Reference, not an authority on project status** (banner added 2026-09-14, Project Control &
+> Documentation Reset). This is an implementation note: it describes a subsystem as it was built,
+> and is useful for that. Any "complete" or "✅" below means **the implementation work described
+> here was finished** — it is not a statement that the capability is reachable by a user today, nor
+> that it has real-world evidence. For current project state, and for the distinction between
+> implemented, integrated, enabled and proven, read `START_HERE.md`. Where this note and a canonical
+> document disagree, the canonical document wins.
+
 > **Correction (2026-09-12, FND-02).** The discipline this document describes was real and
 > is unchanged — FTS indexes `summary` or `redacted_value`, never the raw value. But
 > `redacted_value` was not actually redacted. `apply_redaction(value, evaluated)` (quoted

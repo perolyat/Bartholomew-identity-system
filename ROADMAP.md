@@ -2,7 +2,30 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-08-20 — **Post-Test #1 readiness bands added** (documentation-only). One
+> **Last updated:** 2026-09-14 — **Project Control & Documentation Reset (currency note,
+> documentation-only).** No stage's scope, sequencing, exit criteria or status changed by this
+> pass, and nothing in it authorises implementation. Two things are recorded:
+>
+> **(1) This document's stage/band structure did not know about the September work.** Wave 3
+> (PR #101), BGPR-01 (#102), FND-01 to FND-04 (#104–#107) and EXEC-01 (#108) are all merged.
+> They were sequenced as bounded repair/integration packages rather than as new stages, so
+> the stage gates and readiness bands below are unaffected — but a reader must not conclude
+> from this document alone that the front of the queue is where it says it is.
+> **`START_HERE.md` is the authority for the current-state snapshot**; this document remains
+> the authority for stages, gates, exit criteria and the Band 0/A/B/C/D readiness structure.
+>
+> **(2) EXEC-02 is identified, sequenced, and NOT started.** Deepening the existing Executive so the
+> conversational surface reaches its goal-to-plan deliberation is the identified next implementation
+> package (`MASTER_PLAN.md`'s "Next 3 Moves"). **Taylor sequenced it on 2026-09-14**: it follows a
+> narrow Windows writer-lock/WAL reliability repair and one attended **Band 0** checkpoint, and
+> proceeds unless Band 0 reveals a material blocker (`DECISIONS.md`, "The approved sequence"). **It
+> is not started and not itself authorised to begin**, it creates no new stage, and it does not move
+> any band. The reliability repair is now a **pre-Band-0 requirement** so that Band 0 evidence is not
+> contaminated by a known defect. The readiness bands still govern real-world testing: Band A before further
+> unattended testing, Band B before real ambient sensing, Band C before full Real-World
+> Test #2. **Listing a package or a band is not authorisation to start work in it.**
+>
+> **Previously (2026-08-20):** **Post-Test #1 readiness bands added** (documentation-only). One
 > new section, "Post-Test #1 readiness bands (approved 2026-08-20)", sits between the Usable POC
 > section and the stage gates. It records the Test #1 evidence-freeze provenance (the commit hash,
 > not a branch name), the Band 0/A/B/C/D readiness structure, summaries of safety gates S1–S11 and

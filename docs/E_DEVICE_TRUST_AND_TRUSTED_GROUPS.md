@@ -1,7 +1,7 @@
 # Device trust and trusted groups
 
 > **Status:** Working reference (2026-09-01). **Non-canonical** — a document
-> under `docs/`, not one of the 14 canonical SSOT docs. It describes a
+> under `docs/`, not one of the canonical SSOT docs. It describes a
 > mechanism, how to operate it, and what it does not close. It does **not**
 > authorise remote exposure, and it does not close a readiness band;
 > `MASTER_PLAN.md`, `DECISIONS.md`, `ASSUMPTIONS.md` and `RISKS.md` remain the

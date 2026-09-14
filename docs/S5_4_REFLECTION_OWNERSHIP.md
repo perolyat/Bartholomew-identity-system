@@ -1,7 +1,7 @@
 # S5.4 (part 1) — Closing the reflection-ownership gap
 
 > **Status:** IMPLEMENTED, pending review. **Non-canonical** — a right-sized planning/implementation
-> note per `docs/TILT.md`'s vertical-slice discipline, not one of the 14 canonical SSOT docs.
+> note per `docs/TILT.md`'s vertical-slice discipline, not one of the canonical SSOT docs.
 > It changes no canonical document. §6 lists what would need reconciling if this is accepted.
 
 ## 1. What this closes
