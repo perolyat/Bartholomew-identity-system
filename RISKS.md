@@ -1299,7 +1299,7 @@ the EXEC-01 package record (`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §8, §1
 inside a work-package document is a limitation the next session will not find.
 
 - **R-EXEC01-1 — Executive cognition is not reachable from normal conversation.** `/api/chat`
-  has no path to the Executive; `kernel/runtime_contract.py` holds no reference to the
+  has no path to the Executive; `bartholomew/kernel/runtime_contract.py` holds no import from the
   executive package (verified at `a64f5af`). A goal typed into chat falls through to a
   conversational reply. **Consequence:** the most capable cognition in the system is invisible
   to the user, so no amount of further cognition work improves the product until this is
@@ -1337,7 +1337,8 @@ inside a work-package document is a limitation the next session will not find.
 
 - **R-CTRL-1 — Documentation currency is itself a project risk.** The 2026-09-14 reset found
   the canonical control plane roughly a month behind `main`: `MASTER_PLAN.md`, the document
-  that declared itself the SSOT, knew nothing of six merged pull requests, and its "next
+  that declared itself the SSOT, knew nothing of the seven merged pull requests of the September
+  implementation arc (#101, #102, #104-#107, #108), and its "next
   moves" pointed at a review completed three weeks earlier. Meanwhile EXEC-01's own record
   still described its pull request as unmerged. **Mitigation now in place:** `START_HERE.md`
   is a single short bootstrap that must be updated when `main` moves materially, Airtable

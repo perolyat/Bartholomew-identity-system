@@ -1,10 +1,21 @@
 # MASTER_PLAN
 
-> **Single Source of Truth (SSOT)** for what Bartholomew is, what matters, where we are, and what we do next.
+> Canonical **programme plan, backlog, stage structure, doc governance and approval ledger.** Part of
+> the canonical SSOT *set*; `START_HERE.md` is that set's index and the authority for the
+> current-state snapshot and the source hierarchy.
+>
+> *(Narrowed 2026-09-14. This line read "**Single Source of Truth (SSOT)** for what Bartholomew is,
+> what matters, where we are, and what we do next" — a claim over current state and next work that
+> the note below transfers to `START_HERE.md`. Leaving the subtitle unchanged would have left the
+> transfer described but not made.)*
 >
 > **Last updated:** 2026-09-14 — **Project Control & Documentation Reset.** This
-> document had not been updated since 2026-08-20 and had become the *stalest* canonical
-> document while still declaring itself the Single Source of Truth: it knew nothing of
+> document carried a 2026-08-20 "Last updated" line and its **status and next-work content** had
+> not moved since then, while it still declared itself the Single Source of Truth for exactly that
+> content. *(Corrected 2026-09-14, second pass: an earlier wording here said the document "had not
+> been updated since 2026-08-20", which git refutes — it received non-status additions on
+> 2026-08-22, 2026-08-27 and 2026-09-08. The defect was the staleness of its status record, not an
+> absence of edits.)* Concretely: it knew nothing of
 > Wave 3 (PR #101), BGPR-01 (#102), FND-01 to FND-04 (#104–#107) or EXEC-01 (#108), and
 > its "Next 3 Moves" still pointed at an Approval-Gate review completed on 2026-08-20. *(Extended
 > 2026-09-14, second pass: the gap was wider than six pull requests. Usable POC slice 2 and the two
@@ -193,7 +204,7 @@ prioritisation" entry.)
 referenceable **evidence location** for Real-World Test #1 — the preserved Post-Test #1 Decision
 Register v2.2, SHA-256 checksums, the Test #1 commit-provenance record, and an explicit inventory of
 the raw artifacts that are **absent**. **It is a location, not an authority**: the count above stays
-at 14, the decisions live in `DECISIONS.md`, and the readiness bands live in `ROADMAP.md`.
+at 15 *(14 before 2026-09-14)*, the decisions live in `DECISIONS.md`, and the readiness bands live in `ROADMAP.md`.
 
 **Also not canonical, and deliberately non-authoritative (added 2026-09-08):**
 `docs/research/RESEARCH_REGISTER.md` is the **evidence location** for externally sourced product/
@@ -837,18 +848,23 @@ package. **Listing a package is not authorisation to start it.**
   `TaskIntent` through the existing seam. **Deliberately not connected to the
   conversational surface, and not enabled in production wiring.** See
   `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` and `START_HERE.md` §5.
-- ✅ **Project Control & Documentation Reset.** 2026-09-14. This pass: `START_HERE.md`
+- ⏳ **Project Control & Documentation Reset.** 2026-09-14 — **prepared, not merged and not
+  approved**: branch `claude/bartholomew-control-reset-rdszk7`, PR #109, awaiting Taylor at the User
+  Approval Gate. It is listed here for sequence, and it is the one item in this list that is *not*
+  completed, merged, Taylor-approved work. This pass: `START_HERE.md`
   created, EXEC-01 provenance and CI record corrected, this document's currency restored,
   the GitHub/Airtable source hierarchy recorded, Airtable aligned.
 - ⏭ **NEXT, identified and NOT started: EXEC-02 — connect the conversational surface to
   the existing Executive.** Ordinary user goals arriving at `/api/chat` do not enter the
-  Executive path; `kernel/runtime_contract.py` holds no reference to the executive
+  Executive path; `bartholomew/kernel/runtime_contract.py` holds no import from the executive
   package, and `install_deliberation_port` has no production caller. Until both are
   addressed, EXEC-01's cognition is invisible to the user. **This requires its own
-  separate, explicit approval before any work begins,** and a bounded scope defined from
-  current `main` — no second planner, no governance bypass, deterministic recognition
-  first, existing `ModelRouter` and `TaskIntent` contracts. Live-model end-to-end evidence
-  is part of its definition of done, because no such evidence exists today.
+  separate, explicit approval before any work begins.** Its scope is for its own brief to set, not
+  this document; what the existing invariants already require of any such package is that it
+  develop **outward from the Executive stage the runtime already has** — no second planner, no
+  governance bypass, deterministic recognition first, the existing `ModelRouter` and `TaskIntent`
+  contracts — and a recommendation, not a requirement set here, is that live-model end-to-end
+  evidence form part of its definition of done, because no such evidence exists today.
   **Sequencing question for Taylor, raised 2026-09-14 and deliberately not decided here:**
   `docs/TILT.md` remains the binding near-term sequencing authority, and its principle — real-world
   testing takes priority once a slice can generate meaningful feedback — points at something before

@@ -3338,9 +3338,12 @@
     the implementation: architecture, decisions, constraints, contracts, interfaces, risks,
     evidence, and each work package's record.
   - **Airtable** (base `Bartholomew Master Project`) is the **live project-control layer**:
-    current status, priority, blockers, next action, dependencies, evidence pointers and the
-    next-action queue, across `Project Areas`, `Work Packages`, `Checkpoints`, `Decisions &
-    Constraints` and `Risks & Open Questions`.
+    current status, priority, next action, evidence pointers and the live queue, across
+    `Project Areas`, `Work Packages`, `Checkpoints`, `Decisions & Constraints` and
+    `Risks and Open Questions`. *(Narrowed 2026-09-14: an earlier wording also claimed "blockers"
+    and "dependencies". The base has no field for either — a blocker is carried in next-action
+    prose, and representing dependencies structurally would be a separate controlled schema change.
+    Sequencing authority stays in the repository; see **Open** below.)*
   - **`START_HERE.md`** is a new canonical document (the 15th) and the **single bootstrap**. It is
     the authority for the source hierarchy, the current-state snapshot, the evidence tiers and the
     new-session procedure. It is an index and a snapshot — **not** a competing authority on
@@ -3404,9 +3407,18 @@
 - **Status:** a correction of stale records, recorded for traceability. It decides nothing new.
 - **Decision:** The authoritative EXEC-01 record is: **PR #108, reviewed head `2813c7b`, merge
   commit / `main` after merge `a64f5af`**, approved by Taylor at the User Approval Gate. At the
-  reviewed head, **both** the PR Fast/CI tier **and** the Integration / merge-candidate tier ran
-  and **passed**. Where any document, handoff or record says otherwise, this entry and
+  reviewed head: the **PR Fast** tier (`ci.yml`) ran and passed; the **Integration** tier
+  (`integration.yml`) ran **because the pull request was marked ready for review** and passed; and
+  the **Merge Candidate** tier (`merge-candidate.yml`) **did not run on the pull request at all** —
+  it triggers on a push to `main`, a merge queue, the `ci:merge-candidate` label or a wave branch.
+  It ran post-merge on `main` at `a64f5af` and failed one job of seven (Windows full default suite),
+  which `RISKS.md`'s amended 2026-09-09 entry covers and of which no EXEC-01 test is part. Where any
+  document, handoff or record says otherwise, this entry and
   `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 supersede it.
+  *(Corrected 2026-09-14, second pass: this paragraph first said "both the PR Fast/CI tier and the
+  Integration / merge-candidate tier ran and passed" — the same two-tiers-as-one conflation this
+  entry exists to remove, inside the sentence claiming supersession authority. Rebuilt from the
+  GitHub check-run record.)*
 - **Why:** two statements had been left behind by the merge. (i) The EXEC-01 package record's
   header still read *"implemented, not merged. Awaiting the User Approval Gate"* — true when
   written, stale from the moment #108 merged, and precisely the kind of residue that makes a
@@ -3426,3 +3438,34 @@
     ports must never be reported as proof that a live model produces useful plans.
   - EXEC-01's five carried-forward limitations are now recorded in `RISKS.md` as R-EXEC01-1 to
     R-EXEC01-5, rather than living only inside the package document.
+
+## Decision: A clean acceptance-test installation is not the model for ordinary governed updates
+
+- **Status:** recorded 2026-09-14 by the Project Control & Documentation Reset. The **testing
+  procedure** half is established practice (the standing real-world acceptance workflow agreed
+  September 2026). The **update-mechanism** half is a **proposed constraint for Taylor**, not an
+  approved decision: no update mechanism exists, and nothing here authorises building one.
+- **Decision:** Two things that look alike must not be conflated.
+  - A **real-world acceptance test** installs from a **clean checkout at the exact accepted head**,
+    so that what is tested is what was approved and nothing carries over from a developer's working
+    state. That is a property of the test, and it is why a test result can be attributed to a commit.
+  - An **ordinary future update** of a person's Bartholomew is **governed and in-place**, and must
+    **preserve their personal identity, memory and state**. A user's Bartholomew is not reinstalled
+    to receive an improvement.
+  - Neither pattern is evidence about the other: a clean-install acceptance pass says nothing about
+    whether an in-place update preserves state, and vice versa.
+- **Why:** the two were being conflated in discussion, and the distinction matters in both
+  directions. Treating acceptance installs as the update model would imply a user loses their
+  Bartholomew's accumulated self to get a fix — which `CONSTITUTION.md`'s portability principle and
+  the platform/personal-identity decision both forbid. Treating updates as the acceptance model
+  would let a test inherit developer state and silently stop being attributable to a commit.
+- **Consequences:**
+  - The rule is now in this repository rather than only in Airtable. The reset found it recorded as
+    an Airtable `Decisions & Constraints` row whose "canonical authority" pointed at repository
+    material that did not contain it — a durable rule surviving only in the live status layer, which
+    is exactly what this document's source-of-truth entry forbids.
+  - **No implementation is authorised.** No update, migration or upgrade mechanism exists; designing
+    one is separate, separately-approved work, and this entry does not scope it.
+  - `docs/FIRST_REAL_WORLD_TEST.md` remains the procedure for the test half.
+- **Open — for Taylor:** whether to approve the update-mechanism half as a standing constraint on any
+  future update design, or leave it as a recorded expectation until such work is actually proposed.

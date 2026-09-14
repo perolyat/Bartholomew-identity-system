@@ -1,5 +1,14 @@
 # Session handoff — 2026-08-22
 
+> **HISTORICAL — superseded (banner added 2026-09-14, Project Control & Documentation Reset).**
+> Preserved as record. It is **not** a briefing and **not** current status, and its "read these
+> first" ordering is superseded by `START_HERE.md`, which is the single bootstrap. Specific facts
+> below that are now stale: `main` is **`a64f5af`**, not `6c3fb8a`; every pull request through #108
+> is merged (#101, #102, #104–#107, #108), not "through #61"; and its statement that all CI jobs are
+> green describes 2026-08-22 — today the **Merge Candidate** tier is red on `main` (see
+> `START_HERE.md` §7 and `RISKS.md`'s amended 2026-09-09 entry). The test counts here predate a
+> suite roughly three times larger.
+
 > Working note for whoever picks this up next (human or agent). Non-canonical.
 > Delete or overwrite freely; it describes a moment, not a decision.
 >

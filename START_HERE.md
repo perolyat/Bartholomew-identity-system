@@ -68,7 +68,7 @@ runtime semantics. This list is an index, not a substitute.
 | **External systems are capabilities/endpoints** | Devices, tools, specialist agents and presentation layers (including AIRI) provide sensing, actuation, specialist skill or presence. They do not interpret overall user intent. |
 | **External Capability Interface (ECI)** | The single governed boundary between Bartholomew and any external system: endpoint identity, advertised capability, availability, governed request/directive flow, result correlation. New integrations go through it rather than inventing a private path. |
 | **Governance above autonomy** | Capability never outranks the rules. Growth in cognition never grants growth in authority. |
-| **Parking Brake precedence** | The brake is read *before* an instruction is understood, sits below the presentation layer, and cannot be overridden by cognition, a capability or a UI. An engaged brake means no model is consulted at all. |
+| **Parking Brake precedence** | The brake is read *before* an instruction is understood, sits below the presentation layer, and cannot be overridden by cognition, a capability or a UI. An engaged brake means no model is consulted at all. It has **two approved authority tiers** — a Personal/User brake that never halts other users, and a higher-scope Platform/Admin brake a user cannot override — orthogonal to the six subsystem scopes. `COGNITIVE_RUNTIME.md`'s "Authority tiers" is canonical for the semantics. |
 | **Cognition may propose, never authorise** | The Executive package never grants its own approval (AST-enforced). A proposal stops at `pending_approval` and waits for a human. |
 | **Evidence is not authority** | Recalled memory and endpoint reports are framed, non-instructional data. They can influence *which valid option* is chosen; they can never make an invalid action valid, widen a bound, or authorise anything. |
 | **Prospective reasoning is hypothetical** | Simulated or predicted state must never be presented or recorded as observation. |
@@ -88,9 +88,9 @@ conversation owns nothing.**
 | What is the architecture, and what is frozen? | **GitHub** — `CONSTITUTION.md`, `COGNITIVE_RUNTIME.md`, `DECISIONS.md`, `INTERFACES.md`. |
 | What was decided, when, and why? | **GitHub** — `DECISIONS.md`. |
 | What are the risks? | **GitHub** — `RISKS.md` (durable), mirrored as a working queue in Airtable. |
-| What is the state of work *right now* — status, priority, blockers, next action? | **Airtable** — `Bartholomew Master Project`. |
+| What is the state of work *right now* — status, priority, next action, evidence pointers? | **Airtable** — `Bartholomew Master Project`. (It has no blockers or dependencies field today; a blocker is carried in the next-action text. Representing dependencies structurally would be a separate controlled schema change.) |
 | What was proven, and by what evidence? | **GitHub** — the work-package document and `docs/evidence/`; Airtable holds the pointer and the tier. |
-| What should I work on next? | **Airtable** `Work Packages`, reconciled against `docs/TILT.md` sequencing. |
+| What should I work on next? | **GitHub** — `docs/TILT.md` and `MASTER_PLAN.md`'s "Next 3 Moves" are the sequencing authority. **Airtable** `Work Packages` carries the live queue and must agree with them. *(Whether Airtable should instead own the queue outright is an open question for Taylor — see `DECISIONS.md`'s source-of-truth entry. This row records the conservative reading actually implemented, not a decision.)* |
 
 **These are project-management systems, not parts of Bartholomew.** GitHub and Airtable hold the
 *project's* control information — what humans and AI sessions need in order to build the thing.
@@ -150,22 +150,25 @@ these five states is the most easily lost and most expensive thing in this proje
 | Conversational-primary UI: ordinary-user vs Workshop separation, obligation legibility, first-use orientation | **Operational** | UX Acceleration Sprint, PR #65, merged 2026-08-26 at Taylor's explicit instruction after independent adversarial review. Also carried the Test #1 UI defect repairs. Safety controls stay in the ordinary view. |
 | Memory Agency: list, search, correct, forget, export | **Operational** | PR #65, through the single governed `MemoryStore` authority. Correction is a conditional write, so a stale correction cannot destroy a newer legitimate one, and a user's deletion wins by construction. |
 | Conversational task control (an ordinary sentence performs a real `TasksSkill` operation) | **Operational** | Capability Acceleration Sprint, PR #66. Goes through the same governed Runtime Contract chokepoint — **note this when scoping EXEC-02: a sentence already causes a governed action; what it does not do is reach the Executive.** |
-| Notification delivery (provider-agnostic outbound webhook) | **Operational** | Delivered with slice 1 as the `notify` skill's real outbound channel. |
+| Notification delivery (provider-agnostic outbound webhook) | **Present, enabled only by an operator (default OFF)** | Delivered with slice 1 as the `notify` skill's real outbound channel, but inert until `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` is set (`bartholomew/skills/notify.py`). Unset, a notification is recorded, not delivered. |
 | Proactive schedule/birthday reminders | **Present, enabled only by an operator (default OFF)** | Usable POC slice 2, 2026-08-25, `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md`. `schedule_reminders` in `config/kernel.yaml` is the **single** switch — deliberately no environment-variable override, so there is exactly one authority over whether Bartholomew may contact you unprompted. Surfaces one reminder per (fact, due date) plus one governed delivery. **Unattended operation is not authorised by it.** |
+| Objective continuity (Golden Path slice 2) | **Present, enabled only by an operator (default OFF)** | `objective_continuity` in `config/kernel.yaml`. Same class of switch as the reminders above. |
+| External capability provider — forecast lookup | **Present, enabled only by an operator (default OFF)** | `bartholomew/skills/forecast.py`; unavailable unless `BARTHOLOMEW_FORECAST_API_URL` is configured, and deliberately carries no default URL. The first real use of an outside provider as a capability, through the governed path. |
 | Local spoken output | **Present, enabled only by an operator (default OFF)** | `spoken_output` in `config/kernel.yaml`; a prototype. When off, nothing speaks and the speech adapter is never reached. The `voice` Parking Brake scope silences it. A missing engine is reported as "no engine", never as speech that happened. |
 | Identity projection into every model path | **Integrated** | FND-01, PR #104. Provider-independent and structurally required. |
 | Memory substrate: governed write, redaction, consent gating, retrieval | **Integrated** | Beneath the rows above. FND-02 (#105) and FND-03 (#106) repaired redaction separation and consent-inbox privacy/lifecycle. |
 | Governance: action envelope, approval, Parking Brake, audit | **Integrated** | The most mature part of the system. Heavily tested. |
-| Recovery / undo, independent verification, `FAILED`/`UNKNOWN` distinction | **Integrated** | Contract v1.0 authoritative. |
+| Recovery / undo, independent verification, `FAILED`/`UNKNOWN` distinction | **Integrated** | `bartholomew/executive/recovery.py` and `bartholomew/executive/verification.py`; semantics in `COGNITIVE_RUNTIME.md` and `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §6. *(Airtable carries a frozen decision naming a "Recovery & Undo Contract v1.0"; no document of that name exists in this repository — the code and the runtime document above are the traceable authority.)* |
 | Windows observe → reason → act → verify golden path | **Integrated (operator-only)** | Wave 3, PR #101. Reached through `POST /api/operator/tasks`, not through ordinary conversation. Real-world acceptance still outstanding. |
 | Local-model generation and truthful readiness | **Integrated** | BGPR-01, PR #102. Blocking generation moved off the event loop; readiness reports model reachability distinctly from model selection. |
 | External Capability Interface core boundary | **Integrated** | FND-04, PR #107. Endpoint identity, capability advertisement, availability, governed flow, result correlation — proven by a reference vertical slice. **No real external product is attached.** |
 | **Executive goal-to-plan deliberation** | **Present, not enabled** | EXEC-01, PR #108. No production caller. See §5. |
-| Conversational chat reaching the **Executive** | **Not built** | `kernel/runtime_contract.py` holds no reference to the executive package. A *goal* typed into `/api/chat` ("start a shopping list") falls through to a conversational reply — distinct from the deterministic `TasksSkill` control above, which does act. This is EXEC-02. |
+| Conversational chat reaching **goal-to-plan deliberation** | **Not built** | Read this precisely. Chat **does** traverse the Runtime Contract's **Executive stage** — it builds a `CandidateAction` that Governance genuinely consumes (`bartholomew/kernel/runtime_contract.py`, Stage 3; `COGNITIVE_RUNTIME.md`'s Executive row). What that stage does **not** reach is `bartholomew/executive/`'s goal-to-plan deliberation: the package holds no import from it, so an outcome-level goal ("start a shopping list") produces a conversational reply rather than a deliberated plan. EXEC-02 deepens an Executive stage that already exists; it does not attach a new brain. |
 | Unattended / ambient operation | **Not authorised** | Not a build gap but a governance one: it sits inside Band A's restricted envelope and needs its own recorded decision. Slice 2 supports the Band 0 **attended** checkpoint only. |
 | AIRI as a presence endpoint | **Conceptual** | Architectural role agreed; no production integration. |
-| Household robotics / embodied endpoints | **Conceptual** | Approved strategic backlog item, 2026-09-14. Nothing built. |
-| Multi-user, tenancy, cloud infrastructure, device agents, authentication | **Conceptual** | Target architecture recorded in `DECISIONS.md`. None of it exists. This deployment is a single-user PoC, and the API boundary is loopback-only and unauthenticated. |
+| Household robotics / embodied endpoints | **Conceptual** | Tracked as a strategic backlog item in Airtable `Work Packages` (status: not started); no repository record carries an approval, so none is claimed here. Robots would be capability endpoints through the ECI, never a second executive. Nothing built. |
+| HTTP authentication and the exposure boundary | **Present, deliberately disabled for this deployment** | Not conceptual: `bartholomew/platform/exposure.py` resolves an auth mode, and the rule is fail-closed — **a non-loopback bind forces authentication and TLS on, and neither can then be turned off**; the process refuses to start if `BARTH_AUTH_MODE=disabled` is combined with a non-loopback bind. `disabled` is the single-user localhost development mode this repository runs in. Loopback-only is the default, with a deliberate override path. |
+| Multi-user, tenancy, cloud infrastructure, device agents | **Conceptual** | Target architecture recorded in `DECISIONS.md`. None of it exists; this deployment serves exactly one person. |
 
 **A sixth state, used above:** *present, enabled only by an operator (default OFF)*. It is distinct
 from "present, not enabled" — these have a real switch a person is meant to throw, and they work
@@ -190,7 +193,7 @@ inferred), and every proposed parameter goes through the real device allowlists.
 
 **What it did not accomplish — all four verified in code at `a64f5af`:**
 
-- **It is not reachable from chat.** `/api/chat` has no path to the Executive.
+- **Its deliberation is not reachable from chat.** Chat already traverses the Runtime Contract's Executive *stage*; what it does not reach is `bartholomew/executive/`'s goal-to-plan deliberation, because `bartholomew/kernel/runtime_contract.py` holds no import from that package. The gap is depth in an existing stage, not a missing brain.
 - **It is not enabled anywhere.** `install_deliberation_port` has **no production
   caller**; a deployment that does not call it keeps exactly the pre-EXEC-01
   Executive. This is deliberate — enabling model-led reasoning on someone's computer
@@ -267,11 +270,11 @@ under normal PR behaviour" described the draft phase only and is superseded —
 **`main` is currently red on the Merge Candidate tier**, and you should know this before you read a
 green-looking status anywhere else. At `a64f5af` that tier failed one job of seven — *Windows full
 default suite* — at **3 failed, 4,987 passed, 79 skipped**. Two failures
-(`test_event_backbone_drive.py` ×2) are named members of the writer-lock / WAL-contention class
+(`tests/test_event_backbone_drive.py` ×2) are named members of the writer-lock / WAL-contention class
 recorded in `RISKS.md` and analysed in `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7:
 pre-existing, rotating between runs, passing in isolation, seen on `main` since 2026-08-15, and
 **deferred out of Wave 3 as a separate reliability task with Taylor's explicit approval**. The third
-(`test_fnd04_eci_vertical_slice.py`) is in FND-04 code and is not yet listed among that class.
+(`tests/test_fnd04_eci_vertical_slice.py`) is in FND-04 code and is not yet listed among that class.
 **None is an EXEC-01 test.** This is the state of `main`, not a defect introduced by the last
 package, and repairing it is separate, unauthorised work.
 
@@ -326,7 +329,7 @@ package, and repairing it is separate, unauthorised work.
 | Programme plan, backlog, approval ledger | `MASTER_PLAN.md` |
 | Risks, tech debt, open constraints | `RISKS.md` |
 | API and contract surfaces | `INTERFACES.md` |
-| Test strategy / CI tiers | `TEST_MATRIX.md`, `CI.md` |
+| Test strategy / CI tiers | `CI.md` (its header tier table is current; its body predates the four-tier structure) and `TEST_MATRIX.md` (**counts are of 2026-07-27 — it states a 915-test suite; the default suite is now roughly 4,987 tests**) |
 | The last Executive package in full | `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` |
 | The External Capability Interface in full | `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md` |
 | Real-World Test #1 evidence and the approved register | `docs/evidence/test-1/` |

@@ -223,7 +223,9 @@ below, which is itself canonical.
 
 Most useful entry points:
 
-- [MASTER_PLAN.md](MASTER_PLAN.md) — SSOT: stage status, backlog, approval ledger
+- [START_HERE.md](START_HERE.md) — **read first:** project bootstrap, source hierarchy,
+  current-state snapshot, evidence tiers
+- [MASTER_PLAN.md](MASTER_PLAN.md) — programme plan, backlog, stage structure, approval ledger
 - [docs/TILT.md](docs/TILT.md) — current execution priority: Usable POC / time-to-real-use
 - [COGNITIVE_RUNTIME.md](COGNITIVE_RUNTIME.md) — how Bartholomew actually thinks (the runtime loop)
 - [ROADMAP.md](ROADMAP.md) — stage gates and engineering workstreams with exit criteria
