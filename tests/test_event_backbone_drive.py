@@ -123,6 +123,38 @@ async def _wait_for(predicate, *, timeout=WAIT_SECONDS, what="the expected state
     raise AssertionError(f"the scheduler never reached {what} within {timeout}s")
 
 
+# Wait for the state an assertion is about, not for an earlier effect of the
+# same pass. Processing an event is several durable steps with event-loop
+# turns between them: the handler attaches the evidence, a later transaction
+# settles the processing row to its terminal state, and the scheduler records
+# the drive's tick only after the drive returns. A poll that returns on the
+# first of those can read the second a few milliseconds before it lands. On
+# Windows CI that window was hit (main at a64f5af: ``assert 'claimed' ==
+# 'processed'`` and ``the scheduler recorded no tick``), and widening the
+# window artificially reproduces both failures on every run. Waiting for the
+# terminal record and for the tick row asserts exactly the same properties,
+# in the order the design guarantees them.
+
+
+def _terminal_record(db_path, event_id):
+    record = store.get(db_path, "src-roofer", event_id)
+    return record if record and record.terminal else None
+
+
+def _drive_tick_rows(db_path):
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT success FROM ticks WHERE task_id = ?",
+            (drives.INBOUND_EVENT_PROCESSING_DRIVE,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return rows or None
+
+
 async def _capture(db_path, *, event_id, payload, event_type=OBSERVATION_NOTE):
     return await run_inbound_through_runtime_contract(
         db_path=db_path,
@@ -196,17 +228,17 @@ async def test_the_running_scheduler_processes_a_captured_event(scheduler):
     )
     assert captured.captured is True
 
-    evidence = await _wait_for(
-        lambda: objectives.evidence_events(roof.id),
-        what="the captured event being attached as evidence",
+    record = await _wait_for(
+        lambda: _terminal_record(scheduler.mem.db_path, "evt-1"),
+        what="the captured event reaching a terminal processing state",
     )
+    assert record.state == store.STATE_PROCESSED
+
+    evidence = objectives.evidence_events(roof.id)
     assert len(evidence) == 1
     assert "Roofer confirmed attendance Tuesday." in evidence[0].summary
     assert evidence[0].provenance["event_id"] == "evt-1"
     assert evidence[0].event_kind == objective_store.EVENT_FACT
-
-    record = store.get(scheduler.mem.db_path, "src-roofer", "evt-1")
-    assert record.state == store.STATE_PROCESSED
 
 
 @pytest.mark.asyncio
@@ -217,27 +249,20 @@ async def test_the_running_scheduler_records_a_tick_for_the_drive(scheduler):
         payload={"body": "Your parcel was delivered."},
     )
 
-    def processed():
-        record = store.get(scheduler.mem.db_path, "src-roofer", "evt-tick")
-        return record if record and record.terminal else None
-
-    record = await _wait_for(processed, what="a terminal disposition")
+    record = await _wait_for(
+        lambda: _terminal_record(scheduler.mem.db_path, "evt-tick"),
+        what="a terminal disposition",
+    )
     assert record.state == store.STATE_IRRELEVANT
 
     # The scheduler's own durable activity record names the drive, so an
-    # operator reading `ticks` can see the backbone running.
-    import sqlite3
-
-    conn = sqlite3.connect(scheduler.mem.db_path)
-    try:
-        rows = conn.execute(
-            "SELECT success FROM ticks WHERE task_id = ?",
-            (drives.INBOUND_EVENT_PROCESSING_DRIVE,),
-        ).fetchall()
-    finally:
-        conn.close()
-    assert rows, "the scheduler recorded no tick for the processing drive"
-    assert any(r[0] == 1 for r in rows)
+    # operator reading `ticks` can see the backbone running. The tick is
+    # written after the drive returns, so it is waited for in its own right.
+    rows = await _wait_for(
+        lambda: _drive_tick_rows(scheduler.mem.db_path),
+        what="a recorded tick for the processing drive",
+    )
+    assert any(r[0] == 1 for r in rows), "the processing drive's tick was not a success"
 
 
 @pytest.mark.asyncio
