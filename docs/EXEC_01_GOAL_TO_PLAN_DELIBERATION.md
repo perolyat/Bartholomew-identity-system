@@ -369,5 +369,10 @@ Recorded in `RISKS.md` and summarised in `START_HERE.md` §8:
    `install_deliberation_port` has no production caller — verified at `a64f5af`.
 3. **No real-model plan-quality evidence exists.**
 4. **The capability domain is bounded** — the same nine Windows capability kinds.
-5. **`INFERABLE_CAPABILITIES` remains a policy judgement**, not a derived fact, and
-   will need revisiting as the capability vocabulary grows.
+5. **`INFERABLE_CAPABILITIES` — settled as policy on 2026-09-14.** Taylor approved **"infer the
+   means, not additional authority"** (`DECISIONS.md`), which derives this package's rule rather
+   than leaving it a bare judgement: inferred actions carry less authority than named ones, and
+   capabilities involving materially greater authority, privacy exposure, external commitment or
+   destructive consequence are deny-by-default for inference. The set here is the implementation
+   baseline for the current vocabulary, and each future capability still needs a deliberate review
+   of whether it may be inferred.

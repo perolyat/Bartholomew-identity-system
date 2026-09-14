@@ -19,10 +19,10 @@
 >
 > | Tier | Workflow | Runs when | Roughly what it runs |
 > |---|---|---|---|
-> | **PR Fast** | `.github/workflows/ci.yml` | every push to a pull request | Quality (format, lint, packaging), PR Fast tests (Ubuntu py3.11, parallel), Windows fast, smoke |
+> | **PR Fast** | `.github/workflows/ci.yml` | every push to a pull request; manual dispatch | Quality (format, lint, packaging), PR Fast tests (Ubuntu py3.11, parallel), Windows fast, smoke |
 > | **Integration** | `.github/workflows/integration.yml` | a pull request is **ready for review (not a draft)**; the `ci:integration` label; a merge queue; manual dispatch | Default suite **with** branch coverage and the 70 % gate; the `integration`/`slow` tests the default marker expression excludes, plus clean-start lifecycle, scheduler readiness and parking-brake governance; Windows lifecycle + compatibility |
 > | **Merge Candidate** | `.github/workflows/merge-candidate.yml` | a **push to `main`**; a merge queue; the `ci:merge-candidate` label; a wave integration branch (`wave/w03-f-*`); manual dispatch | Everything Integration runs, widened to both supported Pythons, **plus the full default suite on Windows** |
-> | **Nightly** | `.github/workflows/nightly.yml` | on schedule | — |
+> | **Nightly** | `.github/workflows/nightly.yml` | on schedule; manual dispatch | — |
 >
 > **Two consequences worth stating plainly.** (1) **A draft pull request gets the PR Fast tier
 > only**; the Integration workflow still registers, with every job skipped, which reads as

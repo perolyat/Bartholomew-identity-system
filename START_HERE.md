@@ -261,10 +261,10 @@ claim in this repository:
 
 | Tier | Workflow | Runs when |
 |---|---|---|
-| **PR Fast** | `ci.yml` | every push to a pull request — what a draft gets |
+| **PR Fast** | `ci.yml` | every push to a pull request — what a draft gets; also manual dispatch |
 | **Integration** | `integration.yml` | a pull request is **ready for review (not a draft)**, the `ci:integration` label, a merge queue, or by hand |
 | **Merge Candidate** | `merge-candidate.yml` | a push to `main`, a merge queue, the `ci:merge-candidate` label, or a wave integration branch — **not** an ordinary ready-for-review pull request |
-| **Nightly** | `nightly.yml` | on schedule |
+| **Nightly** | `nightly.yml` | on schedule; also manual dispatch |
 
 **EXEC-01 (PR #108) at reviewed head `2813c7b`:** PR Fast **passed**; Integration **ran, because the
 pull request was marked ready for review, and passed**; Merge Candidate **did not run** (it does not
@@ -295,9 +295,11 @@ package, and repairing it is separate, unauthorised work.
    materially exceeds live-usefulness evidence.
 5. **Bounded capability domain.** Nine Windows capability kinds; no real external
    product is attached through the ECI.
-6. **Residual policy judgement on inferred capabilities.** `INFERABLE_CAPABILITIES`
-   is a judgement call, not a derived fact, and will need revisiting as the
-   capability vocabulary grows.
+6. **Capability inference — policy settled, review obligation standing.** Taylor approved
+   **"infer the means, not additional authority"** on 2026-09-14 (`DECISIONS.md`, and §2 above), so
+   this is no longer an open question. What remains is an obligation, not a risk of drift: every
+   capability added or removed needs a deliberate review of authority, privacy and consequence,
+   because a future capability does **not** become inferable merely by being implemented.
 7. **Parking Brake read/write authority split** remains open (constraint C6,
    gated at Band B / safety gate S5). Not closed by Test #1.
 8. **`main`'s Merge Candidate tier is red** — the Windows writer-lock / WAL-contention class

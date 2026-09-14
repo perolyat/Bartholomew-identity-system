@@ -5,8 +5,8 @@
 > **Last updated:** 2026-09-14 (**Project Control & Documentation Reset**) — two new entries at
 > the end of this document: the **GitHub/Airtable source-of-truth division and the project
 > bootstrap**, and the **EXEC-01 merge provenance and CI record correction**. The first is a
-> project-control decision Taylor directed in the reset brief and whose open sub-question is
-> flagged inside it; the second is a correction of stale records, not a new decision. **No
+> project-control decision Taylor directed in the reset brief (its one open sub-question was
+> resolved by Taylor on 2026-09-14 and is recorded inside it); the second is a correction of stale records, not a new decision. **No
 > production code, tests, schemas, migrations or runtime configuration changed**, and **neither
 > entry authorises implementation** — in particular neither authorises EXEC-02.
 >
@@ -130,7 +130,8 @@
 > added, bringing the set to **15**. It is the project bootstrap and the authority for the source
 > hierarchy, the current-state snapshot, the evidence tiers and the new-session procedure — an
 > index over this set, not a competing authority on architecture, decisions, risks or roadmap.
-> Rationale, alternatives and the one open sub-question are in this document's "GitHub owns durable
+> Rationale, alternatives and the resolution of its one formerly-open sub-question are in this
+> document's "GitHub owns durable
 > truth, Airtable owns live status, and `START_HERE.md` is the single bootstrap" entry.
 > **This is a membership amendment only** — the anti-sprawl rule below is unchanged, and adding a
 > document to reduce reading is only consistent with it because `START_HERE.md` replaces the
@@ -3331,8 +3332,9 @@
 ## Decision: GitHub owns durable truth, Airtable owns live status, and `START_HERE.md` is the single bootstrap
 
 - **Status:** approved in substance by Taylor in the 2026-09-14 Project Control & Documentation
-  Reset brief, which set the direction this entry records. One sub-question remains open for
-  Taylor's judgement — see **Open** below.
+  Reset brief, which set the direction this entry records, and **fully approved by Taylor on
+  2026-09-14** at the User Approval Gate — including the sub-question this entry originally left
+  open, which is now settled under **Resolved** below.
 - **Decision:** Project information has one owner per category.
   - **GitHub is canonical** for code and for durable technical and project documentation tied to
     the implementation: architecture, decisions, constraints, contracts, interfaces, risks,
