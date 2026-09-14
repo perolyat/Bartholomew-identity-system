@@ -849,6 +849,15 @@ package. **Listing a package is not authorisation to start it.**
   current `main` — no second planner, no governance bypass, deterministic recognition
   first, existing `ModelRouter` and `TaskIntent` contracts. Live-model end-to-end evidence
   is part of its definition of done, because no such evidence exists today.
+  **Sequencing question for Taylor, raised 2026-09-14 and deliberately not decided here:**
+  `docs/TILT.md` remains the binding near-term sequencing authority, and its principle — real-world
+  testing takes priority once a slice can generate meaningful feedback — points at something before
+  EXEC-02. Neither **slice 2** (default OFF, no attended checkpoint run) nor the **UX Acceleration
+  Sprint** (which exists to answer Test #1's burden finding) has ever been in real use. An attended
+  **Band 0** checkpoint of the existing surface needs no new code and tests the project's largest
+  risk directly. The counter-argument is that a user cannot fairly judge the product while the
+  Executive is unreachable. **Recommended: the attended checkpoint first, then EXEC-02** — Taylor's
+  call, and neither is authorised by being listed here.
 
 **Historical — the actual next moves, as of 2026-08-12 (each step below requires its own separate, explicit
 approval before work begins — this list records sequencing, not authorisation):**

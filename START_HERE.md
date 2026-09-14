@@ -201,6 +201,36 @@ inferred), and every proposed parameter goes through the real device allowlists.
   better at using them; there are no new ones. Deliberation provenance is not
   persisted on the task row (it reaches the `ActionReflection` audit trail).
 
+### What comes next — and the one open sequencing question
+
+**The identified next implementation package is EXEC-02:** connect the conversational surface to
+the existing Executive, so ordinary goals reach it. It is **not started and not authorised.** It is
+the right implementation package on the evidence — it is the only gap that turns already-merged,
+already-reviewed cognition into something a user can reach, and the seam it needs is proven (an
+ordinary sentence already performs a governed `TasksSkill` operation through the Runtime Contract
+chokepoint; what it does not do is reach the Executive).
+
+**But `docs/TILT.md` is the binding near-term sequencing authority, and read literally it puts
+something before EXEC-02.** Its principle is that *once a vertical slice is sufficiently functional
+to generate meaningful real-user feedback, real-world testing takes priority over additional polish
+or hardening*, with six exceptions (safety, governance, privacy, data integrity, architectural
+validity, validity of the experiment). And two substantial things have never been in real use:
+**slice 2** (proactive reminders — default OFF, no attended checkpoint run) and the **whole UX
+Acceleration Sprint**, which exists specifically to answer Test #1's burden finding and has never
+been retested against a real person.
+
+So there is a genuine choice, and it is **Taylor's, not a builder's**:
+
+- **(a) Run an attended Band 0 real-use checkpoint of what already exists, then EXEC-02.** Cheap —
+  it needs no new code — and it tests the project's single biggest risk (that the product is
+  burdensome) against the work that was done to fix it. If the existing surface is still a chore,
+  EXEC-02 built on top of it inherits that, and we would find out later at higher cost.
+- **(b) EXEC-02 first**, on the argument that a user cannot fairly judge the product while the
+  Executive is unreachable, so the checkpoint is more informative afterwards.
+
+This document does not decide it. **Recommendation: (a), then EXEC-02** — but nothing here
+authorises either, and neither starts without Taylor's explicit approval.
+
 ## 6. Evidence tiers
 
 Never collapse these. A claim must name its tier.
