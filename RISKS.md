@@ -1225,16 +1225,17 @@
   > `tests/test_sqlite_wal_concurrent_processes.py` was a **second, independent** defect of the
   > class: SQLite refuses to invoke the busy handler when two connections race to convert a
   > *fresh* file to WAL (19/40 synchronised attempts failed), now retried in `set_wal_pragmas()`.
-  > **Still open, recorded separately** (record §8): the Windows Merge Candidate "stalled tail"
-  > (a hang after 99 % with one xdist worker lost mid-run, cancelled at the 40-minute cap — on the
-  > unmodified `main` push of `57f86f8` **and again on the repaired branch**, run 34857413080, so it
-  > is independent of this repair and of the writer lock; the Windows jobs now run `-vv` so the
-  > next occurrence names its tests), the nightly serial Windows failures (red on `main`; on the
-  > branch ended earlier by a 120 s per-test timeout in a `slow` memory test, under paired
-  > measurement — record §5.3), a Python 3.11 `asyncio.wait_for` cancellation swallow in the drive
-  > seam that delays shutdown, and the operator self-state routes' synchronous narrator writes.
-  > None is this class; none is absorbed. **The Windows baseline is not yet trustworthy** for the
-  > stalled-tail reason, and Band 0 stays gated on it (record §9).
+  > **Still open, recorded separately** (record §8, each with its own Airtable row): the Windows Merge
+  > Candidate "stalled tail" — with the Windows jobs verbose (`5fb9c88`) it is one named test,
+  > `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens`,
+  > which held the suite for 24 minutes on run 34866265459 unended by the 120 s per-test timeout, on a
+  > run where every other test finished (`1 failed, 4983 passed, 79 skipped`); the per-operation SQLite
+  > connection cost on Windows, which pushed the heavy-burst containment test past 120 s in that run
+  > (the one failure, a killed worker) and the `slow` memory and soak tests past 120 s in the nightly
+  > serial runs on the branch **and on `main`'s same-time control**; a Python 3.11 `asyncio.wait_for`
+  > cancellation swallow in the drive seam that delays shutdown; and the operator self-state routes'
+  > synchronous narrator writes. None is this class; none is absorbed. **The Windows baseline is not
+  > yet trustworthy** for the first two reasons, and Band 0 stays gated on it (record §9).
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the

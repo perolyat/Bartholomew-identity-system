@@ -295,8 +295,11 @@ WAL conversion race), also repaired. The push of `57f86f8` (PR #109, unmodified 
 symptom, which is a hang rather than a lock error, **recurred on the repaired branch** (run
 34857413080, same shape), and so is independent of this repair and remains **separately tracked**
 (record §8). Consequence: the Windows baseline is **not yet trustworthy** and Band 0 is **NOT
-READY** on today's evidence (record §9); the Windows CI jobs now run `-vv` so the next stall names
-its tests.
+READY** on today's evidence (record §9). With the Windows jobs verbose (`5fb9c88`) the stall is a
+named test — `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens`,
+24 minutes on run 34866265459, unended by the per-test timeout, on a run where every other test
+finished — and the mid-run worker loss is the heavy-burst containment test exceeding 120 s from
+per-operation connection cost (record §5.2, §8; Airtable rows).
 
 ## 8. Major open risks
 

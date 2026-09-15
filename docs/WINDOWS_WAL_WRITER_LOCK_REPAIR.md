@@ -170,21 +170,31 @@ unmodified `main` in a worktree (9 failures, as designed).
 |---|---|---|---|
 | 34850155554 (13:35) | `57f86f8`, unmodified `main` | **cancelled at the cap**: `[gw2] node down: Not properly terminated` at ~65 %, 99 % reached at 13:56, nothing further, junit never written | all green |
 | 34857413080 (14:43) | `ac8eea9`, this branch | **cancelled at the cap**: `[gw0] node down: Not properly terminated` at ~67 % (14:54), 99 % reached at 15:02, seven more tests by the 15:23 cap, junit never written | all green |
-| 34866265459 (16:04) | `5fb9c88`, this branch, `-vv` | _in flight when this was written_ | |
+| 34866265459 (16:04) | `5fb9c88`, this branch, `-vv` | **ran to completion**: `1 failed, 4983 passed, 79 skipped, 164 warnings in 0:38:33`, junit written. Still `cancelled`: the last test, `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens` (gw2, started 16:20:34), was reported PASSED at 16:44:29 — the instant the 40-minute cap fired; the one failure is `tests/test_scheduler_queue_containment.py::TestContainmentNeverDestroysAnObligation::test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched`, `worker 'gw1' crashed` (the 120 s per-test timeout) | all green |
 
-What the two completed runs establish:
+What the three runs establish:
 
-- **No writer-lock failure appears in either Windows log.** The `database is locked` signature that
-  named this class (§0) is absent from both; on this branch the repaired paths ran under `-n auto`
-  contention without it.
-- **The "stalled tail" is not this class and not this repair's effect.** It reproduces with the same
-  shape on unmodified `main` and on the repaired branch: one worker dies silently mid-run
-  (pytest-timeout's thread method ends a worker with `os._exit`, so a 120 s test timeout inside an
-  xdist worker leaves only `node down`), the suite reaches 99 %, and the last few dozen tests never
-  complete while no further timeout fires. The dotted output cannot name those tests; `5fb9c88` runs
-  both Windows jobs `-vv` so the next occurrence can be attributed to a worker and a test id.
-- **The Windows baseline is therefore not yet trustworthy on this evidence**, for a reason
-  independent of the writer lock. §8 item 1 carries it; §9 draws the consequence.
+- **No writer-lock failure appears in any Windows full-suite log.** The `database is locked`
+  signature that named this class (§0) is absent from all three; on this branch the repaired paths
+  ran under `-n auto` contention twice without it, and the verbose run completed every test.
+- **The "stalled tail" is one named test, outside this class.** In the verbose run every test but
+  one had finished by 16:20:45; `test_lexical_beats_vector_on_exact_rare_tokens` on gw2 then held
+  99 % → 100 % for 24 minutes and was reported PASSED at 16:44:29, the second the job cap fired
+  (the controller's `KeyboardInterrupt` from its event wait follows in the same second). The 120 s
+  per-test timeout did not end it, so it is not an ordinary blocking wait, or the timer thread could
+  not run; which, is not established here. The same shape — 99 %, silence until the cap, one earlier
+  `node down` — is what unmodified `main` (34850155554) and the pre-verbose branch run
+  (34857413080) showed. The test opens per-operation `MemoryStore`, `VectorStore` and FTS
+  connections and builds three retrievers; nothing in it is a repaired path.
+- **The mid-run "node down" is the heavy-burst containment test, outside this class.**
+  `test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` makes 1000 `insert_nudge`
+  calls, each opening and closing its own `wal_db()` connection: 4.25 s on Ubuntu, more than 120 s on
+  the Windows runner under five workers, so pytest-timeout's thread method ended the worker with
+  `os._exit` (`[gw1] node down: Not properly terminated`, `worker 'gw1' crashed while running …`);
+  xdist replaced the worker and the suite continued. §8 item 7 carries the cost model.
+- **The Windows baseline is therefore not yet trustworthy on this evidence**, for two named
+  reasons that are independent of the writer lock. §8 items 1 and 7 carry them; §9 draws the
+  consequence.
 
 ### 5.3 Nightly Windows serial runs (context, not the baseline)
 
@@ -197,9 +207,19 @@ py3.11 at 35 %, inside `tests/test_memory_agency_review_fixes.py::test_filtered_
 thread per operation — the dump shows that thread inside `sqlite3.connect`; the test takes 10.6 s on
 this Linux machine); py3.12 at 60 %, with `scheduler-db_0` inside `insert_tick`'s `conn.commit()`.
 Neither stack is in a repaired path and neither is a lock wait (`busy_timeout` raises within 3–5 s;
-these waited 120 s). Whether this is runner I/O slowness on a `slow` test or a real difference is
-being measured by same-time runs of `nightly.yml` on this branch (34866268731, `-vv`) and on `main`
-(34866271890, control).
+these waited 120 s). The paired same-time runs dispatched at 16:04 settle it:
+
+| Nightly, Windows every-marker | py3.11 | py3.12 |
+|---|---|---|
+| `main` `57f86f8`, run 34866271890 (control) | **ended by the 120 s timeout at 35 %** in `test_filtered_pagination_addresses_the_filtered_set` — the same test, at the same place, as the branch's earlier run; the dump is in `vector_store.upsert` → `wal_db` exit → `conn.close()` | completed: `12 failed, 5305 passed, 80 skipped, 11 errors in 1:39:02` |
+| this branch `5fb9c88`, run 34866268731 (`-vv`) | completed: `10 failed, 5318 passed, 80 skipped, 11 errors in 1:39:41` | **ended by the 120 s timeout at 62 %** in `tests/test_scheduler_queue_soak.py::TestAcceleratedQueueSoak::test_queue_reaches_a_bounded_stable_state`; the dump is in `insert_tick` → `wal_db` exit → `close_quietly` → `conn.close()` |
+
+The kill moved between `main` and the branch and between Python versions, and the test that ended
+the branch's first py3.11 run ended `main`'s control run. Every dump sits inside a per-operation
+connection open or close. Classification: **runner slowness on connection-churn-heavy tests,
+pre-existing on `main`, not this repair's effect** (§8 item 7). The branch's completed py3.11 run
+shows 10 failures to `main`'s 12; the per-test attribution is in the junit artifacts and is not made
+here.
 
 ## 6. FND-04 classification
 
@@ -230,13 +250,17 @@ defect; it is preserved as a separate reliability concern.
    until the 40-minute cap at 14:15; earlier in the same run one xdist worker died
    (`[gw2] node down: Not properly terminated`). This is a hang, not a lock error, and it is what
    `RISKS.md` records as the job-budget symptom. **It recurred on this branch** (§5.2, run
-   34857413080) with the same shape, so it is independent of this repair and of the writer lock.
-   The dotted output cannot name the tests involved; `5fb9c88` runs the Windows jobs `-vv` so the
-   next occurrence can be attributed. Not this class; not absorbed.
+   34857413080) with the same shape, and the verbose run 34866265459 **names it**:
+   `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens`
+   alone held the suite for 24 minutes, unended by the 120 s per-test timeout, and was reported
+   PASSED the second the cap fired. Independent of this repair and of the writer lock; the
+   reproduction pointer (run it alone and under `-n auto` on Windows with
+   `faulthandler.dump_traceback_later`) is in the Airtable row. Not this class; not absorbed.
 2. **Nightly serial Windows job** (`nightly.yml`, run 34825458349 on `a64f5af`): 12 failed,
    11 errors in 1h39m, including at least one cp1252 console-encoding failure in a CLI test.
-   On this branch the same jobs were ended earlier by a per-test timeout (§5.3). Separate tier, not
-   the Merge Candidate baseline; not classified here beyond §5.3.
+   On this branch and on `main`'s same-time control the jobs were ended by a per-test timeout in
+   connection-churn-heavy tests, the kill moving between heads and Python versions (§5.3). Separate
+   tier, not the Merge Candidate baseline; not classified here beyond §5.3.
 3. **Cancellation swallowed by `asyncio.wait_for` (Python 3.11).**
    `run_drive_through_runtime_contract` awaits `asyncio.wait_for(drive_fn(ctx), timeout)`; in
    Python 3.11 `wait_for` returns the inner result instead of raising `CancelledError` when the
@@ -262,19 +286,25 @@ defect; it is preserved as a separate reliability concern.
 7. **`MemoryStore` opens a connection, and an aiosqlite worker thread, per operation.**
    `bartholomew/kernel/memory_store.py` uses `async with aiosqlite.connect(self.db_path)` at every
    method (twenty sites); the nightly dump names that worker `Thread-14051` at 35 % of the run.
-   Each open pays file open, WAL pragma and shm mapping, which is where Windows is slowest. Not a
-   correctness defect and not this class; it sets the Windows cost of the `slow` memory tests
-   (§5.3).
+   Scheduler persistence and the vector store open a `wal_db()` connection per call. Each open
+   pays file open, WAL pragma, shm mapping and a handle release, which is where Windows is slowest.
+   Not a correctness defect and not this class; it is what pushed the heavy-burst containment test
+   past 120 s in the Merge Candidate run (§5.2) and the `slow` memory and soak tests past 120 s in
+   the nightly runs (§5.3). Its own Airtable row names the decision it needs.
 
 ## 9. Band 0 readiness
 
-**NOT READY** on the evidence to date (2026-09-14; PR #110 open, not merged).
+**NOT READY** on the evidence to date (2026-09-14/15; PR #110 open, not merged).
 
-- The writer-lock class is root-caused, repaired and protected (§§0–4), and the Linux suite is green
-  on the repaired head (§5.1). That part of the pre-Band-0 requirement is met.
-- The Windows Merge Candidate baseline is not yet trustworthy, for a reason outside this class: the
-  "stalled tail" (§8 item 1) ended both Windows full-suite runs today, on unmodified `main` and on
-  this branch alike. A baseline that cannot finish cannot be called green, and Band 0 was gated on a
+- The writer-lock class is root-caused, repaired and protected (§§0–4); the Linux suite is green on
+  the repaired head (§5.1); the Windows full default suite ran to completion on the repaired branch
+  with no writer-lock failure (§5.2, run 34866265459). That part of the pre-Band-0 requirement is
+  met.
+- The Windows Merge Candidate baseline is still not trustworthy, for two named reasons outside this
+  class: one retrieval test holds the suite for 24 minutes past its cap (§8 item 1), and the
+  per-operation connection cost pushes the heaviest tests past the 120 s per-test timeout (§8 item
+  7). A baseline that cannot finish inside its cap cannot be called green, and Band 0 was gated on a
   trustworthy Windows baseline.
-- The runs dispatched at 16:04 (§5.2 row 3, §5.3) are the next evidence; this section is updated
-  from them.
+- What changes the call: the two findings handled in their own packages (or a decision from Taylor
+  that the attended checkpoint may proceed with them recorded), then the Windows full default suite
+  finishing green inside its cap repeatedly.
