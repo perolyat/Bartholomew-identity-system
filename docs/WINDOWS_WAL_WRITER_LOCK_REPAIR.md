@@ -216,16 +216,21 @@ under a 40-minute cap. The `-vv` on the Windows jobs nets to pytest's `-v` becau
 | 34850155554 (13:35) | `57f86f8`, unmodified `main` | **cancelled at the cap**: `[gw2] node down: Not properly terminated` at ~65 %, 99 % reached at 13:56, nothing further, junit never written | all green |
 | 34857413080 (14:43) | `ac8eea9`, this branch | **cancelled at the cap**: `[gw0] node down: Not properly terminated` at ~67 % (14:54), 99 % reached at 15:02, seven more tests by the 15:23 cap, junit never written | all green |
 | 34866265459 (16:04) | `5fb9c88`, this branch, `-vv` | **reached its summary**: `1 failed, 4983 passed, 79 skipped, 164 warnings in 0:38:33` — 5063 of the 5080 selected tests reported; 17 never ran (the remainder of `test_scheduler_queue_containment.py` after the worker crash, and the second rare-token test); junit written. Still `cancelled`: the last test, `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens` (gw2, started 16:20:34), was reported PASSED at 16:44:29 — the instant the 40-minute cap fired; the one failure is `tests/test_scheduler_queue_containment.py::TestContainmentNeverDestroysAnObligation::test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched`, `worker 'gw1' crashed` (the 120 s per-test timeout) | all green |
+| 34942899213 (07:40, 15 Sep) | `830f554`, this branch, `-vv` | **cancelled at the cap again, before the summary** (no junit): `[gw2] node down` at 07:52:05 on the heavy-burst containment test again; two further failures, `tests/test_device_consent_channel.py::test_the_per_tenant_cap_holds_under_concurrent_starts` (a 0.3 s settle window) and `tests/test_event_backbone_processing.py::test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing` (a 1 s lease) — time-budget assertions on per-operation SQLite paths, green in run 34866265459 and 10/10 locally under load; their messages are not in the log. The tail this time was `tests/test_competency_worked_example.py::test_worked_example_round_trips_end_to_end` on gw0 (started 08:00:54, PASSED at 08:20:39 as the cap fired), while the rare-token test passed in 37 s. The eight `test_skill_actions_serialize_on_the_record.py` tests passed on Windows. No `database is locked` anywhere. | all six green |
 
-What the three runs establish:
+What the four runs establish:
 
 - **No writer-lock failure appears in any Windows full-suite log.** The `database is locked`
-  signature that named this class (§0) is absent from all three; on this branch the repaired paths
-  ran under `-n auto` contention twice without it, and the verbose run reported 5063 of 5080.
-- **The "stalled tail" is one named test, outside this class.** In the verbose run every reported
-  test but one had finished by 16:20:45; `test_lexical_beats_vector_on_exact_rare_tokens` on gw2 then
-  held 99 % → 100 % for 24 minutes and was reported PASSED at 16:44:29, the second the job cap fired.
-  The timestamped lines from the job log:
+  signature that named this class (§0) is absent from all four; on this branch the repaired paths
+  ran under `-n auto` contention three times without it, the third verbose run with the
+  read-modify-write repair and its eight tests included.
+- **The "stalled tail" is the last test of the last worker, whichever test that is — outside this
+  class.** In run 34866265459 it was `test_lexical_beats_vector_on_exact_rare_tokens` on gw2 (started
+  16:20:34, PASSED at 16:44:29, the second the cap fired); in run 34942899213 it was
+  `test_worked_example_round_trips_end_to_end` on gw0 (started 08:00:54, PASSED at 08:20:39, the
+  second the cap fired) while the rare-token test passed in 37 s. In both, every other worker had
+  finished minutes earlier and the one remaining test's PASSED report arrived with the cancellation.
+  The timestamped lines from the first of the two:
 
       2026-09-14T16:20:34.5831756Z tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens
       2026-09-14T16:20:45.5255564Z [gw3] [ 99%] PASSED tests/test_stage0_alive.py::test_liveness_endpoints
@@ -234,12 +239,13 @@ What the three runs establish:
       2026-09-14T16:44:30.0139874Z C:\hostedtoolcache\windows\Python\3.11.9\x64\Lib\threading.py:331: KeyboardInterrupt
       2026-09-14T16:44:30.0141549Z ===== 1 failed, 4983 passed, 79 skipped, 164 warnings in 2313.94s (0:38:33) =====
 
-  The 120 s per-test timeout did not end it, so it is not an ordinary blocking wait, or the timer
-  thread could not run; which, is not established here, and the controller log cannot distinguish a
-  call phase that ended at the cap from a report delayed until it. The same shape — 99 %, silence until the cap, one earlier
-  `node down` — is what unmodified `main` (34850155554) and the pre-verbose branch run
-  (34857413080) showed. The test opens per-operation `MemoryStore`, `VectorStore` and FTS
-  connections and builds three retrievers; nothing in it is a repaired path.
+  The 120 s per-test timeout did not end either test, so this is not an ordinary blocking wait, or
+  the timer thread could not run; the controller log cannot distinguish a call phase that ended at
+  the cap from a report held back until it. That it moves between unrelated tests and always sits
+  on the last worker points at the harness or the runner rather than at either test. The same
+  shape — 99 %, silence until the cap, one earlier `node down` — is what unmodified `main`
+  (34850155554) and the pre-verbose branch run (34857413080) showed. Nothing in either test is a
+  repaired path.
 - **The mid-run "node down" is the heavy-burst containment test, outside this class.**
   `test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` makes 1000 `insert_nudge`
   calls, each opening and closing its own `wal_db()` connection: 4.25 s on Ubuntu, more than 120 s on
@@ -247,7 +253,8 @@ What the three runs establish:
   worker with `os._exit` — which the controller log cannot confirm; it shows only
   `[gw1] node down: Not properly terminated` and `worker 'gw1' crashed while running …`. xdist
   replaced the worker (as `gw4`) and the suite continued; the file's remaining tests were not
-  re-run. §8 item 7 carries the cost model.
+  re-run. Run 34942899213 repeated it exactly (`[gw2] node down` on the same test) and added two
+  time-budget failures of the same cost shape. §8 item 7 carries the cost model.
 - **The Windows baseline is therefore not yet trustworthy on this evidence**, for two named
   reasons that are independent of the writer lock. §8 items 1 and 7 carry them; §9 draws the
   consequence.
@@ -306,12 +313,14 @@ defect; it is preserved as a separate reliability concern.
    until the 40-minute cap at 14:15; earlier in the same run one xdist worker died
    (`[gw2] node down: Not properly terminated`). This is a hang, not a lock error, and it is what
    `RISKS.md` records as the job-budget symptom. **It recurred on this branch** (§5.2, run
-   34857413080) with the same shape, and the verbose run 34866265459 **names it**:
-   `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens`
-   alone held the suite for 24 minutes, unended by the 120 s per-test timeout, and was reported
-   PASSED the second the cap fired. Independent of this repair and of the writer lock; the
-   reproduction pointer (run it alone and under `-n auto` on Windows with
-   `faulthandler.dump_traceback_later`) is in the Airtable row. Not this class; not absorbed.
+   34857413080) with the same shape, and the verbose runs show it is **the last test of the last
+   worker, a different test each time** — `test_lexical_beats_vector_on_exact_rare_tokens` for 24
+   minutes in run 34866265459, `test_worked_example_round_trips_end_to_end` for 20 minutes in run
+   34942899213 (the rare-token test passing in 37 s that time) — reported PASSED the second the cap
+   fires, unended by the 120 s per-test timeout, after every other worker has finished. It points at
+   the harness or the runner, not at a test. Independent of this repair and of the writer lock; the
+   reproduction pointer (a Windows machine, `-n auto`, `faulthandler.dump_traceback_later` in the
+   last worker) is in the Airtable row. Not this class; not absorbed.
 2. **Nightly serial Windows job** (`nightly.yml`, run 34825458349 on `a64f5af`): 12 failed,
    11 errors in 1h39m, including at least one cp1252 console-encoding failure in a CLI test.
    On this branch and on `main`'s same-time control the jobs were ended by a per-test timeout in
@@ -355,11 +364,12 @@ defect; it is preserved as a separate reliability concern.
 - The writer-lock class is root-caused, repaired and protected (§§0–4); the Linux suite is green on
   the repaired head (§5.1); the Windows full default suite reached its summary on the repaired
   branch with no writer-lock failure, 5063 of 5080 selected tests reported (§5.2, run
-  34866265459). That part of the pre-Band-0 requirement is met.
+  34866265459; run 34942899213 on the final head adds the read-modify-write repair under the same
+  contention, again with no writer-lock failure). That part of the pre-Band-0 requirement is met.
 - The Windows Merge Candidate baseline is still not trustworthy, for two named reasons outside this
-  class: one retrieval test holds the suite for 24 minutes past its cap (§8 item 1), and the
-  per-operation connection cost pushes the heaviest tests past the 120 s per-test timeout (§8 item
-  7). A baseline that cannot finish inside its cap cannot be called green, and Band 0 was gated on a
+  class: the last worker's last test holds the suite past its cap on every verbose run (§8 item 1),
+  and the per-operation connection cost pushes the heaviest tests past the 120 s per-test timeout
+  and time-budget tests past their windows (§8 item 7). A baseline that cannot finish inside its cap cannot be called green, and Band 0 was gated on a
   trustworthy Windows baseline.
 - What changes the call: the two findings handled in their own packages (or a decision from Taylor
   that the attended checkpoint may proceed with them recorded), then the Windows full default suite
