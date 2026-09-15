@@ -46,6 +46,7 @@ What these tests prove
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
@@ -158,6 +159,19 @@ async def _race(
     started = time.monotonic()
     result, _ = await asyncio.gather(work(), release())
     return result, time.monotonic() - started
+
+
+async def _permission_outcome(skill: Any, permission: str) -> Any:
+    """Call a skill's permission self-check whatever its shape.
+
+    Awaitable on the repaired tree; a plain call on the tree before it. Testing
+    both shapes lets the tests that reach it fail on the unrepaired code for
+    the defect, not for the changed signature.
+    """
+    outcome = skill._require_permission(permission)
+    if inspect.isawaitable(outcome):
+        outcome = await outcome
+    return outcome
 
 
 async def _kernel_db(path) -> str:
@@ -354,7 +368,7 @@ async def test_a_skills_permission_audit_write_completes_while_a_memory_write_is
     )
 
     async with _held_memory_write(db_path) as held:
-        denial, elapsed = await _race(held, lambda: tasks._require_permission("memory.write"))
+        denial, elapsed = await _race(held, lambda: _permission_outcome(tasks, "memory.write"))
 
     assert denial is None
     assert elapsed < COMPLETION_BUDGET_S, f"took {elapsed:.2f}s: the audit write convoyed"
@@ -433,7 +447,7 @@ async def test_the_repaired_paths_write_nothing_to_sqlite_on_the_event_loop_thre
         assert (
             await calendar.execute("create", {"title": "probe", "start": "2026-09-15T10:00:00"})
         ).success
-        assert await audited._require_permission("memory.write") is None
+        assert await _permission_outcome(audited, "memory.write") is None
 
         directive = await responder.respond(_request("e1"), issuer)
         assert directive is not None

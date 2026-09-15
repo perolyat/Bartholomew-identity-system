@@ -466,15 +466,17 @@ class NotifySkill(SkillBase):
         if not notification_id:
             return SkillResult.fail("notification_id is required")
 
-        notification = self._get_notification(notification_id)
-        if not notification:
+        outcome = await self._run_off_loop(
+            self._transition_notification,
+            notification_id,
+            NotificationStatus.PENDING,
+            NotificationStatus.CANCELLED,
+        )
+        if outcome is None:
             return SkillResult.fail(f"Notification not found: {notification_id}")
-
-        if notification.status != NotificationStatus.PENDING:
+        notification, cancelled = outcome
+        if not cancelled:
             return SkillResult.fail("Can only cancel pending notifications")
-
-        notification.status = NotificationStatus.CANCELLED
-        await self._run_off_loop(self._save_notification, notification)
 
         # Emit event
         self._emit_event(
@@ -797,15 +799,25 @@ class NotifySkill(SkillBase):
                 should_deliver = True
 
             if should_deliver:
-                notification.status = NotificationStatus.SENT
-                notification.sent_at = now
-                await self._run_off_loop(self._save_notification, notification)
-                await self._deliver_notification(notification)
+                # Claim the row before delivering: only a still-pending
+                # notification becomes SENT, so a cancel that landed after the
+                # queue was read wins, and nothing is delivered for it.
+                outcome = await self._run_off_loop(
+                    self._transition_notification,
+                    notification.id,
+                    NotificationStatus.PENDING,
+                    NotificationStatus.SENT,
+                    sent_at=now,
+                )
+                if outcome is None or not outcome[1]:
+                    continue
+                claimed = outcome[0]
+                await self._deliver_notification(claimed)
 
                 self._emit_event(
                     "alerts",
                     "notification_sent",
-                    notification.to_dict(),
+                    claimed.to_dict(),
                 )
                 delivered += 1
 
@@ -822,29 +834,85 @@ class NotifySkill(SkillBase):
 
         conn = self._get_connection()
         try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO skill_notifications
-                (id, message, title, priority, status, sound, deliver_at,
-                    deliver_after_quiet_hours, created_at, sent_at,
-                    metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    notification.id,
-                    notification.message,
-                    notification.title,
-                    notification.priority.value,
-                    notification.status.value,
-                    1 if notification.sound else 0,
-                    notification.deliver_at,
-                    1 if notification.deliver_after_quiet_hours else 0,
-                    notification.created_at,
-                    notification.sent_at,
-                    json.dumps(notification.metadata),
-                ),
-            )
+            self._write_notification(conn, notification)
             conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _write_notification(conn: sqlite3.Connection, notification: Notification) -> None:
+        """Write one notification's row on `conn`; the caller owns the transaction."""
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO skill_notifications
+            (id, message, title, priority, status, sound, deliver_at,
+                deliver_after_quiet_hours, created_at, sent_at,
+                metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notification.id,
+                notification.message,
+                notification.title,
+                notification.priority.value,
+                notification.status.value,
+                1 if notification.sound else 0,
+                notification.deliver_at,
+                1 if notification.deliver_after_quiet_hours else 0,
+                notification.created_at,
+                notification.sent_at,
+                json.dumps(notification.metadata),
+            ),
+        )
+
+    def _transition_notification(
+        self,
+        notification_id: str,
+        expected: NotificationStatus,
+        new_status: NotificationStatus,
+        *,
+        sent_at: str | None = None,
+    ) -> tuple[Notification, bool] | None:
+        """
+        Move one notification from `expected` to `new_status` inside a single
+        immediate transaction, or report why not.
+
+        Runs off the event loop. Cancelling and delivering both used to read
+        the row, decide, and write it back, and once the save was awaited off
+        the loop (the writer-lock repair) that read-decide-write had a
+        suspension point in it: a cancel could land between the queue's read
+        and its SENT write and be overwritten, so the notification was both
+        cancelled and delivered. Taking the write lock before the check makes
+        the row decide: exactly one transition out of PENDING succeeds.
+
+        Returns None when the notification does not exist, otherwise the
+        notification as stored and whether the transition was applied.
+        """
+        if not self._db_path:
+            return None
+
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skill_notifications WHERE id = ?",
+                    (notification_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                notification = self._row_to_notification(row)
+                if notification.status != expected:
+                    return notification, False
+                notification.status = new_status
+                if sent_at is not None:
+                    notification.sent_at = sent_at
+                self._write_notification(conn, notification)
+                conn.commit()
+                return notification, True
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
         finally:
             conn.close()
 

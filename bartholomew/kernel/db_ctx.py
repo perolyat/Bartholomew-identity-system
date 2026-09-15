@@ -66,6 +66,11 @@ def _enable_wal(conn: sqlite3.Connection) -> None:
     intermittent "Worker 0 failed: database is locked"). The winner's
     conversion takes milliseconds, after which the pragma is a read again, so
     the correct response is to retry briefly -- not to widen every timeout.
+
+    The retry is scoped to that pending conversion: after a refused attempt
+    the journal mode is read (a pure read), and only a file that is still not
+    in WAL mode is retried, for at most `_WAL_CONVERSION_RETRY_S`. A refusal
+    with any other cause is raised as before.
     """
     deadline = time.monotonic() + _WAL_CONVERSION_RETRY_S
     delay = 0.005
@@ -74,10 +79,25 @@ def _enable_wal(conn: sqlite3.Connection) -> None:
             conn.execute("PRAGMA journal_mode = WAL")
             return
         except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+            if "locked" not in str(exc).lower():
+                raise
+            if _journal_mode(conn) == "wal":
+                # The other connection finished the conversion; the pragma
+                # would be a plain read now and there is nothing to retry.
+                return
+            if time.monotonic() >= deadline:
                 raise
             time.sleep(delay)
             delay = min(delay * 2, 0.1)
+
+
+def _journal_mode(conn: sqlite3.Connection) -> str:
+    """The database's current journal mode, read-only; '' if even that is refused."""
+    try:
+        row = conn.execute("PRAGMA journal_mode").fetchone()
+    except sqlite3.OperationalError:
+        return ""
+    return str(row[0]).lower() if row else ""
 
 
 def set_wal_pragmas(conn: sqlite3.Connection) -> None:

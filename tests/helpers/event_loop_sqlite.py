@@ -51,7 +51,14 @@ _SCRIPT_WRITE_RE = re.compile(
 
 @dataclass(frozen=True)
 class OnLoopSqliteWrite:
-    """One statement that waited (or could have waited) for a lock on a loop thread."""
+    """One statement the rule forbids on a loop thread.
+
+    Matched by statement kind (DML, DDL, an immediate/exclusive BEGIN, a WAL
+    checkpoint), which is what the rule names -- not by whether this
+    particular execution had to wait: an idempotent `CREATE ... IF NOT
+    EXISTS` on an existing object or a PASSIVE checkpoint does not, and is
+    still reported.
+    """
 
     kind: str
     sql: str
@@ -102,7 +109,9 @@ def _on_event_loop_thread() -> bool:
 
 def _production_frames() -> tuple[str, ...]:
     frames: list[str] = []
-    for frame in traceback.extract_stack()[:-3]:
+    # Drop this function and the `_Watching` method that called it; the
+    # writer's own frame is the innermost production frame and must stay.
+    for frame in traceback.extract_stack()[:-2]:
         if "site-packages" in frame.filename:
             continue
         try:

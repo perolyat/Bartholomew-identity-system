@@ -13,6 +13,7 @@ import logging
 import re
 import sqlite3
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -364,31 +365,31 @@ class CalendarDraftSkill(SkillBase):
         if not event_id:
             return SkillResult.fail("event_id is required")
 
-        event = self._get_event(event_id)
-        if not event:
+        def apply(event: CalendarEvent) -> bool:
+            if "title" in params:
+                event.title = params["title"]
+            if "start" in params:
+                start = self._parse_datetime(params["start"])
+                if start:
+                    event.start = start
+            if "end" in params:
+                end = self._parse_datetime(params["end"])
+                if end:
+                    event.end = end
+            if "description" in params:
+                event.description = params["description"]
+            if "location" in params:
+                event.location = params["location"]
+            if "all_day" in params:
+                event.all_day = params["all_day"]
+            if "reminder_minutes" in params:
+                event.reminder_minutes = params["reminder_minutes"]
+            return True
+
+        outcome = await self._run_off_loop(self._mutate_event, event_id, apply)
+        if outcome is None:
             return SkillResult.fail(f"Event not found: {event_id}")
-
-        # Update fields
-        if "title" in params:
-            event.title = params["title"]
-        if "start" in params:
-            start = self._parse_datetime(params["start"])
-            if start:
-                event.start = start
-        if "end" in params:
-            end = self._parse_datetime(params["end"])
-            if end:
-                event.end = end
-        if "description" in params:
-            event.description = params["description"]
-        if "location" in params:
-            event.location = params["location"]
-        if "all_day" in params:
-            event.all_day = params["all_day"]
-        if "reminder_minutes" in params:
-            event.reminder_minutes = params["reminder_minutes"]
-
-        await self._run_off_loop(self._save_event, event)
+        event, _ = outcome
 
         # Emit event
         self._emit_event("calendar", "event_updated", event.to_dict())
@@ -409,11 +410,9 @@ class CalendarDraftSkill(SkillBase):
         if not event_id:
             return SkillResult.fail("event_id is required")
 
-        event = self._get_event(event_id)
+        event = await self._run_off_loop(self._take_event, event_id)
         if not event:
             return SkillResult.fail(f"Event not found: {event_id}")
-
-        await self._run_off_loop(self._delete_event, event_id)
 
         # Emit event
         self._emit_event("calendar", "event_deleted", {"event_id": event_id})
@@ -643,27 +642,98 @@ class CalendarDraftSkill(SkillBase):
 
         conn = self._get_connection()
         try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO skill_calendar_events
-                (id, title, start, end, description, location, all_day,
-                    reminder_minutes, created_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.id,
-                    event.title,
-                    event.start,
-                    event.end,
-                    event.description,
-                    event.location,
-                    1 if event.all_day else 0,
-                    event.reminder_minutes,
-                    event.created_at,
-                    json.dumps(event.metadata),
-                ),
-            )
+            self._write_event(conn, event)
             conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _write_event(conn: sqlite3.Connection, event: CalendarEvent) -> None:
+        """Write one event's row on `conn`; the caller owns the transaction."""
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO skill_calendar_events
+            (id, title, start, end, description, location, all_day,
+                reminder_minutes, created_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.id,
+                event.title,
+                event.start,
+                event.end,
+                event.description,
+                event.location,
+                1 if event.all_day else 0,
+                event.reminder_minutes,
+                event.created_at,
+                json.dumps(event.metadata),
+            ),
+        )
+
+    def _mutate_event(
+        self,
+        event_id: str,
+        mutate: Callable[[CalendarEvent], bool],
+    ) -> tuple[CalendarEvent, bool] | None:
+        """
+        Read, change and write one event inside a single immediate transaction.
+
+        Runs off the event loop. Same reason as `TasksSkill._mutate_task`:
+        with the permission check and the save awaited off the loop, an
+        action's read-modify-write has suspension points, and two actions on
+        the same event would otherwise overwrite each other. The row is the
+        serialization point.
+
+        Returns None when the event does not exist, otherwise the event after
+        `mutate` and whether `mutate` asked for it to be written.
+        """
+        if not self._db_path:
+            return None
+
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skill_calendar_events WHERE id = ?",
+                    (event_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                event = self._row_to_event(row)
+                changed = mutate(event)
+                if changed:
+                    self._write_event(conn, event)
+                    conn.commit()
+                return event, changed
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
+        finally:
+            conn.close()
+
+    def _take_event(self, event_id: str) -> CalendarEvent | None:
+        """Delete one event and return it, inside a single immediate transaction (see `_mutate_event`)."""
+        if not self._db_path:
+            return None
+
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skill_calendar_events WHERE id = ?",
+                    (event_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                conn.execute("DELETE FROM skill_calendar_events WHERE id = ?", (event_id,))
+                conn.commit()
+                return self._row_to_event(row)
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
         finally:
             conn.close()
 
