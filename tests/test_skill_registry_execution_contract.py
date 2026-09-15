@@ -49,6 +49,8 @@ ACTIONS = [
     "call_cycle",
     "spawn_later",
     "spawn_now",
+    "raise_on_cancel",
+    "swallow_cancel_fast",
 ]
 
 HANG_GUARD_S = 10.0
@@ -72,6 +74,12 @@ class GatedSkill(SkillBase):
         self.go = asyncio.Event()
         self.background: asyncio.Task | None = None
         self.background_result: SkillResult | None = None
+        self.swallowed = asyncio.Event()
+        self.transitions: list[tuple[str, str]] = []
+
+    def _set_state(self, state: SkillState) -> None:  # record every transition
+        self.transitions.append((self._state.value, state.value))
+        super()._set_state(state)
 
     @property
     def skill_id(self) -> str:
@@ -106,9 +114,20 @@ class GatedSkill(SkillBase):
                 try:
                     await asyncio.Event().wait()
                 except asyncio.CancelledError:
-                    pass  # a misbehaving skill: ignores the first cancellation
+                    self.swallowed.set()  # a misbehaving skill: ignores the first cancellation
                 await asyncio.sleep(0.5)
                 return SkillResult.ok(data={"n": n, "late": True})
+            if action == "swallow_cancel_fast":
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.swallowed.set()
+                return SkillResult.ok(data={"n": n, "late": True})
+            if action == "raise_on_cancel":
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    raise RuntimeError("cleanup failed") from None
             if action == "call_self":
                 assert self.registry is not None
                 return await self.registry.execute_action(self._id, "quick", {"n": n + 100})
@@ -152,6 +171,14 @@ class GatedSkill(SkillBase):
         finally:
             self.active -= 1
             self.completed.append(n)
+
+
+class SyncSkill(GatedSkill):
+    """A mis-written skill: execute() is not a coroutine."""
+
+    def execute(self, action: str, params: dict | None = None) -> SkillResult:  # type: ignore[override]
+        self.calls.append(int((params or {}).get("n", 0)))
+        return SkillResult.ok(data={"sync": True})
 
 
 # ---------------------------------------------------------------------------
@@ -720,10 +747,12 @@ async def test_the_notification_webhook_never_rides_the_storage_worker(temp_db, 
         instance = registry._loaded["notify"].instance
         instance._webhook_url = "http://127.0.0.1:9/hook"
 
+        # Urgent bypasses quiet hours (22:00-07:00 by default), so the post
+        # happens whatever the wall clock says when this test runs.
         result = await registry.execute_action(
             "notify",
             "send",
-            {"title": "t", "message": "m", "priority": "normal"},
+            {"title": "t", "message": "m", "priority": "urgent"},
         )
         assert result.success, result.error
         assert "thread" in seen, "the webhook was not posted"
@@ -762,3 +791,228 @@ async def test_the_forecast_fetch_never_rides_the_storage_worker(temp_db, monkey
     finally:
         set_consent_handler(None)
         await executor.close()
+
+
+# ---------------------------------------------------------------------------
+# Findings of the adversarial review of the first implementation, each pinned
+# ---------------------------------------------------------------------------
+
+
+async def test_a_request_cancelled_while_its_timed_out_action_settles_still_closes_the_window(
+    skills_dir,
+    temp_db,
+):
+    """The timed-out action ignores its cancellation; while the registry waits
+    for it to settle, the request itself is cancelled. The window must close."""
+    alpha = GatedSkill("alpha")
+    registry = await registry_with(skills_dir, temp_db, {"alpha": alpha}, execution_timeout=0.2)
+
+    with patch.object(skill_registry_module, "_SETTLE_TIMEOUT_S", 3.0):
+        first = asyncio.create_task(registry.execute_action("alpha", "swallow_cancel", {"n": 1}))
+        await asyncio.wait_for(alpha.swallowed.wait(), HANG_GUARD_S)  # now settling
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+    assert alpha.state is SkillState.READY, alpha.state
+    assert waiters(registry, "alpha") == 0
+    assert registry.get_skill_info("alpha")["occupancy"]["in_flight_action"] is None
+
+    again = await registry.execute_action("alpha", "quick", {"n": 2})
+    assert again.success, again.error
+    await until(lambda: 1 in alpha.completed, "the abandoned action to finish")
+
+
+async def test_a_second_cancellation_while_settling_still_closes_the_window(skills_dir, temp_db):
+    alpha = GatedSkill("alpha")
+    registry = await registry_with(skills_dir, temp_db, {"alpha": alpha})
+
+    with patch.object(skill_registry_module, "_SETTLE_TIMEOUT_S", 3.0):
+        first = asyncio.create_task(registry.execute_action("alpha", "swallow_cancel", {"n": 1}))
+        await alpha.entered.wait()
+        first.cancel()
+        await asyncio.wait_for(
+            alpha.swallowed.wait(),
+            HANG_GUARD_S,
+        )  # settling after the first cancel
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+    assert alpha.state is SkillState.READY, alpha.state
+    again = await registry.execute_action("alpha", "quick", {"n": 2})
+    assert again.success, again.error
+    await until(lambda: 1 in alpha.completed, "the abandoned action to finish")
+
+
+async def test_an_unload_arriving_during_the_brake_re_check_is_never_overwritten(
+    skills_dir,
+    temp_db,
+):
+    alpha = GatedSkill("alpha")
+    registry = await registry_with(skills_dir, temp_db, {"alpha": alpha})
+    brake_calls = {"n": 0}
+    gate = asyncio.Event()
+    in_recheck = asyncio.Event()
+
+    async def brake() -> bool:
+        brake_calls["n"] += 1
+        if brake_calls["n"] == 2:  # the in-occupancy re-check of the first request
+            in_recheck.set()
+            await gate.wait()
+        return False
+
+    registry._is_blocked_by_brake = brake  # type: ignore[method-assign]
+
+    first = asyncio.create_task(registry.execute_action("alpha", "quick", {"n": 1}))
+    await asyncio.wait_for(in_recheck.wait(), HANG_GUARD_S)
+    unloading = asyncio.create_task(registry.unload_skill("alpha"))
+    await until(lambda: alpha.state is SkillState.UNLOADING, "unload to mark the skill")
+    gate.set()
+
+    r1 = await asyncio.wait_for(first, HANG_GUARD_S)
+    assert not r1.success and "not ready" in (r1.error or "").lower(), r1.error
+    assert await asyncio.wait_for(unloading, HANG_GUARD_S) is True
+    assert alpha.calls == [], "the action never ran on the unloading skill"
+    assert ("unloading", "running") not in alpha.transitions, alpha.transitions
+    assert alpha.transitions[-1] == ("unloading", "unloaded"), alpha.transitions
+
+
+async def test_a_sync_execute_is_contained_as_an_error_not_escaped(skills_dir, temp_db):
+    alpha = SyncSkill("alpha")
+    registry = await registry_with(skills_dir, temp_db, {"alpha": alpha})
+
+    result = await registry.execute_action("alpha", "quick", {"n": 1})
+    assert not result.success
+    assert "not an awaitable" in (result.error or ""), result.error
+    assert alpha.state is SkillState.ERROR
+    assert waiters(registry, "alpha") == 0
+    assert audit_rows(temp_db, "alpha") == 1
+
+
+async def test_a_skill_that_raises_while_being_cancelled_is_marked_error(skills_dir, temp_db):
+    alpha = GatedSkill("alpha")
+    registry = await registry_with(skills_dir, temp_db, {"alpha": alpha})
+
+    # The request is cancelled; the action turns that into its own exception.
+    first = asyncio.create_task(registry.execute_action("alpha", "raise_on_cancel", {"n": 1}))
+    await alpha.entered.wait()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert alpha.state is SkillState.ERROR
+    refused = await registry.execute_action("alpha", "quick", {"n": 2})
+    assert not refused.success and "error" in (refused.error or ""), refused.error
+
+    # The same through the execution timeout: the failure is the result.
+    replacement = GatedSkill("alpha")
+    with patch.object(registry, "_instantiate_skill", return_value=replacement):
+        assert await registry.reload_skill("alpha") is True
+    registry._execution_timeout = 0.2
+    result = await asyncio.wait_for(
+        registry.execute_action("alpha", "raise_on_cancel", {"n": 3}),
+        HANG_GUARD_S,
+    )
+    assert not result.success and "cleanup failed" in (result.error or ""), result.error
+    assert replacement.state is SkillState.ERROR
+
+
+async def test_an_action_that_completes_while_being_cancelled_keeps_its_result(
+    skills_dir,
+    temp_db,
+):
+    alpha = GatedSkill("alpha")
+    registry = await registry_with(skills_dir, temp_db, {"alpha": alpha}, execution_timeout=0.2)
+
+    result = await asyncio.wait_for(
+        registry.execute_action("alpha", "swallow_cancel_fast", {"n": 1}),
+        HANG_GUARD_S,
+    )
+    assert result.success, result.error
+    assert result.data == {"n": 1, "late": True}
+    assert alpha.state is SkillState.READY
+
+
+async def test_unload_cancels_an_action_that_outlives_the_unload_bound(skills_dir, temp_db):
+    alpha = GatedSkill("alpha")
+    registry = await registry_with(
+        skills_dir,
+        temp_db,
+        {"alpha": alpha},
+        execution_timeout=30.0,
+        unload_timeout=0.2,
+    )
+
+    first = asyncio.create_task(registry.execute_action("alpha", "hang", {"n": 1}))
+    await alpha.entered.wait()
+    assert await asyncio.wait_for(registry.unload_skill("alpha"), HANG_GUARD_S) is True
+    assert alpha.cancelled == 1, "the action outliving the bound was cancelled"
+    assert alpha.shutdown_called
+    r1 = await asyncio.wait_for(first, HANG_GUARD_S)
+    assert not r1.success and "cancelled" in (r1.error or ""), r1.error
+    assert "alpha" not in registry._loaded
+
+
+async def test_a_cancelled_unload_leaves_the_skill_loaded_and_usable(skills_dir, temp_db):
+    alpha = GatedSkill("alpha")
+    registry = await registry_with(skills_dir, temp_db, {"alpha": alpha})
+
+    first = asyncio.create_task(registry.execute_action("alpha", "block", {"n": 1}))
+    await alpha.entered.wait()
+    unloading = asyncio.create_task(registry.unload_skill("alpha"))
+    await until(lambda: alpha.state is SkillState.UNLOADING, "unload to mark the skill")
+    unloading.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await unloading
+    assert alpha.state is SkillState.RUNNING, "restored: the action is still in flight"
+
+    alpha.release.set()
+    assert (await first).success
+    assert alpha.state is SkillState.READY
+    again = await registry.execute_action("alpha", "quick", {"n": 2})
+    assert again.success, again.error
+    assert await registry.unload_skill("alpha") is True
+
+
+async def test_shutdown_unloads_skills_concurrently_within_one_unload_bound(skills_dir, temp_db):
+    alpha, beta = GatedSkill("alpha"), GatedSkill("beta")
+    registry = await registry_with(
+        skills_dir,
+        temp_db,
+        {"alpha": alpha, "beta": beta},
+        execution_timeout=30.0,
+        unload_timeout=0.3,
+    )
+    tasks = [
+        asyncio.create_task(registry.execute_action("alpha", "hang", {"n": 1})),
+        asyncio.create_task(registry.execute_action("beta", "hang", {"n": 2})),
+    ]
+    await alpha.entered.wait()
+    await beta.entered.wait()
+
+    started = time.monotonic()
+    await asyncio.wait_for(registry.shutdown(), HANG_GUARD_S)
+    elapsed = time.monotonic() - started
+    assert alpha.cancelled == 1 and beta.cancelled == 1
+    assert registry._loaded == {}
+    assert elapsed < 1.0, f"two unload bounds paid sequentially: {elapsed:.2f}s"
+    for t in tasks:
+        r = await asyncio.wait_for(t, HANG_GUARD_S)
+        assert not r.success and "cancelled" in (r.error or ""), r.error
+
+
+async def test_the_forecast_seam_does_not_relay_registry_refusal_wording():
+    from bartholomew.kernel.runtime_contract import _forecast_error
+
+    busy = _forecast_error(SkillResult.fail("Skill busy: forecast (waited 30s behind lookup)"))
+    timed_out = _forecast_error(
+        SkillResult.fail("Skill action timed out: forecast.lookup exceeded 60s and was cancelled"),
+    )
+    not_ready = _forecast_error(SkillResult.fail("Skill not ready: forecast (state=error)"))
+    own_words = _forecast_error(
+        SkillResult.fail(
+            "The configured forecast provider is not in this skill's declared network allowlist",
+        ),
+    )
+    assert "Skill" not in busy and "busy" in busy
+    assert "Skill" not in timed_out and timed_out == busy
+    assert not_ready == "the forecast capability is not available"
+    assert own_words.startswith("The configured forecast provider")

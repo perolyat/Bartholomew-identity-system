@@ -87,9 +87,25 @@ DEFAULT_QUEUE_TIMEOUT_S = 30.0
 #: returns the skill to READY (SkillRegistry(execution_timeout=...)).
 DEFAULT_EXECUTION_TIMEOUT_S = 60.0
 
+#: How long unload_skill() waits for an action in flight before cancelling
+#: it (SkillRegistry(unload_timeout=...)). Kept well inside the daemon's
+#: shutdown budget (bartholomew/runtime/serve.py, SHUTDOWN_BUDGET_SECONDS),
+#: because KernelDaemon.stop() unloads every skill before it cancels the
+#: producer tasks.
+DEFAULT_UNLOAD_TIMEOUT_S = 10.0
+
 #: How long the registry waits for a cancelled action to actually finish
 #: before releasing the skill anyway (a skill that swallows cancellation).
 _SETTLE_TIMEOUT_S = 5.0
+
+
+def _retrieve_quietly(task: asyncio.Task[Any]) -> None:
+    """Done-callback for every action task: an exception that nobody else
+    consumed (an abandoned action, a task that ended while the request was
+    being cancelled) is retrieved here, so asyncio never logs 'Task exception
+    was never retrieved' for it -- the registry logs it where it matters."""
+    if not task.cancelled():
+        task.exception()
 
 
 @dataclass
@@ -108,6 +124,7 @@ class SkillOccupancy:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     in_flight_action: str | None = None
     in_flight_since: float | None = None  # time.monotonic()
+    in_flight_task: asyncio.Task[Any] | None = None
     waiters: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -214,6 +231,7 @@ class SkillRegistry:
         governance_store: Any | None = None,
         queue_timeout: float = DEFAULT_QUEUE_TIMEOUT_S,
         execution_timeout: float = DEFAULT_EXECUTION_TIMEOUT_S,
+        unload_timeout: float = DEFAULT_UNLOAD_TIMEOUT_S,
     ) -> None:
         """
         Initialize skill registry.
@@ -256,8 +274,10 @@ class SkillRegistry:
                 refused as busy (see _execute_occupied()).
             execution_timeout: Execution contract -- how long one action may
                 execute before it is cancelled and the skill returned to
-                READY; also bounds how long unload_skill() waits for an
-                action in flight.
+                READY.
+            unload_timeout: Execution contract -- how long unload_skill()
+                waits for an action in flight before cancelling it, so that
+                shutdown stays inside the daemon's budget.
         """
         self._skills_dir = Path(skills_dir)
         self._db_path = db_path
@@ -270,6 +290,7 @@ class SkillRegistry:
         self._governance_store = governance_store
         self._queue_timeout = float(queue_timeout)
         self._execution_timeout = float(execution_timeout)
+        self._unload_timeout = float(unload_timeout)
 
         # Permission checker
         self._permission_checker = permission_checker or get_permission_checker(db_path=db_path)
@@ -638,6 +659,15 @@ class SkillRegistry:
         """
         Unload a skill.
 
+        Execution contract, shutdown (docs/SKILL_EXECUTION_CONCURRENCY_
+        CONTRACT.md, C11): new arrivals are refused from this moment
+        (admission sees UNLOADING); the action in flight, if any, is given
+        `unload_timeout` to finish and is cancelled if it does not; the
+        occupancy is held through shutdown, so a request queued behind that
+        action is refused rather than run on an instance that is being shut
+        down. If this call is itself cancelled before it holds the
+        occupancy, the skill is left loaded and usable, exactly as it was.
+
         Args:
             skill_id: ID of skill to unload
 
@@ -649,20 +679,33 @@ class SkillRegistry:
             logger.warning("Skill not loaded: %s", skill_id)
             return False
 
-        # Execution contract, shutdown: refuse new arrivals from this moment
-        # (admission sees UNLOADING), let the action in flight finish --
-        # bounded by the execution timeout that also bounds the action
-        # itself -- and hold the occupancy through shutdown, so a request
-        # queued behind that action is refused rather than run on an
-        # instance that is being shut down.
+        occupancy = loaded.occupancy
         loaded.instance._set_state(SkillState.UNLOADING)
-        held = await self._acquire_occupancy(loaded.occupancy, self._execution_timeout)
+        try:
+            held = await self._acquire_occupancy(occupancy, self._unload_timeout)
+            if not held and occupancy.in_flight_task is not None:
+                # The action outlived the unload bound: cancel it, wait
+                # (bounded) for it to end, then take the occupancy its
+                # exit releases.
+                logger.warning(
+                    "Skill %s: action %s still executing after %.0fs; cancelling it",
+                    skill_id,
+                    occupancy.in_flight_action,
+                    self._unload_timeout,
+                )
+                await self._settle(occupancy.in_flight_task)
+                held = await self._acquire_occupancy(occupancy, _SETTLE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            if loaded.instance.state is SkillState.UNLOADING:
+                loaded.instance._set_state(
+                    SkillState.RUNNING if occupancy.in_flight_action else SkillState.READY,
+                )
+            raise
         if not held:
-            logger.warning(
-                "Skill %s: action %s still executing after %.0fs; unloading anyway",
+            logger.error(
+                "Skill %s: occupancy still held after cancelling %s; unloading anyway",
                 skill_id,
-                loaded.occupancy.in_flight_action,
-                self._execution_timeout,
+                occupancy.in_flight_action,
             )
 
         try:
@@ -689,7 +732,7 @@ class SkillRegistry:
             return False
         finally:
             if held:
-                loaded.occupancy.lock.release()
+                occupancy.lock.release()
 
     async def reload_skill(self, skill_id: str) -> bool:
         """
@@ -922,20 +965,26 @@ class SkillRegistry:
           "Skill busy". Cancelling a waiting request removes it from the
           queue with no other effect.
         - Re-checks: what Governance decided before the wait can change
-          during it, so the fail-closed parking brake and the skill's
-          lifecycle are checked again once the occupancy is held, right
-          before the action runs. Consent is not asked twice.
+          during it, so the fail-closed parking brake is read again once the
+          occupancy is held, and the skill's lifecycle is checked once more
+          with nothing awaited between that check and the RUNNING
+          transition -- an unload that lands during the brake read is seen,
+          never overwritten. Consent is not asked twice.
         - Bounded execution: the action runs as its own task and is
           cancelled after `execution_timeout`; the skill returns to READY
-          and the request fails as timed out.
+          and the request fails as timed out. An action that completes
+          while it is being cancelled keeps its real result; one that raises
+          then marks the skill ERROR like any other exception.
         - Cancellation: cancelling the request cancels the action, closes
-          the RUNNING window, releases the occupancy and propagates. The
-          skill is never left RUNNING.
-        - Exceptions: an exception escaping execute() marks the skill ERROR
-          (sticky until reload_skill()) and fails the request; a request
-          queued behind it is refused with that state -- never admitted to
-          a skill the registry considers broken, and never masking the
-          ERROR with a later READY.
+          the RUNNING window, releases the occupancy and propagates -- at
+          whichever await the cancellation lands, a second one included.
+          The skill is never left RUNNING.
+        - Exceptions: an exception escaping execute() -- or an execute()
+          that is not a coroutine, or raises before returning one -- marks
+          the skill ERROR (sticky until reload_skill()) and fails the
+          request; a request queued behind it is refused with that state,
+          never admitted to a skill the registry considers broken, and
+          never masks the ERROR with a later READY.
         - Exactly once: an admitted request executes at most once and the
           registry never retries; the caller records the outcome once.
 
@@ -967,18 +1016,19 @@ class SkillRegistry:
             )
 
         frame: _ActionFrame | None = None
+        task: asyncio.Task[Any] | None = None
         try:
-            # Re-checks, now that this request is next in line.
-            if self._loaded.get(skill_id) is not loaded or not instance.is_ready:
-                return SkillResult.fail(
-                    f"Skill not ready: {skill_id} (state={instance.state.value})",
-                )
+            # Gone or dead while this request waited? Then no brake read.
+            refusal = self._lifecycle_refusal(loaded, skill_id)
+            if refusal is not None:
+                return refusal
             if await self._is_blocked_by_brake():
                 return SkillResult.fail("Blocked by parking brake (scope=skills)")
-
-            occupancy.in_flight_action = action
-            occupancy.in_flight_since = time.monotonic()
-            instance._set_state(SkillState.RUNNING)
+            # The authoritative check: nothing is awaited between it and the
+            # RUNNING transition below.
+            refusal = self._lifecycle_refusal(loaded, skill_id)
+            if refusal is not None:
+                return refusal
 
             # The action's task inherits the chain with this action's frame
             # added, so a re-entrant request from inside it (or from a task
@@ -986,23 +1036,41 @@ class SkillRegistry:
             frame = _ActionFrame(skill_id)
             token = _ACTIVE_SKILL_CHAIN.set((*_ACTIVE_SKILL_CHAIN.get(), frame))
             try:
-                task = asyncio.create_task(
-                    instance.execute(action, params),
-                    name=f"skill-action:{skill_id}.{action}",
-                )
+                instance._set_state(SkillState.RUNNING)
+                occupancy.in_flight_action = action
+                occupancy.in_flight_since = time.monotonic()
+                try:
+                    task = self._start_action(instance, skill_id, action, params)
+                except Exception as exc:
+                    logger.error(
+                        "Skill %s action %s failed to start: %s",
+                        skill_id,
+                        action,
+                        exc,
+                        exc_info=exc,
+                    )
+                    instance._set_error(str(exc))
+                    return SkillResult.fail(str(exc))
             finally:
                 _ACTIVE_SKILL_CHAIN.reset(token)
+            occupancy.in_flight_task = task
 
             try:
                 done, _pending = await asyncio.wait({task}, timeout=self._execution_timeout)
             except asyncio.CancelledError:
+                # The request was cancelled: cancel its action and wait,
+                # bounded, for it to end. A second cancellation landing in
+                # that wait propagates too; the finally below still closes
+                # the window.
                 await self._settle(task)
-                self._leave_running(instance)
+                self._consume_settled(task, instance, skill_id, action)
                 raise
 
             if not done:
                 await self._settle(task)
-                self._leave_running(instance)
+                late = self._consume_settled(task, instance, skill_id, action)
+                if late is not None:
+                    return late
                 logger.error(
                     "Skill %s action %s exceeded %.0fs and was cancelled",
                     skill_id,
@@ -1014,7 +1082,8 @@ class SkillRegistry:
                     f"{self._execution_timeout:g}s and was cancelled",
                 )
             if task.cancelled():
-                self._leave_running(instance)
+                # Cancelled from outside this request: an unload that would
+                # not wait any longer.
                 return SkillResult.fail(f"Skill action cancelled: {skill_id}.{action}")
             exc = task.exception()
             if exc is not None:
@@ -1027,14 +1096,88 @@ class SkillRegistry:
                 )
                 instance._set_error(str(exc))
                 return SkillResult.fail(str(exc))
-            self._leave_running(instance)
             return task.result()
         finally:
+            # Whatever path led here -- a result, a refusal, an exception,
+            # a cancellation at any await above -- the frame dies, the
+            # window closes and the occupancy is released.
             if frame is not None:
                 frame.live = False
+            self._leave_running(instance)
+            occupancy.in_flight_task = None
             occupancy.in_flight_action = None
             occupancy.in_flight_since = None
             occupancy.lock.release()
+
+    def _lifecycle_refusal(self, loaded: LoadedSkill, skill_id: str) -> SkillResult | None:
+        """The refusal for a skill that was unloaded, replaced, errored or is
+        being unloaded since this request was admitted; None if it is READY."""
+        if self._loaded.get(skill_id) is not loaded or not loaded.instance.is_ready:
+            return SkillResult.fail(
+                f"Skill not ready: {skill_id} (state={loaded.instance.state.value})",
+            )
+        return None
+
+    @staticmethod
+    def _start_action(
+        instance: SkillBase,
+        skill_id: str,
+        action: str,
+        params: dict[str, Any],
+    ) -> asyncio.Task[Any]:
+        """
+        Start the action as its own task. Raises (to be contained by the
+        caller as an action failure) if execute() is not a coroutine or
+        raises before returning one -- a mis-written skill is marked ERROR
+        like any other exception, never let escape execute_action().
+        """
+        awaitable = instance.execute(action, params)
+        if not inspect.isawaitable(awaitable):
+            raise TypeError(
+                f"{type(instance).__name__}.execute() returned "
+                f"{type(awaitable).__name__!r}, not an awaitable",
+            )
+        name = f"skill-action:{skill_id}.{action}"
+        if asyncio.iscoroutine(awaitable):
+            task = asyncio.create_task(awaitable, name=name)
+        else:
+            task = asyncio.ensure_future(awaitable)
+        task.add_done_callback(_retrieve_quietly)
+        return task
+
+    @staticmethod
+    def _consume_settled(
+        task: asyncio.Task[Any],
+        instance: SkillBase,
+        skill_id: str,
+        action: str,
+    ) -> SkillResult | None:
+        """
+        After a cancelled action has settled: an action that finished with a
+        result while being cancelled keeps it (returned to a timed-out
+        request); one that raised marks the skill ERROR and yields that
+        failure; one that was cancelled, or is still running (abandoned),
+        yields None.
+        """
+        if not task.done() or task.cancelled():
+            return None
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Skill %s action %s raised while being cancelled: %s",
+                skill_id,
+                action,
+                exc,
+                exc_info=exc,
+            )
+            instance._set_error(str(exc))
+            return SkillResult.fail(str(exc))
+        logger.warning(
+            "Skill %s action %s completed while being cancelled; its result stands",
+            skill_id,
+            action,
+        )
+        return task.result()
 
     @staticmethod
     async def _acquire_occupancy(occupancy: SkillOccupancy, timeout: float) -> bool:
@@ -1049,14 +1192,13 @@ class SkillRegistry:
         """
         acquire = asyncio.ensure_future(occupancy.lock.acquire())
         try:
-            done, _pending = await asyncio.wait({acquire}, timeout=timeout)
+            await asyncio.wait({acquire}, timeout=timeout)
         except asyncio.CancelledError:
             if SkillRegistry._withdraw(acquire):
                 occupancy.lock.release()
             raise
-        if done:
-            return True
-        # Timed out: withdraw, unless the lock was won at the last instant.
+        # Done: owned iff the acquisition completed with True. Not done:
+        # withdraw, unless the lock was won at the last instant.
         return SkillRegistry._withdraw(acquire)
 
     @staticmethod
@@ -1067,12 +1209,17 @@ class SkillRegistry:
         A pending acquisition that is cancelled never ends up holding the
         lock: asyncio.Lock hands a lock granted to a cancelled waiter on to
         the next waiter itself. Only an acquisition that has already
-        completed owns the lock, and then the caller is responsible for it.
+        completed with True owns the lock, and then the caller is
+        responsible for it.
         """
         if acquire.done():
-            return (
-                not acquire.cancelled() and acquire.exception() is None and bool(acquire.result())
-            )
+            if acquire.cancelled():
+                return False
+            exc = acquire.exception()
+            if exc is not None:
+                logger.error("Skill occupancy acquisition failed: %s", exc, exc_info=exc)
+                return False
+            return bool(acquire.result())
         acquire.cancel()
         return False
 
@@ -1083,7 +1230,8 @@ class SkillRegistry:
         the skill's occupancy is never released while its action is still
         executing. Bounded: a skill that swallows cancellation and keeps
         running is abandoned after _SETTLE_TIMEOUT_S (logged) rather than
-        holding the skill hostage.
+        holding the skill hostage. A cancellation landing in this wait
+        propagates; the caller's finally still closes the window.
         """
         task.cancel()
         done, _pending = await asyncio.wait({task}, timeout=_SETTLE_TIMEOUT_S)
@@ -1098,7 +1246,7 @@ class SkillRegistry:
     def _leave_running(instance: SkillBase) -> None:
         """
         Close the RUNNING window without overwriting a lifecycle transition
-        (UNLOADING, ERROR) that landed while the action ran.
+        (UNLOADING, ERROR) that landed while the action ran. Idempotent.
         """
         if instance.state is SkillState.RUNNING:
             instance._set_state(SkillState.READY)
@@ -1585,9 +1733,20 @@ class SkillRegistry:
     # -------------------------------------------------------------------------
 
     async def shutdown(self) -> None:
-        """Shutdown all loaded skills."""
-        for skill_id in list(self._loaded.keys()):
-            await self.unload_skill(skill_id)
+        """
+        Shutdown all loaded skills -- concurrently, so the wait for actions
+        in flight is bounded by one `unload_timeout` in total rather than
+        one per skill (KernelDaemon.stop() runs this inside its shutdown
+        budget; see bartholomew/runtime/serve.py).
+        """
+        skill_ids = list(self._loaded.keys())
+        outcomes = await asyncio.gather(
+            *(self.unload_skill(skill_id) for skill_id in skill_ids),
+            return_exceptions=True,
+        )
+        for skill_id, outcome in zip(skill_ids, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.error("Unloading skill %s raised: %s", skill_id, outcome)
 
         logger.info("Skill registry shutdown complete")
 

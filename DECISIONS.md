@@ -3620,7 +3620,15 @@
   recorded; `NotifySkill._deliver_notification()` and `ForecastSkill._action_lookup()` pass
   `executor=None`; `GovernanceStore`'s first-touch seed is `INSERT OR IGNORE`, so concurrent
   fail-closed brake reads on a fresh file no longer report the brake engaged
-  (`tests/test_governance_store.py`). The cost of contention is now latency behind at most one
+  (`tests/test_governance_store.py`). `unload_skill()` gives an action in flight `unload_timeout`
+  (10 s) and then cancels it, and `shutdown()` unloads skills concurrently, so the daemon's 30 s
+  shutdown budget (`bartholomew/runtime/serve.py`) holds; the forecast chat seam translates the
+  registry's refusal wording into the capability's own words. An adversarial review of the first
+  implementation found a cancellation landing during the settle of a cancelled action could still
+  leave a skill `RUNNING`, and an unload landing during the in-occupancy brake read could be
+  overwritten; both are closed by closing the window in the execution path's `finally` and by
+  checking the lifecycle with nothing awaited before the `RUNNING` transition, each pinned by a
+  test. The cost of contention is now latency behind at most one
   action instead of a refusal. The workspace-event path (`handle_event`) runs outside the
   occupancy, as it always has (`RISKS.md`). Callers may now see `Skill busy`, `Skill action timed
   out`, `Skill action cancelled` and `Re-entrant action refused` alongside the existing failure

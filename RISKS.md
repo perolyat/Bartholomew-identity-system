@@ -1250,8 +1250,9 @@
   > execution contract in `docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md` (`DECISIONS.md`, "Skill
   > execution is one action per skill instance at a time") — lifecycle-only admission, per-skill
   > FIFO occupancy, bounded waiting and execution, exact cancellation, `ERROR` never masked,
-  > re-entrancy refused, brake re-checked under occupancy, occupancy-aware unload — pinned by
-  > `tests/test_skill_registry_execution_contract.py`. Two further intrinsic defects repaired with
+  > re-entrancy refused, brake re-checked under occupancy, occupancy-aware unload bounded inside
+  > the daemon's shutdown budget — pinned by `tests/test_skill_registry_execution_contract.py`,
+  > including the findings of an adversarial review of the first implementation, all closed. Two further intrinsic defects repaired with
   > it: the notification webhook and forecast fetch rode the daemon's single SQLite worker (a slow
   > endpoint queued every persistence write), now on their own thread; and `GovernanceStore`'s
   > first-touch seed raced under concurrent fail-closed brake reads, reporting the brake engaged
