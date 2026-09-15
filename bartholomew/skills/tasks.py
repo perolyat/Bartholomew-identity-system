@@ -12,6 +12,7 @@ import json
 import logging
 import sqlite3
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -139,7 +140,7 @@ class TasksSkill(SkillBase):
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._run_off_loop(self._init_database)
 
         # Subscribe to events
         if context.workspace:
@@ -219,7 +220,7 @@ class TasksSkill(SkillBase):
     async def _action_create(self, params: dict[str, Any]) -> SkillResult:
         """Create a new task."""
         # Check permission
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -237,7 +238,7 @@ class TasksSkill(SkillBase):
         )
 
         # Save to database
-        self._save_task(task)
+        await self._run_off_loop(self._save_task, task)
 
         # Emit event
         self._emit_event("tasks", "task_created", task.to_dict())
@@ -251,7 +252,7 @@ class TasksSkill(SkillBase):
     async def _action_list(self, params: dict[str, Any]) -> SkillResult:
         """List tasks with optional filters."""
         # Check permission
-        perm_error = self._require_permission("memory.read")
+        perm_error = await self._require_permission("memory.read")
         if perm_error:
             return perm_error
 
@@ -272,7 +273,7 @@ class TasksSkill(SkillBase):
 
     async def _action_get(self, params: dict[str, Any]) -> SkillResult:
         """Get a specific task."""
-        perm_error = self._require_permission("memory.read")
+        perm_error = await self._require_permission("memory.read")
         if perm_error:
             return perm_error
 
@@ -288,7 +289,7 @@ class TasksSkill(SkillBase):
 
     async def _action_complete(self, params: dict[str, Any]) -> SkillResult:
         """Mark a task as complete."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -296,19 +297,24 @@ class TasksSkill(SkillBase):
         if not task_id:
             return SkillResult.fail("task_id is required")
 
-        task = self._get_task(task_id)
-        if not task:
-            return SkillResult.fail(f"Task not found: {task_id}")
+        completed_at = datetime.utcnow().isoformat() + "Z"
 
-        if task.status == TaskStatus.COMPLETED:
+        def complete(task: Task) -> bool:
+            if task.status == TaskStatus.COMPLETED:
+                return False
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = completed_at
+            return True
+
+        outcome = await self._run_off_loop(self._mutate_task, task_id, complete)
+        if outcome is None:
+            return SkillResult.fail(f"Task not found: {task_id}")
+        task, changed = outcome
+        if not changed:
             return SkillResult.ok(
                 data=task.to_dict(),
                 message="Task already completed",
             )
-
-        task.status = TaskStatus.COMPLETED
-        task.completed_at = datetime.utcnow().isoformat() + "Z"
-        self._save_task(task)
 
         # Emit event
         self._emit_event("tasks", "task_completed", task.to_dict())
@@ -321,7 +327,7 @@ class TasksSkill(SkillBase):
 
     async def _action_delete(self, params: dict[str, Any]) -> SkillResult:
         """Delete a task."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -329,11 +335,9 @@ class TasksSkill(SkillBase):
         if not task_id:
             return SkillResult.fail("task_id is required")
 
-        task = self._get_task(task_id)
+        task = await self._run_off_loop(self._take_task, task_id)
         if not task:
             return SkillResult.fail(f"Task not found: {task_id}")
-
-        self._delete_task(task_id)
 
         # Emit event
         self._emit_event("tasks", "task_deleted", {"task_id": task_id})
@@ -343,7 +347,7 @@ class TasksSkill(SkillBase):
 
     async def _action_update(self, params: dict[str, Any]) -> SkillResult:
         """Update a task."""
-        perm_error = self._require_permission("memory.write")
+        perm_error = await self._require_permission("memory.write")
         if perm_error:
             return perm_error
 
@@ -351,23 +355,23 @@ class TasksSkill(SkillBase):
         if not task_id:
             return SkillResult.fail("task_id is required")
 
-        task = self._get_task(task_id)
-        if not task:
+        def apply(task: Task) -> bool:
+            if "title" in params:
+                task.title = params["title"]
+            if "description" in params:
+                task.description = params["description"]
+            if "priority" in params:
+                task.priority = TaskPriority(params["priority"])
+            if "due_date" in params:
+                task.due_date = params["due_date"]
+            if "tags" in params:
+                task.tags = params["tags"]
+            return True
+
+        outcome = await self._run_off_loop(self._mutate_task, task_id, apply)
+        if outcome is None:
             return SkillResult.fail(f"Task not found: {task_id}")
-
-        # Update fields
-        if "title" in params:
-            task.title = params["title"]
-        if "description" in params:
-            task.description = params["description"]
-        if "priority" in params:
-            task.priority = TaskPriority(params["priority"])
-        if "due_date" in params:
-            task.due_date = params["due_date"]
-        if "tags" in params:
-            task.tags = params["tags"]
-
-        self._save_task(task)
+        task, _ = outcome
 
         # Emit event
         self._emit_event("tasks", "task_updated", task.to_dict())
@@ -389,27 +393,101 @@ class TasksSkill(SkillBase):
 
         conn = self._get_connection()
         try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO skill_tasks
-                (id, title, description, status, priority, due_date,
-                    tags_json, created_at, completed_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task.id,
-                    task.title,
-                    task.description,
-                    task.status.value,
-                    task.priority.value,
-                    task.due_date,
-                    json.dumps(task.tags),
-                    task.created_at,
-                    task.completed_at,
-                    json.dumps(task.metadata),
-                ),
-            )
+            self._write_task(conn, task)
             conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _write_task(conn: sqlite3.Connection, task: Task) -> None:
+        """Write one task's row on `conn`; the caller owns the transaction."""
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO skill_tasks
+            (id, title, description, status, priority, due_date,
+                tags_json, created_at, completed_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task.id,
+                task.title,
+                task.description,
+                task.status.value,
+                task.priority.value,
+                task.due_date,
+                json.dumps(task.tags),
+                task.created_at,
+                task.completed_at,
+                json.dumps(task.metadata),
+            ),
+        )
+
+    def _mutate_task(
+        self,
+        task_id: str,
+        mutate: Callable[[Task], bool],
+    ) -> tuple[Task, bool] | None:
+        """
+        Read, change and write one task inside a single immediate transaction.
+
+        Runs off the event loop (`_run_off_loop`). A skill action's
+        read-modify-write used to have no suspension point; once the
+        permission check and the save were awaited off the loop (the
+        writer-lock repair), two actions on the same task could each read the
+        row before either wrote it back, and the later write silently undid
+        the earlier one while both reported success. Taking the write lock
+        before the read makes the row the serialization point: the second
+        action's read waits for the first action's commit and sees its result.
+
+        Returns None when the task does not exist, otherwise the task after
+        `mutate` and whether `mutate` asked for it to be written.
+        """
+        if not self._db_path:
+            return None
+
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skill_tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                task = self._row_to_task(row)
+                changed = mutate(task)
+                if changed:
+                    self._write_task(conn, task)
+                    conn.commit()
+                return task, changed
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
+        finally:
+            conn.close()
+
+    def _take_task(self, task_id: str) -> Task | None:
+        """Delete one task and return it, inside a single immediate transaction (see `_mutate_task`)."""
+        if not self._db_path:
+            return None
+
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skill_tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                conn.execute("DELETE FROM skill_tasks WHERE id = ?", (task_id,))
+                conn.commit()
+                return self._row_to_task(row)
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
         finally:
             conn.close()
 

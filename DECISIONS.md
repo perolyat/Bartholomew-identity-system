@@ -3527,6 +3527,113 @@
     remains unstarted. It **deepens and connects the Executive architecture that already exists** —
     the runtime already has an Executive stage — rather than attaching a separate Executive brain.
 
+## Decision: A SQLite statement that can wait for a lock never runs on the event-loop thread
+
+- **Status:** established 2026-09-14 by the Windows writer-lock / WAL reliability repair (step 2 of
+  "The approved sequence" above; PR #110, **not merged — awaiting Taylor's User Approval Gate**).
+  Record: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. This entry generalises the Phase B stage B2
+  discipline (`docs/B2_EVENT_LOOP_ISOLATION.md`) from "scheduler persistence and the callers B2
+  named" to a rule that binds every path in the process.
+- **Decision:** In Bartholomew's process, a synchronous `sqlite3` statement that may wait for the
+  write lock — INSERT/UPDATE/DELETE, DDL, `BEGIN IMMEDIATE`, a `wal_checkpoint` — is executed off
+  the event-loop thread, through `bartholomew.kernel.blocking_executor.run_off_loop()` (the
+  daemon's shared `SingleWorkerExecutor` when the caller has one, `asyncio.to_thread()` otherwise).
+  A permission check that writes its audit row is a write for this purpose. Where such a call must
+  observe the calling task's context (WP-A2's `ContextVar` collector of failed audit writes), it is
+  run under `contextvars.copy_context().run`, because a plain executor thread carries no context.
+- **Why:** `MemoryStore` writes through aiosqlite, whose `execute` and `commit` are two separate
+  event-loop round trips. Between them SQLite's single write lock is held by a worker thread that
+  can release it only when the event loop submits the commit. A synchronous write on the loop
+  thread in that window waits for a lock whose release needs the loop it is blocking, so it fails
+  after exactly its `busy_timeout` with `database is locked`, deterministically once the window is
+  hit. That is the mechanism behind the Windows Merge Candidate failures of the writer-lock / WAL
+  class (`RISKS.md`, 2026-09-09 entry), the intermittent HTTP 400 on
+  `/api/notifications/quiet-hours`, and the FND-04 vertical-slice failure — all reproduced
+  deterministically on Linux and all evidenced in the `a64f5af` Windows log. The repair removes the
+  dependency, not the contention: the same contention now resolves in milliseconds.
+- **Alternatives considered:** (a) widening `busy_timeout` — lengthens the stall, cannot end it;
+  (b) making `MemoryStore`'s transactions single-worker-call atomic — would remove the dominant
+  holder but not the discipline violation, needs aiosqlite's private API for multi-statement
+  transactions, and leaves loop-blocking writes in place; (c) disabling WAL — irrelevant to the
+  two-round-trip transaction; (d) retrying writers — hides the defect. The 2026-08-22 decision to
+  retain the effective 5 s `busy_timeout` is unchanged.
+- **Consequences:** `SkillBase._require_permission()` and `NotifySkill._is_muted()` are now
+  awaitable; `SkillContext` carries the daemon's `blocking_executor`; the ECI boundary's ledger and
+  schema writes, the four skills' writes, the registry's pre-action permission gate and the
+  `fts_optimize` drive run off the loop. `tests/helpers/event_loop_sqlite.py` detects violations,
+  and `tests/test_sqlite_event_loop_convoy.py` plus
+  `tests/test_fnd04_eci_vertical_slice.py::TestTheLoopStaysOffTheEventLoop` fail if one returns.
+  A separate defect of the same class — SQLite refusing to wait for the lock when two connections
+  race to convert a *fresh* database file to WAL — is repaired in `db_ctx.set_wal_pragmas()` by a
+  bounded retry of that one pragma, scoped to a conversion still pending. One consequence of the
+  rule needs its own discipline: awaiting a permission check or a save gives an action body
+  suspension points, so a read-modify-write on one record must not straddle them — it runs whole,
+  inside one off-loop immediate transaction, with the row as the serialization point
+  (`TasksSkill._mutate_task`, `CalendarDraftSkill._mutate_event`,
+  `NotifySkill._transition_notification`; `tests/test_skill_actions_serialize_on_the_record.py`).
+  Writers that run only at daemon construction, start or stop, and writers on the separate
+  platform database, are outside the class and were left alone (recorded in the work-package
+  document §8).
+
+## Decision: Skill execution is one action per skill instance at a time — an overlapping request waits, it is not refused
+
+- **Status:** established 2026-09-15 by the Windows writer-lock / WAL reliability repair (PR #110,
+  **not merged — awaiting Taylor's User Approval Gate**), as the second consequence of the rule
+  above, found by automated review after the gate report and repaired in the same package.
+  Record: `docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md` (the clauses, the assessment, the scaling
+  boundary and the replacement path); acceptance suite
+  `tests/test_skill_registry_execution_contract.py`.
+- **Decision:** `SkillRegistry.execute_action()` admits a request on the skill's *lifecycle* alone
+  (`READY` or `RUNNING`; `LOADING`/`UNLOADING`/`UNLOADED`/`ERROR` refuse) and runs it under the
+  skill's *occupancy*: at most one action executes on a skill instance at a time, and an
+  overlapping request waits its turn in arrival order — bounded by `queue_timeout` (30 s, then
+  "Skill busy") — rather than being refused because the instance happens to be `RUNNING`. Execution
+  is bounded by `execution_timeout` (60 s, then cancelled and "timed out", the skill back to
+  `READY`); cancellation of a request cancels its action and always closes the `RUNNING` window;
+  an exception marks the skill `ERROR` (sticky until `reload_skill()`) and a queued request never
+  masks it; an action that re-enters the registry for its own skill is refused, never deadlocked;
+  the fail-closed parking brake is re-checked once the occupancy is held; `unload_skill()` refuses
+  new arrivals first, lets the action in flight finish and refuses every waiter. Requests to
+  different skills never wait on each other. Only storage work rides the daemon's single blocking
+  worker; network I/O runs on its own thread.
+- **Why:** Moving skill writes off the loop (the rule above) gave every action suspension points,
+  and the registry's `is_ready` guard — one bit standing in for both "alive" and "free", born as
+  lifecycle telemetry with the registry in January and never intended as a serializer — began
+  refusing a request that arrived while another action was executing on the same skill: 30 of 30
+  arrivals inside an ~8 ms window on the branch, 0 of 30 on `main`, the window stretching
+  one-for-one with work queued on the single worker (513 ms behind a 500 ms job). The refusal
+  surfaced as HTTP 400 on the notification routes, "didn't go through" chat replies, and reminders
+  recorded as failed deliveries and never retried. The same guard was already live on `main` for
+  webhook sends and forecast lookups. A `CancelledError` escaping an action had always left the
+  skill `RUNNING` forever. Neither the boolean guard nor unstructured concurrency could satisfy the
+  semantics the callers need, so the correction is at the registry's admission boundary.
+- **Alternatives considered:** (a) keep refusing while `RUNNING` — never intended, and the
+  refusals are user-visible failures; (b) allow unrestricted overlap by dropping `RUNNING` from the
+  guard — masks `ERROR` with a later `READY`, contradicts the single-occupancy meaning the
+  instance's state has always carried, and lets skills' in-memory state interleave; (c) global
+  serialization — unrelated skills would wait behind one 10 s webhook POST; (d) retrying "not
+  ready" at the four callers — hides the defect.
+- **Consequences:** `LoadedSkill` carries a `SkillOccupancy` (a per-skill `asyncio.Lock`, the
+  in-flight action and the waiter count, reported by `get_skill_info()`); `SkillRegistry` takes
+  `queue_timeout` and `execution_timeout`; the action runs as its own task under `asyncio.wait()`
+  — not `asyncio.wait_for()`, whose Python 3.11 cancellation swallow this codebase has already
+  recorded; `NotifySkill._deliver_notification()` and `ForecastSkill._action_lookup()` pass
+  `executor=None`; `GovernanceStore`'s first-touch seed is `INSERT OR IGNORE`, so concurrent
+  fail-closed brake reads on a fresh file no longer report the brake engaged
+  (`tests/test_governance_store.py`). `unload_skill()` gives an action in flight `unload_timeout`
+  (10 s) and then cancels it, and `shutdown()` unloads skills concurrently, so the daemon's 30 s
+  shutdown budget (`bartholomew/runtime/serve.py`) holds; the forecast chat seam translates the
+  registry's refusal wording into the capability's own words. An adversarial review of the first
+  implementation found a cancellation landing during the settle of a cancelled action could still
+  leave a skill `RUNNING`, and an unload landing during the in-occupancy brake read could be
+  overwritten; both are closed by closing the window in the execution path's `finally` and by
+  checking the lifecycle with nothing awaited before the `RUNNING` transition, each pinned by a
+  test. The cost of contention is now latency behind at most one
+  action instead of a refusal. The workspace-event path (`handle_event`) runs outside the
+  occupancy, as it always has (`RISKS.md`). Callers may now see `Skill busy`, `Skill action timed
+  out`, `Skill action cancelled` and `Re-entrant action refused` alongside the existing failure
+  strings; none is retried by the registry.
+
 ## Decision: Infer the means, not additional authority
 
 - **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate as a standing

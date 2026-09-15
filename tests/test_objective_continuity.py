@@ -189,7 +189,7 @@ async def _registry(mem, monkeypatch, webhook_url, identity=REAL_ALLOW_CONTEXT):
     notify._muted = False
     notify._muted_until = None
     assert not notify._is_quiet_hours(), "quiet hours were not successfully pinned off"
-    assert not notify._is_muted(), "mute was not successfully pinned off"
+    assert not await notify._is_muted(), "mute was not successfully pinned off"
     return registry
 
 

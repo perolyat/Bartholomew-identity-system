@@ -280,8 +280,12 @@ jobs:
 
       # The whole default suite on Windows, in parallel. This is where a
       # Windows-only failure in an ordinary unit test surfaces before main.
+      # Verbose on purpose (pyproject's addopts carries -q, so -vv here is pytest's -v,
+      # one line per test): a worker that dies or a suite that stalls before
+      # the junit file is written leaves the per-test lines as the only record
+      # of which tests ran, on which worker, and which never finished.
       - name: Default test suite on Windows (parallel, no coverage)
-        run: python -m pytest -p no:cacheprovider -n auto --dist loadfile --junitxml=junit-windows-full.xml
+        run: python -m pytest -p no:cacheprovider -vv -n auto --dist loadfile --junitxml=junit-windows-full.xml
 
       - name: Upload junit
         if: always()

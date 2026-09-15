@@ -52,7 +52,9 @@ EXIT_LOCK_HELD = 3
 EXIT_BAD_CONFIG = 4
 
 #: Longest `KernelDaemon.stop()` is expected to take: admission drain plus
-#: background-task cancellation plus a WAL checkpoint. A supervisor's stop
+#: skill unload (the registry gives actions in flight `unload_timeout`, 10 s,
+#: concurrently across skills, then cancels them) plus background-task
+#: cancellation plus a WAL checkpoint. A supervisor's stop
 #: timeout must exceed this or it will SIGKILL a daemon mid-checkpoint --
 #: which is exactly the unclean shutdown the startup integrity checks then
 #: have to recover from. `deploy/bartholomew.service` sets TimeoutStopSec

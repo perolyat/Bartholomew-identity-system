@@ -1113,15 +1113,36 @@ def _forecast_capability_installed(daemon: KernelDaemon) -> bool:
         return False
 
 
+#: The skill registry's execution-contract refusals
+#: (docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md §3). Their wording is for
+#: operators and logs; the person who asked about the weather gets the
+#: capability's own words, as for "Skill not loaded" above.
+_REGISTRY_TRANSIENT_PREFIXES = (
+    "Skill busy:",
+    "Skill action timed out:",
+    "Skill action cancelled:",
+)
+_REGISTRY_UNAVAILABLE_PREFIXES = (
+    "Skill not ready:",
+    "Skill not loaded:",
+    "Re-entrant action refused:",
+)
+
+
 def _forecast_error(result: Any) -> str:
     """The governed path's own words for why no forecast came back."""
     if result is None:
         return "the forecast capability is not available"
-    return (
+    error = (
         getattr(result, "error", None)
         or getattr(result, "message", None)
         or "the lookup did not succeed"
     )
+    if error.startswith(_REGISTRY_TRANSIENT_PREFIXES):
+        return "the forecast capability is busy right now; try again in a moment"
+    if error.startswith(_REGISTRY_UNAVAILABLE_PREFIXES):
+        return "the forecast capability is not available"
+    return error
 
 
 OBJECTIVE_OUTCOME_EXECUTED = "executed"

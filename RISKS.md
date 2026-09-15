@@ -1205,6 +1205,61 @@
   above. **Risk category:** reliability/CI. **Owner:** separate follow-up reliability task; not Wave
   3, not Wave 4.
 
+  > **Root cause established and repaired 2026-09-14 — PR #110, not merged (User Approval Gate).**
+  > Full record: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`; the rule: `DECISIONS.md`, "A SQLite
+  > statement that can wait for a lock never runs on the event-loop thread". The 2026-09-09
+  > diagnosis above was re-derived independently and **confirmed**: the `a64f5af` Windows log shows
+  > `eci/store.record_directive` failing with `database is locked` on the event-loop thread while
+  > the `self_check` drive's Reflection write was in flight (`dur_ms=5000`), and the convoy
+  > reproduces deterministically on Linux (a loop-thread `wal_db()` writer fails after exactly its
+  > `busy_timeout`; the same writer off the loop succeeds in 54 ms). A suite-wide enumeration under
+  > an instrumented `sqlite3.connect` found the writers still on the loop during operation: the
+  > four skills' writes, every skill's permission self-check and the registry's pre-action gate
+  > (the required `permission_audit` row), the ECI boundary's ledger and schema writes, and the
+  > `fts_optimize` drive. All now run off the loop through `run_off_loop()`; nothing about
+  > `busy_timeout`, WAL or any test was weakened. **Reclassifications from the evidence:**
+  > `tests/test_fnd04_eci_vertical_slice.py` is **the same root cause** (the log is the proof, see
+  > the record §6); `tests/test_event_backbone_drive.py` ×2 were **never** lock failures — they
+  > asserted a later durable step as soon as an earlier one was visible, which an injected 0.5 s
+  > delay makes fail on every run; their waits now target the state each assertion is about.
+  > `tests/test_sqlite_wal_concurrent_processes.py` was a **second, independent** defect of the
+  > class: SQLite refuses to invoke the busy handler when two connections race to convert a
+  > *fresh* file to WAL (19/40 synchronised attempts failed), now retried in `set_wal_pragmas()`.
+  > **Still open, recorded separately** (record §8; the first three with their own Airtable rows): the Windows Merge
+  > Candidate "stalled tail" — with the Windows jobs verbose (`5fb9c88`) it is the last test of the
+  > last worker, a different test each run (`test_lexical_beats_vector_on_exact_rare_tokens`, 24 minutes,
+  > run 34866265459; `test_worked_example_round_trips_end_to_end`, 20 minutes, run 34942899213), reported
+  > PASSED the second the cap fires and unended by the 120 s per-test timeout; the per-operation SQLite
+  > connection cost on Windows, which pushed the heavy-burst containment test past 120 s in that run
+  > (the one failure, a killed worker) and the `slow` memory and soak tests past 120 s in the nightly
+  > serial runs on the branch **and on `main`'s same-time control**; a Python 3.11 `asyncio.wait_for`
+  > cancellation swallow in the drive seam that delays shutdown; and the operator self-state routes'
+  > synchronous narrator writes. None is this class; none is absorbed. **The Windows baseline is not
+  > yet trustworthy** for the first two reasons, and Band 0 stays gated on it (record §9).
+  >
+  > **Second consequence of the repair, found 2026-09-15 by automated review after the gate report
+  > and repaired in the same package (PR #110, still not merged):** with skill writes off the loop,
+  > every action's `execute()` gained suspension points, and the registry's `is_ready` guard — one
+  > bit standing in for both "alive" and "free" — began refusing a request that arrived while another
+  > action was executing on the same skill (`Skill not ready: … (state=running)`; 30 of 30 in-window
+  > arrivals on the branch, 0 of 30 on `main`, the window stretching one-for-one with work queued on
+  > the single worker). It surfaced as HTTP 400 on `/api/notifications/*`, "didn't go through" chat
+  > replies and reminders recorded as failed deliveries and never retried; the same guard was already
+  > live on `main` for webhook sends and forecast lookups, and a cancelled action had always left a
+  > skill `RUNNING` forever. Corrected at the registry's admission boundary, not patched: the
+  > execution contract in `docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md` (`DECISIONS.md`, "Skill
+  > execution is one action per skill instance at a time") — lifecycle-only admission, per-skill
+  > FIFO occupancy, bounded waiting and execution, exact cancellation, `ERROR` never masked,
+  > re-entrancy refused, brake re-checked under occupancy, occupancy-aware unload bounded inside
+  > the daemon's shutdown budget — pinned by `tests/test_skill_registry_execution_contract.py`,
+  > including the findings of an adversarial review of the first implementation, all closed. Two further intrinsic defects repaired with
+  > it: the notification webhook and forecast fetch rode the daemon's single SQLite worker (a slow
+  > endpoint queued every persistence write), now on their own thread; and `GovernanceStore`'s
+  > first-touch seed raced under concurrent fail-closed brake reads, reporting the brake engaged
+  > (`tests/test_governance_store.py`). **Recorded, not absorbed:** the workspace-event path
+  > (`SkillBase.handle_event`) runs skill actions outside the occupancy, as it always has; no
+  > production publisher reaches it today.
+
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
   **chat**, **training**, and **sight/voice** surfaces, the shared Reflection sink is the sole

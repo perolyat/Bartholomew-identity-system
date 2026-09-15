@@ -595,6 +595,51 @@ class TestHonestFailure:
 
 
 # ---------------------------------------------------------------------------
+# 7. The loop's own persistence never waits for a lock on the event-loop thread.
+# ---------------------------------------------------------------------------
+class TestTheLoopStaysOffTheEventLoop:
+    """Windows writer-lock / WAL reliability repair (2026-09).
+
+    `test_the_exchange_and_the_result_are_both_captured_with_provenance`
+    failed on Windows at `a64f5af` with the request captured and no result:
+    `eci/store.record_directive` ran on the event-loop thread inside the
+    spoken-output seam's `speak_fn`, waited its whole busy_timeout for a write
+    lock held by a scheduler drive's in-flight aiosqlite Reflection write --
+    whose commit needed the very loop the ledger write was blocking -- and
+    failed with ``database is locked``. The boundary's writes now run off the
+    loop, like every other governed store's. This pins that, through the
+    production routes and the production responder.
+    """
+
+    def test_no_boundary_write_runs_on_the_event_loop_thread(self, endpoint, env, speaking):
+        from tests.helpers.event_loop_sqlite import forbid_sqlite_writes_on_event_loop
+
+        with forbid_sqlite_writes_on_event_loop() as log:
+            availability = endpoint.report_availability(SPOKEN_OUTPUT_KIND, 1)
+            turn = endpoint.run_turn(exchange_id="off-loop", said="are you there?")
+
+        assert availability.status_code == 200
+        assert turn.directed, turn.submit_body
+        assert turn.result_status == 202, turn.result_body
+
+        # The boundary's own writers: the ledger and schema in `eci/store.py`
+        # (reached through `eci/boundary.py`, the production responder and
+        # the `/api/eci` routes). Matched on the writer's own module rather
+        # than the call chain, because the routes also touch the *platform*
+        # database (`endpoint_auth.resolve` stamps the credential's
+        # `last_seen_at`) -- a separate file no aiosqlite connection ever
+        # opens, which cannot convoy and is outside this invariant.
+        offenders = log.production_writes_from(
+            "bartholomew/eci/boundary.py",
+            "bartholomew/eci/store.py",
+            "bartholomew/integration/eci_responder.py",
+        )
+        assert offenders == [], "ECI writes ran on the event-loop thread:\n" + "\n".join(
+            str(w) for w in offenders
+        )
+
+
+# ---------------------------------------------------------------------------
 # 8. The same loop, on the responder a real deployment gets.
 # ---------------------------------------------------------------------------
 class TestTheProductionWiring:

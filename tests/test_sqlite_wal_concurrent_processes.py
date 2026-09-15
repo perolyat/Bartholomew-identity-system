@@ -129,3 +129,57 @@ def test_wal_cleanup_after_uncommitted_write(temp_db_path):
     # Verify cleanup succeeded - WAL files should be removed
     for aux in fs_helpers.wal_aux_paths(Path(db_path)):
         assert not aux.exists(), f"Aux file still present after cleanup: {aux}"
+
+
+@pytest.mark.database
+def test_two_connections_converting_a_fresh_database_to_wal_both_succeed(tmp_path):
+    """The mechanism behind this file's intermittent ``database is locked``.
+
+    On a database that is not yet in WAL mode -- a file that did not exist a
+    moment ago -- ``PRAGMA journal_mode = WAL`` has to rewrite the header, which
+    it does by escalating its own read lock to a write lock. When two
+    connections race to convert the same fresh file, SQLite deliberately does
+    not invoke the busy handler for the loser of that escalation (its
+    deadlock-avoidance rule) and returns SQLITE_BUSY at once, whatever
+    ``busy_timeout`` says. Two spawned processes hit it on 19 of 40
+    synchronised attempts on Linux; two threads hit it on 9 of 60.
+
+    `db_ctx.set_wal_pragmas` now retries that one pragma briefly, because the
+    winner's conversion takes milliseconds and afterwards the pragma is a
+    read. Forty synchronised attempts make the pre-repair behaviour fail here
+    with overwhelming probability while costing well under a second.
+    """
+    import threading
+
+    failures = []
+    for attempt in range(40):
+        path = str(tmp_path / f"fresh-{attempt}.db")
+        barrier = threading.Barrier(2)
+        errors: list[str] = []
+
+        def convert(path=path, barrier=barrier, errors=errors) -> None:
+            conn = db_ctx.connect(path)
+            try:
+                barrier.wait(timeout=5)
+                db_ctx.set_wal_pragmas(conn)
+                conn.execute("CREATE TABLE IF NOT EXISTS t(x INTEGER)")
+                conn.execute("INSERT INTO t(x) VALUES (1)")
+                conn.commit()
+            except Exception as exc:  # the failure text is the evidence
+                errors.append(f"{type(exc).__name__}: {exc}")
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=convert) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+        if errors:
+            failures.append((attempt, errors))
+        else:
+            with db_ctx.wal_db(path) as conn:
+                assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+                assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 2
+
+    assert not failures, f"fresh-database WAL conversion lost the race: {failures}"

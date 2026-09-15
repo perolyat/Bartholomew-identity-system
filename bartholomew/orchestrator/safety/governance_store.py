@@ -218,7 +218,13 @@ def _import_legacy_state_if_needed(conn) -> None:
     system_flags' pre-existing "parking_brake" row if one exists (additive,
     non-destructive: system_flags/the legacy ParkingBrake are untouched),
     else a fresh disengaged default. Idempotent: a second call finds the
-    singleton row already present and does nothing further.
+    singleton row already present and does nothing further -- including a
+    second call racing this one from another connection on a fresh file
+    (two stores opened at once by concurrent fail-closed brake reads): the
+    seed is an INSERT OR IGNORE, and only the connection whose row landed
+    writes the migration audit entry. Without that, the loser raised
+    IntegrityError on the singleton's primary key and every fail-closed
+    reader above it reported the brake as engaged.
     """
     existing = conn.execute(
         "SELECT id FROM parking_brake_state WHERE id = ?",
@@ -249,11 +255,16 @@ def _import_legacy_state_if_needed(conn) -> None:
         revision = 0
         action = None  # fresh default; not itself a transition worth auditing
 
-    conn.execute(
-        "INSERT INTO parking_brake_state (id, engaged, scopes, revision, updated_at) "
+    seeded = conn.execute(
+        "INSERT OR IGNORE INTO parking_brake_state (id, engaged, scopes, revision, updated_at) "
         "VALUES (?, ?, ?, ?, ?)",
         (_STATE_ROW_ID, int(engaged), json.dumps(scopes), revision, now),
     )
+    if seeded.rowcount != 1:
+        # Another connection seeded the singleton between the SELECT above
+        # and this INSERT. Its seed stands; there is nothing left to import.
+        conn.commit()
+        return
     if action is not None:
         conn.execute(
             "INSERT INTO governance_audit (ts, action, scopes, reason, revision, actor) "
