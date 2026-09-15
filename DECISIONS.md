@@ -3565,9 +3565,15 @@
   `tests/test_fnd04_eci_vertical_slice.py::TestTheLoopStaysOffTheEventLoop` fail if one returns.
   A separate defect of the same class — SQLite refusing to wait for the lock when two connections
   race to convert a *fresh* database file to WAL — is repaired in `db_ctx.set_wal_pragmas()` by a
-  bounded retry of that one pragma. Writers that run only at daemon construction, start or stop,
-  and writers on the separate platform database, are outside the class and were left alone
-  (recorded in the work-package document §8).
+  bounded retry of that one pragma, scoped to a conversion still pending. One consequence of the
+  rule needs its own discipline: awaiting a permission check or a save gives an action body
+  suspension points, so a read-modify-write on one record must not straddle them — it runs whole,
+  inside one off-loop immediate transaction, with the row as the serialization point
+  (`TasksSkill._mutate_task`, `CalendarDraftSkill._mutate_event`,
+  `NotifySkill._transition_notification`; `tests/test_skill_actions_serialize_on_the_record.py`).
+  Writers that run only at daemon construction, start or stop, and writers on the separate
+  platform database, are outside the class and were left alone (recorded in the work-package
+  document §8).
 
 ## Decision: Infer the means, not additional authority
 

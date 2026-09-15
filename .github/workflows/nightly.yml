@@ -102,7 +102,8 @@ jobs:
           python -m pip install -U pip
           python -m pip install -e .
           python -m pip install -r requirements-dev.txt
-      # Verbose on purpose: when a per-test timeout ends the process the
+      # Verbose on purpose (pyproject's addopts carries -q, so -vv here is pytest's -v,
+      # one line per test): when a per-test timeout ends the process the
       # junit file is never written, and the verbose line printed before the
       # stack dump is the only record of which test was running.
       - name: Every collected test, serial (integration and slow included)

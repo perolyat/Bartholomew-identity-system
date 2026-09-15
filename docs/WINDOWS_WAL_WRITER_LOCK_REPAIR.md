@@ -9,7 +9,9 @@
 >
 > **Scope, as approved:** this reliability class only. Not general database cleanup, not
 > unrelated refactoring, not EXEC-02, not Band 0. Findings outside the class are recorded in §8
-> and left unabsorbed.
+> and left unabsorbed. The two `test_event_backbone_drive.py` tests were assigned to this package
+> as named members of the class; their reclassification and correction (§4) is the classification
+> this package owed, recorded here rather than deferred.
 
 ## 0. The defect, in one paragraph
 
@@ -56,11 +58,31 @@ either confirmed or refuted by direct evidence.
    with an executed-but-uncommitted `INSERT`, then the repository's own `wal_db()` writer on
    the loop thread with `busy_timeout = 1000` — **fails after 1.00 s, every time**; the same
    writer through `asyncio.to_thread` with the loop free — **succeeds in 54 ms**.
+   The lines, verbatim from the job log (run 34775856466, Windows job 103773709751, captured
+   stdout and log of the failing FND-04 test), so the classification in §6 can be checked
+   without GitHub access:
+
+       [Scheduler] tick=self_check ok=1 dur_ms=5000 next=1789325902
+       ERROR bartholomew.kernel.runtime_contract:runtime_contract.py:2420 Spoken output failed after governance approval
+       Traceback (most recent call last):
+         File "...\bartholomew\eci\store.py", line 198, in record_directive
+           conn.execute(
+       sqlite3.OperationalError: database is locked
+       The above exception was the direct cause of the following exception:
+         File "...\bartholomew\kernel\runtime_contract.py", line 2399, in run_spoken_output_through_runtime_contract
+           speech_result = speak_fn(text)
+         File "...\bartholomew\integration\eci_responder.py", line 159, in speak_fn
+           directive = issuer.issue(
+         File "...\bartholomew\eci\boundary.py", line 265, in issue
+           record_directive(self.db_path, directive, user_id=self.endpoint.user_id)
+       bartholomew.eci.store.EciPersistenceError: Directive dir-40518511d8c34e1f88a092e727ff6446 was NOT recorded (OperationalError: database is locked). It was not issued.
+
 3. **Suite-wide enumeration** of every SQLite statement that can wait for a lock and that
    executed on a thread running an event loop, by running the whole default suite under an
    instrumented `sqlite3.connect` (the detector now lives in
-   `tests/helpers/event_loop_sqlite.py`). 905 distinct call chains; 504 after excluding
-   `PRAGMA journal_mode` (a read on an already-WAL database). Classified by outermost
+   `tests/helpers/event_loop_sqlite.py`). 905 recorded rows, one per xdist worker per site:
+   442 distinct sites, 258 after excluding `PRAGMA journal_mode` (a read on an already-WAL
+   database), 381 distinct production call chains. Classified by outermost
    production frame into: writers reachable **during operation** concurrently with the
    scheduler's aiosqlite Reflection writes (the defect class, §2); writers that run only at
    daemon construction, start or stop, when no aiosqlite transaction can be in flight (out of
@@ -73,14 +95,26 @@ either confirmed or refuted by direct evidence.
 ## 2. What was repaired, and why each change is the smallest correct one
 
 Every change routes an existing synchronous `sqlite3` write through the existing
-`bartholomew.kernel.blocking_executor.run_off_loop()`. No timeout was changed, no retry was
-added to a write, no test was skipped, quarantined or loosened, WAL stays on, and the
-`busy_timeout` decision of 2026-08-22 is untouched.
+`bartholomew.kernel.blocking_executor.run_off_loop()`. No timeout was changed, no data write
+gained a retry (the one retry added is of the WAL-conversion pragma on a fresh file, scoped to
+a conversion still pending — see the last row), no test was skipped, quarantined or loosened,
+WAL stays on, and the `busy_timeout` decision of 2026-08-22 is untouched.
+
+One consequence of the change needed its own repair, found by the independent review of this
+PR: awaiting the permission check and the save gave each skill action's read-modify-write
+suspension points it never had, so two concurrent actions on one record could each read the
+row before either wrote it back, and the later write silently undid the earlier one while both
+reported success (measured: 0/40 rounds lost a change on `main`, 39/40 on the branch as first
+written). Every mutating skill action now does its read-modify-write inside one off-loop
+immediate transaction (`TasksSkill._mutate_task`/`_take_task`, `CalendarDraftSkill._mutate_event`/
+`_take_event`, `NotifySkill._transition_notification`, which also makes the queue's SENT claim a
+compare-and-set against a concurrent cancel), so the row is the serialization point again.
+`tests/test_skill_actions_serialize_on_the_record.py` holds it under both executors.
 
 | Path (during operation) | Writer that ran on the loop | Change |
 |---|---|---|
 | Skill actions: `notify` (`set_quiet_hours`, `mute`, `unmute`, `send`, `queue`, `cancel`, queue processing, the lazy mute-expiry clear), `tasks` (`create`, `complete`, `update`, `delete`), `calendar_draft` (`create`, `update`, `delete`), and each skill's `initialize()` schema/settings writes | `_save_settings`, `_save_notification`, `_save_task`, `_delete_task`, `_save_event`, `_delete_event`, `_init_database`, `_load_settings` | Each call site awaits the new `SkillBase._run_off_loop()`; `NotifySkill._is_muted()` is now awaitable because its expiry clear persists |
-| Every skill's own permission self-check (`SkillBase._require_permission`, 19 call sites across four skills) | `PermissionChecker.check()` → `_log_audit` (the required `permission_audit` row) and `_check_db_grant` | `_require_permission` is now `async`, runs the check off the loop **under a copy of the task's context** so WP-A2's `ContextVar` collector of failed audit writes still receives a failure recorded on the worker thread |
+| Every skill's own permission self-check (`SkillBase._require_permission`, 20 call sites across four skills) | `PermissionChecker.check()` → `_log_audit` (the required `permission_audit` row) and `_check_db_grant` | `_require_permission` is now `async`, runs the check off the loop **under a copy of the task's context** so WP-A2's `ContextVar` collector of failed audit writes still receives a failure recorded on the worker thread |
 | The registry's own pre-action gate, `SkillRegistry._resolve_permissions` | `PermissionChecker.check()` / `grant_session()` | New `_permission_call()` helper, same context-preserving off-loop pattern; the registry now hands its shared `SingleWorkerExecutor` to skills through `SkillContext.blocking_executor` so skill writes join the daemon's confirmed drain at shutdown |
 | The `fts_optimize` scheduler drive | `FTSClient.optimize()` | `run_off_loop(fts.optimize, executor=ctx.blocking_executor)` |
 | The External Capability Interface: `boundary.submit()` (schema), `boundary._settle()` (result correlation), `DirectiveIssuer.issue()` reached through the production responder's `speak_fn`, and the `/api/eci/availability` route | `eci/store.py`'s `ensure_schema`, `settle_directive`, `record_directive`, `record_availability` | Off-loop at each async seam; `speak_fn` is now a coroutine (the spoken-output seam already awaited an awaitable result) |
@@ -106,9 +140,10 @@ attempts fail after the repair.
   probe of 2026-09-09 (three writers each waiting exactly 5 s), the `dur_ms=5000` tick in the
   FND-04 log, the 1.00 s failure in the deterministic reproduction. Ordinary lock contention
   produces a distribution of waits; a convoy produces the timeout value.
-- The 2026-08-27 scheduler pacing (`DRIVE_PACE_S`) did not change the measured rate — as that
-  entry recorded. Pacing spreads writes; it cannot help a writer that is blocking the only
-  thread able to release the lock it wants.
+- The 2026-08-27 scheduler pacing (`DRIVE_PACE_S`) entry in `RISKS.md` records that the failure
+  rate was never re-measured after pacing, so pacing is not evidence either way; mechanically,
+  pacing spreads writes and cannot help a writer that is blocking the only thread able to
+  release the lock it wants.
 - The repair removes the *dependency* (a loop-thread wait on a loop-dependent holder), not the
   contention. The same contention still occurs; it now resolves in milliseconds, which is what
   the "repaired" reproductions measure.
@@ -125,6 +160,12 @@ attempts fail after the repair.
 | `tests/test_fnd04_eci_vertical_slice.py::TestTheLoopStaysOffTheEventLoop` | The same invariant through the real app, the real `/api/eci` routes and the production responder — the exact path that failed in CI. |
 | `tests/test_sqlite_wal_concurrent_processes.py::test_two_connections_converting_a_fresh_database_to_wal_both_succeed` | The fresh-file conversion race, 40 barrier-synchronised attempts. **Fails on `main`** (`fresh-database WAL conversion lost the race`). |
 | `tests/helpers/event_loop_sqlite.py` | The detector the two invariant tests use, available to any future suite. |
+| `tests/test_skill_actions_serialize_on_the_record.py` (8 tests, `to_thread` and `SingleWorkerExecutor`) | The consequence the review found (§2): concurrent `update`+`complete` on one task, `update`+`delete`, two field updates on one event, and `cancel` racing the notification queue keep every change. **Fails on the branch as first written** (round 0 loses the rename). |
+
+The two convoy tests that call a skill's permission self-check do so through a shape-agnostic
+helper (`_permission_outcome`, awaiting the result only if it is awaitable), so on the unrepaired
+tree they fail for the defect (`took 5.32s: the audit write convoyed`; the invariant listing the
+on-loop writes) and not for the changed signature.
 
 ### `tests/test_event_backbone_drive.py` — reclassified, and its two failing tests corrected
 
@@ -147,7 +188,9 @@ Linux (this session, `scratchpad` virtualenv, Python 3.11.15, SQLite 3.45.1, aio
 
 - Focused suites for every touched area: green once the two callers of `notify._is_muted()`
   awaited the now-async method (§4); the full-suite run in §5.1 supersedes them.
-- New tests against unmodified `main`: 9 failures, as designed (§4).
+- New tests against unmodified `main`: 10 failures, as designed (§4) — the seven
+  `*_completes_while_a_memory_write_is_in_flight` tests, the two invariant tests and the WAL-race
+  test; the mechanism test passes on `main` by design.
 - `tests/test_event_backbone_drive.py`: passes under the injected delay and in three plain runs.
 
 ### 5.1 Linux full default suite
@@ -158,40 +201,53 @@ Code head `ac8eea9` (the later `5fb9c88` changes only the two Windows CI invocat
 
 5080 outcomes to 100 %, no `F` or `E` in the progress record, exit status 0 — the same invocation
 shape as the Windows Merge Candidate job. Python 3.11.15, SQLite 3.45.1, aiosqlite 0.22.1,
-pytest 9.1.1. The new tests of §4 were run 5 × 19 on the repaired tree (all pass) and once against
-unmodified `main` in a worktree (9 failures, as designed).
+pytest 9.1.1. The four touched test files of §4 were run five times each on the repaired tree (all
+pass) and once against unmodified `main` in a worktree (10 failures, as designed).
 
 ### 5.2 Windows Merge Candidate runs
 
-`workflow_dispatch` of `merge-candidate.yml`; the Windows job runs the whole default suite with
-`-n auto --dist loadfile` under a 40-minute cap.
+Runs of `merge-candidate.yml` — the `push` of `57f86f8` to `main`, then two `workflow_dispatch`
+runs on this branch; the Windows job runs the whole default suite with `-n auto --dist loadfile`
+under a 40-minute cap. The `-vv` on the Windows jobs nets to pytest's `-v` because `pyproject.toml`'s
+`addopts` carries `-q`; that is the one-line-per-test level the attribution needs.
 
 | Run (UTC) | Head | Windows full default suite | Other six jobs |
 |---|---|---|---|
 | 34850155554 (13:35) | `57f86f8`, unmodified `main` | **cancelled at the cap**: `[gw2] node down: Not properly terminated` at ~65 %, 99 % reached at 13:56, nothing further, junit never written | all green |
 | 34857413080 (14:43) | `ac8eea9`, this branch | **cancelled at the cap**: `[gw0] node down: Not properly terminated` at ~67 % (14:54), 99 % reached at 15:02, seven more tests by the 15:23 cap, junit never written | all green |
-| 34866265459 (16:04) | `5fb9c88`, this branch, `-vv` | **ran to completion**: `1 failed, 4983 passed, 79 skipped, 164 warnings in 0:38:33`, junit written. Still `cancelled`: the last test, `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens` (gw2, started 16:20:34), was reported PASSED at 16:44:29 — the instant the 40-minute cap fired; the one failure is `tests/test_scheduler_queue_containment.py::TestContainmentNeverDestroysAnObligation::test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched`, `worker 'gw1' crashed` (the 120 s per-test timeout) | all green |
+| 34866265459 (16:04) | `5fb9c88`, this branch, `-vv` | **reached its summary**: `1 failed, 4983 passed, 79 skipped, 164 warnings in 0:38:33` — 5063 of the 5080 selected tests reported; 17 never ran (the remainder of `test_scheduler_queue_containment.py` after the worker crash, and the second rare-token test); junit written. Still `cancelled`: the last test, `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens` (gw2, started 16:20:34), was reported PASSED at 16:44:29 — the instant the 40-minute cap fired; the one failure is `tests/test_scheduler_queue_containment.py::TestContainmentNeverDestroysAnObligation::test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched`, `worker 'gw1' crashed` (the 120 s per-test timeout) | all green |
 
 What the three runs establish:
 
 - **No writer-lock failure appears in any Windows full-suite log.** The `database is locked`
   signature that named this class (§0) is absent from all three; on this branch the repaired paths
-  ran under `-n auto` contention twice without it, and the verbose run completed every test.
-- **The "stalled tail" is one named test, outside this class.** In the verbose run every test but
-  one had finished by 16:20:45; `test_lexical_beats_vector_on_exact_rare_tokens` on gw2 then held
-  99 % → 100 % for 24 minutes and was reported PASSED at 16:44:29, the second the job cap fired
-  (the controller's `KeyboardInterrupt` from its event wait follows in the same second). The 120 s
-  per-test timeout did not end it, so it is not an ordinary blocking wait, or the timer thread could
-  not run; which, is not established here. The same shape — 99 %, silence until the cap, one earlier
+  ran under `-n auto` contention twice without it, and the verbose run reported 5063 of 5080.
+- **The "stalled tail" is one named test, outside this class.** In the verbose run every reported
+  test but one had finished by 16:20:45; `test_lexical_beats_vector_on_exact_rare_tokens` on gw2 then
+  held 99 % → 100 % for 24 minutes and was reported PASSED at 16:44:29, the second the job cap fired.
+  The timestamped lines from the job log:
+
+      2026-09-14T16:20:34.5831756Z tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens
+      2026-09-14T16:20:45.5255564Z [gw3] [ 99%] PASSED tests/test_stage0_alive.py::test_liveness_endpoints
+      2026-09-14T16:44:29.9996481Z [gw2] [ 99%] PASSED tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens
+      2026-09-14T16:44:30.0138975Z !!!!!!!! KeyboardInterrupt !!!!!!!!
+      2026-09-14T16:44:30.0139874Z C:\hostedtoolcache\windows\Python\3.11.9\x64\Lib\threading.py:331: KeyboardInterrupt
+      2026-09-14T16:44:30.0141549Z ===== 1 failed, 4983 passed, 79 skipped, 164 warnings in 2313.94s (0:38:33) =====
+
+  The 120 s per-test timeout did not end it, so it is not an ordinary blocking wait, or the timer
+  thread could not run; which, is not established here, and the controller log cannot distinguish a
+  call phase that ended at the cap from a report delayed until it. The same shape — 99 %, silence until the cap, one earlier
   `node down` — is what unmodified `main` (34850155554) and the pre-verbose branch run
   (34857413080) showed. The test opens per-operation `MemoryStore`, `VectorStore` and FTS
   connections and builds three retrievers; nothing in it is a repaired path.
 - **The mid-run "node down" is the heavy-burst containment test, outside this class.**
   `test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` makes 1000 `insert_nudge`
   calls, each opening and closing its own `wal_db()` connection: 4.25 s on Ubuntu, more than 120 s on
-  the Windows runner under five workers, so pytest-timeout's thread method ended the worker with
-  `os._exit` (`[gw1] node down: Not properly terminated`, `worker 'gw1' crashed while running …`);
-  xdist replaced the worker and the suite continued. §8 item 7 carries the cost model.
+  the Windows runner under four workers, consistent with pytest-timeout's thread method ending the
+  worker with `os._exit` — which the controller log cannot confirm; it shows only
+  `[gw1] node down: Not properly terminated` and `worker 'gw1' crashed while running …`. xdist
+  replaced the worker (as `gw4`) and the suite continued; the file's remaining tests were not
+  re-run. §8 item 7 carries the cost model.
 - **The Windows baseline is therefore not yet trustworthy on this evidence**, for two named
   reasons that are independent of the writer lock. §8 items 1 and 7 carry them; §9 draws the
   consequence.
@@ -245,7 +301,7 @@ defect; it is preserved as a separate reliability concern.
 
 ## 8. Findings outside this package (recorded, not absorbed)
 
-1. **Windows Merge Candidate "stalled tail".** The push of `57f86f8` (unmodified `main`, run
+1. **Windows Merge Candidate "stalled tail".** The `push` of `57f86f8` (unmodified `main`, run
    34850155554) reached 99 % of the Windows default suite at 13:56 and then produced no output
    until the 40-minute cap at 14:15; earlier in the same run one xdist worker died
    (`[gw2] node down: Not properly terminated`). This is a hang, not a lock error, and it is what
@@ -285,7 +341,7 @@ defect; it is preserved as a separate reliability concern.
    `initialize()` writes were moved anyway because the same helpers serve runtime actions.
 7. **`MemoryStore` opens a connection, and an aiosqlite worker thread, per operation.**
    `bartholomew/kernel/memory_store.py` uses `async with aiosqlite.connect(self.db_path)` at every
-   method (twenty sites); the nightly dump names that worker `Thread-14051` at 35 % of the run.
+   method (36 sites); the nightly dump names that worker `Thread-14051` at 35 % of the run.
    Scheduler persistence and the vector store open a `wal_db()` connection per call. Each open
    pays file open, WAL pragma, shm mapping and a handle release, which is where Windows is slowest.
    Not a correctness defect and not this class; it is what pushed the heavy-burst containment test
@@ -297,9 +353,9 @@ defect; it is preserved as a separate reliability concern.
 **NOT READY** on the evidence to date (2026-09-14/15; PR #110 open, not merged).
 
 - The writer-lock class is root-caused, repaired and protected (§§0–4); the Linux suite is green on
-  the repaired head (§5.1); the Windows full default suite ran to completion on the repaired branch
-  with no writer-lock failure (§5.2, run 34866265459). That part of the pre-Band-0 requirement is
-  met.
+  the repaired head (§5.1); the Windows full default suite reached its summary on the repaired
+  branch with no writer-lock failure, 5063 of 5080 selected tests reported (§5.2, run
+  34866265459). That part of the pre-Band-0 requirement is met.
 - The Windows Merge Candidate baseline is still not trustworthy, for two named reasons outside this
   class: one retrieval test holds the suite for 24 minutes past its cap (§8 item 1), and the
   per-operation connection cost pushes the heaviest tests past the 120 s per-test timeout (§8 item

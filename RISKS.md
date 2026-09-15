@@ -1225,7 +1225,7 @@
   > `tests/test_sqlite_wal_concurrent_processes.py` was a **second, independent** defect of the
   > class: SQLite refuses to invoke the busy handler when two connections race to convert a
   > *fresh* file to WAL (19/40 synchronised attempts failed), now retried in `set_wal_pragmas()`.
-  > **Still open, recorded separately** (record §8, each with its own Airtable row): the Windows Merge
+  > **Still open, recorded separately** (record §8; the first three with their own Airtable rows): the Windows Merge
   > Candidate "stalled tail" — with the Windows jobs verbose (`5fb9c88`) it is one named test,
   > `tests/integration/test_lexical_over_vector_on_rare_tokens.py::test_lexical_beats_vector_on_exact_rare_tokens`,
   > which held the suite for 24 minutes on run 34866265459 unended by the 120 s per-test timeout, on a
