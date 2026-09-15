@@ -263,25 +263,32 @@ async def test_the_mechanism_a_writer_on_the_loop_cannot_outwait_an_aiosqlite_co
         conn.execute("CREATE TABLE t(x INTEGER)")
         conn.commit()
 
-    def write_through_the_authority() -> None:
+    def write_through_the_authority(busy_timeout_ms: int) -> None:
         with wal_db(db_path) as conn:
-            conn.execute("PRAGMA busy_timeout = 500")
+            conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
             conn.execute("INSERT INTO t(x) VALUES (2)")
             conn.commit()
 
     async with _HeldAiosqliteWrite(db_path, "INSERT INTO t(x) VALUES (1)") as held:
         # On the loop thread: the holder's commit is queued behind this call,
         # so the busy handler retries for its whole budget and then gives up.
+        # A short budget keeps the demonstration short; the outcome does not
+        # depend on its length, because nothing can deliver the commit.
         started = time.monotonic()
         with pytest.raises(sqlite3.OperationalError, match="locked"):
-            write_through_the_authority()
+            write_through_the_authority(500)
         assert time.monotonic() - started >= 0.45, "it did not even wait its busy_timeout"
 
         # The identical write, off the loop, with the loop free to deliver the
-        # holder's commit: it waits for the commit and then succeeds.
+        # holder's commit: it waits for the commit and then succeeds. It waits
+        # with the production budget (5 s, `set_wal_pragmas`): on a loaded
+        # runner the loop can take far longer than the 0.1 s release delay to
+        # get the holder's commit onto the aiosqlite thread, and a writer that
+        # gives up first would report the convoy where there is none. The
+        # completion budget below still bounds it well under that.
         _, elapsed = await _race(
             held,
-            lambda: asyncio.to_thread(write_through_the_authority),
+            lambda: asyncio.to_thread(write_through_the_authority, 5000),
             release_after=0.1,
         )
         assert elapsed < COMPLETION_BUDGET_S

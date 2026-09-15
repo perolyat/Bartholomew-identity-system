@@ -247,6 +247,17 @@ shape as the Windows Merge Candidate job. Python 3.11.15, SQLite 3.45.1, aiosqli
 pytest 9.1.1. The four touched test files of §4 were run five times each on the repaired tree (all
 pass) and once against unmodified `main` in a worktree (10 failures, as designed).
 
+**One test-side margin, found by the Merge Candidate re-run on `04db28d` (run 35034729745, Ubuntu
+3.10 default suite, 15 Sep 23:24).** `tests/test_sqlite_event_loop_convoy.py::test_the_mechanism_a_writer_on_the_loop_cannot_outwait_an_aiosqlite_commit`
+failed `database is locked` in its second half, where the same write is repeated off the loop and
+must succeed: that writer reused the 500 ms busy budget the first half uses to demonstrate the
+convoy briefly, so on a loaded runner it gave up before the holder's commit — which the loop
+schedules 0.1 s later — could reach the aiosqlite thread. The test had passed on every earlier
+Ubuntu and Windows run of both Pythons, including the first dispatch on the same head. The off-loop
+writer now waits with the production budget (5 s, as `set_wal_pragmas` sets it); the completion
+assertion still bounds it at 2.5 s and the on-loop half is unchanged. Not the repair's mechanism —
+a test that reported a convoy where there was none.
+
 ### 5.2 Windows Merge Candidate runs
 
 Runs of `merge-candidate.yml` — the `push` of `57f86f8` to `main`, then two `workflow_dispatch`
