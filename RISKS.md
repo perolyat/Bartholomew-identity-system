@@ -1236,6 +1236,28 @@
   > cancellation swallow in the drive seam that delays shutdown; and the operator self-state routes'
   > synchronous narrator writes. None is this class; none is absorbed. **The Windows baseline is not
   > yet trustworthy** for the first two reasons, and Band 0 stays gated on it (record §9).
+  >
+  > **Second consequence of the repair, found 2026-09-15 by automated review after the gate report
+  > and repaired in the same package (PR #110, still not merged):** with skill writes off the loop,
+  > every action's `execute()` gained suspension points, and the registry's `is_ready` guard — one
+  > bit standing in for both "alive" and "free" — began refusing a request that arrived while another
+  > action was executing on the same skill (`Skill not ready: … (state=running)`; 30 of 30 in-window
+  > arrivals on the branch, 0 of 30 on `main`, the window stretching one-for-one with work queued on
+  > the single worker). It surfaced as HTTP 400 on `/api/notifications/*`, "didn't go through" chat
+  > replies and reminders recorded as failed deliveries and never retried; the same guard was already
+  > live on `main` for webhook sends and forecast lookups, and a cancelled action had always left a
+  > skill `RUNNING` forever. Corrected at the registry's admission boundary, not patched: the
+  > execution contract in `docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md` (`DECISIONS.md`, "Skill
+  > execution is one action per skill instance at a time") — lifecycle-only admission, per-skill
+  > FIFO occupancy, bounded waiting and execution, exact cancellation, `ERROR` never masked,
+  > re-entrancy refused, brake re-checked under occupancy, occupancy-aware unload — pinned by
+  > `tests/test_skill_registry_execution_contract.py`. Two further intrinsic defects repaired with
+  > it: the notification webhook and forecast fetch rode the daemon's single SQLite worker (a slow
+  > endpoint queued every persistence write), now on their own thread; and `GovernanceStore`'s
+  > first-touch seed raced under concurrent fail-closed brake reads, reporting the brake engaged
+  > (`tests/test_governance_store.py`). **Recorded, not absorbed:** the workspace-event path
+  > (`SkillBase.handle_event`) runs skill actions outside the occupancy, as it always has; no
+  > production publisher reaches it today.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the

@@ -327,7 +327,11 @@ class ForecastSkill(SkillBase):
                 self._fetch,
                 request["url"],
                 request["params"],
-                executor=getattr(self._context, "blocking_executor", None),
+                # Network I/O never rides the daemon's single storage
+                # worker (see NotifySkill._deliver_notification): a slow
+                # provider would queue every SQLite write in the process
+                # behind it. Its own thread instead.
+                executor=None,
             )
         except ForecastLookupError as e:
             return self._failure_result(e, request, requested_at)

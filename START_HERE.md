@@ -301,7 +301,12 @@ run 34942899213 on the final head), reported PASSED the second the cap fires and
 per-test timeout, on runs with no writer-lock failure — and the mid-run worker loss is the
 heavy-burst containment test exceeding 120 s from per-operation connection cost, both runs alike
 (record §5.2, §8; Airtable rows). An independent review of the PR found and the same day repaired one consequence of the
-repair itself (a lost-update window in skill actions; record §2).
+repair itself (a lost-update window in skill actions; record §2). Automated review after the gate report found
+a second consequence — the registry refused a request that arrived while another action was
+executing on the same skill — corrected as an execution contract at the registry's admission
+boundary (`docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md`; `DECISIONS.md`, "Skill execution is one
+action per skill instance at a time"), with the webhook and forecast network I/O moved off the
+single storage worker and a governance-store first-touch race closed in the same package.
 
 ## 8. Major open risks
 

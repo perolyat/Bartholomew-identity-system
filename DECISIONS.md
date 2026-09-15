@@ -3575,6 +3575,57 @@
   platform database, are outside the class and were left alone (recorded in the work-package
   document §8).
 
+## Decision: Skill execution is one action per skill instance at a time — an overlapping request waits, it is not refused
+
+- **Status:** established 2026-09-15 by the Windows writer-lock / WAL reliability repair (PR #110,
+  **not merged — awaiting Taylor's User Approval Gate**), as the second consequence of the rule
+  above, found by automated review after the gate report and repaired in the same package.
+  Record: `docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md` (the clauses, the assessment, the scaling
+  boundary and the replacement path); acceptance suite
+  `tests/test_skill_registry_execution_contract.py`.
+- **Decision:** `SkillRegistry.execute_action()` admits a request on the skill's *lifecycle* alone
+  (`READY` or `RUNNING`; `LOADING`/`UNLOADING`/`UNLOADED`/`ERROR` refuse) and runs it under the
+  skill's *occupancy*: at most one action executes on a skill instance at a time, and an
+  overlapping request waits its turn in arrival order — bounded by `queue_timeout` (30 s, then
+  "Skill busy") — rather than being refused because the instance happens to be `RUNNING`. Execution
+  is bounded by `execution_timeout` (60 s, then cancelled and "timed out", the skill back to
+  `READY`); cancellation of a request cancels its action and always closes the `RUNNING` window;
+  an exception marks the skill `ERROR` (sticky until `reload_skill()`) and a queued request never
+  masks it; an action that re-enters the registry for its own skill is refused, never deadlocked;
+  the fail-closed parking brake is re-checked once the occupancy is held; `unload_skill()` refuses
+  new arrivals first, lets the action in flight finish and refuses every waiter. Requests to
+  different skills never wait on each other. Only storage work rides the daemon's single blocking
+  worker; network I/O runs on its own thread.
+- **Why:** Moving skill writes off the loop (the rule above) gave every action suspension points,
+  and the registry's `is_ready` guard — one bit standing in for both "alive" and "free", born as
+  lifecycle telemetry with the registry in January and never intended as a serializer — began
+  refusing a request that arrived while another action was executing on the same skill: 30 of 30
+  arrivals inside an ~8 ms window on the branch, 0 of 30 on `main`, the window stretching
+  one-for-one with work queued on the single worker (513 ms behind a 500 ms job). The refusal
+  surfaced as HTTP 400 on the notification routes, "didn't go through" chat replies, and reminders
+  recorded as failed deliveries and never retried. The same guard was already live on `main` for
+  webhook sends and forecast lookups. A `CancelledError` escaping an action had always left the
+  skill `RUNNING` forever. Neither the boolean guard nor unstructured concurrency could satisfy the
+  semantics the callers need, so the correction is at the registry's admission boundary.
+- **Alternatives considered:** (a) keep refusing while `RUNNING` — never intended, and the
+  refusals are user-visible failures; (b) allow unrestricted overlap by dropping `RUNNING` from the
+  guard — masks `ERROR` with a later `READY`, contradicts the single-occupancy meaning the
+  instance's state has always carried, and lets skills' in-memory state interleave; (c) global
+  serialization — unrelated skills would wait behind one 10 s webhook POST; (d) retrying "not
+  ready" at the four callers — hides the defect.
+- **Consequences:** `LoadedSkill` carries a `SkillOccupancy` (a per-skill `asyncio.Lock`, the
+  in-flight action and the waiter count, reported by `get_skill_info()`); `SkillRegistry` takes
+  `queue_timeout` and `execution_timeout`; the action runs as its own task under `asyncio.wait()`
+  — not `asyncio.wait_for()`, whose Python 3.11 cancellation swallow this codebase has already
+  recorded; `NotifySkill._deliver_notification()` and `ForecastSkill._action_lookup()` pass
+  `executor=None`; `GovernanceStore`'s first-touch seed is `INSERT OR IGNORE`, so concurrent
+  fail-closed brake reads on a fresh file no longer report the brake engaged
+  (`tests/test_governance_store.py`). The cost of contention is now latency behind at most one
+  action instead of a refusal. The workspace-event path (`handle_event`) runs outside the
+  occupancy, as it always has (`RISKS.md`). Callers may now see `Skill busy`, `Skill action timed
+  out`, `Skill action cancelled` and `Re-entrant action refused` alongside the existing failure
+  strings; none is retried by the registry.
+
 ## Decision: Infer the means, not additional authority
 
 - **Status:** **approved by Taylor 2026-09-14** at the User Approval Gate as a standing

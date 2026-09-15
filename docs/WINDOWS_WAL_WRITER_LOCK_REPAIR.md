@@ -134,6 +134,37 @@ for up to five seconds with a short backoff — the winner's conversion takes mi
 which the pragma is a read. Nothing else about the connection authority changed. **0 of 60**
 attempts fail after the repair.
 
+**Second consequence of the rule — the registry's occupancy (found 2026-09-15 by automated
+review after the gate report; repaired here, not deferred).** Moving the writes off the loop gave
+every action's `execute()` suspension points, and `SkillRegistry.execute_action()`'s `is_ready`
+guard — one bit that had always stood in for both "alive" and "free", born as lifecycle
+telemetry with the registry (`a29bcca`, 2026-01-21) and never intended or tested as a serializer
+— began refusing a request that arrived while another action was executing on the same skill:
+`Skill not ready: <skill> (state=running)`. Measured through the production path on this tree and
+on unmodified `main` (import path pinned per tree): a request arriving inside the ~8 ms window was
+refused **30 of 30** times here and **0 of 30** on `main`, where the window had no suspension
+point; a 500 ms blocking job queued on the daemon's single worker stretched the window to 513 ms
+and a request arriving 100 ms into it was refused **10 of 10** times. The same guard was already
+reachable on `main` for `notify.send` with a webhook configured (the POST, up to 10 s) and
+`forecast.lookup` (the provider fetch); a `CancelledError` escaping any action had always left the
+skill `RUNNING` forever. Four independent readers (callers, design intent, repair, refutation)
+established the reach, the history and the shape of the fix; the correction is a contract at the
+registry's admission boundary rather than a patch over the guard: lifecycle-only admission,
+per-skill FIFO occupancy, bounded waiting and execution without `asyncio.wait_for`, exact
+cancellation, `ERROR` never masked, re-entrancy refused, the fail-closed brake re-checked under
+occupancy, occupancy-aware unload, and occupancy telemetry —
+`docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md`, `DECISIONS.md` ("Skill execution is one action per
+skill instance at a time"). Two further defects intrinsic to the same subsystem were repaired with
+it: the notification webhook POST and the forecast provider fetch had come to ride the daemon's
+single SQLite worker once `SkillContext` carried it (on `main` the same `getattr` fell through to a
+plain thread), so a slow endpoint queued every persistence write in the process — network I/O now
+runs on its own thread (`executor=None`); and `GovernanceStore`'s first-touch seed of its
+singleton row was a check-then-insert, so concurrent fail-closed brake reads on a fresh file —
+what a burst of requests does when no shared store is wired — collided and reported the brake
+**engaged**, refusing legitimate requests as "Blocked by parking brake" (2 of 40 five-request
+bursts locally); the seed is now `INSERT OR IGNORE`, forced deterministically by
+`tests/test_governance_store.py`.
+
 ## 3. Why this is the defect and not a symptom
 
 - The failure signature is *exactly* one `busy_timeout` long, in every observation: the RISKS
@@ -161,6 +192,8 @@ attempts fail after the repair.
 | `tests/test_sqlite_wal_concurrent_processes.py::test_two_connections_converting_a_fresh_database_to_wal_both_succeed` | The fresh-file conversion race, 40 barrier-synchronised attempts. **Fails on `main`** (`fresh-database WAL conversion lost the race`). |
 | `tests/helpers/event_loop_sqlite.py` | The detector the two invariant tests use, available to any future suite. |
 | `tests/test_skill_actions_serialize_on_the_record.py` (8 tests, `to_thread` and `SingleWorkerExecutor`) | The consequence the review found (§2): concurrent `update`+`complete` on one task, `update`+`delete`, two field updates on one event, and `cancel` racing the notification queue keep every change. **Fails on the branch as first written** (round 0 loses the rename). |
+| `tests/test_skill_registry_execution_contract.py` (18 tests) | The second consequence (§2) and the whole execution contract, each clause through `SkillRegistry.execute_action()` only: a request arriving during another's window waits and succeeds (gated skill; the real `TasksSkill`; behind queued blocking work on the single worker), simultaneous requests execute once each without overlap, independent skills do not wait, bounded waiting and execution, cancellation in flight and while waiting, an exception marks `ERROR` and is never masked, re-entrancy refused without deadlock, a brake engaged while waiting still blocks, unload waits for the action in flight and refuses the queued one, occupancy telemetry, and the webhook and forecast fetch off the storage worker. **16 or 17 of 18 fail against the pre-contract registry and skills** (the independence clause held before as well); 15 of 15 consecutive runs pass with it, and a task an action spawns may call the skill once that action has ended. |
+| `tests/test_governance_store.py::test_concurrent_first_touch_seeds_one_row_and_never_fails_closed` | The governance store's seed race, forced by holding every thread between its SELECT and its INSERT. **Fails 5 of 5 against the old seed** (`IntegrityError: UNIQUE constraint failed`). |
 
 The two convoy tests that call a skill's permission self-check do so through a shape-agnostic
 helper (`_permission_outcome`, awaiting the result only if it is awaitable), so on the unrepaired

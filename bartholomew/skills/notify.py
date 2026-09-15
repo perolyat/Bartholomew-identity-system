@@ -759,7 +759,13 @@ class NotifySkill(SkillBase):
                     self._post_webhook,
                     url,
                     payload,
-                    executor=getattr(self._context, "blocking_executor", None),
+                    # Network I/O never rides the daemon's single storage
+                    # worker: an endpoint that takes its whole
+                    # WEBHOOK_TIMEOUT_SECONDS would queue every SQLite write
+                    # in the process behind it. Its own thread instead
+                    # (run_off_loop()'s documented fallback), as before the
+                    # writer-lock repair moved skill writes onto the worker.
+                    executor=None,
                 ),
             )
         except Exception:
