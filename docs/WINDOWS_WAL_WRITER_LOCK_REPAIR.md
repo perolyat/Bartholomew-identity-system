@@ -432,7 +432,7 @@ NO CAUSAL RELATIONSHIP ESTABLISHED; the job was re-run once (drive rule), not fi
 
 ## 9. Band 0 readiness
 
-**NOT READY** on the evidence to date (2026-09-14/16; PR #110 open, not merged, head `e195c13`).
+**NOT READY** on the evidence to date (2026-09-14/16; PR #110 open, not merged; code head `8cf3707`, with only documentation commits — this section among them — above it).
 
 - The writer-lock class is root-caused, repaired and protected (§§0–4); the Linux suite is green on
   the repaired head (§5.1); the Windows full default suite reached its summary on the repaired
