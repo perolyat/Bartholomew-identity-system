@@ -161,8 +161,29 @@ them, taken at the same moment on the Windows runner, settle it.
 
 The workers are waiting for the controller to send work. The controller is waiting for an event
 from the workers. **Four work units are queued and four healthy workers are able to run them.**
-Neither side will ever move. It is a lost wakeup, and it ends only when something outside the
-run kills it, which before this package was the 40-minute job cap.
+Neither side will ever move. It ends only when something outside the run kills it, which before
+this package was the 40-minute job cap.
+
+**Precisely, and this matters for the correction:** the controller is not blocked forever.
+`loop_once` is
+
+```python
+while 1:
+    if not self._active_nodes:
+        self.triggershutdown()
+        raise RuntimeError("Unexpectedly no active workers available")
+    try:
+        eventcall = self.queue.get(timeout=2.0)
+        break
+    except Empty:
+        continue
+```
+
+so the main thread wakes **every two seconds**, checks only whether every node has died, and
+goes back to waiting. The scheduler is never consulted on that wakeup. So the run is not
+deadlocked on a lock that cannot be released; it is a live loop that has stopped asking whether
+there is work to hand out. That is a far cheaper thing to correct, and it is correctable at the
+scheduler boundary this package already owns rather than by patching pytest-xdist.
 
 **This also disproves the reading the evidence had been pointing at.** The controller is not
 blocked in `channel.send`; `queue.get()` is waiting on an *empty* queue, so the loop is idle,
