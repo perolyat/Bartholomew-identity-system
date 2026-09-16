@@ -54,6 +54,7 @@ Environment:
 from __future__ import annotations
 
 import atexit
+import contextlib
 import faulthandler
 import json
 import os
@@ -280,6 +281,7 @@ class WorkerTrace(_BaseTrace):
         self._phase_start = _monotonic()
         self._phase_sqlite = self.sqlite.snapshot()
         self._current = "<none>"
+        self._gil_free_dump: Any = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -301,11 +303,52 @@ class WorkerTrace(_BaseTrace):
             on_stall=self._on_stall,
         )
         self.watchdog.start()
+        self._arm_gil_free_dump()
         atexit.register(self._note_exit)
+
+    def _arm_gil_free_dump(self) -> None:
+        """Arm faulthandler's own timer, which does not need the GIL.
+
+        The Python watchdog above cannot see the one case that would
+        explain a stall the per-test timeout also fails to end: a thread
+        inside a C call that never releases the GIL. No other Python
+        thread runs then -- not pytest-timeout's `threading.Timer`, and
+        not this module's watchdog either -- so the process looks frozen
+        and nothing reports it.
+
+        `dump_traceback_later` runs on a thread faulthandler owns in C and
+        writes without the GIL, so it is the only instrument that survives
+        that case. It is re-armed at every phase boundary and cancelled
+        with the session, so a healthy run never writes a dump.
+        """
+        try:
+            handle = (self.writer.path.with_suffix(".gil.txt")).open("a", encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - diagnostics must not raise
+            self.writer.write("gil_dump_unavailable", error=repr(exc))
+            return
+        self._gil_free_dump = handle
+        self._rearm_gil_free_dump()
+
+    def _rearm_gil_free_dump(self) -> None:
+        if self._gil_free_dump is None:
+            return
+        try:
+            faulthandler.cancel_dump_traceback_later()
+            faulthandler.dump_traceback_later(
+                self.warn_s,
+                repeat=True,
+                file=self._gil_free_dump,
+                exit=False,
+            )
+        except (RuntimeError, ValueError):  # pragma: no cover - defensive
+            self._gil_free_dump = None
 
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
         if self.watchdog is not None:
             self.watchdog.beat("session_finish")
+        if self._gil_free_dump is not None:
+            with contextlib.suppress(RuntimeError, ValueError):
+                faulthandler.cancel_dump_traceback_later()
         count, seconds = self.sqlite.snapshot()
         self.writer.write(
             "session_finish",
@@ -347,6 +390,7 @@ class WorkerTrace(_BaseTrace):
         self._phase_sqlite = self.sqlite.snapshot()
         if self.watchdog is not None:
             self.watchdog.beat(label)
+        self._rearm_gil_free_dump()
 
     # -- stall -------------------------------------------------------------
 

@@ -451,6 +451,62 @@ def test_the_trace_is_immune_to_a_test_that_patches_the_clock(pytester, tmp_path
     assert 0 <= arrival["t"] - call_phase["t"] < 60, "transport delay read a patched clock"
 
 
+def test_a_worker_wedged_in_a_c_call_still_produces_a_stack(pytester, tmp_path, monkeypatch):
+    """The one stall no Python-level instrument can see.
+
+    A thread inside a C call that never releases the GIL stops every other
+    Python thread in the process: pytest-timeout's `threading.Timer` never
+    fires, and neither does this module's own watchdog. The process looks
+    frozen and nothing says why -- which is a candidate explanation for a
+    Windows tail the 120 s per-test timeout demonstrably fails to end.
+
+    faulthandler's own timer runs on a thread it owns in C and writes
+    without the GIL, so it is the only instrument that survives. The test
+    holds the GIL for longer than the stall bound and asserts a stack was
+    written anyway.
+    """
+    trace_dir = tmp_path / "trace"
+    monkeypatch.setenv("BARTHO_EXEC_TRACE", "1")
+    monkeypatch.setenv("BARTHO_EXEC_TRACE_DIR", str(trace_dir))
+    monkeypatch.setenv("BARTHO_EXEC_STALL_WARN_S", "3")
+    monkeypatch.setenv("BARTHO_EXEC_STALL_ABORT_S", "0")
+    monkeypatch.setenv("PYTEST_TIMEOUT", "0")
+    pytester.makeconftest(
+        f"""
+        import sys
+        sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+
+        def pytest_configure(config):
+            from scripts.ci import execution_trace
+            execution_trace.install(config)
+        """,
+    )
+    pytester.makepyfile(
+        test_holds_the_gil="""
+        import sys
+
+        def test_holds_the_gil():
+            # sys.setswitchinterval keeps the interpreter from handing the
+            # GIL to another Python thread for the duration of this loop,
+            # which is the observable behaviour of a C call that does not
+            # release it.
+            sys.setswitchinterval(1000)
+            try:
+                deadline = 0
+                while deadline < 90_000_000:
+                    deadline += 1
+            finally:
+                sys.setswitchinterval(0.005)
+        """,
+    )
+
+    pytester.runpytest_subprocess("-n", "1", "--dist", "loadfile", "-p", "no:cacheprovider")
+
+    gil_dump = trace_dir / "gw0.gil.txt"
+    assert gil_dump.exists(), "a worker that held the GIL produced no stack at all"
+    assert "test_holds_the_gil" in gil_dump.read_text(encoding="utf-8")
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="signal-free stack dump path differs")
 def test_a_stalled_worker_writes_its_own_stacks(pytester, tmp_path, monkeypatch):
     """Requirement 11: tell a product deadlock from slow work.
