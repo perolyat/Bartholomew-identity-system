@@ -60,21 +60,73 @@ as one. §2 is the measurement that decides it.
 (10:10:19.964), so the worker-to-controller channel was carrying messages moments before the
 silence began. Whatever happens, happens between that `logstart` and the first phase report.
 
-## 2. The measurement the console could not make
+## 2. The first instrumented run, and what it overturned
 
-*(Pending: the instrumented Windows Merge Candidate run on the branch.)*
+**Run 35085435731**, `workflow_dispatch` on `1ee0131`, job 104759104143. Test step started
+10:33:39; the controller ended the session itself at **10:59:38**, on its own 600-second
+bound, **fourteen minutes before the job cap**. Artifacts were written and uploaded (11 files);
+the job is red for a stated reason rather than cancelled with nothing. That is clauses W5 and
+W8, and success gate 11, demonstrated on the first attempt.
 
-`scripts/ci/execution_trace.py` timestamps each report in the worker, before it is serialised,
-and again in the controller when it arrives. For the stalled test that gives, directly:
+What it recorded:
 
-* a large `wall_s` with a small transport delay → the test really ran for twenty minutes, and
-  the worker's own stack dump says where;
-* a small `wall_s` with a large transport delay → the report was produced promptly and the
-  harness did not deliver it, and the controller's stack dump names the execnet receiver
-  thread it is sitting in.
+```
+controller STALL after 180.2s; last=report:…test_full_multi_turn_session_coheres:teardown  queued_units=4
+controller STALL after 360.2s; …
+controller STALL after 540.3s; …
+controller ABORT after 600.3s; …
+    gw1: 1 outstanding ['…test_identity_policy_change_flips_a_future_tool_shaped_candidate_action']
+    gw2: 1 outstanding ['…test_uncontained_baseline_grows_without_bound']
+    gw3: 1 outstanding ['tests/unit/kernel/test_time_utils.py::test_utc_now_iso_format']
+    gw4: 1 outstanding ['…test_no_raw_sqlite_connect_in_api']
 
-There is no third reading, and the two are not distinguishable in anything CI has produced so
-far.
+gw1 STALL after 180.0s in …test_full_multi_turn_session_coheres::after-teardown
+gw2 STALL after 181.4s in …test_memory_manager_data_dir_follows_barth_db_path::after-teardown
+gw3 STALL after 181.5s in …test_metrics_has_tick_counter::after-teardown
+gw4 STALL after 180.1s in …test_liveness_self_ok::after-teardown
+```
+
+**Two findings, both of which change the shape of the problem.**
+
+**(a) No test is running.** `after-teardown` is the trace's label for the interval *after* a
+test's teardown report has been written and *before* the next test's `logstart`. All four
+surviving workers are in it. The tests they name are finished. Nothing was waiting on a
+database, a lock, or a computation — the previous explanations all required a test to be
+executing, and none is.
+
+**(b) The four workers stopped together.** Their stall bounds were reached at 180.0, 181.4,
+181.5 and 180.1 seconds — within about one and a half seconds of each other, on four unrelated
+files. Four independent hangs do not synchronise. Something common to all of them stopped, and
+the controller's last processed event was a teardown report, with four work units still queued
+and one outstanding test per worker.
+
+The reading this supports is a **harness-level deadlock between the controller and its
+workers**: the workers are idle waiting to be told what to run next, and the controller is not
+telling them. `gw0` is absent from the outstanding list — it had finished its work and shut
+down cleanly, which is why four and not five.
+
+**This is not yet the root cause, and the difference from §1 matters.** In the baseline the
+stalled test's `logstart` *did* arrive and its report did not, so there a test had started; here
+no test had started at all. Those may be two faces of one defect or two defects, and nothing
+measured so far decides it. The controller's own stack — which names the thread it is sitting
+in — is what settles it, and the first run wrote it to a file this environment cannot reach
+(see §2.1).
+
+### 2.1 Two defects in the instrument itself, found by using it
+
+Recorded because they cost a run each, and because an instrument that has not been used on the
+real failure has not been tested.
+
+1. **The summary crashed before printing anything.** Phase events carry a `threads` integer and
+   stall events a `threads` list of names; one sorted list of both raised
+   `TypeError: '<' not supported between instances of 'list' and 'int'`. The phase field is now
+   `live_threads`.
+2. **The stack dumps went somewhere unreadable.** They were written correctly and uploaded as an
+   artifact — and CI artifacts are served from blob storage this environment's egress policy
+   refuses, so the evidence the run existed to produce could not be opened. The summariser now
+   echoes the tail of the controller's dump, each worker's dump and each worker's GIL-free dump
+   into the job log. A diagnosis that requires downloading a zip is a diagnosis that does not
+   arrive.
 
 ## 3. Worker loss: the cost model
 
