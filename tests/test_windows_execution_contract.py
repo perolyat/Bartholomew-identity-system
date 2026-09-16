@@ -489,17 +489,25 @@ def test_a_worker_wedged_in_a_c_call_still_produces_a_stack(pytester, tmp_path, 
     pytester.makepyfile(
         test_holds_the_gil="""
         import sys
+        import time
 
         def test_holds_the_gil():
             # sys.setswitchinterval keeps the interpreter from handing the
             # GIL to another Python thread for the duration of this loop,
             # which is the observable behaviour of a C call that does not
-            # release it.
+            # release it. time.monotonic() does not release it either, so
+            # the loop can bound itself on the wall clock and still starve
+            # every other Python thread.
+            #
+            # A wall-clock bound, not an iteration count: an earlier version
+            # spun a fixed number of times, passed on a slow machine and
+            # failed on a fast one -- precisely the timing dependence this
+            # package exists to stop shipping.
             sys.setswitchinterval(1000)
             try:
-                deadline = 0
-                while deadline < 90_000_000:
-                    deadline += 1
+                deadline = time.monotonic() + 8.0
+                while time.monotonic() < deadline:
+                    pass
             finally:
                 sys.setswitchinterval(0.005)
         """,
@@ -509,7 +517,9 @@ def test_a_worker_wedged_in_a_c_call_still_produces_a_stack(pytester, tmp_path, 
 
     gil_dump = trace_dir / "gw0.gil.txt"
     assert gil_dump.exists(), "a worker that held the GIL produced no stack at all"
-    assert "test_holds_the_gil" in gil_dump.read_text(encoding="utf-8")
+    dumped = gil_dump.read_text(encoding="utf-8")
+    assert dumped.strip(), "the GIL-free dump file was created but never written to"
+    assert "test_holds_the_gil" in dumped
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="signal-free stack dump path differs")
