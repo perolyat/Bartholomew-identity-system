@@ -128,6 +128,80 @@ real failure has not been tested.
    into the job log. A diagnosis that requires downloading a zip is a diagnosis that does not
    arrive.
 
+## 2.2 Root cause: a lost-wakeup deadlock in the pytest-xdist controller
+
+**Run 35088270721**, `workflow_dispatch` on `ed03789`, job 104768193559. The controller ended
+the session on its own bound again, and this time the stacks reached the job log. Three of
+them, taken at the same moment on the Windows runner, settle it.
+
+**The controller's main thread, idle on an empty event queue:**
+
+```
+  File ".../Lib/threading.py", line 331 in wait
+  File ".../Lib/queue.py", line 180 in get
+  File ".../site-packages/xdist/dsession.py", line 154 in loop_once
+  File ".../site-packages/xdist/dsession.py", line 138 in pytest_runtestloop
+```
+
+**Its four execnet receiver threads, each blocked reading from a worker:**
+
+```
+  File ".../site-packages/execnet/gateway_base.py", line 534 in read
+  File ".../site-packages/execnet/gateway_base.py", line 1160 in _thread_receiver
+```
+
+**Every worker's main thread, blocked waiting to be given work:**
+
+```
+  File ".../Lib/threading.py", line 327 in wait
+  File ".../site-packages/xdist/remote.py", line 90 in get          # TestQueue.get()
+  File ".../site-packages/xdist/remote.py", line 214 in run_one_test
+  File ".../site-packages/xdist/remote.py", line 206 in pytest_runtestloop
+```
+
+The workers are waiting for the controller to send work. The controller is waiting for an event
+from the workers. **Four work units are queued and four healthy workers are able to run them.**
+Neither side will ever move. It is a lost wakeup, and it ends only when something outside the
+run kills it, which before this package was the 40-minute job cap.
+
+**This also disproves the reading the evidence had been pointing at.** The controller is not
+blocked in `channel.send`; `queue.get()` is waiting on an *empty* queue, so the loop is idle,
+not stuck. The transport was never the problem. The two readings need opposite corrections, and
+the inference from the 22-millisecond gap (section 1.1) would have selected the wrong one.
+
+**Why a worker can starve at all** is structural, and visible in `xdist/remote.py`:
+
+```python
+def run_one_test(self) -> None:
+    self.item_index = self.nextitem_index
+    self.nextitem_index = self.torun.get()         # blocks
+    ...
+    self.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+    self.sendevent("runtest_protocol_complete", ...)  # what wakes the controller
+```
+
+The worker fetches the index *after* the one it is about to run, so that
+`pytest_runtest_protocol` can be given a correct `nextitem`. A work unit under `--dist loadfile`
+is one file and its indices are sent in a single batch, so **a worker always blocks before the
+last test of its unit** and can only proceed once the controller assigns another unit. The
+controller assigns one only while handling a completion event. The wake-up and the work are
+mutually dependent: remove one event from that loop and it stops permanently.
+
+`_reschedule` tops a node up when its pending count is at or below two, which normally lands the
+next unit before the worker reaches that point. What is not yet established is why it did not
+fire here, with the pending count at one and four units queued. The two gates that would explain
+it are `node.shutting_down` and a momentarily empty queue. Both are now recorded (section 2.3),
+and the correction is not written until that is measured, because the two want different fixes.
+
+## 2.3 What the next run measures
+
+`event_queue_depth` and the per-node `shutting_down` map, added after this run. The first
+separates a blocked loop from an idle one without needing a stack at all; this run's stack
+happens to answer it, but the integer makes every future run self-explaining. The second decides
+the remaining question: `_reschedule` returns immediately for a node that has been sent
+`shutdown`, so work re-queued after that point can never reach it, and if every node reads
+`True` the run is stranded by construction rather than merely unlucky.
+
 ## 3. Worker loss: the cost model
 
 `tests/test_scheduler_queue_containment.py::TestContainmentNeverDestroysAnObligation::
