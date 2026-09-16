@@ -1041,6 +1041,18 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
 
 ### Approval Ledger
 
+- 2026-09-16 — **Windows writer-lock / WAL reliability repair, with the skill-execution
+  concurrency contract it made necessary** (PR #110, branch
+  `claude/windows-wal-reliability-repair-emrrf4`): approved by Taylor at the User Approval Gate at
+  head `7f99358` — **merge commit `6ccf693`**. Step 2 of the approved sequence. Accepts the
+  completed repair, the execution contract, the record-serialization correction, the tests and the
+  documentation. The approval explicitly does **not** declare Band 0 ready, does **not** declare the
+  Windows foundation trustworthy, does **not** waive the Windows Merge Candidate completion
+  requirement, and closes **none** of the recorded baseline risks — the last-worker stall, the
+  worker-controller replacement failure and the per-operation SQLite connection churn stay open in
+  `RISKS.md` and in Airtable. Records: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`,
+  `docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md`, `DECISIONS.md`.
+
 - 2026-09-14 — **Project Control & Documentation Reset** (PR #109, branch
   `claude/bartholomew-control-reset-rdszk7`): approved by Taylor at the User Approval Gate,
   conditional on required CI being green on the final pull-request head. Documentation and

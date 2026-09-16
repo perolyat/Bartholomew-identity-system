@@ -1,7 +1,7 @@
 # Windows Writer-Lock / WAL Reliability Repair
 
-> **Status:** Work-package record (2026-09-14; **PR #110, not merged — awaiting Taylor's User
-> Approval Gate**), step 2 of the sequence Taylor approved at the User Approval Gate
+> **Status:** Work-package record (2026-09-14; **PR #110 approved by Taylor at the User Approval
+> Gate at head `7f99358` and merged into `main` on 2026-09-16 as `6ccf693`**), step 2 of the sequence Taylor approved at the User Approval Gate
 > (`DECISIONS.md`, "The approved sequence"). **Non-canonical** — a document
 > under `docs/`; `RISKS.md` carries the risk disposition, `DECISIONS.md` the rule this repair
 > establishes, and `START_HERE.md` the current-state snapshot. Where this note and a canonical
@@ -432,7 +432,10 @@ NO CAUSAL RELATIONSHIP ESTABLISHED; the job was re-run once (drive rule), not fi
 
 ## 9. Band 0 readiness
 
-**NOT READY** on the evidence to date (2026-09-14/16; PR #110 open, not merged; code head `8cf3707`, with only documentation commits — this section among them — above it).
+**NOT READY** on the evidence to date (2026-09-14/16; PR #110 merged 2026-09-16 at `6ccf693` (PR #110, approved head `7f99358`), code head `8cf3707`).
+Taylor's approval accepted this repair on its own merits and explicitly did **not** declare Band 0
+ready, did **not** declare the Windows foundation trustworthy, did **not** waive the Windows Merge
+Candidate completion requirement, and closed none of the baseline risks below.
 
 - The writer-lock class is root-caused, repaired and protected (§§0–4); the Linux suite is green on
   the repaired head (§5.1); the Windows full default suite reached its summary on the repaired

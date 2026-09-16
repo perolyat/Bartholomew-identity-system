@@ -3530,7 +3530,8 @@
 ## Decision: A SQLite statement that can wait for a lock never runs on the event-loop thread
 
 - **Status:** established 2026-09-14 by the Windows writer-lock / WAL reliability repair (step 2 of
-  "The approved sequence" above; PR #110, **not merged — awaiting Taylor's User Approval Gate**).
+  "The approved sequence" above; PR #110, **approved at head `7f99358` and merged 2026-09-16 as
+  `6ccf693`**).
   Record: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. This entry generalises the Phase B stage B2
   discipline (`docs/B2_EVENT_LOOP_ISOLATION.md`) from "scheduler persistence and the callers B2
   named" to a rule that binds every path in the process.
@@ -3578,7 +3579,7 @@
 ## Decision: Skill execution is one action per skill instance at a time — an overlapping request waits, it is not refused
 
 - **Status:** established 2026-09-15 by the Windows writer-lock / WAL reliability repair (PR #110,
-  **not merged — awaiting Taylor's User Approval Gate**), as the second consequence of the rule
+  **approved at head `7f99358` and merged 2026-09-16 as `6ccf693`**), as the second consequence of the rule
   above, found by automated review after the gate report and repaired in the same package.
   Record: `docs/SKILL_EXECUTION_CONCURRENCY_CONTRACT.md` (the clauses, the assessment, the scaling
   boundary and the replacement path); acceptance suite

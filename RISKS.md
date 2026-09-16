@@ -1205,7 +1205,8 @@
   above. **Risk category:** reliability/CI. **Owner:** separate follow-up reliability task; not Wave
   3, not Wave 4.
 
-  > **Root cause established and repaired 2026-09-14 — PR #110, not merged (User Approval Gate).**
+  > **Root cause established and repaired 2026-09-14 — PR #110, approved at head `7f99358` and
+  > merged 2026-09-16 as `6ccf693`.**
   > Full record: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`; the rule: `DECISIONS.md`, "A SQLite
   > statement that can wait for a lock never runs on the event-loop thread". The 2026-09-09
   > diagnosis above was re-derived independently and **confirmed**: the `a64f5af` Windows log shows
@@ -1238,7 +1239,7 @@
   > yet trustworthy** for the first two reasons, and Band 0 stays gated on it (record §9).
   >
   > **Second consequence of the repair, found 2026-09-15 by automated review after the gate report
-  > and repaired in the same package (PR #110, still not merged):** with skill writes off the loop,
+  > and repaired in the same package (PR #110, merged 2026-09-16 as `6ccf693`):** with skill writes off the loop,
   > every action's `execute()` gained suspension points, and the registry's `is_ready` guard — one
   > bit standing in for both "alive" and "free" — began refusing a request that arrived while another
   > action was executing on the same skill (`Skill not ready: … (state=running)`; 30 of 30 in-window
