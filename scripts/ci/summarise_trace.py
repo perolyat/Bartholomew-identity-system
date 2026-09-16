@@ -175,8 +175,20 @@ def summarise(trace_dir: Path) -> int:
             any_stall = True
             print(
                 f"controller {event['event'].upper()} after {event.get('idle_s')}s; "
-                f"last={event.get('where')}  queued_units={event.get('workqueue_units')}",
+                f"last={event.get('where')}  queued_units={event.get('workqueue_units')}  "
+                f"event_queue_depth={event.get('event_queue_depth')}  "
+                f"shutting_down={event.get('shutting_down')}",
             )
+            depth = event.get("event_queue_depth")
+            if isinstance(depth, int):
+                print(
+                    "    => controller loop is "
+                    + (
+                        "BLOCKED (events arrived and are not being drained)"
+                        if depth > 0
+                        else "IDLE (no event pending: the wakeup was lost)"
+                    ),
+                )
             for gateway, pending in (event.get("outstanding") or {}).items():
                 print(f"    {gateway}: {len(pending)} outstanding {pending[:3]}")
     for name, events in workers.items():

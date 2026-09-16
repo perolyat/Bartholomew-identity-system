@@ -521,6 +521,20 @@ class ControllerTrace(_BaseTrace):
         sched = getattr(dsession, "sched", None)
         state["shuttingdown"] = getattr(dsession, "shuttingdown", None)
         state["failed_nodes"] = getattr(dsession, "_failed_nodes_count", None)
+        # The decisive pair, and the reason they are worth reading before any
+        # stack. pytest-xdist's controller runs one loop: it blocks on an
+        # event queue, and every scheduling decision -- including the
+        # `channel.send` that hands a worker its next work unit -- happens on
+        # that one thread. So:
+        #   queue_depth > 0 while nothing progresses  => the loop is BLOCKED,
+        #       because events have arrived and are not being drained.
+        #   queue_depth == 0 with work still queued   => the loop is IDLE and
+        #       the wakeup was LOST; nobody will ever call _reschedule again.
+        # The two need opposite corrections, and one integer separates them.
+        try:
+            state["event_queue_depth"] = dsession.queue.qsize()
+        except Exception as exc:
+            state["event_queue_depth_error"] = repr(exc)
         try:
             active = list(getattr(dsession, "_active_nodes", []) or [])
             state["active_nodes"] = [n.gateway.id for n in active]
@@ -544,6 +558,17 @@ class ControllerTrace(_BaseTrace):
                 outstanding[node.gateway.id] = pending[:20]
         except Exception as exc:
             state["assigned_work_error"] = repr(exc)
+        # A node that has been sent `shutdown` is skipped by _reschedule for
+        # the rest of the run, so work re-queued after that point can never be
+        # assigned to it. If every node reads True here while the queue is not
+        # empty, the run is stranded by construction rather than blocked.
+        try:
+            state["shutting_down"] = {
+                node.gateway.id: bool(node.shutting_down)
+                for node in list(getattr(sched, "assigned_work", {}))
+            }
+        except Exception as exc:
+            state["shutting_down_error"] = repr(exc)
         state["outstanding"] = outstanding
         state["collections_registered"] = len(getattr(sched, "registered_collections", {}) or {})
         return state

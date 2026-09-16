@@ -404,6 +404,11 @@ def test_the_controller_ends_a_stalled_run_itself_rather_than_waiting_for_the_ca
     assert aborts, "the run ended without recording why"
     assert aborts[0]["idle_s"] >= 10
     assert aborts[0]["outstanding"], "the abort record does not name the outstanding work"
+    # The pair that tells a blocked controller loop from a lost wakeup, which
+    # need opposite corrections. Both must be present for the abort record to
+    # be worth anything.
+    assert isinstance(aborts[0].get("event_queue_depth"), int)
+    assert isinstance(aborts[0].get("shutting_down"), dict)
 
     stalls = [e for e in controller if e["event"] == "stall"]
     assert stalls, "no stall was reported before the abort"
