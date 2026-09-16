@@ -408,6 +408,13 @@ def test_the_controller_ends_a_stalled_run_itself_rather_than_waiting_for_the_ca
     stalls = [e for e in controller if e["event"] == "stall"]
     assert stalls, "no stall was reported before the abort"
 
+    # The controller's own threads are part of the evidence: a report that
+    # left a worker and never arrived is sitting in an execnet receiver
+    # thread, and only a stack says which one.
+    controller_stacks = trace_dir / "controller.stacks.txt"
+    assert controller_stacks.exists(), "the controller stalled without dumping its own threads"
+    assert "stalled" in controller_stacks.read_text(encoding="utf-8")
+
 
 @pytest.mark.skipif(sys.platform == "win32", reason="signal-free stack dump path differs")
 def test_a_stalled_worker_writes_its_own_stacks(pytester, tmp_path, monkeypatch):

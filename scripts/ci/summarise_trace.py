@@ -154,7 +154,18 @@ def summarise(trace_dir: Path) -> int:
     if stacks:
         print(f"\nstack dumps written: {', '.join(p.name for p in stacks)}")
 
-    # 4. SQLite cost.
+    # 4. Thread growth across each worker's run.
+    print("\n-- live threads, first to last test on each worker ---------------")
+    for name, events in workers.items():
+        counts = [e.get("threads") for e in events if e.get("threads") is not None]
+        if not counts:
+            continue
+        print(
+            f"  {name:>5}  first={counts[0]:4d}  median={sorted(counts)[len(counts) // 2]:4d}  "
+            f"last={counts[-1]:4d}  max={max(counts):4d}",
+        )
+
+    # 5. SQLite cost.
     print("\n-- most SQLite connections per test ----------------------------")
     per_test: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
     for event in worker_calls.values():

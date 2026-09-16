@@ -234,6 +234,24 @@ class _BaseTrace:
         self.writer.write("process_exit", pid=os.getpid())
         self.writer.close()
 
+    def dump_stacks(self, label: str, idle: float) -> None:
+        """Write every thread's stack next to this process's trace.
+
+        Next to it rather than into it: faulthandler writes its own format
+        to a file descriptor, and these are meant to be read by a person.
+        On the controller they name the execnet receiver thread for each
+        worker, which is the only place a report that left a worker and
+        never arrived can be sitting.
+        """
+        dump_path = self.writer.path.with_suffix(".stacks.txt")
+        try:
+            with dump_path.open("a", encoding="utf-8") as fh:
+                fh.write(f"\n===== {self.role} stalled {idle:.0f}s in {label} =====\n")
+                fh.flush()
+                faulthandler.dump_traceback(file=fh, all_threads=True)
+        except Exception as exc:  # pragma: no cover - diagnostics must not raise
+            self.writer.write("stall_dump_failed", error=repr(exc))
+
 
 class WorkerTrace(_BaseTrace):
     """The per-worker half: phase boundaries, SQLite cost, and stacks on a stall.
@@ -306,6 +324,11 @@ class WorkerTrace(_BaseTrace):
             wall_s=round(time.perf_counter() - self._phase_start, 4),
             sqlite_connections=opened,
             sqlite_connect_s=round(connect_s, 4),
+            # Live threads in this worker. A worker whose last tests run
+            # far slower than its first is the shape a test that leaks a
+            # daemon, a portal or a connection pool produces; the count
+            # climbing across the run is what says so.
+            threads=threading.active_count(),
         )
         self._begin_phase(f"{report.nodeid}::after-{report.when}")
 
@@ -325,17 +348,7 @@ class WorkerTrace(_BaseTrace):
             idle_s=round(idle, 1),
             threads=[t.name for t in threading.enumerate()],
         )
-        # The all-thread traceback goes next to the JSONL rather than into
-        # it: it is meant to be read by a person, and faulthandler writes
-        # its own format to a file descriptor.
-        dump_path = self.writer.path.with_suffix(".stacks.txt")
-        try:
-            with dump_path.open("a", encoding="utf-8") as fh:
-                fh.write(f"\n===== {self.workerid} stalled {idle:.0f}s in {label} =====\n")
-                fh.flush()
-                faulthandler.dump_traceback(file=fh, all_threads=True)
-        except Exception as exc:  # pragma: no cover - diagnostics must not raise
-            self.writer.write("stall_dump_failed", error=repr(exc))
+        self.dump_stacks(label, idle)
         # Also to stderr, which xdist forwards, so a run whose artifacts are
         # never uploaded still says something.
         print(
@@ -480,6 +493,10 @@ class ControllerTrace(_BaseTrace):
     def _on_stall(self, label: str, idle: float) -> None:
         state = self._scheduler_state()
         self.writer.write("stall", where=label, idle_s=round(idle, 1), **state)
+        # The controller's own threads matter as much as a worker's: a
+        # report that left a worker and has not arrived is sitting in an
+        # execnet receiver thread, and only a stack says which one.
+        self.dump_stacks(label, idle)
         print(
             f"exec-trace: controller has received nothing for {idle:.0f}s "
             f"(last: {label}); outstanding={state.get('outstanding')} "
@@ -495,6 +512,7 @@ class ControllerTrace(_BaseTrace):
             f"(bound: {self.abort_s:.0f}s); last event was {label}"
         )
         self.writer.write("abort", where=label, idle_s=round(idle, 1), **state)
+        self.dump_stacks(label, idle)
         banner = [
             "",
             "=" * 78,
