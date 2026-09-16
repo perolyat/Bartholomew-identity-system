@@ -122,6 +122,29 @@ the 22-millisecond gap in §1.1, the evidence points at the harness rather than 
 §2 is what turns that from a strong inference into a measurement, and until it does this record
 does not call it settled.
 
+### 3.2 Candidates ruled out before the trace, and why
+
+Recorded so the next person does not spend the time again.
+
+* **A child process inheriting the worker's execnet pipe.** On Windows a subprocess started
+  with `stdout=None` inherits the parent's standard output, and for an xdist worker that would
+  be the channel to the controller — a child writing to it would corrupt the protocol stream,
+  which would look exactly like a channel that goes silent and unwinds on kill. Several tests
+  in the default suite do start subprocesses. **Ruled out:** `execnet.gateway_base.init_popen_io`
+  duplicates fd 1 to a private handle at worker start and points fd 1 at `NUL`, so a child
+  inherits the null device, not the channel. The guard is upstream and predates this.
+* **A worker poisoned by leaked background threads.** A test that leaks a daemon, a portal or a
+  connection pool would make a worker's later tests progressively slower, and the stall is
+  always on a worker's last test. **Ruled out on Linux by measurement:** live thread counts
+  across the daemon-heavy files are flat (first 4, median 4, last 4 on one worker; 7/9/5 on the
+  other), and the trace now records the count at every phase so the Windows run can say the same
+  or contradict it.
+* **The test being genuinely expensive.** §3.1: 0.1 s and 14 connections.
+* **The per-test timeout being mis-configured.** `pytest-timeout` is declared in
+  `requirements-dev.txt`, installed, and `timeout = 120` / `timeout_method = "thread"` are read
+  from `pyproject.toml`; it fires correctly elsewhere in the same runs (it is what kills the
+  worker in §3). It does not fire here, which is a fact about the stall, not about the setting.
+
 ## 4. Failed replacement: root cause, from the source
 
 Established by reading pytest-xdist 3.8.0, and reproduced deterministically on Linux by
