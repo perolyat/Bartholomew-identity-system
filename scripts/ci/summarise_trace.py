@@ -26,6 +26,9 @@ from typing import Any
 _TOP = 15
 #: Above this, a recorded duration is not a measurement but a patched clock.
 _IMPLAUSIBLE_S = 86400.0
+#: How much of each stack dump to echo into the job log.
+_CONTROLLER_STACK_LINES = 260
+_WORKER_STACK_LINES = 120
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -45,6 +48,34 @@ def _load(path: Path) -> list[dict[str, Any]]:
 
 def _fmt(seconds: float) -> str:
     return f"{seconds:8.1f}s"
+
+
+def _print_stacks(trace_dir: Path) -> None:
+    """Put the stack dumps in the log, not only in an artifact.
+
+    A CI artifact is not always reachable from where the diagnosis is
+    made, and a stall that can only be explained by downloading a zip is
+    a stall that stays unexplained. The tail of each dump is the most
+    recent one, which is the one that matters.
+    """
+    for pattern, tail, what in (
+        ("controller.stacks.txt", _CONTROLLER_STACK_LINES, "controller"),
+        ("gw*.stacks.txt", _WORKER_STACK_LINES, "worker"),
+        ("gw*.gil.txt", _WORKER_STACK_LINES, "worker (GIL-free dump)"),
+    ):
+        for path in sorted(trace_dir.glob(pattern)):
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError as exc:
+                print(f"\n-- {path.name}: unreadable ({exc}) --")
+                continue
+            if not lines:
+                continue
+            print(
+                f"\n-- {path.name} ({what}), last {min(tail, len(lines))} of {len(lines)} lines --",
+            )
+            for line in lines[-tail:]:
+                print(f"  {line}")
 
 
 def summarise(trace_dir: Path) -> int:
@@ -159,14 +190,12 @@ def summarise(trace_dir: Path) -> int:
                 print(f"    threads: {event.get('threads')}")
     if not any_stall:
         print("none")
-    stacks = sorted(trace_dir.glob("*.stacks.txt"))
-    if stacks:
-        print(f"\nstack dumps written: {', '.join(p.name for p in stacks)}")
+    _print_stacks(trace_dir)
 
     # 4. Thread growth across each worker's run.
     print("\n-- live threads, first to last test on each worker ---------------")
     for name, events in workers.items():
-        counts = [e.get("threads") for e in events if e.get("threads") is not None]
+        counts = [e["live_threads"] for e in events if isinstance(e.get("live_threads"), int)]
         if not counts:
             continue
         print(

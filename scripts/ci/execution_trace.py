@@ -381,7 +381,11 @@ class WorkerTrace(_BaseTrace):
             # far slower than its first is the shape a test that leaks a
             # daemon, a portal or a connection pool produces; the count
             # climbing across the run is what says so.
-            threads=threading.active_count(),
+            #
+            # Named live_threads, not threads: a stall event carries a
+            # `threads` list of names, and one summary that mixed the two
+            # crashed trying to sort a list against an int.
+            live_threads=threading.active_count(),
         )
         self._begin_phase(f"{report.nodeid}::after-{report.when}")
 
