@@ -99,11 +99,28 @@ For scale, the whole Linux default suite opens **48,481** connections across fou
 Windows is what the instrumented run measures, and what decides whether this is causal or
 merely correlated. *(Pending.)*
 
-The stalled-tail tests are on the same list but far below it:
-`test_lexical_beats_vector_on_exact_rare_tokens` opens **588** connections,
-`test_worked_example_round_trips_end_to_end` fewer still. A 22-minute stall is not 588
-connections at any plausible per-connection cost, which is a further reason not to fold the
-stalled tail into the connection-churn finding.
+### 3.1 The stalled tail is not this, and the measurement settles it
+
+The two tests that have held the tail across six runs were measured under the trace on Linux,
+run together, one worker, nothing else competing:
+
+| Test | Call phase | SQLite connections |
+|---|---|---|
+| `test_lexical_beats_vector_on_exact_rare_tokens` | 2.3 s | 589 |
+| **`test_worked_example_round_trips_end_to_end`** | **0.1 s** | **14** |
+
+`test_worked_example_round_trips_end_to_end` is the test that held the baseline
+(§1) open for **22 minutes 26 seconds**. It costs a tenth of a second and opens fourteen
+connections. There is no per-connection price on any operating system at which fourteen
+connections cost twenty-two minutes, and the two tests that have stalled differ from each
+other by a factor of forty in both time and connection count — they have nothing in common
+except being last.
+
+**The stalled tail is therefore not the connection-churn finding**, and is not folded into it.
+Whatever the Windows connection cost turns out to be, it does not explain the tail. Taken with
+the 22-millisecond gap in §1.1, the evidence points at the harness rather than at either test;
+§2 is what turns that from a strong inference into a measurement, and until it does this record
+does not call it settled.
 
 ## 4. Failed replacement: root cause, from the source
 
