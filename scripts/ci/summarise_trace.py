@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 _TOP = 15
+#: Above this, a recorded duration is not a measurement but a patched clock.
+_IMPLAUSIBLE_S = 86400.0
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -110,6 +112,13 @@ def summarise(trace_dir: Path) -> int:
                     emitted["worker"],
                 ),
             )
+    # A trace written before the clocks were bound at import (or by a
+    # process whose clock a test patched) can carry impossible numbers.
+    # They are shown separately rather than allowed to sort to the top.
+    implausible = [r for r in rows if abs(r[1]) > _IMPLAUSIBLE_S or r[0] > _IMPLAUSIBLE_S]
+    rows = [r for r in rows if r not in implausible]
+    if implausible:
+        print(f"({len(implausible)} report(s) ignored: the test patched the clock)")
     if rows:
         print(f"{'test':>9} {'transport':>10}  worker  when      nodeid")
         by_total = sorted(rows, key=lambda r: r[0] + max(r[1], 0.0), reverse=True)

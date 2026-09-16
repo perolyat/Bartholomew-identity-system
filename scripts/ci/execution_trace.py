@@ -68,6 +68,16 @@ import pytest
 
 TRACE_PLUGIN_NAME = "bartholomew-execution-trace"
 
+#: The real clocks, bound once at import. Several tests in this suite
+#: monkeypatch `time.time` and `time.perf_counter` (freezegun, and
+#: `tests/unit/kernel/test_time_utils.py` directly), and a trace that reads
+#: the patched ones records a phase that took 1.7 billion seconds and a
+#: transport delay to match -- which is exactly the measurement this module
+#: exists to make trustworthy. Binding the function objects here keeps the
+#: trace on the real clock whatever a test does to the module attributes.
+_wall_clock = time.time
+_monotonic = time.perf_counter
+
 _DEFAULT_WARN_S = 180.0
 _DEFAULT_ABORT_S = 900.0
 #: Bound on stack dumps per stalled phase, so a genuinely wedged worker
@@ -109,11 +119,11 @@ class _SqliteCounter:
         original = self._original
 
         def counting_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-            started = time.perf_counter()
+            started = _monotonic()
             try:
                 return original(*args, **kwargs)
             finally:
-                elapsed = time.perf_counter() - started
+                elapsed = _monotonic() - started
                 with self._lock:
                     self.count += 1
                     self.seconds += elapsed
@@ -141,7 +151,7 @@ class _TraceWriter:
         self.path = path
 
     def write(self, event: str, **fields: Any) -> None:
-        record = {"t": round(time.time(), 4), "event": event, **fields}
+        record = {"t": round(_wall_clock(), 4), "event": event, **fields}
         line = json.dumps(record, default=str)
         with self._lock:
             self._fh.write(line + "\n")
@@ -178,7 +188,7 @@ class _Watchdog:
         self._on_stall = on_stall
         self._on_abort = on_abort
         self._poll_s = poll_s
-        self._last = time.monotonic()
+        self._last = _monotonic()
         self._label = "startup"
         self._dumps = 0
         self._aborted = False
@@ -192,7 +202,7 @@ class _Watchdog:
     def beat(self, label: str) -> None:
         """Record progress. ``label`` names what is happening now."""
         with self._lock:
-            self._last = time.monotonic()
+            self._last = _monotonic()
             self._label = label
             self._dumps = 0
 
@@ -202,7 +212,7 @@ class _Watchdog:
     def _run(self) -> None:
         while not self._stop.wait(self._poll_s):
             with self._lock:
-                idle = time.monotonic() - self._last
+                idle = _monotonic() - self._last
                 label = self._label
                 dumps = self._dumps
             if self._abort_s and idle >= self._abort_s and not self._aborted:
@@ -267,7 +277,7 @@ class WorkerTrace(_BaseTrace):
         self.workerid = workerid
         self.sqlite = _SqliteCounter()
         self.sqlite.install()
-        self._phase_start = time.perf_counter()
+        self._phase_start = _monotonic()
         self._phase_sqlite = self.sqlite.snapshot()
         self._current = "<none>"
 
@@ -321,7 +331,7 @@ class WorkerTrace(_BaseTrace):
             when=report.when,
             outcome=report.outcome,
             duration_s=round(report.duration, 4),
-            wall_s=round(time.perf_counter() - self._phase_start, 4),
+            wall_s=round(_monotonic() - self._phase_start, 4),
             sqlite_connections=opened,
             sqlite_connect_s=round(connect_s, 4),
             # Live threads in this worker. A worker whose last tests run
@@ -333,7 +343,7 @@ class WorkerTrace(_BaseTrace):
         self._begin_phase(f"{report.nodeid}::after-{report.when}")
 
     def _begin_phase(self, label: str) -> None:
-        self._phase_start = time.perf_counter()
+        self._phase_start = _monotonic()
         self._phase_sqlite = self.sqlite.snapshot()
         if self.watchdog is not None:
             self.watchdog.beat(label)

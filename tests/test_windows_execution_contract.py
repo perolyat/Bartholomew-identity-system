@@ -416,6 +416,41 @@ def test_the_controller_ends_a_stalled_run_itself_rather_than_waiting_for_the_ca
     assert "stalled" in controller_stacks.read_text(encoding="utf-8")
 
 
+def test_the_trace_is_immune_to_a_test_that_patches_the_clock(pytester, tmp_path, monkeypatch):
+    """W9 has to be trustworthy, and this suite patches time in two places.
+
+    `freezegun` and `tests/unit/kernel/test_time_utils.py` replace
+    `time.time` and `time.perf_counter` on the module. A trace that reads
+    them records a phase of 1.7 billion seconds and a transport delay to
+    match, which would make the one measurement this module exists for
+    worthless. The clocks are bound at import instead.
+    """
+    trace_dir = tmp_path / "trace"
+    monkeypatch.setenv("BARTHO_EXEC_TRACE", "1")
+    monkeypatch.setenv("BARTHO_EXEC_TRACE_DIR", str(trace_dir))
+    pytester.makepyfile(
+        test_patches_the_clock="""
+        import time
+
+        def test_moves_the_clock(monkeypatch):
+            monkeypatch.setattr(time, "time", lambda: 1.0)
+            monkeypatch.setattr(time, "perf_counter", lambda: 1.0)
+            assert time.time() == 1.0
+        """,
+    )
+
+    result = _run_traced(pytester, trace_dir, "-n", "1", "--dist", "loadfile")
+    assert result.ret == 0
+
+    worker = _trace_events(trace_dir / "gw0.jsonl")
+    controller = _trace_events(trace_dir / "controller.jsonl")
+    call_phase = next(e for e in worker if e["event"] == "phase" and e["when"] == "call")
+    arrival = next(e for e in controller if e["event"] == "report_received" and e["when"] == "call")
+
+    assert 0 <= call_phase["wall_s"] < 60, f"phase duration read a patched clock: {call_phase}"
+    assert 0 <= arrival["t"] - call_phase["t"] < 60, "transport delay read a patched clock"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="signal-free stack dump path differs")
 def test_a_stalled_worker_writes_its_own_stacks(pytester, tmp_path, monkeypatch):
     """Requirement 11: tell a product deadlock from slow work.
