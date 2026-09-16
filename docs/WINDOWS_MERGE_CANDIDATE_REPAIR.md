@@ -1,0 +1,188 @@
+# Windows Merge Candidate Repair — Evidence
+
+> **Status:** in progress, 2026-09-16. Companion to
+> `docs/WINDOWS_TEST_EXECUTION_CONTRACT.md`, which states the contract; this file carries the
+> runs, measurements and root causes behind it. **Non-canonical.**
+>
+> **Starting state:** `main` at `d3c9992` (PR #111), after PR #110 merged as `6ccf693`. The
+> writer-lock / WAL repair and the skill-execution concurrency contract are merged and are not
+> reopened here; `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` §8 items 1 and 7 are the two findings
+> this package picks up.
+
+## 1. Baseline reproduction, from unchanged `main`
+
+**Run 35081868613**, `push` of `d3c9992`, job *Windows full default suite + actuation (py3.11)*
+(job 104747517771). Nothing on the branch; this is the authoritative starting state.
+
+| | |
+|---|---|
+| Job started | 09:52:38 UTC |
+| Test step started | 09:54:36 |
+| Last progress of any kind | **10:10:20.303** — `[gw4] [ 99%] PASSED tests/test_scenario_replay.py::TestScenarioReplay::test_full_multi_turn_session_coheres` |
+| Last `logstart` | 10:10:19.964 — `tests/test_competency_worked_example.py::test_worked_example_round_trips_end_to_end` (gw0) |
+| Silence | **22 min 26 s**, no output from any worker |
+| Then | 10:32:46.703 `[gw0] [ 99%] PASSED tests/test_competency_worked_example.py::test_worked_example_round_trips_end_to_end` |
+| Then | 10:32:46.725 `##[error]The operation was canceled.` — **22 ms later** |
+| junit | never written (`No files were found with the provided path: junit-windows-full.xml`) |
+| Other six jobs | all green |
+
+The other six jobs of the same run passed, including both Ubuntu coverage jobs against the 70 %
+gate, both Critical integration jobs, quality, smoke and real-Win32 governed actuation. The
+Ubuntu full default suite finished in **9 min 10 s** (10:21:00–10:30:13 on the branch run; 09:53:01–10:02:11 on
+this one). The Windows job did not finish in 40.
+
+**Everything the earlier record describes is reproduced exactly:** the last test of the last
+worker, a different test each run, reported `PASSED` as the cap fires, the 120-second per-test
+timeout ending nothing, and no junit.
+
+### 1.1 The 22-millisecond gap, across six runs
+
+| Run | Head | Stalled test | Silence | PASSED to cancellation |
+|---|---|---|---|---|
+| 34866265459 | `5fb9c88` | `test_lexical_beats_vector_on_exact_rare_tokens` (gw2) | 24 min | 14 ms |
+| 34942899213 | `830f554` | `test_worked_example_round_trips_end_to_end` (gw0) | 20 min | — |
+| 34973153727 | `6094b9a` | `test_lexical_beats_vector_on_exact_rare_tokens` (gw4) | 18 min | — |
+| 35034729745 | `04db28d` | `test_lexical_beats_vector_on_exact_rare_tokens` (gw4) | 22 min | — |
+| 35037740445 | `8cf3707` | `test_lexical_beats_vector_on_exact_rare_tokens` (gw1) | 22 min | — |
+| **35081868613** | **`d3c9992`** | **`test_worked_example_round_trips_end_to_end` (gw0)** | **22 min 26 s** | **22 ms** |
+
+Two tests, five workers, six heads, and in both runs where the ordering is recorded to the
+millisecond the final report lands within a few tens of milliseconds of a cancellation the run
+knows nothing about. A test genuinely finishing does not land within 22 ms of an independent
+forty-minute deadline twice.
+
+That is strong evidence that **the cancellation is what delivers the report**, not the test
+finishing — but it is evidence about correlation at one end of a channel, and the controller's
+console cannot see the other end. It is not yet a root cause, and this record does not treat it
+as one. §2 is the measurement that decides it.
+
+**What the baseline also rules out.** The `logstart` for the stalled test *did* arrive
+(10:10:19.964), so the worker-to-controller channel was carrying messages moments before the
+silence began. Whatever happens, happens between that `logstart` and the first phase report.
+
+## 2. The measurement the console could not make
+
+*(Pending: the instrumented Windows Merge Candidate run on the branch.)*
+
+`scripts/ci/execution_trace.py` timestamps each report in the worker, before it is serialised,
+and again in the controller when it arrives. For the stalled test that gives, directly:
+
+* a large `wall_s` with a small transport delay → the test really ran for twenty minutes, and
+  the worker's own stack dump says where;
+* a small `wall_s` with a large transport delay → the report was produced promptly and the
+  harness did not deliver it, and the controller's stack dump names the execnet receiver
+  thread it is sitting in.
+
+There is no third reading, and the two are not distinguishable in anything CI has produced so
+far.
+
+## 3. Worker loss: the cost model
+
+`tests/test_scheduler_queue_containment.py::TestContainmentNeverDestroysAnObligation::
+test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` is the test that has
+killed a worker in every verbose run. Measured on Linux (4 cores, idle, this branch):
+
+| | |
+|---|---|
+| Wall time | **1.85 s** |
+| SQLite connections opened by the test | **1036** (measured by the trace's own counter) |
+| Time in `sqlite3.connect` for all of them | 0.1 s |
+| Same test on the Windows runner under four workers | **> 120 s** |
+
+Each `wal_db()` open is a `sqlite3.connect`, a `PRAGMA journal_mode = WAL`, three further
+pragmas and a close; one per `insert_nudge_contained` call, and the test makes 1000 of them.
+Past 120 s, pytest-timeout's `thread` method — the only method Windows has — calls
+`os._exit(1)`, and the worker stops existing with no report and no traceback.
+
+For scale, the whole Linux default suite opens **48,481** connections across four workers
+(9,342 / 15,267 / 11,856 / 12,016) for **4.7 s** of connect time in total. The same count on
+Windows is what the instrumented run measures, and what decides whether this is causal or
+merely correlated. *(Pending.)*
+
+The stalled-tail tests are on the same list but far below it:
+`test_lexical_beats_vector_on_exact_rare_tokens` opens **588** connections,
+`test_worked_example_round_trips_end_to_end` fewer still. A 22-minute stall is not 588
+connections at any plausible per-connection cost, which is a further reason not to fold the
+stalled tail into the connection-churn finding.
+
+## 4. Failed replacement: root cause, from the source
+
+Established by reading pytest-xdist 3.8.0, and reproduced deterministically on Linux by
+`tests/test_windows_execution_contract.py::test_stock_xdist_scheduler_crashes_on_a_still_collecting_replacement`.
+
+`LoadScopeScheduling` (which `LoadFileScheduling` extends) keeps two per-node maps:
+
+* `assigned_work`, populated by `add_node()` — called from `DSession.worker_workerready`, the
+  moment a worker reports ready;
+* `registered_collections`, populated by `add_node_collection()` — called from
+  `DSession.worker_collectionfinish`, when that worker has finished collecting.
+
+Between those two events a node is in the first map and not the second. `remove_node()`, called
+when *any* worker dies, ends with:
+
+```python
+for node in self.assigned_work:
+    self._reschedule(node)
+```
+
+`_reschedule()` on a node with no pending work calls `_assign_work_unit()`, whose first
+statement is `worker_collection = self.registered_collections[node]`. For a node still
+collecting, that is a `KeyError`, raised inside the controller's event loop, reported as
+`INTERNALERROR` and ending the session — every test not yet run is never run.
+
+It needs two deaths close together: the first to create a replacement, the second to reschedule
+while that replacement is still collecting. That is why it took a heavy-burst run to surface,
+and it is exactly what Merge Candidate **35037740445 attempt 2** showed: gw1 died at 03:06:37,
+gw0/gw2/gw3 within 160 ms of each other at 03:07:36, then
+`INTERNALERROR> KeyError: <WorkerController gw5>` in `xdist/scheduler/loadscope.py`, ending the
+session at 61 % (`5 failed, 3132 passed, 6 skipped in 882.82s`).
+
+`DSession.worker_errordown` already guards the `KeyError` from `remove_node`'s own
+`assigned_work.pop(node)`; the one raised from `_assign_work_unit` is not on that path and is
+not guarded.
+
+**Correction.** `scripts/ci/xdist_contract.py` supplies a scheduler through the public
+`pytest_xdist_make_scheduler` hook whose `_reschedule` returns early for a node not yet in
+`registered_collections`. Such a node can be given no work in any case, and is picked up by
+`add_node_collection` → `schedule()`, the ordinary path a healthy replacement already takes.
+The upstream behaviour is pinned as a defect, so an upstream fix retires the override rather
+than hiding it.
+
+## 5. Silent work loss: root cause, from the record
+
+`remove_node()` does re-queue the dead worker's unfinished work unit
+(`self.workqueue.update(workload)`), but nothing verifies it is ever taken off again. Merge
+Candidate **34866265459** ended `1 failed, 4983 passed, 79 skipped` — with **17 of its 5080
+selected tests never run** (the remainder of the crashed worker's file, and one more) and
+nothing in the summary saying so. A reader of that line would call the run all but green.
+
+**Correction.** `WorkAccounting` reconciles the collection the workers agreed on against every
+nodeid that produced a terminal report, names the difference and fails the session. An
+intentional stop (`-x`, `--maxfail`, an internal error, an interrupt) is exempt, so it never
+buries the real reason a run stopped.
+
+**Verification that it does not cry wolf:** the full Linux default suite, `-n auto --dist
+loadfile`, 4 workers, 15,387 phase reports — no unreported test, and no `TESTS LOST` banner.
+
+## 6. What is not yet established
+
+* **The stalled tail's mechanism.** §2 is pending. It is not folded into the connection-churn
+  finding and is not assumed to be transport; the trace decides it.
+* **Whether SQLite connection churn is causal to worker loss on Windows**, as opposed to one
+  contributor among several. §3's Windows column is pending. If it is causal the correction is
+  made comprehensively inside `db_ctx`'s boundary; if it is not, the evidence is recorded and
+  the optimisation stays with a separately owned package, as the brief requires. Note that any
+  connection reuse has to respect the deliberate handle-release contract that
+  `tests/test_vector_store_handle_lifetime.py` and `tests/test_sqlite_wal_cleanup.py` hold: on
+  Windows a file that is still open cannot be deleted, and those tests exist because of it.
+* **The orphan processes.** Every Windows job, including this baseline, ends with
+  `Terminate orphan process: msedge / notepad / msedge`. They come from the governed-actuation
+  step, not the test suite, and no evidence yet connects them to the stall. Recorded, untouched.
+
+## 7. Runs
+
+| Run | Head | Tier | Result |
+|---|---|---|---|
+| 35081868613 | `d3c9992` | Merge Candidate (push, `main`) | **baseline**: Windows cancelled at the cap, 22 min 26 s stall, no junit; other six green |
+| 35084443075 | `916ac59` | Merge Candidate (dispatch) | superseded — cancelled by a second dispatch on the same ref (`cancel-in-progress` on `github.ref`); no evidence taken from it |
+| 35085435731 | `1ee0131` | Merge Candidate (dispatch) | *(pending)* first instrumented run |
