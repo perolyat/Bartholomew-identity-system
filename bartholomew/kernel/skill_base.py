@@ -9,12 +9,15 @@ Part of Stage 4: Skill Registry + Starter Skills.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
+
+from .blocking_executor import run_off_loop
 
 if TYPE_CHECKING:
     from .experience_kernel import ExperienceKernel
@@ -182,6 +185,12 @@ class SkillContext:
 
     # Permission checker callback
     check_permission: Any | None = None  # Callable[[str], bool]
+
+    # The daemon's shared single-worker executor (Phase B stage B2), when the
+    # skill was loaded by one. Skills route their blocking sqlite3 calls off
+    # the event loop through `SkillBase._run_off_loop()`, which uses this
+    # when present and falls back to `asyncio.to_thread()` otherwise.
+    blocking_executor: Any | None = None
 
     def has_permission(self, permission: str) -> bool:
         """Check if the skill has a specific permission."""
@@ -459,14 +468,56 @@ class SkillBase(ABC):
             return False
         return self._context.has_permission(permission)
 
-    def _require_permission(self, permission: str) -> SkillResult | None:
+    async def _run_off_loop(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        """
+        Run a blocking call -- in practice, this skill's synchronous sqlite3
+        helpers -- off the event loop.
+
+        Why this exists (Windows writer-lock / WAL reliability repair, 2026-09):
+        the kernel's `MemoryStore` writes through aiosqlite, whose `execute`
+        and `commit` are two separate event-loop round trips, so between them
+        the write lock is held by a worker thread that needs the event loop to
+        be told to commit. A synchronous sqlite3 write made *on* the event-loop
+        thread in that window blocks the loop while waiting for a lock whose
+        release needs the loop it is blocking. It can never win: it fails after
+        exactly `busy_timeout` with ``database is locked``. Every skill write
+        used to run exactly like that (from an `async def` action, straight on
+        the loop), which is how `notify`'s quiet-hours update surfaced to the
+        user as HTTP 400. Off the loop, the same write simply waits the few
+        milliseconds until the commit lands.
+
+        Uses the daemon's shared `SingleWorkerExecutor` when the skill was
+        loaded by one (`SkillContext.blocking_executor`), so shutdown's
+        confirmed drain covers skill writes too; otherwise a one-off
+        `asyncio.to_thread()`, per `run_off_loop()`'s documented fallback.
+        """
+        executor = getattr(self._context, "blocking_executor", None)
+        return await run_off_loop(fn, *args, executor=executor, **kwargs)
+
+    async def _require_permission(self, permission: str) -> SkillResult | None:
         """
         Check permission and return error result if denied.
+
+        Awaitable, because the check is not a pure lookup: through the
+        registry's `SkillContext.check_permission` closure it reaches
+        `PermissionChecker.check()`, which reads persistent grants and writes
+        the required `permission_audit` row -- synchronous sqlite3 I/O that
+        must not run on the event-loop thread (see `_run_off_loop()`).
+
+        The check runs under a copy of the calling task's context so that
+        WP-A2's per-action collector of failed permission-audit writes (a
+        `ContextVar` holding a list, see `skill_permissions.
+        collect_permission_audit_failures`) still receives a failure recorded
+        on the worker thread: a plain executor thread carries no context, and
+        a lost audit write that nobody collected would be exactly the silent
+        loss S2 forbids.
 
         Returns:
             SkillResult.denied() if permission missing, None if allowed
         """
-        if not self._has_permission(permission):
+        context = contextvars.copy_context()
+        granted = await self._run_off_loop(context.run, self._has_permission, permission)
+        if not granted:
             return SkillResult.denied(permission)
         return None
 

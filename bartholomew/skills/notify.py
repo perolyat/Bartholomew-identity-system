@@ -183,7 +183,7 @@ class NotifySkill(SkillBase):
 
         # Initialize database
         if self._db_path:
-            self._init_database()
+            await self._run_off_loop(self._init_database)
 
         # Stage 1, S1.3: load persisted quiet-hours/mute settings (seeding
         # the singleton row with the class defaults on first run) instead
@@ -193,7 +193,7 @@ class NotifySkill(SkillBase):
         self._muted = False
         self._muted_until: str | None = None
         if self._db_path:
-            self._load_settings()
+            await self._run_off_loop(self._load_settings)
 
         # Usable POC slice 1: the outbound webhook delivery channel. Read from
         # the environment rather than persisted, so no credential-bearing
@@ -355,7 +355,7 @@ class NotifySkill(SkillBase):
     async def _action_send(self, params: dict[str, Any]) -> SkillResult:
         """Send a notification immediately (respects quiet hours)."""
         # Check permission
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -368,7 +368,9 @@ class NotifySkill(SkillBase):
         # Check mute/quiet hours (urgent notifications bypass both -- mute
         # is treated the same as an always-on quiet-hours window rather
         # than a separate gate, per Stage 1 S1.3's design).
-        if (self._is_muted() or self._is_quiet_hours()) and priority != NotificationPriority.URGENT:
+        if (
+            await self._is_muted() or self._is_quiet_hours()
+        ) and priority != NotificationPriority.URGENT:
             # Queue for later
             return await self._action_queue(
                 {
@@ -388,7 +390,7 @@ class NotifySkill(SkillBase):
         )
 
         # Save to database
-        self._save_notification(notification)
+        await self._run_off_loop(self._save_notification, notification)
 
         # Emit event
         self._emit_event("alerts", "notification_sent", notification.to_dict())
@@ -407,7 +409,7 @@ class NotifySkill(SkillBase):
     async def _action_queue(self, params: dict[str, Any]) -> SkillResult:
         """Queue a notification for later delivery."""
         # Check permission
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -427,7 +429,7 @@ class NotifySkill(SkillBase):
         )
 
         # Save to database
-        self._save_notification(notification)
+        await self._run_off_loop(self._save_notification, notification)
 
         # Emit event
         self._emit_event("alerts", "notification_queued", notification.to_dict())
@@ -441,7 +443,7 @@ class NotifySkill(SkillBase):
     async def _action_list_pending(self, params: dict[str, Any]) -> SkillResult:
         """List pending notifications."""
         # Check permission
-        perm_error = self._require_permission("nudge.read")
+        perm_error = await self._require_permission("nudge.read")
         if perm_error:
             return perm_error
 
@@ -456,7 +458,7 @@ class NotifySkill(SkillBase):
     async def _action_cancel(self, params: dict[str, Any]) -> SkillResult:
         """Cancel a queued notification."""
         # Check permission
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -464,15 +466,17 @@ class NotifySkill(SkillBase):
         if not notification_id:
             return SkillResult.fail("notification_id is required")
 
-        notification = self._get_notification(notification_id)
-        if not notification:
+        outcome = await self._run_off_loop(
+            self._transition_notification,
+            notification_id,
+            NotificationStatus.PENDING,
+            NotificationStatus.CANCELLED,
+        )
+        if outcome is None:
             return SkillResult.fail(f"Notification not found: {notification_id}")
-
-        if notification.status != NotificationStatus.PENDING:
+        notification, cancelled = outcome
+        if not cancelled:
             return SkillResult.fail("Can only cancel pending notifications")
-
-        notification.status = NotificationStatus.CANCELLED
-        self._save_notification(notification)
 
         # Emit event
         self._emit_event(
@@ -500,7 +504,7 @@ class NotifySkill(SkillBase):
 
     async def _action_set_quiet_hours(self, params: dict[str, Any]) -> SkillResult:
         """Set and persist quiet hours (Stage 1, S1.3)."""
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -513,7 +517,7 @@ class NotifySkill(SkillBase):
 
         self._quiet_hours_start = start
         self._quiet_hours_end = end
-        self._save_settings()
+        await self._run_off_loop(self._save_settings)
 
         return SkillResult.ok(
             data={"start": start, "end": end, "is_active": self._is_quiet_hours()},
@@ -522,7 +526,7 @@ class NotifySkill(SkillBase):
 
     async def _action_mute(self, params: dict[str, Any]) -> SkillResult:
         """Mute non-urgent notifications, optionally until a given time (Stage 1, S1.3)."""
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
@@ -535,7 +539,7 @@ class NotifySkill(SkillBase):
 
         self._muted = True
         self._muted_until = normalized_until
-        self._save_settings()
+        await self._run_off_loop(self._save_settings)
 
         return SkillResult.ok(
             data={"muted": True, "muted_until": normalized_until},
@@ -544,13 +548,13 @@ class NotifySkill(SkillBase):
 
     async def _action_unmute(self, params: dict[str, Any]) -> SkillResult:
         """Clear mute (Stage 1, S1.3)."""
-        perm_error = self._require_permission("nudge.create")
+        perm_error = await self._require_permission("nudge.create")
         if perm_error:
             return perm_error
 
         self._muted = False
         self._muted_until = None
-        self._save_settings()
+        await self._run_off_loop(self._save_settings)
 
         return SkillResult.ok(data={"muted": False}, message="Notifications unmuted")
 
@@ -560,7 +564,7 @@ class NotifySkill(SkillBase):
         # the clear) an expired muted_until, so muted/muted_until below
         # must be read after that check runs, not before, or a just-expired
         # mute would report a self-contradictory muted=true/effective=false.
-        effective_muted = self._is_muted()
+        effective_muted = await self._is_muted()
         return SkillResult.ok(
             data={
                 "quiet_hours": {
@@ -620,11 +624,15 @@ class NotifySkill(SkillBase):
         else:
             return start <= current_time < end
 
-    def _is_muted(self) -> bool:
+    async def _is_muted(self) -> bool:
         """
         Check if notifications are currently muted, lazily clearing (and
         persisting the clear, not just computing a value) an expired
         `muted_until` so a stale mute doesn't silently outlive its window.
+
+        Awaitable because that persisted clear is a synchronous sqlite3 write,
+        which must not run on the event-loop thread (see
+        `SkillBase._run_off_loop()`).
         """
         if not self._muted:
             return False
@@ -640,7 +648,7 @@ class NotifySkill(SkillBase):
             if until_dt is None or datetime.now(timezone.utc) >= until_dt:
                 self._muted = False
                 self._muted_until = None
-                self._save_settings()
+                await self._run_off_loop(self._save_settings)
                 return False
         return True
 
@@ -751,7 +759,13 @@ class NotifySkill(SkillBase):
                     self._post_webhook,
                     url,
                     payload,
-                    executor=getattr(self._context, "blocking_executor", None),
+                    # Network I/O never rides the daemon's single storage
+                    # worker: an endpoint that takes its whole
+                    # WEBHOOK_TIMEOUT_SECONDS would queue every SQLite write
+                    # in the process behind it. Its own thread instead
+                    # (run_off_loop()'s documented fallback), as before the
+                    # writer-lock repair moved skill writes onto the worker.
+                    executor=None,
                 ),
             )
         except Exception:
@@ -768,7 +782,7 @@ class NotifySkill(SkillBase):
         Called periodically to deliver due notifications.
         """
         now = datetime.utcnow().isoformat() + "Z"
-        is_suppressed = self._is_muted() or self._is_quiet_hours()
+        is_suppressed = await self._is_muted() or self._is_quiet_hours()
         delivered = 0
 
         notifications = self._get_pending_notifications(limit=100)
@@ -791,15 +805,25 @@ class NotifySkill(SkillBase):
                 should_deliver = True
 
             if should_deliver:
-                notification.status = NotificationStatus.SENT
-                notification.sent_at = now
-                self._save_notification(notification)
-                await self._deliver_notification(notification)
+                # Claim the row before delivering: only a still-pending
+                # notification becomes SENT, so a cancel that landed after the
+                # queue was read wins, and nothing is delivered for it.
+                outcome = await self._run_off_loop(
+                    self._transition_notification,
+                    notification.id,
+                    NotificationStatus.PENDING,
+                    NotificationStatus.SENT,
+                    sent_at=now,
+                )
+                if outcome is None or not outcome[1]:
+                    continue
+                claimed = outcome[0]
+                await self._deliver_notification(claimed)
 
                 self._emit_event(
                     "alerts",
                     "notification_sent",
-                    notification.to_dict(),
+                    claimed.to_dict(),
                 )
                 delivered += 1
 
@@ -816,29 +840,85 @@ class NotifySkill(SkillBase):
 
         conn = self._get_connection()
         try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO skill_notifications
-                (id, message, title, priority, status, sound, deliver_at,
-                    deliver_after_quiet_hours, created_at, sent_at,
-                    metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    notification.id,
-                    notification.message,
-                    notification.title,
-                    notification.priority.value,
-                    notification.status.value,
-                    1 if notification.sound else 0,
-                    notification.deliver_at,
-                    1 if notification.deliver_after_quiet_hours else 0,
-                    notification.created_at,
-                    notification.sent_at,
-                    json.dumps(notification.metadata),
-                ),
-            )
+            self._write_notification(conn, notification)
             conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _write_notification(conn: sqlite3.Connection, notification: Notification) -> None:
+        """Write one notification's row on `conn`; the caller owns the transaction."""
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO skill_notifications
+            (id, message, title, priority, status, sound, deliver_at,
+                deliver_after_quiet_hours, created_at, sent_at,
+                metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notification.id,
+                notification.message,
+                notification.title,
+                notification.priority.value,
+                notification.status.value,
+                1 if notification.sound else 0,
+                notification.deliver_at,
+                1 if notification.deliver_after_quiet_hours else 0,
+                notification.created_at,
+                notification.sent_at,
+                json.dumps(notification.metadata),
+            ),
+        )
+
+    def _transition_notification(
+        self,
+        notification_id: str,
+        expected: NotificationStatus,
+        new_status: NotificationStatus,
+        *,
+        sent_at: str | None = None,
+    ) -> tuple[Notification, bool] | None:
+        """
+        Move one notification from `expected` to `new_status` inside a single
+        immediate transaction, or report why not.
+
+        Runs off the event loop. Cancelling and delivering both used to read
+        the row, decide, and write it back, and once the save was awaited off
+        the loop (the writer-lock repair) that read-decide-write had a
+        suspension point in it: a cancel could land between the queue's read
+        and its SENT write and be overwritten, so the notification was both
+        cancelled and delivered. Taking the write lock before the check makes
+        the row decide: exactly one transition out of PENDING succeeds.
+
+        Returns None when the notification does not exist, otherwise the
+        notification as stored and whether the transition was applied.
+        """
+        if not self._db_path:
+            return None
+
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM skill_notifications WHERE id = ?",
+                    (notification_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                notification = self._row_to_notification(row)
+                if notification.status != expected:
+                    return notification, False
+                notification.status = new_status
+                if sent_at is not None:
+                    notification.sent_at = sent_at
+                self._write_notification(conn, notification)
+                conn.commit()
+                return notification, True
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
         finally:
             conn.close()
 

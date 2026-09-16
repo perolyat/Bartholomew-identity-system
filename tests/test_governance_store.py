@@ -534,3 +534,53 @@ def test_stale_write_rejection_itself_leaves_no_partial_state(db_path):
         conn.close()
     assert audit_count == 2  # only the two real engage() calls above
     assert revision == 2
+
+
+def test_concurrent_first_touch_seeds_one_row_and_never_fails_closed(db_path, monkeypatch):
+    """Stores opened at once on a fresh file (what concurrent fail-closed brake
+    reads do when no shared store is wired) must all succeed: one seed lands,
+    the others are ignored, and no reader reports the brake engaged.
+
+    The collision is forced, not hoped for: every thread is held at the
+    seed's `time.time()` call, which sits between its "is there a row yet?"
+    SELECT and its INSERT, until all of them have passed the SELECT."""
+    import threading
+
+    from bartholomew.orchestrator.safety import governance_store as module
+    from bartholomew.orchestrator.safety.governance_store import is_blocked_fail_closed
+
+    parties = 8
+    barrier = threading.Barrier(parties, timeout=10)
+    local = threading.local()
+    real_time = module.time
+
+    class _HeldTime:
+        @staticmethod
+        def time() -> float:
+            if not getattr(local, "held", False):
+                local.held = True
+                barrier.wait()
+            return real_time.time()
+
+    monkeypatch.setattr(module, "time", _HeldTime)
+    outcomes: list[object] = []
+
+    def open_and_read() -> None:
+        try:
+            outcomes.append(is_blocked_fail_closed("skills", db_path))
+        except Exception as e:  # noqa: BLE001 - the failure is the finding
+            outcomes.append(e)
+
+    threads = [threading.Thread(target=open_and_read) for _ in range(parties)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert outcomes == [False] * parties, outcomes
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM parking_brake_state").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM governance_audit").fetchone()[0] == 0
+    finally:
+        conn.close()

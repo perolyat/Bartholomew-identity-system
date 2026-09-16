@@ -296,6 +296,7 @@ async def submit(
     """
     moment = now or utc_now()
 
+    from bartholomew.kernel.blocking_executor import run_off_loop
     from bartholomew.kernel.inbound_store import InboundPersistenceError
     from bartholomew.kernel.runtime_contract import (
         EventBacklogFullError,
@@ -303,8 +304,16 @@ async def submit(
     )
     from bartholomew.orchestrator.safety.governance_store import ParkingBrakeEngagedError
 
+    # The boundary's own writes are synchronous sqlite3, and they are made
+    # off the event loop -- exactly like `inbound_store` and the event
+    # backbone. On the loop, a write that has to wait for the lock blocks the
+    # loop an in-flight aiosqlite commit needs in order to release it, and so
+    # can only fail after its full busy_timeout: `record_directive` failed
+    # precisely that way in CI (`database is locked` while a scheduler drive's
+    # Reflection write was mid-transaction), which is why the FND-04 vertical
+    # slice reported a request captured but no result recorded.
     try:
-        ensure_schema(db_path)
+        await run_off_loop(ensure_schema, db_path)
     except EciPersistenceError as exc:
         logger.error("ECI schema unavailable: %s", exc)
         return ExchangeReceipt(
@@ -400,7 +409,7 @@ async def submit(
     degraded_error = getattr(captured, "provenance_error", None)
 
     if exchange.kind is ExchangeKind.RESULT:
-        return _settle(
+        return await _settle(
             exchange,
             db_path=db_path,
             moment=moment,
@@ -418,7 +427,7 @@ async def submit(
     )
 
 
-def _settle(
+async def _settle(
     exchange: InboundExchange,
     *,
     db_path: str,
@@ -426,14 +435,22 @@ def _settle(
     degraded: bool,
     degraded_error: str | None,
 ) -> ExchangeReceipt:
-    """Correlate a returning result to the directive that caused it."""
+    """Correlate a returning result to the directive that caused it.
+
+    The ledger write runs off the event loop -- see `submit()` for why a
+    synchronous sqlite3 write on the loop thread cannot safely wait for the
+    write lock.
+    """
+    from bartholomew.kernel.blocking_executor import run_off_loop
+
     reason = None
     raw_reason = exchange.payload.get("reason")
     if isinstance(raw_reason, str):
         reason = raw_reason[:500]
 
     try:
-        settled = settle_directive(
+        settled = await run_off_loop(
+            settle_directive,
             db_path,
             correlation_id=exchange.correlation_id or "",
             endpoint_id=exchange.endpoint.endpoint_id,

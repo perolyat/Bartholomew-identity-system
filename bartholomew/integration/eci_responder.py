@@ -129,6 +129,7 @@ class SpokenAcknowledgementResponder:
         from bartholomew.eci.boundary import CapabilityRefusedError
         from bartholomew.eci.contract import CapabilityRef, ExchangeKind
         from bartholomew.kernel import spoken_output
+        from bartholomew.kernel.blocking_executor import run_off_loop
         from bartholomew.kernel.runtime_contract import (
             run_spoken_output_through_runtime_contract,
         )
@@ -147,7 +148,7 @@ class SpokenAcknowledgementResponder:
 
         minted: dict[str, Any] = {}
 
-        def speak_fn(text: str) -> DelegatedSpeech:
+        async def speak_fn(text: str) -> DelegatedSpeech:
             """The capability, performed by an endpoint instead of a local engine.
 
             Reached only after the seam's enablement, brake and policy gates
@@ -155,8 +156,17 @@ class SpokenAcknowledgementResponder:
             unsuccessful outcome rather than a success it did not have, and
             `issuer.issue()` raises whenever the endpoint's capability
             standing does not admit the directive.
+
+            Awaitable (the seam awaits an awaitable result) because issuing
+            writes the directive ledger with synchronous sqlite3, and that
+            write must not wait for the lock on the event-loop thread: in CI
+            it did exactly that, blocked the loop that a scheduler drive's
+            in-flight aiosqlite commit needed, and failed after its full
+            busy_timeout with ``database is locked`` -- no directive, no
+            result, and the vertical slice's provenance test failing.
             """
-            directive = issuer.issue(
+            directive = await run_off_loop(
+                issuer.issue,
                 capability,
                 parameters={"text": text},
                 issued_by=ISSUED_BY,

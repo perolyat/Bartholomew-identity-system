@@ -178,7 +178,7 @@ async def _registry(mem, monkeypatch, webhook_url: str | None, identity=REAL_ALL
     notify._muted = False
     notify._muted_until = None
     assert not notify._is_quiet_hours(), "quiet hours were not successfully pinned off"
-    assert not notify._is_muted(), "mute was not successfully pinned off"
+    assert not await notify._is_muted(), "mute was not successfully pinned off"
 
     return registry
 
@@ -767,7 +767,11 @@ class TestGovernance:
         await _store_schedule_fact(mem, "car_rego", _due_in(1))
         registry = await _registry(mem, monkeypatch, _url(server))
         notify = registry._loaded["notify"].instance
-        monkeypatch.setattr(notify, "_is_muted", lambda: True)
+
+        async def muted() -> bool:
+            return True
+
+        monkeypatch.setattr(notify, "_is_muted", muted)
 
         await drive_schedule_reminder_check(_Ctx(mem, scheduler_store, registry))
 

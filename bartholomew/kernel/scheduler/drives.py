@@ -177,7 +177,12 @@ async def drive_fts_optimize(ctx: Any) -> Nudge | None:
         from bartholomew.kernel.fts_client import FTSClient
 
         fts = FTSClient(db_path)
-        fts.optimize()
+        # A synchronous sqlite3 write, so off the event loop like every other
+        # drive's persistence: on the loop it could only wait for the write
+        # lock by blocking the loop that an in-flight aiosqlite commit needs
+        # (see SkillBase._run_off_loop for the mechanism), and a drive that
+        # blocks the loop for its whole busy_timeout stalls the scheduler.
+        await run_off_loop(fts.optimize, executor=getattr(ctx, "blocking_executor", None))
         print("[Scheduler] FTS index optimized")
     except Exception as e:
         print(f"[Scheduler] Error optimizing FTS index: {e}")
