@@ -283,7 +283,8 @@ pre-existing, rotating between runs, passing in isolation, seen on `main` since 
 **None is an EXEC-01 test.** This is the state of `main`, not a defect introduced by the last
 package, and repairing it is separate, unauthorised work.
 
-**The repair exists and is awaiting Taylor's gate (2026-09-14, PR #110, not merged).** Its record
+**The repair is merged (2026-09-14 package; PR #110 approved at head `7f99358`, merged 2026-09-16
+as `6ccf693`).** Its record
 is `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`; the rule it establishes is in `DECISIONS.md` ("A SQLite
 statement that can wait for a lock never runs on the event-loop thread"). Read the reclassification
 before reading any older statement about these tests: the FND-04 slice failure is **the same root
@@ -330,7 +331,8 @@ single storage worker and a governance-store first-touch race closed in the same
 8. **`main`'s Merge Candidate tier is red** — the Windows writer-lock / WAL-contention class
    (§7). **No longer deferred: as of 2026-09-14 this is a pre-Band-0 repair requirement**, because
    Band 0 evidence must not be contaminated by a known reliability defect. **The repair is built,
-   root-caused and regression-tested in PR #110 (not merged; User Approval Gate)** —
+   root-caused, regression-tested and merged (PR #110, approved head `7f99358`, merge commit
+   `6ccf693`)** —
    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. `tests/test_fnd04_eci_vertical_slice.py` is now
    classified **same root cause, by log evidence**. What that PR does **not** close: the Windows
    "stalled tail" hang that cancelled the `57f86f8` run at the job cap, which is a different
