@@ -945,16 +945,12 @@ def test_a_requeued_test_does_not_invent_a_transport_delay(tmp_path, capsys):
         + "\n",
         encoding="utf-8",
     )
+
+    def received(at, worker):
+        return line(event="report_received", t=at, nodeid="t.py::a", when="setup", worker=worker)
+
     (tmp_path / "controller.jsonl").write_text(
-        "\n".join(
-            [
-                line(event="report_received", t=10.1, nodeid="t.py::a", when="setup", worker="gw0"),
-                line(
-                    event="report_received", t=600.1, nodeid="t.py::a", when="setup", worker="gw1"
-                ),
-            ],
-        )
-        + "\n",
+        "\n".join([received(10.1, "gw0"), received(600.1, "gw1")]) + "\n",
         encoding="utf-8",
     )
 
