@@ -628,11 +628,33 @@ async def test_the_per_tenant_cap_holds_under_concurrent_starts(db_path):
         asyncio.create_task(device_consent.ask(_request(session_id=f"mms_cap_{i}")))
         for i in range(n)
     ]
-    await asyncio.sleep(0.3)
+    # Wait for the reservations to settle, bounded, rather than for a fixed
+    # 0.3 s. On a loaded Windows runner the concurrent inserts do not all
+    # land inside that window, and the test failed as `assert 2 == 3` --
+    # a timing dependence in the test, not in the cap.
+    #
+    # This does not weaken the check. The wait ends as soon as the cap is
+    # reached and every other start has been refused; the assertions below
+    # are unchanged and still exact, so a cap that admitted a fourth ask
+    # would still fail on `== MAX_PENDING_PER_TENANT`.
+    surplus = n - device_consent.MAX_PENDING_PER_TENANT
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while True:
+        open_asks = device_consent.list_pending(db_path, include_nonce=True)
+        settled = [t for t in tasks if t.done()]
+        if len(open_asks) >= device_consent.MAX_PENDING_PER_TENANT and len(settled) >= surplus:
+            break
+        if asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.02)
+    # A short settle, so a late extra reservation is seen and fails the cap
+    # assertion rather than being missed by a wait that stopped at three.
+    await asyncio.sleep(0.05)
+
     open_asks = device_consent.list_pending(db_path, include_nonce=True)
     assert len(open_asks) == device_consent.MAX_PENDING_PER_TENANT
     denied_immediately = [t for t in tasks if t.done() and t.result() is False]
-    assert len(denied_immediately) == n - device_consent.MAX_PENDING_PER_TENANT
+    assert len(denied_immediately) == surplus
     for row in open_asks:
         device_consent.answer(db_path, row["request_id"], nonce=row["answer_nonce"], approve=False)
     for t in tasks:
