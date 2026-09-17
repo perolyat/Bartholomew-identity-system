@@ -431,6 +431,23 @@ buries the real reason a run stopped.
 **Verification that it does not cry wolf:** the full Linux default suite, `-n auto --dist
 loadfile`, 4 workers, 15,387 phase reports — no unreported test, and no `TESTS LOST` banner.
 
+## 5.1 Verification on Linux
+
+The full default suite, `-n auto --dist loadfile`, four workers, with the correction active:
+
+| | |
+|---|---|
+| Result | 2 failed — both `tests/smoke/test_packaging_contract.py::test_declared_console_script_runs_help`, `FileNotFoundError: 'bartholomew'`, a local virtualenv whose console scripts are not on `PATH`. Not a code failure and not reproducible in CI, where the same tests pass. |
+| Scheduler re-drives | **0** |
+| Tests never reported | **0** — the work accounting raised nothing |
+
+Zero re-drives across roughly 5,100 tests is the non-regression signal that matters for W13:
+the trigger is conservative enough never to fire on a healthy run. The deadlock has never been
+observed on Linux, which finishes the same suite in about nine minutes, so a re-drive here would
+have meant the condition was too loose.
+
+The acceptance suite, `tests/test_windows_execution_contract.py`, is **20 passed**.
+
 ## 6. Unresolved, with severity
 
 * **The upstream pytest-xdist defect itself — Medium, open.** The controller still stops asking
