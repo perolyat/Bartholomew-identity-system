@@ -703,7 +703,8 @@ def test_only_a_finished_test_counts_as_progress():
     from scripts.ci.xdist_contract import SchedulerRedrive
 
     redrive = SchedulerRedrive(idle_after_s=60.0)
-    before = redrive._last_progress
+    before_stamp = redrive._last_progress
+    before_count = redrive._completions
 
     class _Report:
         when = "call"
@@ -711,7 +712,8 @@ def test_only_a_finished_test_counts_as_progress():
         nodeid = "a::t1"
 
     redrive.pytest_runtest_logreport(_Report())  # type: ignore[arg-type]
-    assert redrive._last_progress == before, "a passing call report is not a completion"
+    assert redrive._completions == before_count, "a passing call report is not a completion"
+    assert redrive._last_progress == before_stamp
 
     class _Teardown:
         when = "teardown"
@@ -719,7 +721,16 @@ def test_only_a_finished_test_counts_as_progress():
         nodeid = "a::t1"
 
     redrive.pytest_runtest_logreport(_Teardown())  # type: ignore[arg-type]
-    assert redrive._last_progress > before, "a finished test is progress"
+    # The completion counter, not the timestamp. Windows resolves
+    # time.monotonic() to about 15.6 ms, so two calls inside one tick return
+    # the same value and a strict `>` fails -- which is exactly how this
+    # assertion failed on the Windows runner, and exactly the defect
+    # RISKS.md already records against
+    # test_the_scheduler_loop_beats_even_when_no_drive_is_due
+    # (`assert 701.25 > 701.25`). The counter is resolution-independent and
+    # is what the watcher actually means by progress.
+    assert redrive._completions == before_count + 1, "a finished test is progress"
+    assert redrive._last_progress >= before_stamp
 
 
 def test_a_run_that_needed_redriving_says_so(pytester):

@@ -448,6 +448,65 @@ have meant the condition was too loose.
 
 The acceptance suite, `tests/test_windows_execution_contract.py`, is **20 passed**.
 
+## 5.2 The first Windows run to finish
+
+**Run 35171239428**, `workflow_dispatch` on `529012f`, job 105043161150.
+
+```
+3 failed, 5055 passed, 80 skipped, 178 warnings, 1 error in 2026.56s (0:33:46)
+```
+
+**The suite reached its summary.** No run in this record had done so since 34866265459 on
+14 September, and that one had 17 tests missing and was still cancelled. This one ran to the
+end, inside the 40-minute cap, and wrote its junit.
+
+It got there over thirteen scheduler re-drives, and the shape of them is the finding:
+
+```
+re-drive  #1: no test completed for 65s while 50 unit(s) queued and a node able to take them
+re-drive  #2: ... 46 unit(s) queued
+re-drive  #3: ... 42 unit(s) queued
+...
+re-drive #13: ...  2 unit(s) queued
+```
+
+Fifty units down to two, four units at a time. **The deadlock is not an occasional lost
+wakeup; it recurs at roughly every work-unit boundary.** Every previous Windows run was hitting
+it constantly and simply had no way to recover, so the first occurrence near the end of the
+suite was fatal and every earlier one was invisible — masked because a worker that starves while
+three others still have work does not stop the run, it only slows it.
+
+That also explains the "stalled tail" name. There was never anything special about the tail. It
+is where the last worker starves with nobody left to carry the run.
+
+**Cost, and the tuning it justifies.** Thirteen re-drives at a 60-second detection bound is
+about fifteen minutes of dead time, which is why a suite that runs in nine minutes on Ubuntu
+took 33m46s here. A re-drive that was not needed is a no-op — `_reschedule` returns on the
+node's own pending count — so the bound is set by acceptable dead time, not by false-positive
+risk. It is now **8 seconds**, polled every second, which should cost about two minutes.
+
+### 5.3 What that run still failed on
+
+| | Verdict |
+|---|---|
+| `test_a_heavy_system_generated_burst…` — `worker 'gw2' crashed` | The connection-churn defect, section 2.4. Known, High, open. |
+| `test_queued_outcome_is_independent_of_inbox_size` — `worker 'gw3' crashed` | The same defect, the other 1000-connection test. Known, High, open. |
+| `test_only_a_finished_test_counts_as_progress` — `AssertionError: a finished test is progress` | **This package's own test, and its own mistake.** It asserted a strict `>` on a `time.monotonic()` stamp. Windows resolves that clock to about 15.6 ms, so two calls inside one tick return the same value. `RISKS.md` already records exactly this against `test_the_scheduler_loop_beats_even_when_no_drive_is_due` (`assert 701.25 > 701.25`) — the same error, in a package written to stop shipping timing-dependent tests. It now asserts the completion counter, which is resolution-independent. |
+| `test_a_shadow_evaluation_never_arrives_without_its_statement` — `ERROR … sqlite3.OperationalError: database is locked` | **Bears directly on success gate 8 and is not dismissed here.** See below. |
+
+**The `database is locked`.** It is the first instance of that signature in any run in this
+record, and success gate 8 requires the writer-lock / WAL class to stay absent. What is known:
+it is an *error in setup*, not a failure; the trace records that setup phase as taking **42.2
+seconds**; and it occurred in a run that was already pathological — two workers dead, thirteen
+deadlock recoveries, 33 minutes of wall clock, far more overlap than a healthy run produces.
+
+What is **not** known is whether it is a genuine recurrence of the repaired class or contention
+under an overloaded run, and nothing in this package touches product or storage code, so it is
+not attributable to this change on the evidence available. It is recorded as open and gate 8 is
+**not** claimed until a run that is otherwise clean shows it absent. One observation under
+extreme load is not enough to call either way, and calling it "environmental" without evidence
+is the habit this whole package exists to break.
+
 ## 6. Unresolved, with severity
 
 * **The upstream pytest-xdist defect itself — Medium, open.** The controller still stops asking
@@ -470,10 +529,16 @@ The acceptance suite, `tests/test_windows_execution_contract.py`, is **20 passed
   `Terminate orphan process: msedge / notepad / msedge`. They come from the governed-actuation
   step, not the default suite, and no evidence connects them to any failure here. Recorded, as
   the brief directs, and left alone.
-* **Repeated completion on one head — not yet evidenced.** Success gate 2 needs the Windows
-  Merge Candidate to complete repeatedly on the final functional head. At the time of writing
-  the correction has been verified on Linux and is queued for Windows; no green Windows run
-  exists yet, and nothing here should be read as claiming one.
+* **`database is locked` in `test_a_shadow_evaluation_never_arrives_without_its_statement` —
+  unclassified, blocking gate 8.** Section 5.3. One setup-phase error, in a 42-second setup, in
+  an overloaded run. Not attributable to this package (no product or storage code is touched)
+  and not attributable to the repaired writer-lock class either without a second observation.
+  Gate 8 stays unclaimed until a clean run settles it.
+* **Repeated completion on one head — one run, not repeated.** Success gate 2 needs the Windows
+  Merge Candidate to complete repeatedly on the final functional head. Run 35171239428 is the
+  first completion ever recorded here, and it is one run, on a head that has since changed
+  (the detection bound and the flaky test are both fixed above). Gate 1 is met once; gate 2 is
+  not met at all.
 
 ## 8. Decision note: why this package stops at the harness
 

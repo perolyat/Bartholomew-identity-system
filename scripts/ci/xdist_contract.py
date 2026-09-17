@@ -285,11 +285,22 @@ class SchedulerRedrive:
     """
 
     #: Seconds without a completed test before the scheduler is re-asked.
-    #: Far longer than any legitimate gap between completions in this suite
-    #: (tens of seconds at worst), so a healthy run never reaches it.
-    DEFAULT_IDLE_AFTER_S = 60.0
+    #:
+    #: Measured, not guessed. Merge Candidate 35171239428 was the first
+    #: Windows run ever to reach its summary, and it needed **thirteen**
+    #: re-drives to get there: the queue fell 50 -> 46 -> 42 -> ... -> 2, so
+    #: the deadlock recurs at roughly every work-unit boundary rather than
+    #: being a rare event. At a 60-second bound that cost about fifteen
+    #: minutes of dead time and the run took 33m46s of its 40-minute budget.
+    #:
+    #: A short bound is safe because a re-drive that was not needed is a
+    #: no-op: `_reschedule` returns on the node's own pending count, so
+    #: firing while a worker is legitimately busy changes nothing. The bound
+    #: is therefore set by how much dead time is acceptable, not by fear of
+    #: false positives.
+    DEFAULT_IDLE_AFTER_S = 8.0
     #: How often the watcher looks. Cheap: it reads three attributes.
-    POLL_S = 5.0
+    POLL_S = 1.0
     #: If this many re-drives do not restore progress, the run is failing
     #: for some other reason and the execution trace's abort should own the
     #: ending rather than this class hiding it behind an endless nudge.
