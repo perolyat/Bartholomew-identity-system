@@ -62,6 +62,9 @@ anything -- it refuses to call a run complete that is not.
 from __future__ import annotations
 
 import os
+import sys
+import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -72,6 +75,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: Nodeids that reported a terminal outcome, and the collection the workers
 #: agreed on. Kept on the plugin instance, not module state.
 CONTRACT_PLUGIN_NAME = "bartholomew-xdist-contract"
+REDRIVE_PLUGIN_NAME = "bartholomew-xdist-redrive"
 
 
 def make_safe_scheduler(config: pytest.Config, log: Any = None) -> Any:
@@ -209,3 +213,269 @@ def install(config: pytest.Config) -> None:
     if os.environ.get("BARTHO_XDIST_CONTRACT") == "0":
         return
     config.pluginmanager.register(WorkAccounting(), CONTRACT_PLUGIN_NAME)
+    # Only meaningful with a controller that distributes work; a serial run
+    # has no scheduler to re-drive.
+    if getattr(config.option, "dist", "no") != "no":
+        config.pluginmanager.register(SchedulerRedrive(), REDRIVE_PLUGIN_NAME)
+
+
+# ---------------------------------------------------------------------------
+# Defect 3: the controller stops asking its own scheduler for work.
+# ---------------------------------------------------------------------------
+
+
+class SchedulerRedrive:
+    """Re-ask the scheduler for work when a live run has stopped moving.
+
+    **The defect, measured.** Merge Candidate 35090997379's Windows job
+    recorded, three minutes into a stall and again three minutes after that::
+
+        controller STALL after 184.9s; queued_units=47  event_queue_depth=0
+          shutting_down={'gw1': False, 'gw2': False, 'gw3': False, 'gw5': False}
+
+    Forty-seven work units queued. Four workers alive, none shutting down,
+    each blocked in ``TestQueue.get()`` waiting to be given work. The
+    controller's own event queue empty. Simultaneous stacks confirm all of
+    it: every worker's main thread in ``xdist/remote.py`` line 214, the
+    controller's in ``queue.get`` inside ``dsession.loop_once``.
+
+    Nothing is broken and nothing is stuck. ``_reschedule`` would assign
+    immediately if anything called it, and nothing does.
+
+    **Why the run can reach that state.** ``WorkerInteractor.run_one_test``
+    fetches the index *after* the one it is about to run, so that
+    ``pytest_runtest_protocol`` can be handed a correct ``nextitem``::
+
+        self.item_index = self.nextitem_index
+        self.nextitem_index = self.torun.get()          # blocks
+        ...
+        self.sendevent("runtest_protocol_complete", ...)  # wakes the controller
+
+    A ``--dist loadfile`` work unit is one file, sent as a single batch, so
+    a worker always blocks before the last test of its unit and can only
+    proceed once another unit is assigned. The controller assigns one only
+    while handling a completion event. The wake-up and the work are
+    mutually dependent, and losing one event anywhere in that loop stops it
+    permanently.
+
+    ``DSession.loop_once`` does wake every two seconds -- it is a
+    ``queue.get(timeout=2.0)`` in a ``while 1`` -- but it only checks
+    whether every node has died. The schedule is never re-examined.
+
+    **The correction.** A controller-side thread watches for *test
+    completions*, not events. When none has arrived for ``idle_after``
+    seconds while the scheduler still holds queued work and at least one
+    node is alive and not shutting down, it posts one event onto the
+    controller's own queue. ``DSession.loop_once`` dispatches it on the
+    main thread, which is where pytest-xdist does all of its scheduling and
+    all of its channel sends, and the handler simply calls ``_reschedule``
+    on every eligible node.
+
+    This is not a retry and not a sleep. The condition is a measured fact
+    about the scheduler's own state -- work queued, node able, controller
+    idle -- and the action is the one call the controller failed to make.
+    A node that is genuinely busy has ``_reschedule`` return immediately on
+    its own pending count, so a re-drive that was not needed changes
+    nothing.
+
+    **Every re-drive is a defect, and is reported as one.** The count is
+    written to the trace and printed in the terminal summary. A run that
+    needed re-driving completed, but it completed over a bug, and the log
+    says so rather than quietly looking green.
+    """
+
+    #: Seconds without a completed test before the scheduler is re-asked.
+    #: Far longer than any legitimate gap between completions in this suite
+    #: (tens of seconds at worst), so a healthy run never reaches it.
+    DEFAULT_IDLE_AFTER_S = 60.0
+    #: How often the watcher looks. Cheap: it reads three attributes.
+    POLL_S = 5.0
+    #: If this many re-drives do not restore progress, the run is failing
+    #: for some other reason and the execution trace's abort should own the
+    #: ending rather than this class hiding it behind an endless nudge.
+    MAX_REDRIVES = 200
+
+    EVENT_NAME = "bartholomew_scheduler_redrive"
+
+    def __init__(self, idle_after_s: float | None = None) -> None:
+        self.idle_after_s = idle_after_s if idle_after_s is not None else _redrive_idle_after()
+        self.redrives = 0
+        self.redrive_log: list[str] = []
+        self._completions = 0
+        self._last_progress = time.monotonic()
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._config: pytest.Config | None = None
+        self._installed_handler = False
+
+    # -- progress ----------------------------------------------------------
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        # Progress means a test finished, not that some message arrived. An
+        # earlier version of this watch counted any event, and a replacement
+        # worker's startup chatter was enough to make a deadlocked run look
+        # alive for the rest of its 40 minutes.
+        if report.when != "teardown" and report.passed:
+            return
+        with self._lock:
+            self._completions += 1
+            self._last_progress = time.monotonic()
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def pytest_sessionstart(self, session: pytest.Session) -> None:
+        self._config = session.config
+        with self._lock:
+            self._last_progress = time.monotonic()
+        self._thread = threading.Thread(
+            target=self._watch,
+            name="xdist-scheduler-redrive",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+        self._stop.set()
+
+    # -- the watch ---------------------------------------------------------
+
+    def _dsession(self) -> Any:
+        if self._config is None:
+            return None
+        try:
+            return self._config.pluginmanager.getplugin("dsession")
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _eligible_nodes(self, sched: Any) -> list[Any]:
+        """Nodes that could be given work right now, best effort.
+
+        Read from a watcher thread while the controller's own loop may be
+        mutating the same structures, so every access is defensive: a read
+        that fails means "do not act", never an exception.
+        """
+        try:
+            return [
+                node for node in list(getattr(sched, "assigned_work", {})) if not node.shutting_down
+            ]
+        except Exception:  # pragma: no cover - defensive
+            return []
+
+    def _should_redrive(self) -> tuple[bool, str]:
+        dsession = self._dsession()
+        if dsession is None:
+            return False, "no dsession"
+        sched = getattr(dsession, "sched", None)
+        if sched is None:
+            return False, "no scheduler yet"
+        if getattr(dsession, "shuttingdown", False):
+            return False, "already shutting down"
+        try:
+            queued = len(getattr(sched, "workqueue", ()) or ())
+        except Exception:  # pragma: no cover - defensive
+            return False, "queue unreadable"
+        if not queued:
+            # Nothing to hand out. A run with no queued work that is not
+            # progressing is a different problem, and the execution trace's
+            # abort owns it.
+            return False, "no queued work"
+        if not self._eligible_nodes(sched):
+            return False, "no node can take work"
+        try:
+            if dsession.queue.qsize() > 0:
+                # Events are waiting to be drained: the controller is busy,
+                # not idle. Posting another would be noise.
+                return False, "controller has events pending"
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return True, f"{queued} unit(s) queued and a node able to take them"
+
+    def _watch(self) -> None:
+        while not self._stop.wait(self.POLL_S):
+            with self._lock:
+                idle = time.monotonic() - self._last_progress
+            if idle < self.idle_after_s:
+                continue
+            if self.redrives >= self.MAX_REDRIVES:
+                continue
+            ok, why = self._should_redrive()
+            if not ok:
+                continue
+            self._post_redrive(idle, why)
+
+    def _post_redrive(self, idle: float, why: str) -> None:
+        dsession = self._dsession()
+        if dsession is None:  # pragma: no cover - defensive
+            return
+        if not self._installed_handler:
+            # DSession dispatches an event by calling `worker_<name>` on
+            # itself. Binding the handler here, rather than subclassing
+            # DSession, keeps this correction to one attribute on one
+            # object and leaves pytest-xdist's own class untouched.
+            setattr(dsession, f"worker_{self.EVENT_NAME}", self._handle_redrive)
+            self._installed_handler = True
+        self.redrives += 1
+        note = (
+            f"scheduler re-drive #{self.redrives}: no test completed for "
+            f"{idle:.0f}s while {why}"
+        )
+        self.redrive_log.append(note)
+        print(f"xdist-contract: {note}", file=sys.stderr, flush=True)
+        try:
+            dsession.queue.put((self.EVENT_NAME, {}))
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"xdist-contract: could not post re-drive: {exc!r}", file=sys.stderr)
+
+    # -- runs on the controller's main thread ------------------------------
+
+    def _handle_redrive(self) -> None:
+        """Ask the scheduler to assign work, from the thread that may.
+
+        Reached only through ``DSession.loop_once``, so the scheduler
+        mutation and the ``channel.send`` inside ``_assign_work_unit``
+        happen exactly where pytest-xdist performs them itself.
+        """
+        dsession = self._dsession()
+        sched = getattr(dsession, "sched", None) if dsession else None
+        if sched is None:  # pragma: no cover - defensive
+            return
+        for node in self._eligible_nodes(sched):
+            try:
+                sched._reschedule(node)
+            except Exception as exc:  # pragma: no cover - defensive
+                print(
+                    f"xdist-contract: re-drive of {node.gateway.id} failed: {exc!r}",
+                    file=sys.stderr,
+                )
+
+    # -- reporting ---------------------------------------------------------
+
+    def pytest_terminal_summary(self, terminalreporter: Any) -> None:
+        if not self.redrives:
+            return
+        terminalreporter.write_sep(
+            "=",
+            f"xdist contract: the scheduler stalled and was re-driven {self.redrives} time(s)",
+            yellow=True,
+            bold=True,
+        )
+        terminalreporter.write_line(
+            "The run completed, but it completed over a pytest-xdist defect: the "
+            "controller stopped assigning queued work to idle workers. See "
+            "docs/WINDOWS_TEST_EXECUTION_CONTRACT.md clause W13.",
+        )
+        for note in self.redrive_log[:20]:
+            terminalreporter.write_line(f"  {note}")
+        if len(self.redrive_log) > 20:
+            terminalreporter.write_line(f"  ... and {len(self.redrive_log) - 20} more")
+
+
+def _redrive_idle_after() -> float:
+    raw = os.environ.get("BARTHO_XDIST_REDRIVE_IDLE_S")
+    if not raw:
+        return SchedulerRedrive.DEFAULT_IDLE_AFTER_S
+    try:
+        return float(raw)
+    except ValueError:
+        return SchedulerRedrive.DEFAULT_IDLE_AFTER_S

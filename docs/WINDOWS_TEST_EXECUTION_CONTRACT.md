@@ -109,10 +109,27 @@ Every clause is enforced by `scripts/ci/xdist_contract.py` or
 | W10 | **A stalled process says where it is** | A worker with no phase transition for `BARTHO_EXEC_STALL_WARN_S` dumps every thread's stack; so does the controller, whose execnet receiver threads are the only place a sent-but-unarrived report can be. | `…stalled_worker_writes_its_own_stacks`, the controller-stacks assertion in `…ends_a_stalled_run_itself…` |
 | W11 | **Database contention is attributable per test** | Every phase records the number of SQLite connections it opened and the time spent opening them, so per-operation connection cost is a measurement rather than an argument. | `…trace_brackets_every_report_at_both_ends` |
 | W12 | **The contract is not a diagnostic mode** | W4, W6 and W7 are always on, on every platform and in every tier. Only the trace (W9–W11) is switched on by the environment. | `…worker_that_dies_mid_file_cannot_end_the_run_green` runs with no trace enabled |
+| W13 | **Queued work reaches an idle worker** | If no test completes for `BARTHO_XDIST_REDRIVE_IDLE_S` (default 60 s) while the scheduler holds queued work, a node is alive and not shutting down, and the controller's own event queue is empty, the scheduler is re-asked to assign — on the controller's main thread, through its own event queue. Every re-drive is counted and reported: a run that needed one completed **over a defect** and does not read as green. | `…deadlock_is_real_and_nothing_in_xdist_breaks_it`, `…redrive_assigns_queued_work_to_an_idle_node`, `…redrive_fires_only_when_work_is_queued_and_a_node_can_take_it`, `…redrive_reaches_the_controller_through_a_real_xdist_run`, `…run_that_needed_redriving_says_so` |
+| W14 | **Progress means a test finished** | The stall and abort bounds count completed tests, not messages. Worker lifecycle chatter — a crash, a replacement starting, a replacement collecting — is recorded but never resets them. | `…only_a_finished_test_counts_as_progress` |
 
 **What this contract does not do.** It does not change any timeout, any cap, any marker or
-any test; it does not retry anything; it does not serialise execution. A run that fails
-under it fails for a stated reason, which is the point.
+any test; it does not serialise execution. A run that fails under it fails for a stated
+reason, which is the point.
+
+**On W13 and the word "retry".** The brief this package was written to forbids blind retries
+and timing-dependent workarounds, so it is worth being exact about what W13 is. It does not
+re-run a test, re-run a job, or wait and hope. Its trigger is a conjunction of measured facts
+about the scheduler's own state — queued work exists, a node is able to take it, the
+controller has nothing pending — and its action is the single `_reschedule` call the
+controller failed to make, executed on the thread pytest-xdist itself uses for scheduling. A
+node that is genuinely busy has `_reschedule` return on its own pending count, so a re-drive
+that was not needed is a no-op. The 60-second threshold is a detection bound, not a race: the
+deadlock is permanent, so waiting longer only costs time.
+
+What W13 does **not** do is fix the upstream defect. pytest-xdist's controller still stops
+asking its scheduler for work; this contract notices and asks. That is a symptom-level
+correction by necessity — the defect is in a dependency — and it is recorded as an unresolved
+limitation in `docs/WINDOWS_MERGE_CANDIDATE_REPAIR.md` rather than treated as closed.
 
 ## 4. Diagnostics: the seven cases, and how each is told apart
 
@@ -125,6 +142,7 @@ global CI cancellation. Reading `scripts/ci/summarise_trace.py`'s output:
 | Worker loss | Controller `node_down` with `crashed=true`; that worker's JSONL has no `session_finish` and no `process_exit`; its last `phase` names the test it died on. |
 | Slow work | Large `wall_s` on a `phase` event, small transport delay. The per-test SQLite counts say whether the cost is connection churn. |
 | Failed replacement | `node_created` for a replacement with no following `node_collected`; controller `stall` showing that worker's work still queued. |
+| Scheduler deadlock | Controller `stall` with `event_queue_depth=0`, `workqueue_units` above zero and every node `shutting_down=False`; each worker's stack in `xdist/remote.py`'s `TestQueue.get`. The summary prints "controller loop is IDLE (no event pending: the wakeup was lost)". |
 | Database contention | High `sqlite_connections` and `sqlite_connect_s` on the slow phases, and worker stacks inside `sqlite3.connect` or a pragma. |
 | Test-runner failure | Small `wall_s`, large transport delay, and controller stacks showing an execnet receiver thread — the report left the worker and did not arrive. |
 | CI cancellation | No `abort` event, no `session_finish`, and the trace simply stops. Distinguishable from all of the above precisely because the watchdog would otherwise have written an ending first. |
@@ -143,8 +161,9 @@ controller may receive nothing before it ends the run. The Merge Candidate's Win
 uses 180 and 600: the longest legitimate gap between reports in that suite is a few tens
 of seconds, and 600 s is comfortably inside the 40-minute cap.
 
-`BARTHO_XDIST_CONTRACT=0` disables the work accounting. It exists so that a bug in the
-accounting cannot block a release; it is not for making a red run green.
+`BARTHO_XDIST_CONTRACT=0` disables the work accounting and the scheduler re-drive. It exists
+so that a bug in either cannot block a release; it is not for making a red run green.
+`BARTHO_XDIST_REDRIVE_IDLE_S` sets W13's detection bound (default 60 s).
 
 ## 6. Evidence
 

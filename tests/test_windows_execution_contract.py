@@ -566,3 +566,250 @@ def test_a_stalled_worker_writes_its_own_stacks(pytester, tmp_path, monkeypatch)
     stall_events = [e for e in worker if e["event"] == "stall"]
     assert stall_events
     assert stall_events[0]["nodeid"].endswith("test_slow")
+
+
+# ---------------------------------------------------------------------------
+# Clause W13: the controller must not stop asking its own scheduler for work.
+# ---------------------------------------------------------------------------
+
+
+class _FakeQueue:
+    """Just enough of `queue.Queue` for the re-drive path."""
+
+    def __init__(self) -> None:
+        self.items: list = []
+
+    def put(self, item) -> None:
+        self.items.append(item)
+
+    def qsize(self) -> int:
+        return len(self.items)
+
+
+class _FakeDSession:
+    def __init__(self, sched) -> None:
+        self.sched = sched
+        self.queue = _FakeQueue()
+        self.shuttingdown = False
+
+
+def _deadlocked_scheduler(pytester):
+    """The exact state Merge Candidate 35090997379 recorded.
+
+    A node that is alive, not shutting down, and holding one unfinished
+    item; work still on the queue; and nothing left to trigger
+    ``mark_test_complete``. Stock pytest-xdist leaves this untouched
+    forever, because the only thing that calls ``_reschedule`` is an event
+    that is never coming.
+    """
+    from scripts.ci.xdist_contract import make_safe_scheduler
+
+    config = _make_config(pytester)
+    sched = make_safe_scheduler(config)
+
+    node = _FakeNode("gw0")
+    sched.add_node(node)
+    sched.add_node_collection(
+        node,
+        [
+            "tests/test_alpha.py::test_one",
+            "tests/test_alpha.py::test_two",
+            "tests/test_beta.py::test_three",
+            "tests/test_gamma.py::test_four",
+        ],
+    )
+    sched.schedule()
+    node.sent.clear()
+
+    # Everything the node was given except its final item is done. This is
+    # the moment a real worker blocks in TestQueue.get(): pending is 1, the
+    # queue still holds units, and no further completion event will arrive.
+    for unit in sched.assigned_work[node].values():
+        nodeids = list(unit)
+        for nodeid in nodeids[:-1]:
+            unit[nodeid] = True
+    return sched, node
+
+
+def test_the_deadlock_is_real_and_nothing_in_xdist_breaks_it(pytester):
+    """The defect, pinned as a defect.
+
+    Work queued, a node able to take it, and no event to trigger the
+    assignment. Nothing moves. If pytest-xdist ever grows a heartbeat that
+    re-examines the schedule, this test fails and clause W13 can be retired.
+    """
+    sched, node = _deadlocked_scheduler(pytester)
+
+    assert len(sched.workqueue) >= 1, "the queue should still hold work"
+    assert not node.shutting_down
+    assert not node.sent, "nothing assigns work without an event to prompt it"
+
+
+def test_the_redrive_assigns_queued_work_to_an_idle_node(pytester):
+    """The correction: one call the controller failed to make."""
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    sched, node = _deadlocked_scheduler(pytester)
+    redrive = SchedulerRedrive(idle_after_s=0.0)
+    dsession = _FakeDSession(sched)
+    redrive._dsession = lambda: dsession  # type: ignore[method-assign]
+
+    redrive._handle_redrive()
+
+    assert node.sent, "the re-drive did not hand the idle node its queued work"
+
+
+def test_the_redrive_fires_only_when_work_is_queued_and_a_node_can_take_it(pytester):
+    """It must not nudge a healthy run, or one that is ending."""
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    sched, node = _deadlocked_scheduler(pytester)
+    redrive = SchedulerRedrive(idle_after_s=0.0)
+    dsession = _FakeDSession(sched)
+    redrive._dsession = lambda: dsession  # type: ignore[method-assign]
+
+    ok, _ = redrive._should_redrive()
+    assert ok, "the deadlocked state should qualify"
+
+    # A controller with events pending is busy, not stalled.
+    dsession.queue.put(("something", {}))
+    assert not redrive._should_redrive()[0]
+    dsession.queue.items.clear()
+
+    # A run that is shutting down is not stalled either.
+    dsession.shuttingdown = True
+    assert not redrive._should_redrive()[0]
+    dsession.shuttingdown = False
+
+    # Neither is a node that has been told to shut down.
+    node.shutting_down = True
+    assert not redrive._should_redrive()[0]
+    node.shutting_down = False
+
+    # Nor an empty queue: nothing to hand out is a different problem, and
+    # the execution trace's abort owns it.
+    sched.workqueue.clear()
+    assert not redrive._should_redrive()[0]
+
+
+def test_only_a_finished_test_counts_as_progress():
+    """The defect that stopped the 600-second abort from ever firing.
+
+    In Merge Candidate 35090997379 a replacement worker's startup chatter
+    kept resetting the stall clock, so a run that had been deadlocked for
+    half an hour never reached its own bound and was cancelled at the job
+    cap instead. Progress has to mean a test finished.
+    """
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    redrive = SchedulerRedrive(idle_after_s=60.0)
+    before = redrive._last_progress
+
+    class _Report:
+        when = "call"
+        passed = True
+        nodeid = "a::t1"
+
+    redrive.pytest_runtest_logreport(_Report())  # type: ignore[arg-type]
+    assert redrive._last_progress == before, "a passing call report is not a completion"
+
+    class _Teardown:
+        when = "teardown"
+        passed = True
+        nodeid = "a::t1"
+
+    redrive.pytest_runtest_logreport(_Teardown())  # type: ignore[arg-type]
+    assert redrive._last_progress > before, "a finished test is progress"
+
+
+def test_a_run_that_needed_redriving_says_so(pytester):
+    """A re-driven run completed over a defect, and must not look green."""
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    redrive = SchedulerRedrive(idle_after_s=0.0)
+    redrive.redrives = 3
+    redrive.redrive_log = ["re-drive #1: ...", "re-drive #2: ...", "re-drive #3: ..."]
+
+    written: list[str] = []
+
+    class _Reporter:
+        def write_sep(self, sep, title, **kwargs):
+            written.append(title)
+
+        def write_line(self, line, **kwargs):
+            written.append(line)
+
+    redrive.pytest_terminal_summary(_Reporter())
+    blob = "\n".join(written)
+    assert "re-driven 3 time(s)" in blob
+    assert "pytest-xdist defect" in blob
+
+    quiet = SchedulerRedrive(idle_after_s=0.0)
+    silent: list[str] = []
+
+    class _Quiet:
+        def write_sep(self, sep, title, **kwargs):
+            silent.append(title)
+
+        def write_line(self, line, **kwargs):
+            silent.append(line)
+
+    quiet.pytest_terminal_summary(_Quiet())
+    assert not silent, "a run that never stalled must say nothing"
+
+
+def test_the_redrive_reaches_the_controller_through_a_real_xdist_run(pytester, monkeypatch):
+    """The plumbing, end to end, in a real controller.
+
+    The tests above prove the decision and the assignment against fakes.
+    This one proves the risky part: that the event posted from a watcher
+    thread is dispatched by `DSession.loop_once` on the controller's main
+    thread, that the handler bound with `setattr` is found and called, and
+    that `_reschedule` from inside that dispatch does not disturb a healthy
+    run.
+
+    The bound is set to a second so the re-drive fires while one slow test
+    holds the only worker and four units sit queued. A re-drive that was
+    not needed is harmless by construction -- `_reschedule` returns on the
+    node's own pending count -- so the run must still finish green, and
+    must still say that it was re-driven.
+    """
+    monkeypatch.setenv("BARTHO_XDIST_REDRIVE_IDLE_S", "1")
+    pytester.makeconftest(
+        f"""
+        import sys
+        sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+
+        def pytest_xdist_make_scheduler(config, log):
+            from scripts.ci.xdist_contract import make_safe_scheduler
+            return make_safe_scheduler(config, log)
+
+        def pytest_configure(config):
+            from scripts.ci import xdist_contract
+            xdist_contract.install(config)
+        """,
+    )
+    pytester.makepyfile(
+        test_slow_one="import time\ndef test_slow(): time.sleep(9)\n",
+        test_two="def test_a(): pass\n",
+        test_three="def test_b(): pass\n",
+        test_four="def test_c(): pass\n",
+        test_five="def test_d(): pass\n",
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-n",
+        "1",
+        "--dist",
+        "loadfile",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:randomly",
+    )
+
+    assert result.ret == 0, "a re-drive disturbed an otherwise healthy run"
+    result.assert_outcomes(passed=5)
+    combined = result.stdout.str() + result.stderr.str()
+    assert "scheduler re-drive #1" in combined, "the re-drive never reached the controller"
+    assert "re-driven" in combined, "a re-driven run did not report that it was"

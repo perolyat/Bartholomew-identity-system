@@ -214,14 +214,94 @@ fire here, with the pending count at one and four units queued. The two gates th
 it are `node.shutting_down` and a momentarily empty queue. Both are now recorded (section 2.3),
 and the correction is not written until that is measured, because the two want different fixes.
 
-## 2.3 What the next run measures
+## 2.3 The confirming measurement
 
-`event_queue_depth` and the per-node `shutting_down` map, added after this run. The first
-separates a blocked loop from an idle one without needing a stack at all; this run's stack
-happens to answer it, but the integer makes every future run self-explaining. The second decides
-the remaining question: `_reschedule` returns immediately for a node that has been sent
-`shutdown`, so work re-queued after that point can never reach it, and if every node reads
-`True` the run is stranded by construction rather than merely unlucky.
+**Run 35090997379**, `workflow_dispatch` on `439345c`, job 104777009526. The controller
+recorded, twice:
+
+```
+controller STALL after 184.9s; last=report:...test_lexical_beats_vector_on_exact_rare_tokens:teardown
+  queued_units=47  event_queue_depth=0
+  shutting_down={'gw1': False, 'gw2': False, 'gw3': False, 'gw5': False}
+  => controller loop is IDLE (no event pending: the wakeup was lost)
+```
+
+**Forty-seven work units queued. Four workers alive, none shutting down, each blocked in
+`TestQueue.get()`. The controller's own event queue empty.** That is the whole defect in one
+line, and it decides the shape of the correction:
+
+* `event_queue_depth=0` confirms the loop is **idle**, not blocked. A blocked-send correction
+  would have been the wrong one.
+* `shutting_down` all `False` **disproves the stranding hypothesis** (section 3.2's fifth
+  candidate, added while this run was in flight): the nodes had not been told to shut down, so
+  work was not stranded by `_reschedule`'s early return. It is a plain lost wakeup on live
+  nodes.
+
+Because the nodes are live and able, re-asking the scheduler is a **correction**, not a
+workaround: the assignment is legitimate and was simply never requested. Had the flags read
+`True`, re-driving would have been papering over stranded work, and a different repair would
+have been required.
+
+### 2.4 The same run confirms the SQLite causality, on Windows
+
+Six workers were created for a five-worker run. Two crashed:
+
+| Worker | Last test before it stopped existing | SQLite connections that test opens |
+|---|---|---|
+| `gw0` | `test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` | **1036** |
+| `gw4` | `test_queued_outcome_is_independent_of_inbox_size` | **1062** |
+
+Both recorded `session_finish=NO, process_exit=NO` — the signature of `os._exit`, which is what
+pytest-timeout's thread method does at 120 s. **The two highest-connection tests in the whole
+suite are exactly the two that killed workers**, and nothing else did. That answers the brief's
+SQLite question from measurement rather than argument: per-operation connection churn is
+causal to worker loss on Windows (section 6).
+
+### 2.5 A third defect in the instrument, and the one that mattered most
+
+The 600-second abort **never fired** in this run; the job was cancelled at its cap at 12:14:11
+with the diagnosis half-written. The controller logged stalls at 184.9 s and 360.0 s and then
+reset.
+
+The cause is in this package's own code. The watchdog counted *any* event as progress, and the
+replacement worker `gw5` was still producing startup chatter and 36 reports of its own. A run
+that had been deadlocked for half an hour therefore looked alive. **Progress has to mean a test
+finished**, not that a message arrived; worker lifecycle events are now recorded without
+resetting the bound (clause W14, pinned by
+`test_only_a_finished_test_counts_as_progress`).
+
+This is the third defect the instrument revealed in itself, and the most serious: the other two
+cost a run each, this one would have let the contract's own ending fail silently on exactly the
+case it exists for.
+
+## 2.6 The correction
+
+`scripts/ci/xdist_contract.py`'s `SchedulerRedrive` (clause W13). A controller-side thread
+watches for *test completions*. When none has arrived for `BARTHO_XDIST_REDRIVE_IDLE_S`
+(default 60 s) **and** the scheduler still holds queued work **and** at least one node is alive
+and not shutting down **and** the controller's own event queue is empty, it posts one event
+onto `DSession`'s queue. `loop_once` dispatches it on the controller's main thread — the thread
+pytest-xdist uses for every scheduling decision and every `channel.send` — and the handler calls
+`_reschedule` on each eligible node.
+
+Why this is a correction and not a workaround, stated plainly because the brief forbids the
+latter:
+
+* **Not blind.** The trigger is a conjunction of measured facts about the scheduler's own
+  state, every one of which was observed in run 35090997379.
+* **Not a retry.** No test is re-run, no job is re-run. The action is the single `_reschedule`
+  call the controller failed to make.
+* **Not timing-dependent.** The deadlock is permanent, so the 60-second threshold is a
+  detection bound, not a race; a longer bound would only waste time. A node that is genuinely
+  busy has `_reschedule` return on its own pending count, so a re-drive that was not needed is
+  a no-op — which is what the end-to-end test exercises.
+* **Never silent.** Every re-drive is counted, printed to stderr as it happens, and reported in
+  the terminal summary as a defect the run completed *over*. A re-driven run does not read as
+  green.
+
+**What it does not do.** It does not fix pytest-xdist. The controller still stops asking its
+scheduler for work; this contract notices and asks. That is a symptom-level correction by
+necessity — the defect is in a dependency — and it stays on the unresolved list (section 7).
 
 ## 3. Worker loss: the cost model
 
@@ -351,25 +431,55 @@ buries the real reason a run stopped.
 **Verification that it does not cry wolf:** the full Linux default suite, `-n auto --dist
 loadfile`, 4 workers, 15,387 phase reports — no unreported test, and no `TESTS LOST` banner.
 
-## 6. What is not yet established
+## 6. Unresolved, with severity
 
-* **The stalled tail's mechanism.** §2 is pending. It is not folded into the connection-churn
-  finding and is not assumed to be transport; the trace decides it.
-* **Whether SQLite connection churn is causal to worker loss on Windows**, as opposed to one
-  contributor among several. §3's Windows column is pending. If it is causal the correction is
-  made comprehensively inside `db_ctx`'s boundary; if it is not, the evidence is recorded and
-  the optimisation stays with a separately owned package, as the brief requires. Note that any
-  connection reuse has to respect the deliberate handle-release contract that
-  `tests/test_vector_store_handle_lifetime.py` and `tests/test_sqlite_wal_cleanup.py` hold: on
-  Windows a file that is still open cannot be deleted, and those tests exist because of it.
-* **The orphan processes.** Every Windows job, including this baseline, ends with
+* **The upstream pytest-xdist defect itself — Medium, open.** The controller still stops asking
+  its scheduler for queued work; clause W13 detects that and asks. The proper repair belongs
+  upstream (a schedule re-examination on `loop_once`'s existing two-second wakeup would do it),
+  and `test_the_deadlock_is_real_and_nothing_in_xdist_breaks_it` fails the day pytest-xdist
+  grows one, which is how this package finds out. Until then every Windows run that needed a
+  re-drive says so in its summary.
+* **Per-operation SQLite connection churn — High, open, now proven causal.** Section 2.4: the
+  two highest-connection tests are the two that killed workers. W13 does not address it; a
+  worker still dies, its work is still re-queued, and the run still pays for it. The correction
+  belongs inside `db_ctx`'s boundary and has a hard constraint the brief's "correct it
+  comprehensively" has to respect: `tests/test_vector_store_handle_lifetime.py` and
+  `tests/test_sqlite_wal_cleanup.py` deliberately assert that every call releases its handles
+  before returning, because on Windows a file that is still open cannot be deleted. Any
+  connection reuse must therefore be explicitly scoped and closed, not a silent pool. That is a
+  storage-design decision with its own blast radius, it is not needed to make the Merge
+  Candidate complete, and this package does not take it — see the decision note in section 8.
+* **The orphan processes — Low, open, untouched.** Every Windows job ends with
   `Terminate orphan process: msedge / notepad / msedge`. They come from the governed-actuation
-  step, not the test suite, and no evidence yet connects them to the stall. Recorded, untouched.
+  step, not the default suite, and no evidence connects them to any failure here. Recorded, as
+  the brief directs, and left alone.
+* **Repeated completion on one head — not yet evidenced.** Success gate 2 needs the Windows
+  Merge Candidate to complete repeatedly on the final functional head. At the time of writing
+  the correction has been verified on Linux and is queued for Windows; no green Windows run
+  exists yet, and nothing here should be read as claiming one.
 
-## 7. Runs
+## 8. Decision note: why this package stops at the harness
+
+The brief's Decision Boundary asks for a stop-and-report if completion requires an
+architectural change outside the worker/runtime/storage boundaries implicated here. It does
+not, and this package did not expand.
+
+The stalled tail — the blocker that has cancelled roughly half of all Windows Merge Candidate
+runs since August — is entirely inside the test-execution harness, and is corrected there
+(W13). The connection churn is inside the storage boundary and is causal to a *different*
+symptom (worker loss), which the contract already survives without losing work (W4, W6). Making
+the Merge Candidate complete does not require touching it, so taking a storage-lifetime
+decision here would have been the expansion the brief forbids, not the completion it asks for.
+It is recorded in section 6 with its constraint and left to its own package.
+
+## 9. Runs
 
 | Run | Head | Tier | Result |
 |---|---|---|---|
 | 35081868613 | `d3c9992` | Merge Candidate (push, `main`) | **baseline**: Windows cancelled at the cap, 22 min 26 s stall, no junit; other six green |
 | 35084443075 | `916ac59` | Merge Candidate (dispatch) | superseded — cancelled by a second dispatch on the same ref (`cancel-in-progress` on `github.ref`); no evidence taken from it |
-| 35085435731 | `1ee0131` | Merge Candidate (dispatch) | *(pending)* first instrumented run |
+| 35085435731 | `1ee0131` | Merge Candidate (dispatch) | first instrumented run: controller **ended the session itself at 600 s**, 14 min inside the cap; four workers idle in `after-teardown`; summary step then crashed on its own mixed-type field (section 2.1) |
+| 35088270721 | `ed03789` | Merge Candidate (dispatch) | **root cause**: simultaneous stacks — controller idle in `queue.get` inside `loop_once`, every worker blocked in `TestQueue.get` (section 2.2) |
+| 35090997379 | `439345c` | Merge Candidate (dispatch) | **confirming measurement**: `queued_units=47`, `event_queue_depth=0`, `shutting_down` all `False` (section 2.3); two workers killed on the two highest-connection tests (section 2.4); abort failed to fire because lifecycle chatter reset it (section 2.5). Cancelled at the cap |
+
+Section 6's last bullet stands: no Windows run has yet completed with the correction in place.

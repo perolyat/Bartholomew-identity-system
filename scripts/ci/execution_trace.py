@@ -460,16 +460,24 @@ class ControllerTrace(_BaseTrace):
 
     # -- worker lifecycle --------------------------------------------------
 
+    # Worker lifecycle is recorded but does NOT count as progress. A run
+    # that has deadlocked can still produce lifecycle chatter -- a worker
+    # crashing, a replacement starting and collecting -- and in Merge
+    # Candidate 35090997379 exactly that kept resetting this watchdog, so
+    # the 600-second abort never fired and the job was cancelled at its cap
+    # with the diagnosis half-written. Progress is a test finishing.
+
     def pytest_xdist_newgateway(self, gateway: Any) -> None:
         self.writer.write("node_created", gateway=gateway.id)
-        self._beat(f"node_created:{gateway.id}")
 
     def pytest_testnodeready(self, node: Any) -> None:
         self.writer.write("node_ready", gateway=node.gateway.id)
-        self._beat(f"node_ready:{node.gateway.id}")
 
     def pytest_xdist_node_collection_finished(self, node: Any, ids: list[str]) -> None:
         self.writer.write("node_collected", gateway=node.gateway.id, collected=len(ids))
+        # The one exception: collection is genuine startup progress, and on
+        # Windows it can take minutes before the first report. Without this
+        # the abort bound would run during collection.
         self._beat(f"node_collected:{node.gateway.id}")
 
     def pytest_testnodedown(self, node: Any, error: object | None) -> None:
@@ -479,7 +487,6 @@ class ControllerTrace(_BaseTrace):
             error=None if error is None else str(error),
             crashed=error is not None,
         )
-        self._beat(f"node_down:{node.gateway.id}")
 
     # -- reports -----------------------------------------------------------
 
@@ -487,7 +494,7 @@ class ControllerTrace(_BaseTrace):
         self.writer.write("logstart_received", nodeid=nodeid)
         self._beat(f"logstart:{nodeid}")
 
-    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:  # noqa: D102
         self.writer.write(
             "report_received",
             nodeid=report.nodeid,
