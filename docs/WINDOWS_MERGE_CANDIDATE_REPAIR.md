@@ -557,6 +557,39 @@ before choosing any correction, and this package deliberately does not choose on
 The correlation is real, so the risk stays High and open. The stated mechanism was not, and is
 withdrawn.
 
+## 5.5 Verification run 2, and a pre-existing defect this package does own
+
+**Run 35181564645**, same head `595adcc`, job 105074629319.
+
+```
+2 failed, 5056 passed, 80 skipped, 172 warnings in 1342.57s (0:22:22)
+```
+
+Completed again, twelve re-drives, no lost work, no `database is locked`. Two failures:
+
+1. `test_a_heavy_system_generated_burst…` — `worker 'gw3' crashed`. The same test, the same
+   worker-loss defect, in both runs. Reproducible, High, open (section 6).
+2. `test_the_scheduler_loop_beats_even_when_no_drive_is_due` —
+   **`AssertionError: assert 702.25 > 702.25`**.
+
+**The second one is named in the risk entry this package is chartered against.** `RISKS.md`'s
+Windows Merge Candidate entry lists it explicitly under "**Coarse `time.monotonic()` (1)**",
+with the diagnosis already done — Windows resolves the clock to about 15.6 ms, the test sleeps
+10 ms and then asserts a strict `>`, and "the product's heartbeat only ever uses the stamp for
+an age". It was diagnosed and left. It is one of the named reasons the Windows Merge Candidate
+is not green, so it is this package's to fix, and it is fixed here.
+
+The correction supplies a clock instead of sleeping: two ticks, 100.0 and 100.5, injected on
+the health module's own `time` reference rather than the global module, so nothing else in the
+process sees it. The test now asserts what it always meant — a beat refreshes the stamp, with
+no drive and nothing due — deterministically, on every platform, with no sleep. Nothing is
+weakened: the assertions it makes are strictly stronger (exact values, not an inequality), and
+`RISKS.md` itself classifies the old form as the defect.
+
+It is also, exactly, the mistake this package made in its own W14 test one run earlier
+(section 5.3). Two instances of one defect class in one session is the argument for fixing the
+class rather than the instance.
+
 ## 6. Unresolved, with severity
 
 * **The upstream pytest-xdist defect itself — Medium, open.** The controller still stops asking

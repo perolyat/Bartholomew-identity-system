@@ -349,12 +349,27 @@ async def test_a_cancelled_scheduler_task_is_a_clean_stop():
 
 
 @pytest.mark.asyncio
-async def test_the_scheduler_loop_beats_even_when_no_drive_is_due():
-    """An idle loop is a live loop; the heartbeat must not need a drive to advance."""
-    import asyncio
+async def test_the_scheduler_loop_beats_even_when_no_drive_is_due(monkeypatch):
+    """An idle loop is a live loop; the heartbeat must not need a drive to advance.
+
+    A supplied clock rather than a sleep. Windows resolves `time.monotonic()`
+    to about 15.6 ms, so two real beats 10 ms apart can read the *same* value
+    and a strict `>` fails -- `assert 701.25 > 701.25`, which `RISKS.md`
+    records against this test by name as a Windows test-robustness defect and
+    which reddened Merge Candidate 35181564645. The product only ever uses
+    this stamp for an age (`seconds_since_beat`), so what the test means is
+    "a beat refreshes the stamp, with no drive and nothing due", and a
+    supplied clock says exactly that on every platform without sleeping.
+
+    The clock is replaced on the health module's own `time` reference, not on
+    the global `time` module, so nothing else in the process sees it.
+    """
     from types import SimpleNamespace
 
     from bartholomew.kernel.scheduler import loop as loop_module
+
+    ticks = iter([100.0, 100.5])
+    monkeypatch.setattr(health, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
 
     beats = health.SchedulerHeartbeat()
     ctx = SimpleNamespace(scheduler_heartbeat=beats)
@@ -362,9 +377,10 @@ async def test_the_scheduler_loop_beats_even_when_no_drive_is_due():
     loop_module._beat(ctx)
     assert beats.state == health.SCHEDULER_RUNNING
     first = beats.last_beat_monotonic
+    assert first == 100.0
 
-    await asyncio.sleep(0.01)
     loop_module._beat(ctx)
+    assert beats.last_beat_monotonic == 100.5
     assert beats.last_beat_monotonic > first
     assert beats.last_drive is None  # no drive ran, and none was invented
 
