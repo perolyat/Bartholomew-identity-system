@@ -118,18 +118,31 @@ def summarise(trace_dir: Path) -> int:
 
     # 2. Test time versus transport time.
     print("\n-- slowest reports: test time vs transport ---------------------")
-    worker_calls: dict[tuple[str, str], dict[str, Any]] = {}
+    # Keyed by worker as well as by test. When a worker is lost its work is
+    # requeued, so the same (nodeid, when) is reported twice by two
+    # different processes. Keying on the test alone let one worker's
+    # emit time be subtracted from another worker's receive time, which
+    # invented worker-to-controller delays of 173 s and 585 s in runs
+    # 35185611629 and 35189705193 -- the exact shape of a harness defect,
+    # and entirely an artefact of this summary.
+    worker_calls: dict[tuple[str, str, str], dict[str, Any]] = {}
     for name, events in workers.items():
         for event in events:
             if event["event"] == "phase":
-                worker_calls[(event["nodeid"], event["when"])] = {**event, "worker": name}
+                worker_calls[(name, event["nodeid"], event["when"])] = {**event, "worker": name}
     rows = []
     starts: dict[str, float] = {}
     for event in controller:
         if event["event"] == "logstart_received":
             starts[event["nodeid"]] = event["t"]
         elif event["event"] == "report_received":
-            key = (event["nodeid"], event["when"])
+            worker = event.get("worker")
+            if worker is None:
+                # Pre-dates the worker field, or a report with no node.
+                # Guessing which worker sent it is what caused the defect
+                # above, so it is left out rather than guessed.
+                continue
+            key = (worker, event["nodeid"], event["when"])
             emitted = worker_calls.get(key)
             if emitted is None:
                 continue
@@ -225,6 +238,8 @@ def summarise(trace_dir: Path) -> int:
     print("\n-- SQLite cost per test, whole write path ----------------------")
     per_test: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
     for event in worker_calls.values():
+        # Summed per test across workers on purpose: a test that ran twice
+        # because its first worker was lost cost the run both attempts.
         entry = per_test[event["nodeid"]]
         entry[0] += event.get("sqlite_connections", 0) or 0
         entry[1] += event.get("sqlite_connect_s", 0.0) or 0.0

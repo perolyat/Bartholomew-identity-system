@@ -916,3 +916,50 @@ def test_timing_the_write_path_keeps_a_caller_supplied_connection_class(tmp_path
         sqlite3.connect = original
 
     assert counter.write_snapshot()[0] == 1
+
+
+def test_a_requeued_test_does_not_invent_a_transport_delay(tmp_path, capsys):
+    """A lost worker's work is requeued, so one test is reported twice.
+
+    Matching the controller's receive to a worker's emit by test alone let
+    the second worker's receive be subtracted from the first worker's emit.
+    That invented worker-to-controller delays of 173 s and 585 s in runs
+    35185611629 and 35189705193 and pointed at the harness, when the real
+    defect was the test exceeding its per-test timeout. A diagnostic that
+    manufactures the symptom it is meant to detect is worse than none.
+    """
+    from scripts.ci.summarise_trace import summarise
+
+    def line(**fields):
+        return json.dumps(fields)
+
+    # gw0 emits setup at t=10 and is then lost; gw1 re-runs the same test
+    # far later, emitting at t=600 and reported at t=600.1.
+    (tmp_path / "gw0.jsonl").write_text(
+        line(event="phase", t=10.0, nodeid="t.py::a", when="setup", outcome="passed", wall_s=0.2)
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "gw1.jsonl").write_text(
+        line(event="phase", t=600.0, nodeid="t.py::a", when="setup", outcome="passed", wall_s=0.2)
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "controller.jsonl").write_text(
+        "\n".join(
+            [
+                line(event="report_received", t=10.1, nodeid="t.py::a", when="setup", worker="gw0"),
+                line(event="report_received", t=600.1, nodeid="t.py::a", when="setup", worker="gw1"),
+            ],
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summarise(tmp_path)
+    printed = capsys.readouterr().out
+
+    assert "largest worker-to-controller delay" in printed
+    delay_line = next(ln for ln in printed.splitlines() if "largest worker-to-controller" in ln)
+    assert "0.1s" in delay_line, f"each report matched its own worker: {delay_line}"
+    assert "590" not in delay_line, "no delay was invented across the two workers"
