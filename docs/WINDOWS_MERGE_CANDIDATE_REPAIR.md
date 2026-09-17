@@ -662,6 +662,7 @@ also the approved boundary, and this package finishes inside it.
 | 35193584212 | `59c0948` | Merge Candidate (dispatch) | red, **cause unknown**: no stalls, 0.1 s max transport, heavy-burst ran 45.3 s. The failing test's name was not reachable in the log (section 13) |
 | 35196083601 | `2a2041f` | Merge Candidate (dispatch) | red, **cause unknown**, same reason |
 | 35198762745 | `f2470c8` | Merge Candidate (dispatch) | **second fully green run**: all seven jobs, Windows suite 15:44 |
+| 35200778170 | `e678cdd` | Merge Candidate (dispatch) | red, and **named**: `WORKER LOST gw3 died on ...heavy_system_generated_burst...`. The known blocker of section 11, not a new one (section 14) |
 
 Superseded by sections 10–12: Windows runs have since completed, one of them fully green.
 
