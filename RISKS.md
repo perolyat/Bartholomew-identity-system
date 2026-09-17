@@ -1297,9 +1297,15 @@
   > **The Windows evidence, stated precisely, because the distinction matters.** The execution
   > machinery is corrected and proven: the Merge Candidate now **completes** inside its 40-minute
   > cap instead of being cancelled at it (29:03 on `b19cd33`; 16:15 on `b5764d7`), and run
-  > 35188201289 is the **first fully green Windows Merge Candidate on record** — all seven jobs.
-  > **Repeatably all-green Windows completion is NOT yet achieved**, and this entry stays open on
-  > that basis: run 35189705193, on the *identical* commit, crashed a worker. The cause is not the
+  > 35188201289 is the **first fully green Windows Merge Candidate on record** — all seven jobs,
+  > and 35198762745 is the second (15:44). **Repeatably all-green Windows completion is NOT yet
+  > achieved**, and this entry stays open on that basis: across four heads the record is two
+  > green and three red, and run 35189705193 was red on the *identical* commit as a green one.
+  > Two of the reds (35193584212, 35196083601) are **unexplained**: the trace recorded the cause
+  > but the log tail a log API returns is filled by the Windows runner's own post-job cleanup, so
+  > the failing test's name could not be retrieved. Failures are now emitted as GitHub
+  > annotations as well as printed (`18972b5`); those two runs cannot be diagnosed
+  > retroactively. The cause is not the
   > execution machinery, which behaved correctly throughout — the loss was detected, the worker
   > replaced, the work requeued, and the test completed on another worker in 25.5 s, with nothing
   > lost silently.

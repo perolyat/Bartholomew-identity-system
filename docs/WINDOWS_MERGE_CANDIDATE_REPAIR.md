@@ -659,6 +659,9 @@ also the approved boundary, and this package finishes inside it.
 | 35185611629 | `b19cd33` | Merge Candidate (dispatch) | `2 failed, 5057 passed, 80 skipped in 29:03`; the consent cap fix held; 64 re-drives, most of them the startup false positive of section 12 |
 | 35188201289 | `b5764d7` | Merge Candidate (dispatch) | **first fully green Windows Merge Candidate**: all seven jobs, Windows suite 16:15, no crashes, no stalls, largest transport delay 0.1 s |
 | 35189705193 | `b5764d7` | Merge Candidate (dispatch) | **same commit, red**: `gw3` crashed on the heavy-burst test; work requeued and it passed on `gw2` in 25.5 s. Gate 2 not met (section 10) |
+| 35193584212 | `59c0948` | Merge Candidate (dispatch) | red, **cause unknown**: no stalls, 0.1 s max transport, heavy-burst ran 45.3 s. The failing test's name was not reachable in the log (section 13) |
+| 35196083601 | `2a2041f` | Merge Candidate (dispatch) | red, **cause unknown**, same reason |
+| 35198762745 | `f2470c8` | Merge Candidate (dispatch) | **second fully green run**: all seven jobs, Windows suite 15:44 |
 
 Superseded by sections 10–12: Windows runs have since completed, one of them fully green.
 
@@ -755,3 +758,34 @@ so one test is reported twice, and the summary keyed worker emit times by test a
 one worker's emit from another worker's receive. No such delay existed. **A diagnostic that
 manufactures the symptom it exists to detect is worse than no diagnostic**, and this one nearly
 supported a wrong root cause.
+
+
+## 13. The diagnostic could not be read, which is its own finding
+
+Two runs (35193584212 on `59c0948`, 35196083601 on `2a2041f`) went red and
+**their cause is still unknown**. Not because the trace failed to record it — it did — but
+because the name of the failing test could not be retrieved.
+
+Three attempts, and the first two were wrong about where the limit was:
+
+1. `e9e79d4` — moved "what failed" to the **end** of the summary, on the reasoning that a log is
+   read from the end. Not enough: the summary step still ran before the artifact-upload step.
+2. `f2470c8` — made the summary the **last** step in the job, so nothing of ours followed it.
+   Still not enough.
+3. `18972b5` — emitted the failures as **GitHub workflow annotations**.
+
+The limit is this: on a Windows runner the runner's **own post-job cleanup** fills the log tail
+that a log API returns — its `git` command lines are long enough to do that unaided — so
+*anything a step prints can be unreachable regardless of where in the job it runs.* Printing was
+never the right mechanism for a machine-read diagnosis. An annotation attaches to the check run
+rather than the log, survives whatever follows it, and appears at the top of the job in the UI.
+
+**The honest consequence:** those two failures cannot now be diagnosed retroactively, because the
+green run that followed carries no record of them. They are recorded here as unexplained rather
+than assumed to be the heavy-burst timeout, which the trace positively rules out for
+`59c0948` — no stalls, 0.1 s maximum transport delay, and that test completing in 45.3 s.
+
+This is the fifth and sixth defect found in this package's own instrumentation, and neither was
+found by the adversarial review in section 12 — both were found by a real failure that could not
+be diagnosed. A contract whose purpose is to make failures legible failed at exactly that, twice,
+and the record would be worth little if it did not say so.
