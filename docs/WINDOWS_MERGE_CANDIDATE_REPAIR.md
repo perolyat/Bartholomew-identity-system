@@ -507,6 +507,56 @@ not attributable to this change on the evidence available. It is recorded as ope
 extreme load is not enough to call either way, and calling it "environmental" without evidence
 is the habit this whole package exists to break.
 
+## 5.4 Verification run 1 on the final head, and a correction to section 2.4
+
+**Run 35180213611**, `workflow_dispatch` on `595adcc`, job 105070534243.
+
+```
+1 failed, 5057 passed, 80 skipped, 172 warnings in 1039.10s (0:17:19)
+```
+
+**17 minutes 19 seconds**, against 33m46s for the same suite at the 60-second bound and a
+40-minute cap that had swallowed every run before this package. Sixteen re-drives, no lost
+work, no `database is locked`, and one failure: `test_a_heavy_system_generated_burst…`, worker
+`gw3` crashed.
+
+### The correction: connection *opening* is not the cost
+
+Section 2.4 called per-operation connection churn "causal to worker loss" and this record, PR
+#110's §8 item 7 before it, and the Airtable row all explained it the same way — "each open
+pays file open, WAL pragma, shm mapping and a handle release, which is where Windows is
+slowest". **The trace measures that claim and it is wrong.** On the Windows runner:
+
+| | opens | time inside `sqlite3.connect` |
+|---|---|---|
+| `test_queued_outcome_is_independent_of_inbox_size` | 1062 | **0.4 s** |
+| `test_a_heavy_system_generated_burst…` | 1036 | **0.3 s** |
+| whole worker `gw1`, entire run | 14,882 | 6.7 s |
+
+About 0.4 ms per open. The heavy-burst test exceeds the 120-second timeout while spending
+**0.3 seconds** of it opening connections — a quarter of one percent of its budget.
+
+So what survives and what does not:
+
+* **Survives:** the two tests with the highest database-operation volume are the two that
+  exceed the timeout and kill workers, in every run where a worker died. The correlation is
+  strong and repeated.
+* **Does not survive:** that the cost is in opening connections. It is measured and it is
+  negligible.
+* **Not established:** which per-operation component does cost the time. The counter times
+  `sqlite3.connect` only, not the four pragmas each open runs, the statement itself, the
+  commit's durability work, or the close.
+
+**This matters for whoever takes the follow-up package.** A connection pool — the fix both this
+record and the Airtable row previously recommended — would recover 0.25 % of the cost and would
+have to be traded against the deliberate handle-release contract in
+`tests/test_vector_store_handle_lifetime.py`. That is a bad trade made on a mis-attribution.
+The next step is to instrument the rest of the per-operation path (pragmas, commit, close)
+before choosing any correction, and this package deliberately does not choose one.
+
+The correlation is real, so the risk stays High and open. The stated mechanism was not, and is
+withdrawn.
+
 ## 6. Unresolved, with severity
 
 * **The upstream pytest-xdist defect itself — Medium, open.** The controller still stops asking
@@ -515,11 +565,13 @@ is the habit this whole package exists to break.
   and `test_the_deadlock_is_real_and_nothing_in_xdist_breaks_it` fails the day pytest-xdist
   grows one, which is how this package finds out. Until then every Windows run that needed a
   re-drive says so in its summary.
-* **Per-operation SQLite connection churn — High, open, now proven causal.** Section 2.4: the
-  two highest-connection tests are the two that killed workers. W13 does not address it; a
-  worker still dies, its work is still re-queued, and the run still pays for it. The correction
-  belongs inside `db_ctx`'s boundary and has a hard constraint the brief's "correct it
-  comprehensively" has to respect: `tests/test_vector_store_handle_lifetime.py` and
+* **Per-operation SQLite cost — High, open, mechanism withdrawn.** Section 5.4. The
+  correlation holds: the two tests with the most database operations are the two that exceed
+  the 120-second timeout and kill workers. The *explanation* does not: connection opening costs
+  0.3 s per 1036 opens on Windows, so it is not where the time goes, and a connection pool
+  would not help. Which component does cost it is unmeasured. W13 does not address any of this;
+  a worker still dies, its work is still re-queued, and the run still pays for it. Whatever
+  correction follows belongs inside `db_ctx`'s boundary and has a hard constraint to respect: `tests/test_vector_store_handle_lifetime.py` and
   `tests/test_sqlite_wal_cleanup.py` deliberately assert that every call releases its handles
   before returning, because on Windows a file that is still open cannot be deleted. Any
   connection reuse must therefore be explicitly scoped and closed, not a silent pool. That is a
