@@ -1301,11 +1301,13 @@
   > and 35198762745 is the second (15:44). **Repeatably all-green Windows completion is NOT yet
   > achieved**, and this entry stays open on that basis: across four heads the record is two
   > green and three red, and run 35189705193 was red on the *identical* commit as a green one.
-  > Two of the reds (35193584212, 35196083601) are **unexplained**: the trace recorded the cause
-  > but the log tail a log API returns is filled by the Windows runner's own post-job cleanup, so
-  > the failing test's name could not be retrieved. Failures are now emitted as GitHub
-  > annotations as well as printed (`18972b5`); those two runs cannot be diagnosed
-  > retroactively. The cause is not the
+  > Every red that can be read is the **same failure**: the heavy-burst test kills its worker via
+  > the 120 s per-test timeout (run 35200778170 names it outright). Two earlier reds
+  > (35193584212, 35196083601) stay unconfirmed only because their logs cannot be retrieved;
+  > they are consistent with the same cause. **There is one blocker here, not two** — an
+  > earlier claim of a second, unexplained intermittent failure was an artefact of not being
+  > able to read a log, and a fast completion time for that test is the *successful retry after*
+  > the worker died, not evidence it did not time out. The cause is not the
   > execution machinery, which behaved correctly throughout — the loss was detected, the worker
   > replaced, the work requeued, and the test completed on another worker in 25.5 s, with nothing
   > lost silently.

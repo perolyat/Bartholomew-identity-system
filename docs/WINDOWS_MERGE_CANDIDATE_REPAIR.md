@@ -789,3 +789,44 @@ This is the fifth and sixth defect found in this package's own instrumentation, 
 found by the adversarial review in section 12 — both were found by a real failure that could not
 be diagnosed. A contract whose purpose is to make failures legible failed at exactly that, twice,
 and the record would be worth little if it did not say so.
+
+
+## 14. The failure is identified, and section 13's conclusion was wrong
+
+Run 35200778170 on `e678cdd` went red, and this time it could be read:
+
+```
+-- what failed ------------------------------------------------
+  WORKER LOST  gw3  died on tests/test_scheduler_queue_containment.py::
+                    TestContainmentNeverDestroysAnObligation::
+                    test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched
+               Not properly terminated
+::error::worker gw3 was lost while running ...
+```
+
+**It is the heavy-burst worker loss — the known blocker of section 11, not a second defect.**
+
+Two corrections to what this record said an hour ago.
+
+**The retrieval route existed all along.** `get_job_logs` with `failed_only=true` returns a
+*different* window of the same log than a plain tail request, and the `-- what failed --` section
+is in it. Three commits (`e9e79d4`, `f2470c8`, `18972b5`) went into moving the output somewhere it
+could be read, when the output had been reachable by asking for it differently. The annotation in
+`18972b5` is still worth having — it puts the failure at the top of the job in the UI, where a
+person looks — but it was not required, and the two reorderings before it were solving a problem
+that was partly mine.
+
+**The reasoning that made 35193584212 "not obviously the heavy-burst timeout" was wrong.** That
+run showed the heavy-burst test completing in 45.3 s, and this record treated it as evidence the
+test had not timed out. It was the opposite: a worker dies on that test, the work is requeued, and
+it then *passes* on another worker — 25.5 s in run 35189705193, 45.3 s here. **The fast number is
+the successful retry, not the attempt that died.** The contract's own recovery behaviour produced
+the number that was read as exoneration.
+
+So: the two runs in section 13 are consistent with the same heavy-burst worker loss and were
+almost certainly it. They stay marked unconfirmed rather than reclassified, because their logs
+still cannot be read and "consistent with" is not "shown".
+
+**The consequence for gate 2 is that there is one blocker, not two.** The claim that an unexplained
+intermittent failure sat alongside the SQLite lifecycle cost was an artefact of not being able to
+read a log.
