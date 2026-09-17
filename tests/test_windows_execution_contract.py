@@ -1115,3 +1115,43 @@ def test_the_summary_names_what_failed_last_of_all(tmp_path, capsys):
 
     tail = printed.strip().splitlines()
     assert "t.py::bad" in "\n".join(tail[-6:]), "and it is at the end, where the tail is read"
+
+
+def test_failures_are_annotated_so_they_survive_the_log_tail(tmp_path, capsys, monkeypatch):
+    """Printing the failure is not enough on a Windows runner.
+
+    The post-job cleanup alone fills the log tail a log API returns -- its
+    git command lines are enormous -- so anything a step prints can be
+    unreachable no matter where in the job that step runs. Moving this
+    summary last (f2470c8) helped and still did not make it reachable. A
+    workflow annotation is attached to the check run rather than the log,
+    so it survives, and it appears at the top of the job in the UI.
+    """
+    from scripts.ci.summarise_trace import summarise
+
+    (tmp_path / "gw0.jsonl").write_text(
+        json.dumps(
+            {
+                "event": "phase",
+                "t": 2.0,
+                "nodeid": "t.py::bad",
+                "when": "call",
+                "outcome": "failed",
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "controller.jsonl").write_text("", encoding="utf-8")
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    summarise(tmp_path)
+    assert "::error" not in capsys.readouterr().out, "no annotations outside Actions"
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    summarise(tmp_path)
+    printed = capsys.readouterr().out
+    assert "::error title=Windows execution::t.py::bad reported gw0/call" in printed
+    for line in printed.splitlines():
+        if line.startswith("::error"):
+            assert "%0A" not in line or "\n" not in line

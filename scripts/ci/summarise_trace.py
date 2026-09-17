@@ -18,6 +18,7 @@ answer on its own:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -288,6 +289,19 @@ def summarise(trace_dir: Path) -> int:
     crashed = [e for e in controller if e["event"] == "node_down" and e.get("crashed")]
     if not failures and not crashed:
         print("nothing: no worker crashed and no phase reported a bad outcome")
+
+    # Also emitted as GitHub workflow annotations. Printing is not enough:
+    # on a Windows runner the post-job cleanup alone fills the log tail that
+    # a log API will return, so anything a step prints can be unreachable no
+    # matter where in the job it runs. An annotation is attached to the
+    # check run instead of the log, so it survives that and appears at the
+    # top of the job in the UI.
+    def annotate(message: str) -> None:
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            return
+        # Newlines would end the workflow command; GitHub's own escape.
+        print(f"::error title=Windows execution::{message}".replace("\n", "%0A"))
+
     for gateway in crashed:
         # Name the test it died on, not "a test that failed": a worker that
         # stops existing has its in-flight test reported as failed with no
@@ -298,8 +312,10 @@ def summarise(trace_dir: Path) -> int:
                 last = event["nodeid"]
         print(f"  WORKER LOST  {gateway['gateway']}  died on {last}")
         print(f"               {gateway.get('error') or ''}")
+        annotate(f"worker {gateway['gateway']} was lost while running {last}")
     for nodeid, where in sorted(failures.items()):
         print(f"  {', '.join(where):<24}  {nodeid}")
+        annotate(f"{nodeid} reported {', '.join(where)}")
 
     print("=" * 78)
     return 0
