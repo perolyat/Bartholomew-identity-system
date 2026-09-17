@@ -1260,6 +1260,66 @@
   > (`tests/test_governance_store.py`). **Recorded, not absorbed:** the workspace-event path
   > (`SkillBase.handle_event`) runs skill actions outside the occupancy, as it always has; no
   > production publisher reaches it today.
+  >
+  > **Amendment (2026-09-17) — the "stalled tail" is root-caused and corrected; the name was wrong
+  > (PR #112, NOT MERGED, awaiting Taylor's User Approval Gate).** It was never a property of a
+  > test, which is why repeated investigation found no property of the unlucky test to explain it.
+  > It is a **lost-wakeup deadlock in pytest-xdist's own controller**. Three simultaneous Windows
+  > stacks show the controller's main thread parked in `queue.get` inside `DSession.loop_once` on an
+  > **empty** queue, the execnet receiver threads in `read`, and every worker's main thread in
+  > `remote.py`'s `run_one_test`; the controller's own state reads
+  > `queued_units=47 event_queue_depth=0` with four live, non-shutting-down workers. Forty-seven
+  > units of work queued, four workers idle, nobody asking. The structure that permits it:
+  > `run_one_test` fetches the item *after* the one it is about to run, so that
+  > `pytest_runtest_protocol` gets a correct `nextitem`; under `--dist loadfile` a work unit is one
+  > file sent as one batch, so a worker always blocks before the last test of its unit and can only
+  > proceed once another unit is assigned — and the controller assigns one only while handling a
+  > completion event. The wake-up and the work are mutually dependent. `loop_once` does wake every
+  > two seconds, but only to ask whether every node has died; it never re-consults the schedule.
+  >
+  > **"Stalled tail" named where the symptom was visible, not what the defect was.** Once the
+  > correction could count occurrences, the deadlock fired **7–16 times per run**, at roughly every
+  > work-unit boundary — invisible while other workers still had work, and fatal only when it caught
+  > the last one. The prior framing around "the last test" was therefore unfalsifiable by
+  > construction.
+  >
+  > Corrected in `docs/WINDOWS_TEST_EXECUTION_CONTRACT.md` as clauses W4, W6, W13 and W14: a
+  > scheduler re-drive posted onto the controller's own event queue and dispatched on the thread
+  > that may mutate the schedule; progress redefined as *a test finished*, so a replacement worker's
+  > startup chatter can no longer make a deadlocked run look alive; a scheduler that tolerates a
+  > still-collecting replacement node, which also fixes the `INTERNALERROR KeyError` that ended run
+  > 35037740445 at 61 %; and work accounting that fails any run where a collected test never
+  > reported, so silent loss cannot pass as green. Pinned by 28 deterministic tests in
+  > `tests/test_windows_execution_contract.py`, including one that reproduces the upstream defect
+  > against stock pytest-xdist. An adversarial review of the implementation found four further
+  > defects in the corrections themselves, all fixed with tests (`59c0948`).
+  >
+  > **The Windows evidence, stated precisely, because the distinction matters.** The execution
+  > machinery is corrected and proven: the Merge Candidate now **completes** inside its 40-minute
+  > cap instead of being cancelled at it (29:03 on `b19cd33`; 16:15 on `b5764d7`), and run
+  > 35188201289 is the **first fully green Windows Merge Candidate on record** — all seven jobs.
+  > **Repeatably all-green Windows completion is NOT yet achieved**, and this entry stays open on
+  > that basis: run 35189705193, on the *identical* commit, crashed a worker. The cause is not the
+  > execution machinery, which behaved correctly throughout — the loss was detected, the worker
+  > replaced, the work requeued, and the test completed on another worker in 25.5 s, with nothing
+  > lost silently.
+  >
+  > **What blocks it is the per-operation SQLite connection lifecycle, now measured rather than
+  > asserted, and deliberately left to its own package (Taylor, 2026-09-17).** The earlier claim on
+  > this class — that the cost was the connection *open*, with a connection pool as the remedy — is
+  > **withdrawn**: opens measure about 0.4 ms each, 1036 of them costing 0.4 s. Timing the whole
+  > write path gives, for the test that kills workers:
+  > `1036 opens = 0.4 s connect | 1031 commits = 33.8 s | close = 72.3 s | wall = 108.4 s`.
+  > **Connect + commit + close is 106.5 s of 108.4 s — 98 % of the test — and the dominant term is
+  > `close`, at about 70 ms each.** At 108.4 s against a 120 s per-test timeout the green run had
+  > 10 % headroom and the red one did not; `pytest-timeout`'s thread method then ends the worker
+  > with `os._exit`. **The trap for whoever takes this on:**
+  > `tests/test_vector_store_handle_lifetime.py` and `tests/test_sqlite_wal_cleanup.py` deliberately
+  > require every call to release its handles before returning, because on Windows an open file
+  > cannot be deleted — those tests exist because that defect happened. **The close they mandate
+  > *is* the 70 ms.** So this is a trade against an existing, defect-driven contract, not a free
+  > optimisation. Scoped reuse only (a `db_session()` held across a burst), never a process-wide
+  > pool.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the

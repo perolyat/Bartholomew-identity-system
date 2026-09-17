@@ -619,11 +619,10 @@ class rather than the instance.
   an overloaded run. Not attributable to this package (no product or storage code is touched)
   and not attributable to the repaired writer-lock class either without a second observation.
   Gate 8 stays unclaimed until a clean run settles it.
-* **Repeated completion on one head — one run, not repeated.** Success gate 2 needs the Windows
-  Merge Candidate to complete repeatedly on the final functional head. Run 35171239428 is the
-  first completion ever recorded here, and it is one run, on a head that has since changed
-  (the detection bound and the flaky test are both fixed above). Gate 1 is met once; gate 2 is
-  not met at all.
+* **Repeated completion on one head — superseded by section 11, and still not met.** Every
+  Windows run since has completed, and run 35188201289 was fully green, but run 35189705193 on
+  the *identical* commit crashed a worker. Gate 1 is met; **gate 2 is not**, and section 11 gives
+  the measured reason.
 
 ## 8. Decision note: why this package stops at the harness
 
@@ -639,6 +638,13 @@ the Merge Candidate complete does not require touching it, so taking a storage-l
 decision here would have been the expansion the brief forbids, not the completion it asks for.
 It is recorded in section 6 with its constraint and left to its own package.
 
+**Ruled on by Taylor, 2026-09-17, at the User Approval Gate**, after section 11 measured the
+mechanism and showed it blocking gate 2: the SQLite connection-lifetime repair is **not** folded
+into this PR. It becomes a separate follow-on package, scoped to explicit connection reuse and
+explicitly **not** a process-wide pool, preserving the existing Windows handle-release
+requirements. Recorded in `DECISIONS.md`. So the boundary this section drew on evidence is now
+also the approved boundary, and this package finishes inside it.
+
 ## 9. Runs
 
 | Run | Head | Tier | Result |
@@ -649,4 +655,103 @@ It is recorded in section 6 with its constraint and left to its own package.
 | 35088270721 | `ed03789` | Merge Candidate (dispatch) | **root cause**: simultaneous stacks — controller idle in `queue.get` inside `loop_once`, every worker blocked in `TestQueue.get` (section 2.2) |
 | 35090997379 | `439345c` | Merge Candidate (dispatch) | **confirming measurement**: `queued_units=47`, `event_queue_depth=0`, `shutting_down` all `False` (section 2.3); two workers killed on the two highest-connection tests (section 2.4); abort failed to fire because lifecycle chatter reset it (section 2.5). Cancelled at the cap |
 
-Section 6's last bullet stands: no Windows run has yet completed with the correction in place.
+| 35183428917 | `7af62b0` | Merge Candidate (dispatch) | `2 failed, 5056 passed, 80 skipped in 24:11`; 7 re-drives; the coarse-clock fix held |
+| 35185611629 | `b19cd33` | Merge Candidate (dispatch) | `2 failed, 5057 passed, 80 skipped in 29:03`; the consent cap fix held; 64 re-drives, most of them the startup false positive of section 12 |
+| 35188201289 | `b5764d7` | Merge Candidate (dispatch) | **first fully green Windows Merge Candidate**: all seven jobs, Windows suite 16:15, no crashes, no stalls, largest transport delay 0.1 s |
+| 35189705193 | `b5764d7` | Merge Candidate (dispatch) | **same commit, red**: `gw3` crashed on the heavy-burst test; work requeued and it passed on `gw2` in 25.5 s. Gate 2 not met (section 10) |
+
+Superseded by sections 10–12: Windows runs have since completed, one of them fully green.
+
+## 10. The first fully green Windows Merge Candidate, and why one run is not the answer
+
+Run **35188201289** on `b5764d7` is the first Windows Merge Candidate on record with all seven
+jobs green. The Windows suite step took **16 minutes 15 seconds** against a 40-minute cap. Four
+workers, all `session_finish=yes` and `process_exit=yes`, no crashes, **no stalls**, and the
+largest worker-to-controller delay in the entire run was **0.1 s**.
+
+Run **35189705193**, dispatched on the **identical commit**, crashed `gw3` on
+`test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched`.
+
+Same code, opposite outcomes. That is the whole answer to success gate 2, and it is *not met*.
+
+It is worth being precise about what the failing run demonstrates, because it is not a failure of
+this package: `gw3` died, the loss was detected, a replacement was created, the requeued work was
+picked up, and the same test then **passed on `gw2` in 25.5 s**. No work was lost, no run was
+silently green, and the trace named the cause. The contract did exactly what it promises. The test
+still killed a worker.
+
+## 11. Where the time actually goes: the whole SQLite write path, measured
+
+Section 5.4 withdrew the claim that connection *opening* was the cost, having measured it at about
+0.4 ms per open. That left the cost unexplained rather than explained, so the trace was extended to
+time the `commit`, which fsyncs, and the `close`, which releases the file handles. From run
+35188201289 (Windows, green):
+
+| opens | connect | commits | commit | close | wall | test |
+|---|---|---|---|---|---|---|
+| 1062 | 0.4 s | 529 | 27.3 s | 23.7 s | 54.9 s | `test_queued_outcome_is_independent_of_inbox_size` |
+| 1036 | 0.4 s | 1031 | 33.8 s | **72.3 s** | 108.4 s | `test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` |
+| 812 | 0.3 s | 805 | 13.8 s | 26.1 s | 41.7 s | `test_open_obligations_are_bit_for_bit_unchanged` |
+| 575 | 0.3 s | 367 | 18.8 s | 22.6 s | 45.0 s | `test_vector_quality_maintained_when_fts_unavailable` |
+
+For the test that kills workers, `connect + commit + close = 106.5 s of 108.4 s`. **Ninety-eight
+percent of the test is the per-operation connection lifecycle, and the dominant term is `close` —
+roughly 70 ms each.** The shape repeats across every storage-heavy test in the suite.
+
+So the original conclusion on this class — *connection churn is causal* — was right, and the
+mechanism recorded for it was wrong at both ends: not the open (0.4 ms, acquitted in section 5.4),
+but the close. A connection pool would in fact have helped, for a reason nobody had measured.
+
+**Why this blocks gate 2, arithmetically.** 108.4 s against a 120 s per-test timeout is 10 %
+headroom. The green run had it; the next run on the same commit did not, and `pytest-timeout`'s
+thread method ended the worker with `os._exit`. No amount of correctness in the execution
+machinery closes a 10 % margin.
+
+**The constraint on the repair, sharper than section 6 could state it.**
+`tests/test_vector_store_handle_lifetime.py` and `tests/test_sqlite_wal_cleanup.py` deliberately
+assert that every call releases its database handles before returning, because on Windows a file
+that is still open cannot be deleted — those tests exist because that defect happened.
+**The close they mandate is the 70 ms.** Any repair is therefore an explicit trade against an
+existing, defect-driven contract, and must be scoped reuse (a `db_session()` held across a burst,
+closed explicitly) rather than a silent process-wide pool.
+
+## 12. Adversarial review of this package's own corrections
+
+Run against the full contract, on the implementation rather than the intent. Four defects found,
+all of them in corrections *this package added*, all fixed with tests (`59c0948`). Two were
+mutation-checked against the unfixed code.
+
+1. **Startup was counted as a stall (W13).** A node joins `assigned_work` when it reports ready
+   and `registered_collections` only once it has collected. In between it holds no work, so a
+   pending-count test alone calls it idle — and on Windows that window exceeds the idle bound.
+   Run 35185611629's first twenty re-drives were this, every one a no-op that `_reschedule` then
+   skipped. Eligibility now asks the question `_reschedule` asks, which is what the clause claimed
+   already.
+2. **The re-drive went silent at its bound.** Past `MAX_REDRIVES` the run is failing for a reason
+   re-driving cannot fix, and the trace's abort is meant to own the ending — but the trace is
+   opt-in, so on a run without it nothing would ever speak. A stranded run that prints nothing is
+   the precise failure this package exists to remove. It now says so once, names
+   `BARTHO_EXEC_TRACE`, and the terminal summary records that anything past the bound was not
+   re-driven.
+3. **The SQLite counter could crash what it measures.** `factory` is `sqlite3.connect`'s sixth
+   *positional* parameter and the counter injects it as a keyword, so a positional caller gets
+   `TypeError: argument for Connection() given by name ('factory') and position (6)` — reproduced
+   verbatim by removing the guard. Nothing in this repository passes it positionally today, but the
+   counter wraps every open in the process, dependencies included.
+4. **The escape hatch did not cover every correction.** `BARTHO_XDIST_CONTRACT=0` is documented as
+   the route back to stock behaviour so that a defect here cannot block a release; it disabled the
+   accounting and the re-drive but left the scheduler override installed, which would not help if
+   the override were the defective one.
+
+Two of these (1 and 3) had already shipped and were already producing misleading output or latent
+crashes in the runs above. That is the argument for the review having been worth running, and a
+caution about the other measurements in this record.
+
+**A fifth defect, found the same way and already recorded in its own commit (`f58d1f1`):** the
+trace summary reported worker-to-controller delays of 173 s and 585.5 s on the crashing test in
+runs 35185611629 and 35189705193 — precisely the signature this record tells the reader to
+interpret as a harness defect. It was an artefact of the summary: a lost worker's work is requeued,
+so one test is reported twice, and the summary keyed worker emit times by test alone, subtracting
+one worker's emit from another worker's receive. No such delay existed. **A diagnostic that
+manufactures the symptom it exists to detect is worse than no diagnostic**, and this one nearly
+supported a wrong root cause.

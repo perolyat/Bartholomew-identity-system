@@ -117,8 +117,8 @@ Every clause is enforced by `scripts/ci/xdist_contract.py` or
 | W9 | **Slow work is distinguishable from slow transport** | Each report is timestamped in the worker before it is sent and in the controller when it arrives. The difference is the transport delay; `scripts/ci/summarise_trace.py` prints it. | `…trace_brackets_every_report_at_both_ends` |
 | W10 | **A stalled process says where it is** | A worker with no phase transition for `BARTHO_EXEC_STALL_WARN_S` dumps every thread's stack; so does the controller, whose execnet receiver threads are the only place a sent-but-unarrived report can be. | `…stalled_worker_writes_its_own_stacks`, the controller-stacks assertion in `…ends_a_stalled_run_itself…` |
 | W11 | **Database contention is attributable per test** | Every phase records the number of SQLite connections it opened and the time spent opening them, so per-operation connection cost is a measurement rather than an argument. | `…trace_brackets_every_report_at_both_ends` |
-| W12 | **The contract is not a diagnostic mode** | W4, W6 and W7 are always on, on every platform and in every tier. Only the trace (W9–W11) is switched on by the environment. | `…worker_that_dies_mid_file_cannot_end_the_run_green` runs with no trace enabled |
-| W13 | **Queued work reaches an idle worker** | If no test completes for `BARTHO_XDIST_REDRIVE_IDLE_S` (default 8 s) while the scheduler holds queued work, a node is alive and not shutting down, and the controller's own event queue is empty, the scheduler is re-asked to assign — on the controller's main thread, through its own event queue. Every re-drive is counted and reported: a run that needed one completed **over a defect** and does not read as green. | `…deadlock_is_real_and_nothing_in_xdist_breaks_it`, `…redrive_assigns_queued_work_to_an_idle_node`, `…redrive_fires_only_when_work_is_queued_and_a_node_can_take_it`, `…redrive_reaches_the_controller_through_a_real_xdist_run`, `…run_that_needed_redriving_says_so` |
+| W12 | **The contract is not a diagnostic mode** | W4, W6, W7 and W13 are always on, on every platform and in every tier. Only the trace (W9–W11) is switched on by the environment. `BARTHO_XDIST_CONTRACT=0` turns off **all** of the corrections together, including the scheduler override, so a defect in any one of them can be escaped. | `…worker_that_dies_mid_file_cannot_end_the_run_green` runs with no trace enabled |
+| W13 | **Queued work reaches an idle worker** | If no test completes for `BARTHO_XDIST_REDRIVE_IDLE_S` (default 8 s) while the scheduler holds queued work, a node would actually be given a unit — alive, not shutting down, past collection, and depleted enough that `_reschedule` would top it up — and the controller's own event queue is empty, the scheduler is re-asked to assign — on the controller's main thread, through its own event queue. Every re-drive is counted and reported: a run that needed one completed **over a defect** and does not read as green. | `…deadlock_is_real_and_nothing_in_xdist_breaks_it`, `…redrive_assigns_queued_work_to_an_idle_node`, `…redrive_fires_only_when_work_is_queued_and_a_node_can_take_it`, `…slow_test_is_not_a_stalled_scheduler`, `…worker_that_has_not_collected_yet_is_not_a_stall`, `…redrive_reaches_the_controller_through_a_real_xdist_run`, `…run_that_needed_redriving_says_so`, `…redrive_says_so_when_it_stops_trying` |
 | W14 | **Progress means a test finished** | The stall and abort bounds count completed tests, not messages. Worker lifecycle chatter — a crash, a replacement starting, a replacement collecting — is recorded but never resets them. | `…only_a_finished_test_counts_as_progress` |
 
 **What this contract does not do.** It does not change any timeout, any cap, any marker or
@@ -170,14 +170,53 @@ controller may receive nothing before it ends the run. The Merge Candidate's Win
 uses 180 and 600: the longest legitimate gap between reports in that suite is a few tens
 of seconds, and 600 s is comfortably inside the 40-minute cap.
 
-`BARTHO_XDIST_CONTRACT=0` disables the work accounting and the scheduler re-drive. It exists
-so that a bug in either cannot block a release; it is not for making a red run green.
+`BARTHO_XDIST_CONTRACT=0` disables **every** correction in this contract — the work accounting,
+the scheduler re-drive *and* the collection-aware scheduler — restoring stock pytest-xdist
+behaviour. It exists so that a bug in any one of them cannot block a release; it is not for making
+a red run green. (Until 2026-09-17 it left the scheduler override installed, which would not have
+helped had the override been the defective one; found by the adversarial review.)
 `BARTHO_XDIST_REDRIVE_IDLE_S` sets W13's detection bound (default 8 s). The bound is chosen
 by how much dead time a recovery may cost, not by false-positive risk: a re-drive that was not
-needed is a no-op, because `_reschedule` returns on the node's own pending count. Run
+needed is a no-op, because `_reschedule` returns on the node's own pending count. The bound may be
+short only because eligibility asks that same question *before* reporting a stall — a node still
+collecting, or still deep in a work unit, is busy and is not counted. Before that was true the
+count inflated with test duration and with startup, which made it useless as evidence (run
+35185611629 reported 64 re-drives, most of them no-ops). Run
 35171239428 needed thirteen recoveries, so a 60-second bound cost roughly fifteen minutes.
 
 ## 6. Evidence
 
 Run-by-run results, the baseline reproduction and the measurements behind each root cause
 are in `docs/WINDOWS_MERGE_CANDIDATE_REPAIR.md`.
+
+## 7. What this contract does and does not make green
+
+This distinction matters more than any other sentence in this document, so it is stated plainly.
+
+**What it achieves.** The Windows Merge Candidate **completes**. Before this package it was
+cancelled at its 40-minute cap on every head, `main` included, with no summary, no junit and
+nothing to diagnose from. It now finishes inside the cap (29:03 on `b19cd33`, 16:15 on `b5764d7`),
+and run **35188201289 is the first fully green Windows Merge Candidate on record** — all seven
+jobs. When a worker is lost, the loss is detected, a replacement is created, the work is requeued
+and it completes; nothing is lost silently, and the log says which of the seven cases occurred.
+
+**What it does not achieve.** **Repeatably all-green Windows completion.** Run 35189705193, on the
+*identical* commit as the green one, crashed a worker. The cause is not the execution machinery,
+which behaved correctly throughout that run: the loss was detected, the worker replaced, the work
+requeued, and the test completed elsewhere in 25.5 s.
+
+**What blocks it is a separate, measured defect**: the per-operation SQLite connection lifecycle on
+Windows. For the test that kills workers,
+`1036 opens = 0.4 s connect | 1031 commits = 33.8 s | close = 72.3 s | wall = 108.4 s` — 98 % of
+the test is the connection lifecycle and the dominant term is `close`, at about 70 ms each. At
+108.4 s against a 120 s per-test timeout, one run had headroom and the next did not.
+`pytest-timeout`'s thread method then ends the worker with `os._exit`, which this contract reports
+correctly and cannot prevent.
+
+That repair is its own package by decision (Taylor, 2026-09-17; see `DECISIONS.md`). It is scoped
+connection reuse — never a process-wide pool — because
+`tests/test_vector_store_handle_lifetime.py` and `tests/test_sqlite_wal_cleanup.py` deliberately
+require every call to release its handles before returning: **the close they mandate is the 70 ms.**
+
+So: *this contract makes the run complete and makes its failures legible. It does not make Windows
+green, and it was never going to.*
