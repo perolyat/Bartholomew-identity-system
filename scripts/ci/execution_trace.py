@@ -160,12 +160,22 @@ class _SqliteCounter:
     def install(self) -> None:
         original = self._original
 
+        #: `factory` is sqlite3.connect's sixth positional parameter. A
+        #: caller that passes it positionally would collide with a keyword
+        #: injected here ("got multiple values for argument 'factory'"),
+        #: so such a call is measured for its open only and left otherwise
+        #: untouched. An instrument may not break the thing it measures.
+        factory_position = 5
+
         def counting_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-            base = kwargs.get("factory") or sqlite3.Connection
-            try:
-                kwargs["factory"] = self._timed_factory(base)
-            except Exception:  # pragma: no cover - never fail a real open
-                kwargs.pop("factory", None) if base is sqlite3.Connection else None
+            if len(args) <= factory_position:
+                base = kwargs.get("factory") or sqlite3.Connection
+                try:
+                    kwargs["factory"] = self._timed_factory(base)
+                except Exception:  # pragma: no cover - never fail a real open
+                    kwargs.pop("factory", None)
+                    if base is not sqlite3.Connection:
+                        kwargs["factory"] = base
             started = _monotonic()
             try:
                 return original(*args, **kwargs)

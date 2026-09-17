@@ -961,3 +961,107 @@ def test_a_requeued_test_does_not_invent_a_transport_delay(tmp_path, capsys):
     delay_line = next(ln for ln in printed.splitlines() if "largest worker-to-controller" in ln)
     assert "0.1s" in delay_line, f"each report matched its own worker: {delay_line}"
     assert "590" not in delay_line, "no delay was invented across the two workers"
+
+
+def test_a_worker_that_has_not_collected_yet_is_not_a_stall(pytester):
+    """Startup is not a stall, and must not be counted as one.
+
+    A node enters ``assigned_work`` when it reports ready and
+    ``registered_collections`` only when it has finished collecting. In
+    between it holds no work, so a pending-count test alone calls it idle.
+    On Windows that window -- collection plus worker spin-up -- is longer
+    than the idle bound, so every run began by reporting re-drives that
+    `_reschedule` then skipped anyway. Run 35185611629's first twenty were
+    exactly this, and they made the count useless as evidence.
+    """
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    sched, node = _deadlocked_scheduler(pytester)
+    redrive = SchedulerRedrive(idle_after_s=0.0)
+    dsession = _FakeDSession(sched)
+    redrive._dsession = lambda: dsession  # type: ignore[method-assign]
+
+    assert redrive._should_redrive()[0], "a collected, depleted node is the deadlock"
+
+    collection = sched.registered_collections.pop(node)
+    assert not redrive._should_redrive()[0], "a still-collecting node is not a stall"
+
+    sched.registered_collections[node] = collection
+    assert redrive._should_redrive()[0], "and it counts again once it has collected"
+
+
+def test_the_redrive_says_so_when_it_stops_trying(pytester, capsys):
+    """Past its bound the re-drive goes quiet; it must not go silent.
+
+    The bound exists because past it the run is failing for a reason
+    re-driving cannot fix, and the execution trace's abort is meant to own
+    the ending. But that trace is opt-in, so on a run without it nothing
+    else would ever speak, and a stranded run that prints nothing is the
+    precise failure this package exists to remove.
+    """
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    sched, _node = _deadlocked_scheduler(pytester)
+    redrive = SchedulerRedrive(idle_after_s=0.0)
+    dsession = _FakeDSession(sched)
+    redrive._dsession = lambda: dsession  # type: ignore[method-assign]
+    redrive.redrives = redrive.MAX_REDRIVES
+
+    redrive._announce_give_up()
+    first = capsys.readouterr().err
+    assert "giving up" in first
+    assert str(redrive.MAX_REDRIVES) in first
+    assert "BARTHO_EXEC_TRACE" in first, "it names the way to get the stacks"
+
+    redrive._announce_give_up()
+    assert capsys.readouterr().err == "", "said once, not once per poll"
+
+
+def test_timing_the_write_path_survives_a_positional_factory(tmp_path):
+    """``factory`` is sqlite3.connect's sixth positional parameter.
+
+    Injecting it as a keyword alongside a positional one raises "got
+    multiple values for argument 'factory'". Nothing in this repository
+    passes it positionally today, but the counter wraps every sqlite3 open
+    in the process, dependencies included. An instrument that breaks the
+    thing it measures is worse than no instrument.
+    """
+    from scripts.ci.execution_trace import _SqliteCounter
+
+    class Mine(sqlite3.Connection):
+        pass
+
+    counter = _SqliteCounter()
+    original = sqlite3.connect
+    counter.install()
+    try:
+        # timeout, detect_types, isolation_level, check_same_thread, factory
+        conn = sqlite3.connect(str(tmp_path / "positional.db"), 5.0, 0, None, True, Mine)
+        assert isinstance(conn, Mine), "the caller's class survived"
+        conn.close()
+    finally:
+        sqlite3.connect = original
+
+    assert counter.snapshot()[0] == 1, "the open was still counted"
+
+
+def test_the_escape_hatch_covers_every_correction(pytester, monkeypatch):
+    """`BARTHO_XDIST_CONTRACT=0` is documented as the way back to stock.
+
+    It is there so that a defect in this module cannot block a release. A
+    hatch that disables two of the three corrections and leaves the third
+    installed would not help if the third were the defective one.
+    """
+    from scripts.ci import xdist_contract
+
+    config = _make_config(pytester)
+
+    monkeypatch.delenv("BARTHO_XDIST_CONTRACT", raising=False)
+    assert xdist_contract.make_safe_scheduler(config) is not None
+
+    monkeypatch.setenv("BARTHO_XDIST_CONTRACT", "0")
+    assert xdist_contract.make_safe_scheduler(config) is None, "stock scheduler is restored"
+
+    xdist_contract.install(config)
+    assert not config.pluginmanager.hasplugin(xdist_contract.CONTRACT_PLUGIN_NAME)
+    assert not config.pluginmanager.hasplugin(xdist_contract.REDRIVE_PLUGIN_NAME)

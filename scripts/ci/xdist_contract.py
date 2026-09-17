@@ -84,6 +84,12 @@ def make_safe_scheduler(config: pytest.Config, log: Any = None) -> Any:
     Returns ``None`` for any distribution mode this correction does not
     apply to, which tells pytest-xdist to fall back to its own choice.
     """
+    if os.environ.get("BARTHO_XDIST_CONTRACT") == "0":
+        # The same escape hatch as install(). It is documented as the way
+        # to get stock behaviour back if a correction in this module is
+        # itself defective, so it has to cover all three corrections --
+        # including this one -- or it does not do what it is for.
+        return None
     dist = getattr(config.option, "dist", "no")
     if dist not in ("loadscope", "loadfile"):
         return None
@@ -322,6 +328,7 @@ class SchedulerRedrive:
         self._thread: threading.Thread | None = None
         self._config: pytest.Config | None = None
         self._installed_handler = False
+        self._gave_up = False
 
     # -- progress ----------------------------------------------------------
 
@@ -374,10 +381,20 @@ class SchedulerRedrive:
         except Exception:  # pragma: no cover - defensive
             return []
         pending_of = getattr(sched, "_pending_of", None)
+        registered = getattr(sched, "registered_collections", None)
         eligible = []
         for node, workload in assigned.items():
             try:
                 if node.shutting_down:
+                    continue
+                # Ready but still collecting. `_reschedule` skips such a
+                # node (see make_safe_scheduler), so counting it as able to
+                # take work makes the whole startup window -- collection
+                # plus worker spin-up, which exceeds the idle bound on
+                # Windows -- look like a stall before the first test has
+                # even finished. That is where run 35185611629's first
+                # twenty "re-drives" came from, all of them no-ops.
+                if registered is not None and node not in registered:
                     continue
                 # A node deep in a work unit is busy, not stalled. Ask the
                 # same question the scheduler asks before it hands out more
@@ -428,11 +445,32 @@ class SchedulerRedrive:
             if idle < self.idle_after_s:
                 continue
             if self.redrives >= self.MAX_REDRIVES:
+                self._announce_give_up()
                 continue
             ok, why = self._should_redrive()
             if not ok:
                 continue
             self._post_redrive(idle, why)
+
+    def _announce_give_up(self) -> None:
+        """Say so, once, when the re-drive stops trying.
+
+        Past this bound the run is failing for a reason this correction
+        cannot reach, and the execution trace's abort is meant to own the
+        ending -- but that trace is opt-in, so on a run without it nothing
+        else would ever speak. A stranded run that prints nothing is the
+        exact failure this whole package exists to remove.
+        """
+        if self._gave_up:
+            return
+        self._gave_up = True
+        print(
+            f"xdist-contract: giving up after {self.MAX_REDRIVES} re-drives. The run is "
+            "stalled for a reason re-driving the scheduler does not fix. Set "
+            "BARTHO_EXEC_TRACE=1 to capture stacks and have the watchdog end it.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def _post_redrive(self, idle: float, why: str) -> None:
         dsession = self._dsession()
@@ -499,6 +537,12 @@ class SchedulerRedrive:
             terminalreporter.write_line(f"  {note}")
         if len(self.redrive_log) > 20:
             terminalreporter.write_line(f"  ... and {len(self.redrive_log) - 20} more")
+        if self._gave_up:
+            terminalreporter.write_line(
+                f"The re-drive gave up at its bound of {self.MAX_REDRIVES}. Anything after "
+                "that point was not re-driven, so this run's ending is not explained by "
+                "this correction.",
+            )
 
 
 def _redrive_idle_after() -> float:
