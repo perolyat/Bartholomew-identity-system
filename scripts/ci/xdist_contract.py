@@ -307,6 +307,9 @@ class SchedulerRedrive:
     MAX_REDRIVES = 200
 
     EVENT_NAME = "bartholomew_scheduler_redrive"
+    #: xdist's own heuristic: it tops a node up once its pending work
+    #: drops to this. Mirrored so eligibility matches _reschedule's.
+    DEPLETED_AT = 2
 
     def __init__(self, idle_after_s: float | None = None) -> None:
         self.idle_after_s = idle_after_s if idle_after_s is not None else _redrive_idle_after()
@@ -367,11 +370,27 @@ class SchedulerRedrive:
         that fails means "do not act", never an exception.
         """
         try:
-            return [
-                node for node in list(getattr(sched, "assigned_work", {})) if not node.shutting_down
-            ]
+            assigned = dict(getattr(sched, "assigned_work", {}) or {})
         except Exception:  # pragma: no cover - defensive
             return []
+        pending_of = getattr(sched, "_pending_of", None)
+        eligible = []
+        for node, workload in assigned.items():
+            try:
+                if node.shutting_down:
+                    continue
+                # A node deep in a work unit is busy, not stalled. Ask the
+                # same question the scheduler asks before it hands out more
+                # work, so "a node able to take them" means what it says: a
+                # node _reschedule would actually give a unit to. Without
+                # this, any long test anywhere in the run looks like a stall
+                # and the re-drive count stops meaning anything.
+                if pending_of is not None and pending_of(workload) > self.DEPLETED_AT:
+                    continue
+            except Exception:  # pragma: no cover - defensive
+                continue
+            eligible.append(node)
+        return eligible
 
     def _should_redrive(self) -> tuple[bool, str]:
         dsession = self._dsession()

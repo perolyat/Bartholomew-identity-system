@@ -215,18 +215,45 @@ def summarise(trace_dir: Path) -> int:
             f"last={counts[-1]:4d}  max={max(counts):4d}",
         )
 
-    # 5. SQLite cost.
-    print("\n-- most SQLite connections per test ----------------------------")
-    per_test: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    # 5. SQLite cost, split across the write path.
+    #
+    # Opening was measured and acquitted (about 0.4 ms each). The question
+    # this answers is where the rest of a storage-heavy test's time goes:
+    # the commit, which fsyncs, the close, which releases the file handles,
+    # or neither -- in which case it is inside execute and the statements
+    # themselves are the cost.
+    print("\n-- SQLite cost per test, whole write path ----------------------")
+    per_test: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
     for event in worker_calls.values():
         entry = per_test[event["nodeid"]]
         entry[0] += event.get("sqlite_connections", 0) or 0
         entry[1] += event.get("sqlite_connect_s", 0.0) or 0.0
+        entry[2] += event.get("sqlite_commits", 0) or 0
+        entry[3] += event.get("sqlite_commit_s", 0.0) or 0.0
+        entry[4] += event.get("sqlite_close_s", 0.0) or 0.0
+    wall_of: dict[str, float] = defaultdict(float)
+    for event in worker_calls.values():
+        wall = event.get("wall_s", 0.0) or 0.0
+        if wall <= _IMPLAUSIBLE_S:
+            wall_of[event["nodeid"]] += wall
     ranked = sorted(per_test.items(), key=lambda kv: kv[1][0], reverse=True)[:_TOP]
     if ranked and ranked[0][1][0]:
-        print(f"{'opens':>8} {'connect':>10}  nodeid")
-        for nodeid, (count, seconds) in ranked:
-            print(f"{int(count):8d} {_fmt(seconds)}  {nodeid}")
+        print(
+            f"{'opens':>8} {'connect':>10} {'commits':>8} {'commit':>10} "
+            f"{'close':>10} {'wall':>10}  nodeid",
+        )
+        for nodeid, (opens, connect_s, commits, commit_s, close_s) in ranked:
+            wall = wall_of.get(nodeid, 0.0)
+            print(
+                f"{int(opens):8d} {_fmt(connect_s)} {int(commits):8d} {_fmt(commit_s)} "
+                f"{_fmt(close_s)} {_fmt(wall)}  {nodeid}",
+            )
+        print(
+            "\n  Accounted time is connect + commit + close. What the wall "
+            "column has\n  beyond that is inside execute, not in the "
+            "per-operation connection\n  lifecycle -- which is the difference "
+            "between a pooling fix and a\n  statement or schema fix.",
+        )
     else:
         print("none recorded")
 

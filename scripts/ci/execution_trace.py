@@ -113,13 +113,59 @@ class _SqliteCounter:
     def __init__(self) -> None:
         self.count = 0
         self.seconds = 0.0
+        self.commits = 0
+        self.commit_seconds = 0.0
+        self.close_seconds = 0.0
         self._lock = threading.Lock()
         self._original = sqlite3.connect
+        self._factories: dict[type, type] = {}
+
+    def _timed_factory(self, base: type) -> type:
+        """A Connection subclass that times the two calls that can block.
+
+        Opening a connection was measured and is not where the time goes
+        (0.4 ms each). The remaining candidates on Windows are the commit,
+        which fsyncs, and the close, which releases the file handles. This
+        makes both measurable per test instead of inferred from totals.
+        """
+        cached = self._factories.get(base)
+        if cached is not None:
+            return cached
+
+        counter = self
+
+        class TimedConnection(base):  # type: ignore[valid-type, misc]
+            def commit(self, *args: Any, **kwargs: Any) -> Any:
+                started = _monotonic()
+                try:
+                    return super().commit(*args, **kwargs)
+                finally:
+                    elapsed = _monotonic() - started
+                    with counter._lock:
+                        counter.commits += 1
+                        counter.commit_seconds += elapsed
+
+            def close(self, *args: Any, **kwargs: Any) -> Any:
+                started = _monotonic()
+                try:
+                    return super().close(*args, **kwargs)
+                finally:
+                    elapsed = _monotonic() - started
+                    with counter._lock:
+                        counter.close_seconds += elapsed
+
+        self._factories[base] = TimedConnection
+        return TimedConnection
 
     def install(self) -> None:
         original = self._original
 
         def counting_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            base = kwargs.get("factory") or sqlite3.Connection
+            try:
+                kwargs["factory"] = self._timed_factory(base)
+            except Exception:  # pragma: no cover - never fail a real open
+                kwargs.pop("factory", None) if base is sqlite3.Connection else None
             started = _monotonic()
             try:
                 return original(*args, **kwargs)
@@ -134,6 +180,10 @@ class _SqliteCounter:
     def snapshot(self) -> tuple[int, float]:
         with self._lock:
             return self.count, self.seconds
+
+    def write_snapshot(self) -> tuple[int, float, float]:
+        with self._lock:
+            return self.commits, self.commit_seconds, self.close_seconds
 
 
 class _TraceWriter:
@@ -280,6 +330,7 @@ class WorkerTrace(_BaseTrace):
         self.sqlite.install()
         self._phase_start = _monotonic()
         self._phase_sqlite = self.sqlite.snapshot()
+        self._phase_writes = self.sqlite.write_snapshot()
         self._current = "<none>"
         self._gil_free_dump: Any = None
 
@@ -368,6 +419,7 @@ class WorkerTrace(_BaseTrace):
         count, seconds = self.sqlite.snapshot()
         opened = count - self._phase_sqlite[0]
         connect_s = seconds - self._phase_sqlite[1]
+        commits, commit_s, close_s = self.sqlite.write_snapshot()
         self.writer.write(
             "phase",
             nodeid=report.nodeid,
@@ -377,6 +429,9 @@ class WorkerTrace(_BaseTrace):
             wall_s=round(_monotonic() - self._phase_start, 4),
             sqlite_connections=opened,
             sqlite_connect_s=round(connect_s, 4),
+            sqlite_commits=commits - self._phase_writes[0],
+            sqlite_commit_s=round(commit_s - self._phase_writes[1], 4),
+            sqlite_close_s=round(close_s - self._phase_writes[2], 4),
             # Live threads in this worker. A worker whose last tests run
             # far slower than its first is the shape a test that leaks a
             # daemon, a portal or a connection pool produces; the count
@@ -392,6 +447,7 @@ class WorkerTrace(_BaseTrace):
     def _begin_phase(self, label: str) -> None:
         self._phase_start = _monotonic()
         self._phase_sqlite = self.sqlite.snapshot()
+        self._phase_writes = self.sqlite.write_snapshot()
         if self.watchdog is not None:
             self.watchdog.beat(label)
         self._rearm_gil_free_dump()

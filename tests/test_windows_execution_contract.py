@@ -17,6 +17,7 @@ a worker is made to die on purpose.
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -692,6 +693,41 @@ def test_the_redrive_fires_only_when_work_is_queued_and_a_node_can_take_it(pytes
     assert not redrive._should_redrive()[0]
 
 
+def test_a_slow_test_is_not_a_stalled_scheduler(pytester):
+    """A node still deep in its work unit is busy, not stalled.
+
+    Eligibility asks the question ``_reschedule`` asks before it tops a
+    node up. Without that, any long test anywhere in the run looked like a
+    stall: Merge Candidate 35185611629 reported 64 re-drives where earlier
+    runs of the same correction reported 7, because every eight-second
+    stretch with a slow test running counted as one. A count that inflates
+    with test duration cannot be used to tell a real defect from a slow
+    suite, which is the only thing the count is for.
+    """
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    sched, node = _deadlocked_scheduler(pytester)
+    redrive = SchedulerRedrive(idle_after_s=0.0)
+    dsession = _FakeDSession(sched)
+    redrive._dsession = lambda: dsession  # type: ignore[method-assign]
+
+    assert redrive._should_redrive()[0], "one unfinished item is the deadlock"
+
+    workload = sched.assigned_work[node]
+    workload["tests/test_busy.py"] = {
+        "tests/test_busy.py::test_a": False,
+        "tests/test_busy.py::test_b": False,
+        "tests/test_busy.py::test_c": False,
+    }
+    assert sched._pending_of(workload) > 2, "the node now has work left to do"
+    assert not redrive._should_redrive()[0], "a busy node is not a stalled one"
+
+    # And it becomes eligible again the moment it is nearly depleted, which
+    # is the state the deadlock strands it in.
+    del workload["tests/test_busy.py"]
+    assert redrive._should_redrive()[0], "a nearly depleted node still qualifies"
+
+
 def test_only_a_finished_test_counts_as_progress():
     """The defect that stopped the 600-second abort from ever firing.
 
@@ -824,3 +860,59 @@ def test_the_redrive_reaches_the_controller_through_a_real_xdist_run(pytester, m
     combined = result.stdout.str() + result.stderr.str()
     assert "scheduler re-drive #1" in combined, "the re-drive never reached the controller"
     assert "re-driven" in combined, "a re-driven run did not report that it was"
+
+
+def test_the_trace_times_the_write_path_and_not_only_the_open(tmp_path):
+    """Connection opens were measured at 0.4 ms and acquitted as the cause.
+
+    That left the storage cost of the heaviest tests unexplained rather
+    than explained, so the trace now times the commit and the close too.
+    A measurement that silently records zero is worse than none.
+    """
+    from scripts.ci.execution_trace import _SqliteCounter
+
+    counter = _SqliteCounter()
+    original = sqlite3.connect
+    counter.install()
+    try:
+        conn = sqlite3.connect(tmp_path / "written.db")
+        conn.execute("create table t (a)")
+        conn.execute("insert into t values (1)")
+        conn.commit()
+        conn.close()
+    finally:
+        sqlite3.connect = original
+
+    opens, _ = counter.snapshot()
+    commits, commit_s, close_s = counter.write_snapshot()
+    assert opens == 1
+    assert commits == 1, "the commit was counted"
+    assert commit_s > 0.0, "the commit was timed"
+    assert close_s > 0.0, "the close was timed"
+
+
+def test_timing_the_write_path_keeps_a_caller_supplied_connection_class(tmp_path):
+    """The timing is installed by wrapping the connection factory.
+
+    A caller that supplies its own Connection subclass must still get it,
+    or the instrument changes the behaviour it is there to observe.
+    """
+    from scripts.ci.execution_trace import _SqliteCounter
+
+    class Mine(sqlite3.Connection):
+        def marker(self) -> str:
+            return "mine"
+
+    counter = _SqliteCounter()
+    original = sqlite3.connect
+    counter.install()
+    try:
+        conn = sqlite3.connect(tmp_path / "factory.db", factory=Mine)
+        assert isinstance(conn, Mine), "the caller's class survived"
+        assert conn.marker() == "mine"
+        conn.commit()
+        conn.close()
+    finally:
+        sqlite3.connect = original
+
+    assert counter.write_snapshot()[0] == 1
