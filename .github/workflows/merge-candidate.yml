@@ -300,10 +300,6 @@ jobs:
           BARTHO_EXEC_STALL_ABORT_S: "600"
         run: python -m pytest -p no:cacheprovider -vv -n auto --dist loadfile --junitxml=junit-windows-full.xml
 
-      - name: Execution trace summary
-        if: always()
-        run: python -m scripts.ci.summarise_trace exec-trace
-
       - name: Upload junit and execution trace
         if: always()
         uses: actions/upload-artifact@v4
@@ -314,6 +310,16 @@ jobs:
             exec-trace/
           if-no-files-found: ignore
           retention-days: 30
+
+      # Last on purpose. A log API returns the tail of the job, and the
+      # upload step's own output is long enough to fill that window on its
+      # own -- which is how run 35196083601 went red with the name of the
+      # failing test unreachable without downloading an artifact. The
+      # summary ends with what failed, so it has to be the last thing the
+      # job prints.
+      - name: Execution trace summary
+        if: always()
+        run: python -m scripts.ci.summarise_trace exec-trace
 
   smoke:
     name: smoke
