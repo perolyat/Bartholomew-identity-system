@@ -272,6 +272,35 @@ def summarise(trace_dir: Path) -> int:
     else:
         print("none recorded")
 
+    # 6. What actually failed -- printed LAST, on purpose.
+    #
+    # A CI log is read from the end, and log APIs return the tail. This
+    # summary is long enough to push pytest's own "short test summary info"
+    # out of that window, which is exactly what happened on run 35193584212:
+    # the job was red and the name of the failing test was unreachable
+    # without downloading an artifact. A diagnostic that displaces the very
+    # line a reader needs is a defect in the diagnostic.
+    print("\n-- what failed ------------------------------------------------")
+    failures: dict[str, list[str]] = defaultdict(list)
+    for event in worker_calls.values():
+        if event.get("outcome") not in (None, "passed", "skipped"):
+            failures[event["nodeid"]].append(f"{event['worker']}/{event['when']}")
+    crashed = [e for e in controller if e["event"] == "node_down" and e.get("crashed")]
+    if not failures and not crashed:
+        print("nothing: no worker crashed and no phase reported a bad outcome")
+    for gateway in crashed:
+        # Name the test it died on, not "a test that failed": a worker that
+        # stops existing has its in-flight test reported as failed with no
+        # message, and that row says nothing about the test itself.
+        last = "<unknown>"
+        for event in workers.get(gateway["gateway"], []):
+            if event["event"] in ("phase", "logstart"):
+                last = event["nodeid"]
+        print(f"  WORKER LOST  {gateway['gateway']}  died on {last}")
+        print(f"               {gateway.get('error') or ''}")
+    for nodeid, where in sorted(failures.items()):
+        print(f"  {', '.join(where):<24}  {nodeid}")
+
     print("=" * 78)
     return 0
 

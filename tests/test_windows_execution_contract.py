@@ -1065,3 +1065,49 @@ def test_the_escape_hatch_covers_every_correction(pytester, monkeypatch):
     xdist_contract.install(config)
     assert not config.pluginmanager.hasplugin(xdist_contract.CONTRACT_PLUGIN_NAME)
     assert not config.pluginmanager.hasplugin(xdist_contract.REDRIVE_PLUGIN_NAME)
+
+
+def test_the_summary_names_what_failed_last_of_all(tmp_path, capsys):
+    """A CI log is read from the end, and log APIs return the tail.
+
+    On run 35193584212 this summary was long enough to push pytest's own
+    "short test summary info" out of that window: the job was red and the
+    name of the failing test could not be reached without downloading an
+    artifact. A diagnostic that displaces the line a reader needs is a
+    defect in the diagnostic, so the failures are printed last.
+    """
+    from scripts.ci.summarise_trace import summarise
+
+    def event(**fields):
+        return json.dumps(fields)
+
+    (tmp_path / "gw0.jsonl").write_text(
+        "\n".join(
+            [
+                event(event="phase", t=1.0, nodeid="t.py::ok", when="call", outcome="passed"),
+                event(event="phase", t=2.0, nodeid="t.py::bad", when="call", outcome="failed"),
+                event(event="logstart", t=3.0, nodeid="t.py::died_here"),
+            ],
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "controller.jsonl").write_text(
+        event(
+            event="node_down", t=4.0, gateway="gw0", crashed=True, error="Not properly terminated",
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summarise(tmp_path)
+    printed = capsys.readouterr().out
+
+    assert "-- what failed" in printed
+    assert "t.py::bad" in printed, "the failing test is named"
+    assert "WORKER LOST  gw0" in printed
+    assert "died on t.py::died_here" in printed, "a lost worker names the test it died on"
+    assert "t.py::ok" not in printed.split("-- what failed")[1], "passing tests are not listed"
+
+    tail = printed.strip().splitlines()
+    assert "t.py::bad" in "\n".join(tail[-6:]), "and it is at the end, where the tail is read"
