@@ -1094,7 +1094,11 @@ def test_the_summary_names_what_failed_last_of_all(tmp_path, capsys):
     )
     (tmp_path / "controller.jsonl").write_text(
         event(
-            event="node_down", t=4.0, gateway="gw0", crashed=True, error="Not properly terminated",
+            event="node_down",
+            t=4.0,
+            gateway="gw0",
+            crashed=True,
+            error="Not properly terminated",
         )
         + "\n",
         encoding="utf-8",
