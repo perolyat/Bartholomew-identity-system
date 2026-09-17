@@ -949,7 +949,9 @@ def test_a_requeued_test_does_not_invent_a_transport_delay(tmp_path, capsys):
         "\n".join(
             [
                 line(event="report_received", t=10.1, nodeid="t.py::a", when="setup", worker="gw0"),
-                line(event="report_received", t=600.1, nodeid="t.py::a", when="setup", worker="gw1"),
+                line(
+                    event="report_received", t=600.1, nodeid="t.py::a", when="setup", worker="gw1"
+                ),
             ],
         )
         + "\n",
