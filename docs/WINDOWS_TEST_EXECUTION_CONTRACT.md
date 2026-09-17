@@ -31,14 +31,23 @@ roughly half of all attempts since 2026-08, and the writer-lock repair that clos
 
 Three distinct failures were folded together under "Windows is flaky".
 
-**(a) The stalled tail.** Every other worker finishes; one test on one worker sits for
-eighteen to twenty-four minutes and is reported `PASSED` the instant the cap fires. It is
-a different test every run (`test_lexical_beats_vector_on_exact_rare_tokens` in runs
-34866265459, 34973153727, 35034729745 and 35037740445;
-`test_worked_example_round_trips_end_to_end` in run 34942899213, with the rare-token test
-passing in 37 s that time), which is what rules out the tests themselves. The 120-second
-per-test timeout does not end it. A cancelled job writes no junit, so the only record is
-the console.
+**(a) The "stalled tail" — which turned out to be the wrong name for it.** Every other worker
+finishes; one test on one worker sits for eighteen to twenty-four minutes and is reported
+`PASSED` the instant the cap fires. It is a different test every run
+(`test_lexical_beats_vector_on_exact_rare_tokens` in runs 34866265459, 34973153727,
+35034729745 and 35037740445; `test_worked_example_round_trips_end_to_end` in run 34942899213,
+with the rare-token test passing in 37 s that time), which is what rules out the tests
+themselves. The 120-second per-test timeout does not end it. A cancelled job writes no junit,
+so the only record is the console.
+
+**The name described the symptom's location, not the defect.** Once W13 could count the
+occurrences, run 35171239428 showed the underlying deadlock firing thirteen times in one run,
+at roughly every work-unit boundary — the queue falling 50, 46, 42, … 2. A worker that starves
+while three others still have work only slows the run; it is fatal the first time it catches
+the last worker with nobody left to carry on. So the suite had been deadlocking constantly
+all along, and the tail is simply where it stopped being survivable. A diagnosis framed around
+"the last test" was always going to look like an unreproducible property of whichever test was
+unlucky.
 
 **(b) Worker loss.** `test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched`
 makes 1000 `insert_nudge_contained` calls, each opening and closing its own SQLite
@@ -109,7 +118,7 @@ Every clause is enforced by `scripts/ci/xdist_contract.py` or
 | W10 | **A stalled process says where it is** | A worker with no phase transition for `BARTHO_EXEC_STALL_WARN_S` dumps every thread's stack; so does the controller, whose execnet receiver threads are the only place a sent-but-unarrived report can be. | `…stalled_worker_writes_its_own_stacks`, the controller-stacks assertion in `…ends_a_stalled_run_itself…` |
 | W11 | **Database contention is attributable per test** | Every phase records the number of SQLite connections it opened and the time spent opening them, so per-operation connection cost is a measurement rather than an argument. | `…trace_brackets_every_report_at_both_ends` |
 | W12 | **The contract is not a diagnostic mode** | W4, W6 and W7 are always on, on every platform and in every tier. Only the trace (W9–W11) is switched on by the environment. | `…worker_that_dies_mid_file_cannot_end_the_run_green` runs with no trace enabled |
-| W13 | **Queued work reaches an idle worker** | If no test completes for `BARTHO_XDIST_REDRIVE_IDLE_S` (default 60 s) while the scheduler holds queued work, a node is alive and not shutting down, and the controller's own event queue is empty, the scheduler is re-asked to assign — on the controller's main thread, through its own event queue. Every re-drive is counted and reported: a run that needed one completed **over a defect** and does not read as green. | `…deadlock_is_real_and_nothing_in_xdist_breaks_it`, `…redrive_assigns_queued_work_to_an_idle_node`, `…redrive_fires_only_when_work_is_queued_and_a_node_can_take_it`, `…redrive_reaches_the_controller_through_a_real_xdist_run`, `…run_that_needed_redriving_says_so` |
+| W13 | **Queued work reaches an idle worker** | If no test completes for `BARTHO_XDIST_REDRIVE_IDLE_S` (default 8 s) while the scheduler holds queued work, a node is alive and not shutting down, and the controller's own event queue is empty, the scheduler is re-asked to assign — on the controller's main thread, through its own event queue. Every re-drive is counted and reported: a run that needed one completed **over a defect** and does not read as green. | `…deadlock_is_real_and_nothing_in_xdist_breaks_it`, `…redrive_assigns_queued_work_to_an_idle_node`, `…redrive_fires_only_when_work_is_queued_and_a_node_can_take_it`, `…redrive_reaches_the_controller_through_a_real_xdist_run`, `…run_that_needed_redriving_says_so` |
 | W14 | **Progress means a test finished** | The stall and abort bounds count completed tests, not messages. Worker lifecycle chatter — a crash, a replacement starting, a replacement collecting — is recorded but never resets them. | `…only_a_finished_test_counts_as_progress` |
 
 **What this contract does not do.** It does not change any timeout, any cap, any marker or
@@ -163,7 +172,10 @@ of seconds, and 600 s is comfortably inside the 40-minute cap.
 
 `BARTHO_XDIST_CONTRACT=0` disables the work accounting and the scheduler re-drive. It exists
 so that a bug in either cannot block a release; it is not for making a red run green.
-`BARTHO_XDIST_REDRIVE_IDLE_S` sets W13's detection bound (default 60 s).
+`BARTHO_XDIST_REDRIVE_IDLE_S` sets W13's detection bound (default 8 s). The bound is chosen
+by how much dead time a recovery may cost, not by false-positive risk: a re-drive that was not
+needed is a no-op, because `_reschedule` returns on the node's own pending count. Run
+35171239428 needed thirteen recoveries, so a 60-second bound cost roughly fifteen minutes.
 
 ## 6. Evidence
 
