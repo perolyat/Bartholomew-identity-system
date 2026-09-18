@@ -706,6 +706,31 @@ async def startup():
         except Exception as e:
             print(f"[api] Real model path unavailable, staying on stub: {e}")
 
+    # EXEC-02: connect the conversational surface to the Executive that
+    # already exists -- if, and only if, this deployment has explicitly said
+    # so. Deliberately *after* the orchestrator rebuild above, because the
+    # cognition port is an adapter over `orch.router` and the router that
+    # matters is the one carrying the loaded Identity.
+    #
+    # Both switches default OFF and neither is implied by a model being
+    # reachable (`BARTH_EXECUTIVE_DELIBERATION`, `BARTH_CONVERSATIONAL_
+    # EXECUTIVE`; see `bartholomew/integration/conversational_executive.py`).
+    # A deployment that sets neither gets byte-identical pre-EXEC-02 chat.
+    # Best-effort: a misconfigured activation degrades to today's behaviour
+    # rather than taking down startup, and says which posture it came up in,
+    # because an activation that silently did not happen is the worst of the
+    # available outcomes.
+    try:
+        from bartholomew.integration import conversational_executive as _conv_exec
+
+        _exec_posture = _conv_exec.configure_from_environment(
+            _kernel,
+            getattr(orch, "router", None),
+        )
+        print(f"[api] Executive posture: {_exec_posture}")
+    except Exception as e:  # pragma: no cover - startup must not fail on this
+        print(f"[api] Executive activation skipped: {e}")
+
     # Unattended-run evidence (Session A). Inert unless
     # BARTH_UNATTENDED_RUN_ID is set, so a normal deployment gains no writer
     # and no table. It observes: the runtime_id it records is the kernel's
