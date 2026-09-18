@@ -40,6 +40,7 @@ from . import (
     candidate_learning,
     consent_gate,
     forecast_intents,
+    goal_intents,
     learning_authorization,
     learning_policy,
     objective_intents,
@@ -195,6 +196,16 @@ class RuntimeContractResult:
     #: the governed outcome and whether anything actually changed.
     #: Defaulted so existing construction sites are unaffected.
     objective_action: dict[str, Any] | None = None
+
+    #: EXEC-02: what this turn's outcome-level goal did through the existing
+    #: Executive, or None when the turn contained none -- which is every turn
+    #: on a runtime that has not explicitly enabled conversational Executive
+    #: deliberation, and almost every turn on one that has. Records the
+    #: recognised goal, the Executive's own outcome, whether cognition was
+    #: consulted, the actions it *proposed*, and -- always, and always False on
+    #: this surface -- whether anything was executed or independently verified.
+    #: Defaulted so existing construction sites are unaffected.
+    executive_action: dict[str, Any] | None = None
 
     #: Set when a forecast this turn obtained was recorded as evidence
     #: against a live objective. Names the objective and the event kind, so
@@ -1379,12 +1390,197 @@ async def _attach_forecast_evidence(
         return None
 
 
+# -----------------------------------------------------------------------------
+# EXEC-02: the conversational surface's route into the Executive that already
+# exists.
+#
+# Structurally identical to the three recognisers above, and deliberately so.
+# There is no new planner here, no second Executive, no orchestration layer and
+# no parallel runtime: this handler recognises an outcome-level goal, hands the
+# person's own words to `bartholomew/executive/seam.py` --- the same entry point
+# `POST /api/operator/tasks` calls, with the same contracts, the same governance
+# and the same envelope --- and renders what came back without improving on it.
+#
+# Everything that decides anything is downstream of this function. It selects no
+# capability, validates no parameter, mints no approval and executes nothing.
+# -----------------------------------------------------------------------------
+
+
+def _conversational_executive_config(daemon: KernelDaemon) -> Any:
+    """The explicit activation on this runtime, or None.
+
+    Resolved by import rather than `getattr` on a bare string so the attribute
+    name lives in one place (`integration/conversational_executive.py`), and
+    resolved lazily so `bartholomew.kernel` keeps no import edge to
+    `bartholomew.integration`.
+    """
+    try:
+        from bartholomew.integration import conversational_executive
+    except ImportError:  # pragma: no cover - a tree without the integration package
+        return None
+    return conversational_executive.resolve(daemon)
+
+
+def _executive_seam() -> Any:
+    """W03-B/EXEC-01's Executive seam, resolved by name, or None.
+
+    Resolved rather than imported for the reason `routes/operator.py` gives for
+    doing the same: this module carries no import edge to a package that may not
+    be present, and a missing package is *reported* rather than worked around.
+    """
+    import importlib  # noqa: PLC0415
+
+    try:
+        return importlib.import_module("bartholomew.executive.seam")
+    except ImportError:
+        return None
+
+
+def _goal_reply(intent: Any, result: Any, outcome: str) -> str:
+    """What Bartholomew says, derived from what the Executive actually did.
+
+    Every branch is a different state and reads as one. There is no branch that
+    can say the work is finished, because at this point in the Runtime Contract
+    it demonstrably is not: the Executive stops at `pending_approval`, and the
+    action envelope refuses dispatch without an approval whatever this sentence
+    says. Completion is `POST /api/operator/tasks/{id}/advance`'s to report,
+    after real execution and independent verification.
+    """
+    explanation = getattr(result, "explanation", "") or ""
+    reason = getattr(result, "reason", None)
+    if outcome == goal_intents.GOAL_OUTCOME_PROPOSED:
+        return goal_intents.render_proposed(
+            explanation,
+            action_ids=list(getattr(result, "proposed_action_ids", None) or []),
+        )
+    if outcome == goal_intents.GOAL_OUTCOME_CLARIFICATION:
+        return goal_intents.render_clarification(reason or "", explanation)
+    if outcome == goal_intents.GOAL_OUTCOME_BRAKE:
+        return goal_intents.render_brake(reason)
+    if outcome == goal_intents.GOAL_OUTCOME_REFUSED:
+        return goal_intents.render_refused(reason, explanation)
+    return goal_intents.render_failure(intent.described_as, reason)
+
+
+async def _handle_executive_goal(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> dict[str, Any] | None:
+    """Route an outcome-level conversational goal into the existing Executive.
+
+    Returns None --- which is the answer for almost every utterance, and the
+    answer for *every* utterance on a runtime that has not explicitly enabled
+    this --- and the turn then proceeds exactly as it did before EXEC-02,
+    reaching the model unchanged.
+
+    **Three separate gates, in this order, and the first two are free.** The
+    activation must be installed; the utterance must be recognised as a goal by
+    `goal_intents.parse_intent`; and only then is the Executive called at all.
+    A runtime with no `conversational_executive` never even runs the recogniser,
+    so an unconfigured deployment pays nothing and behaves identically.
+
+    **Why the turn's own CandidateAction stays `chat_response`.** The same
+    reasoning `_handle_task_intent` records: the Executive action is a *nested*
+    governed act, evaluated for real at the action envelope against the
+    capability it actually names, which is the grain the device allowlists and
+    approval requirements use. Re-deciding it at the chat gate would replace a
+    truthful account of a refusal with a denial of the whole conversation turn.
+    Chat's own Governance stage has already failed closed on the `skills` scope
+    before this is reached, and the Executive independently reads the Parking
+    Brake --- in its most restrictive form, `EXECUTIVE_BRAKE_SCOPE` --- before it
+    understands anything, so a braked system consults no model and plans nothing.
+
+    **Never raises.** A goal that could not be planned is reported as one. It is
+    never allowed to fall through to the model, because falling through is
+    exactly how a fabricated "I've sorted your files out" would reach the user.
+    """
+    config = _conversational_executive_config(daemon)
+    if config is None:
+        return None
+
+    intent = goal_intents.parse_intent(observation.raw_content or "")
+    if intent is None:
+        return None
+
+    record: dict[str, Any] = {
+        "requested": intent.described_as,
+        "referent": intent.referent,
+        "trigger": intent.trigger,
+        "device_id": config.device_id,
+        #: Nothing on this surface can make either of these true. They are
+        #: recorded as False so that an audit reader sees the claim being made
+        #: rather than inferring it from an absence -- execution and independent
+        #: verification happen on the `advance` pass, behind a human approval.
+        "executed": False,
+        "verified": False,
+        "changed": False,
+    }
+
+    seam = _executive_seam()
+    if seam is None:
+        record["outcome"] = goal_intents.GOAL_OUTCOME_UNAVAILABLE
+        record["reply"] = goal_intents.render_unavailable(intent.described_as)
+        return record
+
+    try:
+        result = await seam.run_executive_task_through_runtime_contract(
+            daemon,
+            tenant_id=config.tenant_id,
+            device_id=config.device_id,
+            requested_by=config.requested_by,
+            instruction=intent.instruction,
+        )
+    except Exception:
+        logger.exception("The Executive raised on a conversational goal; reporting it truthfully")
+        record["outcome"] = goal_intents.GOAL_OUTCOME_FAILED
+        record["error"] = "an internal error interrupted the Executive"
+        record["reply"] = goal_intents.render_failure(
+            intent.described_as,
+            "an internal error interrupted it",
+        )
+        return record
+
+    outcome = goal_intents.map_outcome(getattr(result, "outcome", None))
+    record["outcome"] = outcome
+    record["executive_outcome"] = getattr(result, "outcome", None)
+    record["governance_allowed"] = bool(getattr(result, "governance_allowed", False))
+    record["proposed_action_ids"] = list(getattr(result, "proposed_action_ids", None) or [])
+    if getattr(result, "reason", None):
+        # A failure is recorded under `error`, as the other recognisers record
+        # theirs; everything else -- a question, a refusal, a brake -- is a
+        # `reason`, because none of those is a malfunction.
+        if outcome == goal_intents.GOAL_OUTCOME_FAILED:
+            record["error"] = result.reason
+        else:
+            record["reason"] = result.reason
+
+    plan = getattr(result, "plan", None)
+    if plan is not None:
+        record["task_id"] = getattr(plan, "task_id", None)
+        record["steps"] = len(getattr(plan, "steps", None) or [])
+        # Whether cognition was used at all, and why not when it was not. Read
+        # from the plan the Executive itself built -- this surface does not
+        # decide it and cannot influence it.
+        deliberation = getattr(plan, "deliberation", None) or {}
+        record["deliberated"] = bool(deliberation.get("used"))
+        if deliberation.get("reason"):
+            record["deliberation_reason"] = deliberation["reason"]
+
+    if getattr(result, "provenance_degraded", False):
+        record["provenance_degraded"] = True
+        record["provenance_error"] = getattr(result, "provenance_error", None)
+
+    record["reply"] = _goal_reply(intent, result, outcome)
+    return record
+
+
 #: Dispatch names, one per explicit-instruction recogniser. Constants rather
 #: than bare strings so the table below and the result-field reads in
 #: `run_chat_through_runtime_contract()` cannot drift apart silently.
 _DISPATCH_TASK = "task"
 _DISPATCH_FORECAST = "forecast"
 _DISPATCH_OBJECTIVE = "objective"
+_DISPATCH_EXECUTIVE_GOAL = "executive_goal"
 
 #: The chat surface's explicit-instruction recognisers, **in dispatch order**.
 #:
@@ -1410,6 +1606,13 @@ _CHAT_DISPATCH: tuple[
     # an objective. The objective recogniser is the broadest of the three,
     # so it goes where a broad recogniser belongs -- after the narrow ones.
     (_DISPATCH_OBJECTIVE, _handle_objective_intent),
+    # EXEC-02. **Last, and this is the whole of its safety posture.** Every
+    # deterministic recogniser above keeps first refusal on every utterance, so
+    # a known explicit command still takes the path it has always taken and no
+    # simple instruction is sent through a planner. This entry sees only what
+    # already fell through to the model -- and, on a runtime that has not
+    # explicitly enabled it, declines that too.
+    (_DISPATCH_EXECUTIVE_GOAL, _handle_executive_goal),
 )
 
 
@@ -1531,6 +1734,7 @@ async def run_chat_through_runtime_contract(
     task_action: dict[str, Any] | None = None
     forecast_action: dict[str, Any] | None = None
     objective_action: dict[str, Any] | None = None
+    executive_action: dict[str, Any] | None = None
     objective_evidence: dict[str, Any] | None = None
 
     if governance_allowed:
@@ -1556,6 +1760,7 @@ async def run_chat_through_runtime_contract(
         task_action = recognised.get(_DISPATCH_TASK)
         forecast_action = recognised.get(_DISPATCH_FORECAST)
         objective_action = recognised.get(_DISPATCH_OBJECTIVE)
+        executive_action = recognised.get(_DISPATCH_EXECUTIVE_GOAL)
 
         # Golden Path slice 2: a forecast obtained during this turn becomes
         # evidence on the objective it bears on. After the reply is settled
@@ -1618,6 +1823,14 @@ async def run_chat_through_runtime_contract(
             # user asked for, what the governed objective seam did, and
             # whether anything actually changed.
             details["objective_action"] = objective_action
+        if executive_action is not None:
+            # Explanation-grade provenance for the one surface where a
+            # conversation became a governed proposal: what was recognised as a
+            # goal, whether cognition was consulted, what the Executive decided,
+            # which actions were proposed -- and that nothing was executed or
+            # verified here. An audit reader must be able to tell a plan from a
+            # performance.
+            details["executive_action"] = executive_action
         if objective_evidence is not None:
             # External content entering an objective's durable history is
             # exactly the kind of thing that must be visible afterwards.
@@ -1671,6 +1884,7 @@ async def run_chat_through_runtime_contract(
         task_action=task_action,
         forecast_action=forecast_action,
         objective_action=objective_action,
+        executive_action=executive_action,
         objective_evidence=objective_evidence,
         provenance_degraded=reflection_outcome.error is not None,
         provenance_error=reflection_outcome.error,

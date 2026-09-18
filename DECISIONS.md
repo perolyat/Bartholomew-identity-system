@@ -3835,3 +3835,72 @@
   - The spent attempt is still kept on recovery, so a crash-loop stays bounded — asserted
     explicitly so this change cannot have altered it.
 - **Date:** 2026-09-18
+
+---
+
+## Decision: Conversation reaches the Executive through the dispatch table's last entry, behind an explicit switch
+
+- **Decision:** EXEC-02 connects the conversational surface to EXEC-01's goal-to-plan cognition by
+  **deepening the Executive stage the chat turn already has**, not by attaching a new system to it.
+  Concretely, and each clause is load-bearing:
+  1. a **pure recogniser** (`bartholomew/kernel/goal_intents.py`), a direct sibling of
+     `task_intents.py` / `forecast_intents.py` / `objective_intents.py` and held to the same
+     discipline (no I/O, no clock, no persistence, no model), decides whether an utterance is an
+     outcome-level goal. It claims one only when **both** a request construction **and** a
+     device-domain referent are present, each from a closed set;
+  2. that recogniser is the **last** entry in `_CHAT_DISPATCH`, so every existing deterministic
+     handler keeps first refusal on every utterance and no known explicit command is diverted into
+     a planner;
+  3. a qualifying goal is handed to `run_executive_task_through_runtime_contract()` — the **same**
+     entry point `POST /api/operator/tasks` calls, with the same contracts, the same `TaskIntent`,
+     the same governance and the same envelope;
+  4. activation is **two explicit environment switches**, both default-off, neither implying the
+     other, plus a **required** device id with no default. **A model being reachable enables
+     neither.**
+- **Alternatives:**
+  - *Ask a model whether a message is a task.* Rejected. It is the "everything goes to the planner"
+    behaviour the package brief forbids, it makes the decision unreviewable, and a model asked
+    "is this a task?" says yes to passing remarks — the same false-positive cost
+    `objective_intents.py` already refused to pay, for the same reason.
+  - *Put the goal recogniser first in the dispatch table, or merge it with the objective
+    recogniser.* Rejected. Ordering **is** the safety posture here: an explicit task instruction
+    must never be reinterpreted, and "add a task to ring the roofer" must keep the path it has.
+  - *A new conversational planner, agent loop or orchestration layer.* Rejected under
+    `CONSTITUTION.md`'s one-Executive rule. There is exactly one planner in this repository and it
+    is `bartholomew/executive/`.
+  - *One switch instead of two.* Rejected. Cognition inside the Executive and conversational
+    routing into it widen different things; folding them together would mean enabling chat routing
+    silently enabled model-led reasoning for the operator console too.
+  - *Derive the device id from the registry when only one device is enrolled.* Rejected. A guessed
+    device id means a sentence typed into chat could plan against a machine nobody named. The
+    activation is refused without one.
+  - *Expose approval on the chat surface too, so the journey completes there.* Deliberately **not
+    taken** in this package. The surface that understands a goal is not the surface that authorises
+    it; moving approval is a governance decision needing its own gate. Recorded as R-EXEC02-2.
+- **Why:** EXEC-01 produced the most capable cognition in the system and left it reachable only
+  from an operator route, which meant no amount of further cognition work could improve the
+  product. The gap was **depth in a stage that already existed**, so the repair had to be depth in
+  that stage. Every alternative above either creates a second decision-maker, makes the decision
+  seam unreviewable, or converts ordinary conversation into tasks — and the last of those is the
+  specific burden Real-World Test #1 already found Bartholomew adding.
+- **Consequences:**
+  - A deployment that sets neither switch behaves **identically** to `c5cb3a0`: the recogniser is
+    not even run, so EXEC-02 costs an unconfigured runtime nothing.
+  - Understanding a goal remains categorically distinct from being allowed to act on it. A
+    conversational proposal stops at `pending_approval` and meets the Parking Brake, the capability
+    catalogue, the real parameter validators, the device allowlists, the approval requirement and
+    independent verification exactly as an operator-initiated one does.
+  - The chat reply is built from what the Executive reported and is never generated; **no renderer
+    on this surface can say the work is finished**, because at that point it is not.
+  - Consequential verbs ("delete these files for me") are claimed by the recogniser **so that they
+    are refused in the Executive's own words** rather than falling through to a model that has no
+    way to do them and every way to sound as though it did.
+  - The closed request/referent sets become a standing review obligation as the capability domain
+    grows (R-EXEC02-1), of the same kind `INFERABLE_CAPABILITIES` already carries.
+  - Deliberation now runs in response to ordinary conversation, so the *frequency* of the
+    prompt-injection surface EXEC-01 analysed rises even though no new path from memory to
+    cognition was added (R-EXEC02-4).
+  - **No real-model plan-quality evidence exists.** R-EXEC01-3 stands unchanged; the real-path
+    evidence reached a live outbound model call from a chat message and stopped there for want of
+    a provisioned model.
+- **Date:** 2026-09-18

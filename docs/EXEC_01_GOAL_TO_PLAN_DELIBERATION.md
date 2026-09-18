@@ -249,10 +249,13 @@ recovery, and asserts the fourteen acceptance conditions in order.
 
 ## 8. What this does not do
 
-* **It does not reach the chat surface.** `/api/chat` has no path to the
-  Executive; "start a shopping list" typed there still falls through to a
-  conversational reply. EXEC-01 closed the goal-to-plan gap *within* the
-  Executive; connecting the chat surface to it is separate, unstarted work.
+* **It does not reach the chat surface.** *(Addressed by EXEC-02 —
+  `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`, built 2026-09-18,
+  **unmerged and default-off**, so this remains true of `main` and of any
+  deployment that has not set the switches.)* At `a64f5af`, `/api/chat` had no
+  path to the Executive and "start a shopping list" typed there fell through to
+  a conversational reply. EXEC-01 closed the goal-to-plan gap *within* the
+  Executive; connecting the chat surface to it was separate work, since done.
 * **It does not expand Bartholomew's limbs.** The capability vocabulary is the
   same nine kinds. Cognition got better at using them; there are no new ones.
 * **Deliberation provenance is not persisted on the task row.** It reaches the
@@ -261,7 +264,10 @@ recovery, and asserts the fourteen acceptance conditions in order.
   otherwise require. A plan reloaded for `advance` carries `None` there, and
   `advance` reads nothing from it.
 * **No model is configured by default.** A deployment that does not call
-  `install_deliberation_port` keeps exactly the pre-EXEC-01 executive.
+  `install_deliberation_port` keeps exactly the pre-EXEC-01 executive. *(EXEC-02
+  gives it a production caller behind the explicit, default-off
+  `BARTH_EXECUTIVE_DELIBERATION` switch. The principle is unchanged and was
+  deliberately preserved: a model being reachable still enables nothing.)*
 * **It does not claim general competence.** It claims that outcome-level goals
   inside the supported Windows capability domain now become bounded, validated,
   governed proposals.
@@ -363,10 +369,12 @@ exercised through this path, so nothing here says a real model produces good pla
 
 Recorded in `RISKS.md` and summarised in `START_HERE.md` §8:
 
-1. **Executive cognition is not reachable from normal chat.** `/api/chat` has no path
-   to the Executive.
-2. **The deliberation port is not enabled in shipped production wiring.**
-   `install_deliberation_port` has no production caller — verified at `a64f5af`.
+1. **Executive cognition is not reachable from normal chat.** *(Addressed by EXEC-02,
+   unmerged and default-off; see `RISKS.md`'s R-EXEC01-1.)* True at `a64f5af`: `/api/chat`
+   had no path to the Executive.
+2. **The deliberation port is not enabled in shipped production wiring.** *(Addressed by
+   EXEC-02, unmerged and default-off; see R-EXEC01-2.)* True at `a64f5af`:
+   `install_deliberation_port` had no production caller.
 3. **No real-model plan-quality evidence exists.**
 4. **The capability domain is bounded** — the same nine Windows capability kinds.
 5. **`INFERABLE_CAPABILITIES` — settled as policy on 2026-09-14.** Taylor approved **"infer the

@@ -173,6 +173,48 @@ test-only resolver is actually installed — which takes both
 `BARTH_INBOUND_ALLOW_TEST_RESOLVER` and `BARTH_INBOUND_TEST_TOKEN`, and
 neither belongs in a deployment with real devices.
 
+## Executive goal deliberation from conversation (default OFF)
+
+EXEC-02 lets an outcome-level goal typed into ordinary conversation — "sort these files out for
+me" — reach Bartholomew's goal-to-plan cognition and become a bounded, governed **proposal**.
+Nothing runs: a proposal stops at `pending_approval` and is authorised from the operator console,
+exactly as one raised through `POST /api/operator/tasks` is.
+
+**Two switches, both off unless you set them, and neither implied by the other. A model being
+reachable enables neither.**
+
+```
+# Executive cognition: lets the Executive reason from an outcome rather than
+# only reading instructions literally. Applies to every Executive caller,
+# including the operator console.
+BARTH_EXECUTIVE_DELIBERATION=1
+
+# Conversational routing: lets a recognised goal typed into chat reach the
+# Executive at all. Requires a device id -- there is no default, and activation
+# is refused without one, because a guessed device id would mean a sentence
+# typed into chat could plan against a machine nobody named.
+BARTH_CONVERSATIONAL_EXECUTIVE=1
+BARTH_CONVERSATIONAL_EXECUTIVE_DEVICE_ID=<an enrolled device id>
+
+# Optional. Single-tenant/single-operator defaults.
+BARTH_CONVERSATIONAL_EXECUTIVE_TENANT_ID=default
+BARTH_CONVERSATIONAL_EXECUTIVE_REQUESTED_BY=chat
+```
+
+The API prints the posture it actually came up in on startup
+(`[api] Executive posture: {...}`). Check it: an activation that silently did not happen is the
+worst of the available outcomes, which is why it is always stated rather than only logged on
+failure.
+
+Setting `BARTH_CONVERSATIONAL_EXECUTIVE` **without** `BARTH_EXECUTIVE_DELIBERATION` is a real and
+safe posture: chat reaches the Executive, the Executive reads instructions literally, and an
+outcome it cannot recognise becomes a question rather than a plan.
+
+Turning either on changes what Bartholomew will *think about*. It changes nothing about what he
+may *do*: the Parking Brake, the device allowlists, the capability validation, the approval
+requirement and independent verification are all unchanged and all still apply. Full record:
+`docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`.
+
 ## Unattended test runs
 
 For an unattended test period — as opposed to ordinary running — set

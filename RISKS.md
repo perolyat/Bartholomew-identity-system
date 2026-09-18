@@ -1630,18 +1630,36 @@ the EXEC-01 package record (`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §8, §1
 `DECISIONS.md`'s EXEC-01 entry. They are gathered here because a limitation that lives only
 inside a work-package document is a limitation the next session will not find.
 
-- **R-EXEC01-1 — Executive cognition is not reachable from normal conversation.** `/api/chat`
-  has no path to the Executive; `bartholomew/kernel/runtime_contract.py` holds no import from the
-  executive package (verified at `a64f5af`). A goal typed into chat falls through to a
-  conversational reply. **Consequence:** the most capable cognition in the system is invisible
-  to the user, so no amount of further cognition work improves the product until this is
-  addressed. This is the reason EXEC-02 is the identified next package.
-- **R-EXEC01-2 — The deliberation port is not enabled in shipped production wiring.**
-  `install_deliberation_port` has no production caller (verified at `a64f5af`). A deployment
-  that does not call it keeps exactly the pre-EXEC-01 Executive. **This is deliberate** — see
-  `DECISIONS.md` — and the risk is not the design but the *misreading*: "EXEC-01 is merged"
-  must never be read as "Bartholomew now plans from goals in production".
-- **R-EXEC01-3 — No real-model plan-quality evidence exists.** All EXEC-01 evidence is
+- **R-EXEC01-1 — ~~Executive cognition is not reachable from normal conversation.~~ ADDRESSED by
+  EXEC-02 (built 2026-09-18, branch `claude/exec-02-conversational-integration-82tk0o`,
+  **unmerged**).** The original entry, true at `a64f5af`, read: "`/api/chat` has no path to the
+  Executive; `bartholomew/kernel/runtime_contract.py` holds no import from the executive package.
+  A goal typed into chat falls through to a conversational reply." EXEC-02 closes it by adding a
+  last entry to `_CHAT_DISPATCH` that hands a recognised outcome-level goal to the **same**
+  `run_executive_task_through_runtime_contract()` the operator console calls. **Two qualifications
+  that keep this from being over-read:** it is *unmerged*, so `main` still carries the original
+  condition; and it is *default-off*, so a deployment that sets neither switch still falls through
+  to a conversational reply exactly as before. See
+  `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`.
+- **R-EXEC01-2 — ~~The deliberation port is not enabled in shipped production wiring.~~ ADDRESSED
+  by EXEC-02 (unmerged), and the *misreading* it warned about is now more available, not less.**
+  The original entry: "`install_deliberation_port` has no production caller (verified at
+  `a64f5af`)." EXEC-02 gives it one —
+  `bartholomew/integration/conversational_executive.configure_from_environment`, called from the
+  API's startup — behind the explicit `BARTH_EXECUTIVE_DELIBERATION` switch, which **defaults
+  off and is not implied by a model being reachable**. The design point the original entry made
+  is unchanged and was deliberately preserved: enabling model-led reasoning on somebody's
+  computer stays an operator's decision. The standing risk is the same misreading, restated for
+  the new state: **"EXEC-02 is merged" must never be read as "Bartholomew now plans from goals in
+  production"** — that requires two environment variables and a named device id, and it still
+  proposes rather than acts.
+- **R-EXEC01-3 — No real-model plan-quality evidence exists. UNCHANGED by EXEC-02, and this
+  matters most precisely because EXEC-02 makes the path reachable.** EXEC-02's real-path evidence
+  ran the shipped composition end to end and reached a **live outbound model call** from an
+  ordinary chat message — proving reachability and a truthful failure path — and stopped there,
+  because no model was provisioned in that environment (no Ollama on `127.0.0.1:11434`, no
+  `ANTHROPIC_API_KEY`, no `anthropic` SDK). That is evidence about *plumbing*, not about plans.
+  The original entry stands verbatim: All EXEC-01 evidence is
   unit/integration, CI, adversarial-review and **mocked-model** evidence. Deterministic fake
   ports prove the plumbing and the defences; they say nothing about whether a live model
   produces useful, sensible plans. **Nothing may describe live plan quality as proven** until
@@ -1696,3 +1714,33 @@ inside a work-package document is a limitation the next session will not find.
   `START_HERE.md` §3 rule 3 requires material chat-only findings to be promoted to a durable
   record. **Residual risk:** all three depend on discipline at the end of a session, and
   nothing enforces them mechanically.
+
+
+## EXEC-02 residual risks (recorded 2026-09-18, branch `claude/exec-02-conversational-integration-82tk0o`, **unmerged**)
+
+Carried-forward limitations of built-but-unmerged work. Full record:
+`docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` §10.
+
+- **R-EXEC02-1 — The goal recogniser's vocabulary is a closed list, and lists drift.**
+  `kernel/goal_intents.py` claims an utterance only when it carries both a request construction
+  from a closed verb set and a referent from a closed noun set. A goal phrased outside those sets
+  is a **false negative**: it stays conversation, and the person restates it or uses the operator
+  console. This is the deliberate direction of error — a false positive answers a conversational
+  turn with a plan nobody asked for, and costs trust — but it means the two sets need reviewing
+  whenever the capability domain grows, the same standing obligation `INFERABLE_CAPABILITIES`
+  carries (R-EXEC01-5). **Not a defect; a maintenance obligation that must not be forgotten.**
+- **R-EXEC02-2 — A goal can be stated in chat but not approved there.** The surface that
+  understands a goal is not the surface that authorises it: approving a proposed action remains
+  the operator console's. That is a real seam in the experience, deliberately left, because
+  exposing approval on the conversational surface is a governance question and not a cognition
+  one. **Consequence:** the conversational experience is genuinely incomplete end-to-end, and
+  nothing should describe it as a finished user journey.
+- **R-EXEC02-3 — One device per deployment.** The activation names a single `device_id` and has
+  no default. A deployment with two machines cannot express "that one" conversationally. Opening
+  it would need a recogniser and a consent question this package did not open.
+- **R-EXEC02-4 — Enabling this widens what a prompt-injected memory can influence.** EXEC-01's
+  analysis holds exactly (`docs/EXEC_01_...` §5: evidence reaches the prompt, reaches no part of
+  the deterministic path, and confers no authority), and EXEC-02 adds no new path from memory to
+  cognition. What it changes is *how often* deliberation runs, because an ordinary conversation
+  can now trigger it. The defences are unchanged and separately tested; the exposure surface is
+  larger. **Stated so it is not discovered later as a surprise.**
