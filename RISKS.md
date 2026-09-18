@@ -1329,39 +1329,46 @@
   > optimisation. Scoped reuse only (a `db_session()` held across a burst), never a process-wide
   > pool.
 
-- **(2026-09-18, REPAIRED in the same package) A `lease_seconds=N` claim lease in
-  `event_processing` could expire after as little as zero seconds.**
-  `bartholomew/kernel/event_processing/store.py::claim_batch()` computes
-  `now = int(time.time())` and stores `lease_expires_ts = now + lease_seconds`, then recovered
-  expired claims by comparing that against a second, separately truncated `int(time.time())`.
-  Both ends whole seconds, the two calls at different sub-second phases: with the comparison at
-  `<=`, a lease was released as soon as the second *counter* reached its expiry, so a claim taken
-  at `T.996` was already expired 5 ms later. An `N`-second lease really lasted somewhere in
-  `(N-1, N]`, and at `N = 1` it could last essentially no time at all.
-- **Why it mattered:** a claim is this module's only mutual exclusion. A lease released the moment
-  after it is granted lets two passes hold one event at once. Re-processing here is idempotent by
-  design, so the damage was bounded — but the lease did not provide the guarantee its own
-  docstring states ("A claim is a lease with an expiry").
+- **(2026-09-18, REPAIRED) A `lease_seconds=N` claim lease in `event_processing` had no reliable
+  duration in either direction.** `claim_batch()` read the clock twice — once with
+  `now = int(time.time())` when granting (`lease_expires_ts = now + lease_seconds`) and once, in a
+  later pass, to test for expiry. Both were truncated to the whole second, and truncation throws
+  away the sub-second phase at which each call happened, so the two readings were not measuring
+  the same thing:
+  - **Too short.** A claim taken at `T.996` stored `T+1` and was already expired 5 ms later, when
+    the second counter reached `T+1`.
+  - **Too long.** A claim taken at `T.004` was held for almost a full second beyond the `N` asked
+    for.
+- **Why the short end mattered:** a claim is this module's only mutual exclusion. A lease released
+  the moment after it is granted lets two passes hold one event at once. Re-processing here is
+  idempotent by design, so the damage was bounded — but the lease did not provide the guarantee
+  its own docstring states ("A claim is a lease with an expiry").
 - **Evidence:** measured before the change, 10 of 60 claims deliberately aligned to 4 ms before a
   second boundary were released by the very next call, every one showing the claim at fraction
   `.996` and the recheck at `.001` of the next second; away from the boundary (0.1, 0.5, 0.9,
   0.97) it never occurred. It had been presenting as an intermittent failure of
   `tests/test_event_backbone_processing.py::
-  test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing` (which claims with
-  `lease_seconds=1` and asserts an immediate second pass claims nothing), named on the
-  pre-existing list in `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` (run 34942899213) and seen again
-  on the SQLite connection-lifecycle branch. It was never that package's: the defect is
+  test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing`, named on the pre-existing
+  list in `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` (run 34942899213) and seen again while
+  verifying the SQLite connection-lifecycle package. It was never that package's: the defect is
   wall-clock phase.
-- **Repair:** the recovery comparison is now strict, `lease_expires_ts < ?`. The boundary second
-  belongs to the holder, so an `N`-second lease lasts between `N` and `N+1` real seconds. That is
-  the correct direction for a lease: granting slightly long costs at most one extra second before
-  a genuinely dead holder's work is recovered; expiring early costs mutual exclusion. The
-  reasoning is kept in full above `claim_batch()` so the next reader does not "simplify" it back.
-- **Proof:** `tests/test_event_lease_expiry_boundary.py` — eight tests driving the clock through
-  `now_ts` rather than racing a phase, plus one that busy-waits to a real second boundary. **Six
-  of the eight fail against the old `<=` comparison**, including the wall-clock one; all pass
-  against the new one. The spent-attempt behaviour (a crash-loop stays bounded) is asserted
-  alongside, so the fix cannot quietly alter it.
+- **Repair:** the lease clock is real seconds (`time.time()`), not whole ones. An `N`-second lease
+  now lasts `N` seconds. No schema change: the column stays numeric, pre-existing whole-second
+  rows compare correctly against a float, and the only reader outside the module already compares
+  it to `time.time()`. `now_ts` still accepts an integer.
+- **A first attempt at this fix was wrong, and is recorded because the tests that caught it are
+  the value here.** Making the expiry comparison strict (`<` rather than `<=`) removes the
+  too-short case and looks like a one-operator fix — but it makes an `N`-second lease last between
+  `N` and `N+1` seconds, which **fails four existing tests** in
+  `tests/test_event_backbone_store.py` that claim with `lease_seconds=1` and wait 1.1 s for a
+  recovery. Fixing one end of the lease simply moves the defect to the other. Only a clock that
+  measures the same thing at both readings fixes it.
+- **Proof:** `tests/test_event_lease_expiry_boundary.py` — 18 tests driving the clock through
+  `now_ts` rather than racing a phase, plus one that busy-waits to a real second boundary across
+  12 trials. **11 fail against the unfixed code**, including the wall-clock one; and
+  `TestALeaseIsNotTooLong` (5 tests) fails against the rejected strict-comparison variant, so the
+  wrong fix cannot pass either. The spent-attempt behaviour (a crash-loop stays bounded) is
+  asserted alongside, so the fix cannot quietly alter it.
 - **Risk category:** durable-work-queue correctness. **Status:** closed by this change.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,

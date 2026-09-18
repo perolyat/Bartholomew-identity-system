@@ -3754,34 +3754,41 @@
     on it.
 - **Date:** 2026-09-17
 
-## Decision: a lease errs long, never short — the boundary second belongs to its holder
+## Decision: a lease's two clock readings must measure the same thing
 
-- **Status:** established 2026-09-18 by the event-processing lease-truncation repair (branch
+- **Status:** established 2026-09-18 by the event-processing lease repair (branch
   `claude/event-lease-truncation-race`, **NOT MERGED**, awaiting Taylor's User Approval Gate).
   Found while verifying the SQLite connection-lifecycle package and deliberately split out of it,
   because it is a durable-queue correctness question rather than a connection-lifetime one.
-- **Decision:** where a lease is stored with whole-second granularity, the expiry comparison is
-  strict (`lease_expires_ts < now`), not inclusive. A lease asked for as `N` seconds lasts between
-  `N` and `N + 1` real seconds. It may never last less than `N`.
-- **Why:** `claim_batch()` truncates both ends of the lease to the second — `now = int(time.time())`
-  when granting, and a separately truncated `int(time.time())` when recovering — and the two calls
-  are not at the same sub-second phase. With an inclusive comparison the lease was released as
-  soon as the second counter *reached* its expiry, so a claim taken at `T.996` was expired 5 ms
-  later and an `N`-second lease really lasted `(N-1, N]`. At `N = 1` that is no lease at all.
-  A claim is this module's only mutual exclusion; releasing one immediately after granting it
-  lets two passes hold the same event.
-- **Alternatives considered:** (a) sub-second lease timestamps — a schema change and a migration
-  for a defect one operator fixes, and it would leave every other second-granular comparison in
-  the codebase with the same latent shape; (b) granting `lease_seconds + 1` at claim time —
-  numerically equivalent but states the wrong thing, since the caller did not ask for `N + 1`;
-  (c) changing the tests that exposed it to use longer leases — hides the defect and leaves
-  production with a lease that can expire on grant.
+- **Decision:** a lease is granted and tested against the same clock, at the same resolution. In
+  `event_processing`, that clock is `time.time()` — real seconds. An `N`-second lease lasts `N`
+  seconds: not `(N-1, N]`, and not `[N, N+1)`.
+- **Why:** `claim_batch()` truncated both readings with `int()`. Truncation discards the
+  sub-second phase at which each call happened, and the two calls are at different phases, so the
+  lease's real duration was whatever the phase difference made it. A claim taken at `T.996` was
+  expired 5 ms later; one taken at `T.004` was held almost a second too long. A claim is this
+  module's only mutual exclusion, so the short end let two passes hold the same event.
+- **Alternatives considered:**
+  - *Make the expiry comparison strict (`<`).* **Tried, and rejected on evidence.** It removes the
+    too-short case and reads like a one-operator fix, but it makes an `N`-second lease last up to
+    `N+1` seconds and **fails four existing tests** in `tests/test_event_backbone_store.py` that
+    wait `1.1 s` for a `lease_seconds=1` recovery. Fixing one end of a lease moves the defect to
+    the other end; only matching the two clock readings removes it. `TestALeaseIsNotTooLong` in
+    `tests/test_event_lease_expiry_boundary.py` exists to fail if anyone reaches for this again.
+  - *Grant `lease_seconds + 1`.* Same shape as the above, and additionally stores a number the
+    caller did not ask for.
+  - *Lengthen the leases in the tests that exposed it.* Hides the defect and leaves production
+    with a lease that can expire on grant.
+  - *A migration to a sub-second column.* Unnecessary: SQLite's column affinity is numeric, a
+    float compares correctly against the whole-second rows already stored, and the single reader
+    outside the module already compares the value to `time.time()`.
 - **Consequences:**
-  - Recovery of a genuinely dead holder's work can take up to one second longer. That is the
-    accepted cost, and it is the safe direction: the work is recovered a moment later and
-    re-processing is idempotent by design, whereas early expiry costs mutual exclusion outright.
-  - A caller needing a hard upper bound on recovery latency asks for a shorter lease rather than
-    relying on a lease that might already be over.
+  - Callers waiting `N + ε` for a recovery keep working, because the lease is no longer able to
+    run long either.
+  - `lease_expires_ts` is a float going forward; rows written before this change are whole
+    seconds and need no migration.
+  - `now_ts` still accepts an integer, so a caller driving the clock in whole seconds is
+    unaffected.
   - The spent attempt is still kept on recovery, so a crash-loop stays bounded — asserted
     explicitly so this change cannot have altered it.
 - **Date:** 2026-09-18

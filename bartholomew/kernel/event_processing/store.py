@@ -64,21 +64,21 @@ logger = logging.getLogger(__name__)
 
 # -- states -----------------------------------------------------------------
 
-# Swept from `inbound_events`, waiting for a pass to take it.
+#: Swept from `inbound_events`, waiting for a pass to take it.
 STATE_CAPTURED = "captured"
-# A pass holds a lease on it right now.
+#: A pass holds a lease on it right now.
 STATE_CLAIMED = "claimed"
-# A handler ran and its effect (if any) is durable. Terminal.
+#: A handler ran and its effect (if any) is durable. Terminal.
 STATE_PROCESSED = "processed"
-# Nothing here bears on anything Bartholomew is carrying. Terminal, and an
-# explicit verdict rather than an absence of one.
+#: Nothing here bears on anything Bartholomew is carrying. Terminal, and an
+#: explicit verdict rather than an absence of one.
 STATE_IRRELEVANT = "irrelevant"
-# Deliberately not acted on: an unknown event type, a payload that is not
-# what its type promises, a policy denial, or an interpretation that would
-# have had to guess. Terminal, and never an error.
+#: Deliberately not acted on: an unknown event type, a payload that is not
+#: what its type promises, a policy denial, or an interpretation that would
+#: have had to guess. Terminal, and never an error.
 STATE_REFUSED = "refused"
-# Repeatedly failed. Terminal, held for inspection, and out of the way of
-# every later event. Terminal.
+#: Repeatedly failed. Terminal, held for inspection, and out of the way of
+#: every later event. Terminal.
 STATE_QUARANTINED = "quarantined"
 
 TERMINAL_STATES = frozenset(
@@ -87,9 +87,9 @@ TERMINAL_STATES = frozenset(
 PENDING_STATES = frozenset({STATE_CAPTURED, STATE_CLAIMED})
 ALL_STATES = TERMINAL_STATES | PENDING_STATES
 
-# The dispositions a handler may ask for. `quarantined` is deliberately not
-# among them: quarantine is what repeated *failure* produces, and a handler
-# that could elect it directly would be able to hide a refusal as a fault.
+#: The dispositions a handler may ask for. `quarantined` is deliberately not
+#: among them: quarantine is what repeated *failure* produces, and a handler
+#: that could elect it directly would be able to hide a refusal as a fault.
 SETTLEABLE_STATES = frozenset({STATE_PROCESSED, STATE_IRRELEVANT, STATE_REFUSED})
 
 _STATE_CHECK = ", ".join(f"'{s}'" for s in sorted(ALL_STATES))
@@ -178,7 +178,10 @@ class ProcessingRecord:
     attempts: int
     claim_token: str | None
     claimed_at: str | None
-    lease_expires_ts: int | None
+    #: When this claim's lease runs out, in epoch seconds. A float since the
+    #: lease clock became real seconds (see the note above `claim_batch()`);
+    #: rows written before that hold whole seconds and compare identically.
+    lease_expires_ts: float | None
     last_attempt_at: str | None
     last_error: str | None
     settled_at: str | None
@@ -454,39 +457,49 @@ def new_claim_token() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Why the expiry comparison in `claim_batch()` is `<` and not `<=`
+# Why the lease clock is `time.time()` and not `int(time.time())`
 # ---------------------------------------------------------------------------
 #
-# Both ends of a lease are whole seconds. `claim_batch()` takes
-# `now = int(time.time())` and stores `lease_expires_ts = now + lease_seconds`;
-# a later pass recovers expired claims by comparing that stored value against
-# its own, separately truncated `int(time.time())`. Truncation throws away
-# the sub-second phase at which each call happened, and the two calls are not
-# at the same phase.
+# A lease has two clock readings: one when it is granted
+# (`lease_expires_ts = now + lease_seconds`) and one, in a later pass, when it
+# is tested for expiry. While both were truncated with `int()`, they were not
+# measuring the same thing -- truncation throws away the sub-second phase at
+# which each call happened, and the two calls are at different phases.
 #
-# With `<=`, a lease is released as soon as the *second counter* reaches
-# `lease_expires_ts` -- which, for a claim taken at `T.996`, happens 5 ms
-# later at `T+1.001`. An `N`-second lease therefore really lasted somewhere
-# in `(N-1, N]` seconds, and at `N = 1` it could last essentially no time at
-# all. Measured before this change: 10 of 60 claims deliberately aligned to
-# 4 ms before a second boundary were released by the very next call, every
-# one of them showing the claim at fraction `.996` and the recheck at `.001`
-# of the next second. Away from the boundary (fractions 0.1, 0.5, 0.9, 0.97)
-# it never happened -- which is exactly why it read as an intermittent test
-# failure rather than as the defect it is.
+# The consequence is that a `lease_seconds=N` lease had no reliable duration in
+# *either* direction:
 #
-# That is not a cosmetic off-by-one. A claim is this module's only mutual
-# exclusion: releasing one the moment after granting it lets two passes hold
-# the same event at once. Re-processing is idempotent here by design, so the
-# damage is bounded, but the lease did not provide the guarantee its own
-# docstring states.
+#   * Too short. A claim taken at `T.996` stored `T+1` and was already expired
+#     5 ms later, when the second counter reached `T+1`. Measured before this
+#     change: 10 of 60 claims deliberately aligned to 4 ms before a second
+#     boundary were released by the very next call, each showing the claim at
+#     fraction `.996` and the recheck at `.001` of the next second. Away from
+#     the boundary (0.1, 0.5, 0.9, 0.97) it never happened -- which is why it
+#     presented as an intermittent test failure rather than as a defect.
+#   * Too long. A claim taken at `T.004` stored `T+1` and was held for almost a
+#     full second beyond the `N` asked for.
 #
-# With `<`, the boundary second belongs to the holder: an `N`-second lease
-# lasts between `N` and `N+1` real seconds. That is the correct direction for
-# a lease. Granting slightly long costs at most one extra second before a
-# genuinely dead holder's work is recovered; expiring early costs mutual
-# exclusion. A caller that needs a hard upper bound on recovery latency
-# should ask for a shorter lease, not a lease that might already be over.
+# The first of those is the one that matters: a claim is this module's only
+# mutual exclusion, and a lease released the moment after it was granted lets
+# two passes hold the same event at once. Re-processing here is idempotent by
+# design, so the damage was bounded -- but the lease did not provide the
+# guarantee its own docstring states ("A claim is a lease with an expiry").
+#
+# Storing real seconds fixes both ends at once, and is why this is a clock
+# change rather than an adjustment to the comparison. An `N`-second lease now
+# lasts `N` seconds. Nothing about the schema changes: the column stays
+# numeric, existing whole-second rows compare correctly against a float, and
+# the only reader outside this module already compares it to `time.time()`.
+#
+# Alternatives that were tried and rejected. Making the expiry comparison
+# strict (`<` instead of `<=`) removes the too-short case but makes an
+# `N`-second lease last between `N` and `N+1` seconds, which breaks every
+# caller and test that waits `N + 0.1` for a recovery -- the guarantee simply
+# moves from one end to the other. Granting `lease_seconds + 1` has the same
+# shape and additionally stores a number the caller did not ask for.
+#
+# `now_ts` still accepts an integer, so a caller that wants to drive the clock
+# in whole seconds is unaffected.
 
 
 def claim_batch(
@@ -506,12 +519,9 @@ def claim_batch(
     1. **Recover expired leases.** Anything still `claimed` past its expiry
        goes back to `captured`. Its spent attempt is *kept*: a process that
        died holding the event may well have died because of it, and a
-       crash-loop must be bounded like any other repeated failure.
-
-       "Past its expiry" is `lease_expires_ts < now`, strictly: the boundary
-       second belongs to the holder. See the note above this function for
-       why -- it is the difference between an `N`-second lease and one that
-       might already be over.
+       crash-loop must be bounded like any other repeated failure. "Past its
+       expiry" is measured in real seconds -- see the note above this
+       function for why that had to be said out loud.
     2. **Quarantine the exhausted.** Anything `captured` that has already used
        its attempts is moved out of the way before the selection below, so a
        poison event cannot be picked ahead of healthy ones a second time.
@@ -523,12 +533,13 @@ def claim_batch(
     runtime binding (the single-user local deployment) claims exactly the
     events captured with no binding, and never another runtime's.
     """
-    now = int(time.time()) if now_ts is None else int(now_ts)
+    # Real seconds, not whole ones -- see the note above this function. The
+    # grant clock and the expiry clock must measure the same thing, or the
+    # lease's real duration depends on the sub-second phase it was taken at.
+    now = time.time() if now_ts is None else float(now_ts)
     now_text = _now_iso()
     lease_until = now + max(1, int(lease_seconds))
     claimed: list[ProcessingRecord] = []
-    # `lease_until` is second-granular because `now` is. The recovery
-    # comparison below must therefore be strict -- see the note above.
 
     try:
         with _connect(db_path, "event_processing_claim") as conn:
@@ -546,7 +557,7 @@ def claim_batch(
                     "claimed_at = NULL, lease_expires_ts = NULL, "
                     "last_error = COALESCE(last_error, ?) "
                     "WHERE state = ? AND runtime_id IS ? AND lease_expires_ts IS NOT NULL "
-                    "AND lease_expires_ts < ?",
+                    "AND lease_expires_ts <= ?",
                     (
                         STATE_CAPTURED,
                         "claim lease expired before the event was settled; recovered",
