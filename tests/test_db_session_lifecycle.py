@@ -417,8 +417,13 @@ class TestTheCostIsActuallyRemoved:
         0.105 s scoped for the 1000-emission containment burst (43x). The
         assertion here is deliberately loose (2x) so it proves the direction
         without becoming a timing test.
+
+        `n` is kept small on purpose. The unscoped half of this comparison
+        pays the very cost the package removes -- about 70 ms per close on
+        Windows -- so a large `n` would make this test one of the slowest in
+        the suite to prove something 50 operations already prove.
         """
-        n = 150
+        n = 50
 
         def run(scoped: bool) -> float:
             start = time.perf_counter()

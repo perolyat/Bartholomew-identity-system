@@ -14,7 +14,7 @@ reuse and never a process-wide pool" (2026-09-17).
 | --- | --- | --- |
 | PR #112 merged cleanly | Yes | `origin/main` head `9ca2d4a` is the merge commit for `claude/windows-runtime-execution-bnpcw0`. |
 | Gate 2 / Band 0 blocked solely by the SQLite connection lifecycle | Consistent with the record; not independently re-measured on Windows | `RISKS.md` 2026-09-17 amendment; no separate blocker found in this package's scope. |
-| Heavy-burst test ~108 s against a 120 s per-test timeout | Not re-measurable here (Linux runner) | Taken from the recorded Windows measurement; the *structure* it describes is reproduced below. |
+| Heavy-burst test ~108 s against a 120 s per-test timeout | **Confirmed on Windows, and now repaired** | §4a: the base branch `9ca2d4a` lost a worker to it the same day (run 35301649186); on this branch it leaves the cost table entirely (run 35311115266). |
 | ~98 % of the test is the per-operation connection lifecycle, dominated by `close` at ~70 ms | **Confirmed in structure, and the mechanism identified** | §2. |
 | The remedy is scoped reuse, never a process-wide pool | Adopted unchanged | §3. |
 | `RISKS.md` still says PR #112 is awaiting Taylor's gate | **Confirmed stale, corrected** | §6. |
@@ -142,13 +142,57 @@ Inside the scope, `wal_db()` borrows the session's connection. Outside it, nothi
   recorded in the pull request.
 - Heavy-burst containment test on Linux: **2.23 s → 0.20 s**.
 
+### 4a. Windows evidence (the decisive measurement)
+
+Merge Candidate run **35311115266**, head `6750227`, "Windows full default suite + actuation
+(py3.11)": **16:30 wall, 5098 passed, 1 failed, 82 skipped.** No worker lost. No stall recorded.
+All four workers reached `session_finish=yes process_exit=yes`.
+
+`test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` **does not appear in
+that run's slowest-reports table or in its SQLite cost table at all** — both are top-15 lists
+whose last entry is 1.3 s. Its recorded profile before this package was:
+
+```
+1036 opens | 0.4s connect | 33.8s commit | 72.3s close | 108.4s wall
+```
+
+The control is same-day and on the base branch: the Merge Candidate for `main` at `9ca2d4a`
+(run **35301649186**, 03:22 the same morning, the post-#112 push) failed with
+
+```
+WORKER LOST  gw3  died on tests/test_scheduler_queue_containment.py::
+  TestContainmentNeverDestroysAnObligation::
+  test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched
+```
+
+— the blocker exactly, on the same runner image and the same execution machinery. The comparison
+is therefore direct, and the one thing that changed between them is this package.
+
+**The one failure in run 35311115266 is a different, pre-existing class**:
+`tests/test_device_consent_channel.py::test_a_late_answer_after_expiry_cannot_resurrect_the_start`
+("the ask never appeared"). It sets `ttl_seconds=1` and polls for the ask to be *pending*; the
+run's own trace shows it at `253 opens | 3 commits | 4.0s commit | 14.3s wall`, so one commit took
+seconds and the ask expired before it was observable. `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`
+already names this file, with `test_event_backbone_processing.py::
+test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing`, as "time-budget assertions on
+per-operation SQLite paths", failing on `main` before this package existed. `db_session()` changes
+behaviour only inside a scope and neither path opens one, so there is no mechanism by which this
+repair causes it; what changed is exposure, since the heavy-burst test no longer kills a worker and
+requeues its work. Recorded as its own `RISKS.md` entry rather than absorbed here — see §5.
+
 ## 5. Limitations and remaining risk
 
-- **The decisive measurement is still owed by Windows CI.** Everything above is Linux. The
-  mechanism is platform-independent and the Windows cost of the removed operations is higher, not
-  lower, so the direction is not in doubt — but "the heavy-burst test now completes well inside
-  120 s on Windows" is a claim only a Windows Merge Candidate run can make. Treat the Linux
-  figures as the reason to expect it, not as the evidence for it.
+- **One Windows run is not "repeatably all-green".** Run 35311115266 is decisive about *this
+  blocker* — the test is gone from the cost table and the base branch lost a worker to it the same
+  day — but Band 0's condition is repeatable completion, and the record before this package was
+  two green and three red across four heads. More runs are needed, and they are cheap to get: the
+  `ci:merge-candidate` label runs the Windows suite on this PR.
+- **A separate, pre-existing Windows failure is still live** (§4a and `RISKS.md`,
+  2026-09-18): time-budget assertions on per-operation SQLite paths in
+  `test_device_consent_channel.py` and `test_event_backbone_processing.py`. Deliberately not
+  absorbed — repairing them means touching those subsystems' own semantics. It is a real obstacle
+  to repeatable Windows green and should be tracked as its own item, not counted against this
+  package.
 - **The scope is opt-in.** Only the scheduler tick and the containment bursts declare one today.
   Other hot paths (MemoryStore ingestion, retrieval, the API bridge's request handling) still pay
   the per-operation cost and can adopt `db_session()` incrementally. That is deliberate: each
@@ -178,11 +222,14 @@ reassessment is:
 2. The lifecycle contract in §3, pinned by 34 deterministic tests, including explicit proof that
    the handle-release guarantee the Windows tests defend is preserved.
 3. The Linux before/after figures in §2 and §4.
-4. **The one thing still required: a Windows Merge Candidate run on this branch showing
-   `test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` completing well inside
-   the unchanged 120 s per-test timeout, and no worker killed by it.** Band 0's outstanding
-   condition is *repeatably* all-green Windows completion, so more than one run is needed — the
-   record before this package was two green and three red across four heads.
+4. **The Windows measurement in §4a**, which is the decisive one: run 35311115266 on this branch
+   against run 35301649186 on `main` the same morning. This is what closes the connection-lifecycle
+   blocker specifically.
+5. **What it does not close:** repeatable Windows green. One run is one run, and run 35311115266
+   also carried a failure of a different, pre-existing class (§4a). A reassessment should require
+   further Merge Candidate runs on this head, and should treat the device-consent /
+   event-backbone timing class as its own open item.
 
-Until (4) exists, the correct statement is that the blocker is **technically repaired and
-evidenced on Linux, pending Windows confirmation** — not that Band 0 is clear.
+The correct statement is that **the SQLite connection-lifecycle blocker is resolved, measured on
+Windows** — and that Band 0 is *not* thereby clear, because its condition is repeatable all-green
+completion and a separate failure class is still live.

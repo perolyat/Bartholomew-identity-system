@@ -1360,6 +1360,51 @@
   > test well inside the unchanged 120 s per-test timeout with no worker killed. Until then the
   > accurate statement is **technically repaired and evidenced on Linux, pending Windows
   > confirmation** — not that Band 0 is clear.
+  >
+  > **Windows confirmation, 2026-09-18 (run 35311115266, head `6750227`).** Taken, and it holds.
+  > The heavy-burst containment test no longer appears in the run's slowest-reports table or in
+  > its SQLite cost table at all — it was `1036 opens | 0.4 s connect | 33.8 s commit | 72.3 s
+  > close | 108.4 s wall` and is now below the 15th entry of both (1.3 s). No worker was lost, no
+  > stall was recorded, all four workers reached `session_finish` and `process_exit`, and the job
+  > completed in 16:30 with 5098 passed. The **control is same-day and on the base branch**: the
+  > Merge Candidate for `main` at `9ca2d4a` (run 35301649186, 2026-09-18 03:22, the post-#112
+  > push) failed with `WORKER LOST gw3 died on
+  > test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` — the blocker
+  > exactly. The nothing-changed-but-this comparison is therefore direct.
+  >
+  > One test failed in that run, and it is **not this class and not this package's**: see the
+  > separate entry below. Band 0 still needs *repeatably* all-green Windows completion, so this
+  > is one run, not the record.
+
+- **(2026-09-18) Time-budget assertions on per-operation SQLite paths, in tests this package did
+  not adopt the connection scope for.** `tests/test_device_consent_channel.py::
+  test_a_late_answer_after_expiry_cannot_resurrect_the_start` failed on Windows in run
+  35311115266 with "the ask never appeared". The test configures `ttl_seconds=1` and then polls
+  up to 5 s for the ask to show up as *pending*; the run's own SQLite trace shows that test at
+  `253 opens | 3 commits | 4.0 s commit | 14.3 s wall`, so a single commit took seconds and the
+  ask had already expired by the time it was observable. The assertion races the TTL it sets.
+  - **Not new, and not caused by the connection-lifecycle repair.** The class is already on the
+    record: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` §(run 34942899213) names this same file and
+    `tests/test_event_backbone_processing.py::
+    test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing` (a 1 s lease) together as
+    "time-budget assertions on per-operation SQLite paths", failing on `main` before this
+    package existed. The repair has no mechanism to cause it: `db_session()` changes behaviour
+    only inside a scope, and neither of these paths opens one. What changed is exposure — with
+    the heavy-burst test no longer killing a worker and requeueing its work, the run's test
+    distribution differs, and a latent race surfaces where it previously hid behind a bigger
+    failure.
+  - **Deliberately not absorbed here.** The connection-lifecycle package is scoped to the
+    lifecycle; repairing the device-consent and event-backbone timing assertions means touching
+    those subsystems' own semantics (what "expired" means when the write that creates the row
+    can take seconds), which is their design question, not this one's.
+  - **The shape of the real fix, for whoever takes it:** either these paths adopt a
+    `db_session()` for the ask/claim unit of work — the cost the repair removes is exactly what
+    they are losing the race to — or the assertions stop keying on wall-clock TTLs and drive
+    expiry deterministically. The first is preferable: it removes the cost rather than
+    tolerating it.
+  - **Risk category:** test-suite trustworthiness on Windows. It is a live obstacle to the
+    *repeatably* all-green Windows completion Band 0 requires, and should be tracked as its own
+    item rather than counted against the connection-lifecycle package.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
