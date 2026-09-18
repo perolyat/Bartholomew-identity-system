@@ -1373,8 +1373,14 @@
   > exactly. The nothing-changed-but-this comparison is therefore direct.
   >
   > One test failed in that run, and it is **not this class and not this package's**: see the
-  > separate entry below. Band 0 still needs *repeatably* all-green Windows completion, so this
-  > is one run, not the record.
+  > separate entry below.
+  >
+  > **Second run, 35312520515 (head `350479e`): fully green — all seven jobs**, the Windows
+  > trace closing with `nothing: no worker crashed and no phase reported a bad outcome`, the
+  > heavy-burst test again absent from the cost table, and the device-consent failure not
+  > recurring. That is the **first fully green Windows Merge Candidate since the blocker was
+  > named**. Band 0 still needs *repeatably* all-green Windows completion, so this is two runs,
+  > not yet the record.
 
 - **(2026-09-18) Time-budget assertions on per-operation SQLite paths, in tests this package did
   not adopt the connection scope for.** `tests/test_device_consent_channel.py::

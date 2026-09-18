@@ -168,6 +168,12 @@ WORKER LOST  gw3  died on tests/test_scheduler_queue_containment.py::
 — the blocker exactly, on the same runner image and the same execution machinery. The comparison
 is therefore direct, and the one thing that changed between them is this package.
 
+**Second Windows run, 35312520515, head `350479e`: fully green — all seven jobs.** The Windows
+suite's own trace closes with `nothing: no worker crashed and no phase reported a bad outcome`,
+and the heavy-burst test is again absent from the SQLite cost table (last entry 1.1 s). The
+device-consent failure below did not recur, which confirms it as the intermittent timing race it
+is described as rather than a deterministic break.
+
 **The one failure in run 35311115266 is a different, pre-existing class**:
 `tests/test_device_consent_channel.py::test_a_late_answer_after_expiry_cannot_resurrect_the_start`
 ("the ask never appeared"). It sets `ttl_seconds=1` and polls for the ask to be *pending*; the
@@ -182,10 +188,11 @@ requeues its work. Recorded as its own `RISKS.md` entry rather than absorbed her
 
 ## 5. Limitations and remaining risk
 
-- **One Windows run is not "repeatably all-green".** Run 35311115266 is decisive about *this
-  blocker* — the test is gone from the cost table and the base branch lost a worker to it the same
-  day — but Band 0's condition is repeatable completion, and the record before this package was
-  two green and three red across four heads. More runs are needed, and they are cheap to get: the
+- **Two Windows runs are not yet a record of repeatability.** 35311115266 (one failure, the
+  pre-existing class below) and 35312520515 (fully green) are both decisive about *this blocker*
+  — the test is gone from the cost table in both, and the base branch lost a worker to it the same
+  morning. Band 0's condition is repeatable completion, and the record before this package was two
+  green and three red across four heads. More runs are worth taking, and they are cheap: the
   `ci:merge-candidate` label runs the Windows suite on this PR.
 - **A separate, pre-existing Windows failure is still live** (§4a and `RISKS.md`,
   2026-09-18): time-budget assertions on per-operation SQLite paths in
@@ -222,13 +229,14 @@ reassessment is:
 2. The lifecycle contract in §3, pinned by 34 deterministic tests, including explicit proof that
    the handle-release guarantee the Windows tests defend is preserved.
 3. The Linux before/after figures in §2 and §4.
-4. **The Windows measurement in §4a**, which is the decisive one: run 35311115266 on this branch
-   against run 35301649186 on `main` the same morning. This is what closes the connection-lifecycle
-   blocker specifically.
-5. **What it does not close:** repeatable Windows green. One run is one run, and run 35311115266
-   also carried a failure of a different, pre-existing class (§4a). A reassessment should require
-   further Merge Candidate runs on this head, and should treat the device-consent /
-   event-backbone timing class as its own open item.
+4. **The Windows measurements in §4a**, which are the decisive ones: runs 35311115266 and
+   35312520515 on this branch against run 35301649186 on `main` the same morning, which lost a
+   worker to the blocker. This is what closes the connection-lifecycle blocker specifically.
+   35312520515 is additionally a **fully green Windows Merge Candidate**, all seven jobs.
+5. **What it does not close:** repeatable Windows green. Two runs are two runs, and 35311115266
+   carried a failure of a different, pre-existing class (§4a) that 35312520515 did not reproduce.
+   A reassessment should take further Merge Candidate runs on this head, and should treat the
+   device-consent / event-backbone timing class as its own open item.
 
 The correct statement is that **the SQLite connection-lifecycle blocker is resolved, measured on
 Windows** — and that Band 0 is *not* thereby clear, because its condition is repeatable all-green
