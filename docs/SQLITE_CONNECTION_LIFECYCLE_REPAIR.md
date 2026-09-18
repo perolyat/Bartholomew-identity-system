@@ -182,6 +182,32 @@ not green failed on a pre-existing class this package does not touch. The record
 before this package, on the windows-runtime branch, was two green and three red
 across four heads with **every red the heavy-burst worker kill**.
 
+**A second negative control, unplanned and therefore worth more than the first.**
+PR #114 (`claude/event-lease-truncation-race`) is cut from `main` and deliberately
+does not carry this package. Its Windows Merge Candidate the same morning
+(run 35319767756, head `81d0128`) ended with
+
+```
+WORKER LOST  gw3  died on tests/test_scheduler_queue_containment.py::
+  TestContainmentNeverDestroysAnObligation::
+  test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched
+```
+
+and its cost table shows all three containment bursts back at the per-operation
+profile:
+
+```
+opens  connect  commits   commit    close     wall  nodeid
+ 1037     0.2s     1032    15.1s    31.6s    54.3s  ...heavy_system_generated_burst...
+  812     0.2s      805     7.5s    15.0s    23.7s  ...open_obligations_are_bit_for_bit_unchanged
+  303     0.1s      301     3.1s     5.8s     9.5s  ...capacity_is_bounded_by_identity...
+```
+
+On this branch, none of those three appears in that table at all. Same morning,
+same runner image, same execution machinery; the difference is this package.
+Two independent branches off `main` now show the blocker, and every run carrying
+the repair does not.
+
 **Second Windows run, 35312520515, head `350479e`: fully green — all seven jobs.** The Windows
 suite's own trace closes with `nothing: no worker crashed and no phase reported a bad outcome`,
 and the heavy-burst test is again absent from the SQLite cost table (last entry 1.1 s). The
