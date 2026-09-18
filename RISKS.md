@@ -1371,6 +1371,33 @@
   asserted alongside, so the fix cannot quietly alter it.
 - **Risk category:** durable-work-queue correctness. **Status:** closed by this change.
 
+- **(2026-09-18) A durable-memory leak assertion can fail on its own timestamps.**
+  `tests/test_forecast_chat_seam.py::TestTheRecord::
+  test_no_external_content_is_written_to_durable_memory` dumps every table to JSON and asserts the
+  literal substring `"19.4"` — the stub forecast's temperature — is absent. Every row carries an
+  ISO-8601 timestamp with microseconds, so **any write landing in second 19 of a minute with a
+  fraction beginning `4` spells `19.4` and fails the assertion**. Observed on
+  `claude/event-lease-truncation-race` at head `748e9e4`: `assert '19.4' not in '[[1, "forec...'`,
+  with pytest's own diff pointing at `-18T07:28:19.401767Z`, a timestamp.
+  - **The property it is defending is right; the check is not.** External provider content must
+    not become durable knowledge, and that is worth asserting. A bare substring scan over a JSON
+    dump of every column cannot distinguish the provider's number from a coincidence in an
+    unrelated field, so the test is both able to pass while content leaks in a different form and
+    able to fail while nothing leaked at all. What failed here is the second.
+  - **Not caused by the lease repair, and not this package's.** The defect is wall-clock
+    coincidence in a test of the forecast chat seam; the lease change is in `event_processing` and
+    touches nothing this test reads.
+  - **Shape of the real fix, for its owner:** assert against the parsed values of the columns that
+    could carry provider content, or exclude timestamp columns from the scan, rather than
+    substring-matching a whole-table JSON dump. A distinctive sentinel value in the stub forecast
+    (one that cannot occur in a timestamp) would remove the coincidence without changing what the
+    test defends.
+  - **Risk category:** test-suite trustworthiness. **Third distinct time-dependent test defect
+    surfaced on 2026-09-18**, after the device-consent TTL race and the event-processing lease
+    clock. The common shape is worth naming: *assertions that depend on the wall clock without
+    controlling it*. Two of the three were latent for months and surfaced only once a larger
+    failure stopped masking them.
+
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
   **chat**, **training**, and **sight/voice** surfaces, the shared Reflection sink is the sole
