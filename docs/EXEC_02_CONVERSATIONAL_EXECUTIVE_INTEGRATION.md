@@ -47,10 +47,22 @@ question: *is this utterance a request for an outcome on the person's machine?*
 
 A goal is claimed only when **both** halves are present:
 
-* a **request construction** — an imperative opening from a closed verb set, or
-  an explicit ask ("can you", "please", "I need you to", "help me"); **and**
+* a **request construction** — an **action verb** from the closed `_ACTION_VERBS`
+  set, optionally preceded by a way of addressing the ask to him ("can you",
+  "please", "I need you to", "help me"); **and**
 * a **device-domain referent** — one of a closed noun set (file, folder,
   document, note, window, desktop, clipboard, browser, tab, app, …).
+
+**The action verb is required, and the address alone is never sufficient.**
+There is one action vocabulary, used by every construction, so "can you X" and
+a bare "X" are held to the same standard and cannot drift apart. *A first cut
+matched the auxiliary alone*, which made "can you recommend a browser", "would
+you say this app is good", "can you tell me where my files are" and "will you
+remember my notes" into goals — questions answered with a machine plan, the
+exact false positive this module exists to prevent. Raised by automated review
+on PR #115, confirmed, and pinned by `TestAnAuxiliaryIsNotAnInstruction`,
+including a test of the *property* that the two constructions accept and reject
+the same verbs.
 
 Both, never either:
 
@@ -58,6 +70,7 @@ Both, never either:
 |---|---|---|---|
 | `Sort these files out for me.` | yes | `files` | **goal** |
 | `Sort out what you think about Tolstoy` | yes | none | conversation |
+| `Can you recommend a browser?` | address, no action verb | `browser` | conversation |
 | `The files are a mess.` | none | `files` | conversation |
 | `Do you remember the document I mentioned?` | — | — | conversation (excluded outright) |
 
@@ -151,7 +164,7 @@ requires and a chat turn cannot derive from a sentence — `tenant_id`,
 | `BARTH_EXECUTIVE_DELIBERATION` | **off** | installs EXEC-01's `DeliberationPort`, for every Executive caller including the operator console |
 | `BARTH_CONVERSATIONAL_EXECUTIVE` | **off** | routes qualifying conversational goals into the Executive at all |
 | `BARTH_CONVERSATIONAL_EXECUTIVE_DEVICE_ID` | none | **required** for the above; activation is refused without it |
-| `BARTH_CONVERSATIONAL_EXECUTIVE_TENANT_ID` | `default` | single-tenant build |
+| `BARTH_CONVERSATIONAL_EXECUTIVE_TENANT_ID` | *resolved, not defaulted* | an **override**; normally leave unset — see below |
 | `BARTH_CONVERSATIONAL_EXECUTIVE_REQUESTED_BY` | `chat` | who is recorded as asking |
 
 **Two switches, deliberately, because they widen different things and neither
@@ -170,6 +183,21 @@ anything_on`.
 **There is no default device id, and there will not be one.** A device id guessed
 from a registry would mean a sentence typed into chat could plan against a
 machine nobody named.
+
+**The tenant is resolved, never invented.** `resolve_tenant_id()` reaches the
+same answer `routes/operator.py` reaches, by the same reads in the same order:
+an explicit override, then this process's runtime binding, then the `local`
+sentinel for an unbound process. *A first cut of this module defaulted it to the
+string `"default"`, which was a real defect and is worth recording rather than
+quietly fixing:* devices enrolled through the platform are tenant-qualified, so
+planning under `"default"` would have reported a normally-enrolled machine as
+**not enrolled** — the feature would have looked configured and refused every
+conversational goal, with a message blaming the enrolment. Raised by automated
+review on PR #115, confirmed against `device_action_auth.resolved_tenant_id`,
+and pinned by
+`TestProductionActivationIsExplicit::test_the_tenant_is_the_platform_s_answer_not_a_synthetic_default`.
+The sentinel is duplicated rather than imported (so `bartholomew/` keeps no
+import edge to the API bridge) and a second test fails if the two ever diverge.
 
 This closes **R-EXEC01-2**: `configure_from_environment` is called from
 `bartholomew_api_bridge_v0_1/services/api/app.py`'s startup, after the
@@ -229,8 +257,8 @@ writes no action row, and says so.
 
 | Suite | Tests | What it proves |
 |---|---|---|
-| `tests/test_exec02_goal_intents.py` | 62 | the decision seam: conversation stays conversation, goals are recognised, both halves are required, and no renderer can claim completion |
-| `tests/test_exec02_conversational_executive.py` | 41 | the vertical slice, on the real chat turn, real dispatch table, real Executive, real catalogue, real validators, real allowlists, real envelope, real brake, real approval requirement |
+| `tests/test_exec02_goal_intents.py` | 78 | the decision seam: conversation stays conversation, goals are recognised, an address without an action verb is not a request, both halves are required, and no renderer can claim completion |
+| `tests/test_exec02_conversational_executive.py` | 46 | the vertical slice, on the real chat turn, real dispatch table, real Executive, real catalogue, real validators, real allowlists, real envelope, real brake, real approval requirement; plus tenant resolution and the evidence script's own path |
 
 The only stand-in in the slice is the model, which is a fixed-payload
 `DeliberationPort` — the seam EXEC-01 already declared, and the same fixture
@@ -289,12 +317,32 @@ establishes **nothing about plan quality**, because no model answered.
 `R-EXEC01-3` therefore stands, unchanged, and nothing here may be read as
 closing it.
 
+**A correction to this section, made 2026-09-18 after automated review of PR
+#115.** The run described above was made by a script that built a `KernelDaemon`
+and nothing else. `app.py` also calls `install_seams()` on startup, which
+installs Session E's registry as the one device truth; without it the actuation
+registry stays at its fail-closed default and **every** device is refused. So
+the first run's "no capabilities are available on this device to reason with"
+was partly this script's omission and not only a fact about the environment, and
+the completion steps first published here would not have worked. The script now
+installs the same seams, in the same order, before the chat turn
+(`TestTheEvidenceScriptExercisesTheRealPath` pins that it does). The blocker
+above is unchanged and independently real — the second run reached a live
+outbound call to Ollama and failed on the connection, which is downstream of
+every registry question.
+
 **To complete it** (Taylor, on the Windows PC, alongside the deferred Band 0
-checkpoint): start Ollama with the Identity-selected model pulled, enrol the
-device, set the four environment variables from §5, and run
-`python scripts/exec02_real_model_evidence.py`. An `outcome` of `proposed` with a
-non-empty `proposed_action_ids` and `stopped_at: "pending_approval (nothing
-ran)"` is the real-model proof.
+checkpoint):
+
+1. start Ollama with the Identity-selected model pulled;
+2. enrol the device **under the tenant this process resolves** — the run prints
+   it as `activation.tenant_id`, and it is `local` on an unbound single-user
+   deployment;
+3. set the environment variables from §5;
+4. run `python scripts/exec02_real_model_evidence.py`.
+
+An `outcome` of `proposed` with a non-empty `proposed_action_ids` and
+`stopped_at: "pending_approval (nothing ran)"` is the real-model proof.
 
 ## 9. What this does not do
 

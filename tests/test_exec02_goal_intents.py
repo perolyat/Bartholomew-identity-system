@@ -96,6 +96,71 @@ class TestOutcomeLevelGoalsAreRecognised:
         assert goal_intents.parse_intent("please tidy the files " * 60) is None
 
 
+class TestAnAuxiliaryIsNotAnInstruction:
+    """An ask must name something Bartholomew can *do*, not merely address him.
+
+    Raised by review on PR #115 and confirmed: an earlier cut matched the
+    auxiliary alone, so "can you" plus any device noun anywhere later in the
+    sentence was a goal. That made questions into tasks — the exact false
+    positive this module exists to avoid — and would have suppressed the
+    ordinary conversational reply in favour of asking the Executive to plan a
+    machine action for someone who had asked a question.
+
+    The correction is that `_ACTION_VERBS` is one closed vocabulary required by
+    every construction, so "can you X" and a bare "X" are held to the same
+    standard and cannot drift apart.
+    """
+
+    @pytest.mark.parametrize(
+        "utterance",
+        [
+            # The four the review named.
+            "Can you recommend a browser?",
+            "Would you say this app is good?",
+            "Can you tell me where my files are?",
+            "Will you remember my notes?",
+            # The same shape, other verbs that ask for words, opinion or memory.
+            "Could you explain the clipboard?",
+            "Can you find my files?",
+            "Would you describe the document?",
+            "Can you check whether my notes are any good?",
+            "Could you suggest a note app?",
+            "Can you remind me about the files?",
+        ],
+    )
+    def test_an_auxiliary_without_an_action_verb_is_conversation(self, utterance):
+        assert goal_intents.parse_intent(utterance) is None
+
+    @pytest.mark.parametrize(
+        ("utterance", "trigger"),
+        [
+            ("Can you sort these files out?", "can you sort"),
+            ("Could you open notepad for me?", "could you open"),
+            ("Can you get my shopping list started?", "can you get"),
+            ("I need you to draft a note about the roofer", "i need you to draft"),
+            ("help me clear the desktop", "help me clear"),
+        ],
+    )
+    def test_an_auxiliary_with_an_action_verb_is_still_a_goal(self, utterance, trigger):
+        intent = goal_intents.parse_intent(utterance)
+        assert intent is not None
+        assert intent.trigger == trigger
+
+    def test_one_action_vocabulary_serves_every_construction(self):
+        """The property, not an example of it: whatever a bare imperative
+        accepts, the addressed form accepts, and vice versa. Two lists would
+        drift; one cannot."""
+        for verb in ("sort", "tidy", "open", "draft", "delete"):
+            bare = goal_intents.parse_intent(f"{verb} the files")
+            addressed = goal_intents.parse_intent(f"could you {verb} the files")
+            assert (bare is None) == (addressed is None)
+            assert bare is not None
+
+        for verb in ("recommend", "explain", "tell", "remember"):
+            assert goal_intents.parse_intent(f"{verb} the files") is None
+            assert goal_intents.parse_intent(f"could you {verb} the files") is None
+
+
 class TestBothHalvesAreRequired:
     """A request construction, and a device-domain referent. Never either."""
 

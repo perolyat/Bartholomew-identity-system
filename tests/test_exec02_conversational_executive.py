@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pathlib
 
 import pytest
 
@@ -679,6 +680,33 @@ class TestActivationContract:
             config.device_id = "other"  # frozen
 
 
+class TestTheEvidenceScriptExercisesTheRealPath:
+    """Raised by review on PR #115 and confirmed.
+
+    The script is the package's real-model proof, so a step it omits is a
+    proof it cannot produce. `app.py` calls `install_seams()` on startup, which
+    installs Session E's registry as the one device truth; a process that only
+    builds a `KernelDaemon` leaves the actuation registry at its fail-closed
+    default and refuses **every** device. The script would then report "not
+    enrolled" as a fact about the deployment when it was a fact about the
+    script.
+    """
+
+    def test_it_installs_the_same_seams_the_api_startup_does(self):
+        source = pathlib.Path("scripts/exec02_real_model_evidence.py").read_text()
+        assert "install_seams(" in source, (
+            "the evidence script must install the device registry, or it can "
+            "never reach a proposal however well a model reasons"
+        )
+        assert "bound_runtime_user_id" in source
+        # Installed *before* the chat turn, not after it. Anchored on the call
+        # sites rather than any mention, so the module docstring naming either
+        # of them cannot make this pass or fail by accident.
+        assert source.index("install_seams(") < source.index(
+            "await run_chat_through_runtime_contract(",
+        )
+
+
 class TestProductionActivationIsExplicit:
     """Invariant 8, at the one place a real deployment turns this on.
 
@@ -771,6 +799,47 @@ class TestProductionActivationIsExplicit:
             DEVICE,
             "taylor",
         )
+
+    def test_the_tenant_is_the_platform_s_answer_not_a_synthetic_default(
+        self,
+        _clean_env,
+        monkeypatch,
+    ):
+        """Raised by review on PR #115 and confirmed.
+
+        An earlier cut defaulted the tenant to the string `"default"`. Devices
+        enrolled through the platform are tenant-qualified by the bound runtime
+        user, falling back to the `local` sentinel when the process is unbound,
+        so planning under `"default"` reported a normally-enrolled machine as
+        **not enrolled**: the feature would have looked configured and refused
+        every conversational goal. The tenant must be the same answer the
+        operator route reaches, not a string this module invented.
+        """
+        monkeypatch.delenv("BARTH_RUNTIME_USER_ID", raising=False)
+        monkeypatch.setenv(_clean_env.ENV_ENABLED, "1")
+        monkeypatch.setenv(_clean_env.ENV_DEVICE_ID, DEVICE)
+        ctx = self._Ctx()
+        report = _clean_env.configure_from_environment(ctx, None)
+        assert _clean_env.resolve(ctx).tenant_id == _clean_env.LOCAL_TENANT
+        assert report["tenant_id"] == _clean_env.LOCAL_TENANT
+        assert _clean_env.resolve(ctx).tenant_id != "default"
+
+    def test_the_sentinel_cannot_drift_from_the_operator_route_s(self, _clean_env):
+        """`LOCAL_TENANT` is duplicated here rather than imported, so that
+        `bartholomew/` keeps no import edge to the API bridge. Duplication is
+        only safe while something fails when the two diverge. This is it."""
+        from bartholomew_api_bridge_v0_1.services.api import device_action_auth
+
+        assert _clean_env.LOCAL_TENANT == device_action_auth.LOCAL_TENANT
+
+    def test_a_bound_runtime_is_the_tenant(self, _clean_env, monkeypatch):
+        monkeypatch.setenv("BARTH_RUNTIME_USER_ID", "user-42")
+        assert _clean_env.resolve_tenant_id() == "user-42"
+
+    def test_an_explicit_override_still_wins(self, _clean_env, monkeypatch):
+        monkeypatch.setenv("BARTH_RUNTIME_USER_ID", "user-42")
+        monkeypatch.setenv(_clean_env.ENV_TENANT_ID, "some-other-tenant")
+        assert _clean_env.resolve_tenant_id() == "some-other-tenant"
 
     def test_a_broken_activation_degrades_rather_than_crashing_startup(
         self,

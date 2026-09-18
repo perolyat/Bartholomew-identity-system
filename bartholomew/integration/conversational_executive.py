@@ -67,10 +67,10 @@ ENV_ENABLED = "BARTH_CONVERSATIONAL_EXECUTIVE"
 #: registry would mean a sentence typed into chat could end up planning against
 #: a machine nobody named.
 ENV_DEVICE_ID = "BARTH_CONVERSATIONAL_EXECUTIVE_DEVICE_ID"
-#: Whose Bartholomew this is, and who is asking. Both have conservative
-#: single-user defaults, because unlike the device id they are not a choice
-#: between machines — this build is single-tenant and single-operator, and
-#: `INTERFACES.md` records multi-user as out of scope.
+#: Whose Bartholomew this is, and who is asking. Unlike the device id, neither
+#: is a choice between machines: the tenant is resolved from the platform's own
+#: authority (see `resolve_tenant_id`) and these variables are overrides for a
+#: deployment that genuinely needs one, not the normal path.
 ENV_TENANT_ID = "BARTH_CONVERSATIONAL_EXECUTIVE_TENANT_ID"
 ENV_REQUESTED_BY = "BARTH_CONVERSATIONAL_EXECUTIVE_REQUESTED_BY"
 
@@ -78,7 +78,21 @@ ENV_REQUESTED_BY = "BARTH_CONVERSATIONAL_EXECUTIVE_REQUESTED_BY"
 #: docstring for why the two are not one switch.
 ENV_DELIBERATION = "BARTH_EXECUTIVE_DELIBERATION"
 
-DEFAULT_TENANT_ID = "default"
+#: The sentinel tenant for an unbound process --- the single-runtime local
+#: deployment, where there is exactly one tenant.
+#:
+#: **This must equal `device_action_auth.LOCAL_TENANT`, and a test pins that it
+#: does.** It is duplicated rather than imported because `bartholomew/` must not
+#: acquire an import edge to the API bridge. It is not a second opinion about
+#: what the tenant is: `resolve_tenant_id` below reaches the same answer the
+#: operator route reaches, by the same reads, in the same order.
+#:
+#: Getting this wrong is not cosmetic. A device enrolled through the platform is
+#: tenant-qualified, so planning a conversational goal under some other string
+#: would report a normally-enrolled machine as **not enrolled** --- the feature
+#: would look configured and refuse everything. An earlier cut of this module
+#: used a synthetic "default" here and did exactly that.
+LOCAL_TENANT = "local"
 DEFAULT_REQUESTED_BY = "chat"
 
 #: The attribute the chat dispatch reads. Absent means "not configured", which
@@ -90,6 +104,36 @@ _TRUE = frozenset({"1", "true", "yes", "on"})
 
 def _flag(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in _TRUE
+
+
+def resolve_tenant_id() -> str:
+    """Whose Bartholomew this is --- the same answer the operator route reaches.
+
+    `routes/operator.py` resolves the tenant through
+    `device_action_auth.resolved_tenant_id(request)`, which reads the verified
+    principal on the request and then this process's own runtime binding,
+    falling back to the `local` sentinel for an unbound process. A chat turn has
+    no request and therefore no principal, so the two reads available here are
+    the binding and the sentinel --- which is exactly what that function does
+    for a call carrying no principal.
+
+    An explicit environment override is honoured first, for a deployment whose
+    devices are enrolled under some other tenant string. It is an override, not
+    the normal path: leaving it unset is correct.
+    """
+    override = (os.getenv(ENV_TENANT_ID) or "").strip()
+    if override:
+        return override
+
+    try:
+        from bartholomew.platform.runtime_registry import bound_runtime_user_id
+
+        bound = bound_runtime_user_id()
+    except Exception:  # noqa: BLE001 - an unreadable binding is an unbound one
+        logger.exception("Could not read this process's runtime binding")
+        bound = None
+
+    return bound or LOCAL_TENANT
 
 
 @dataclass(frozen=True)
@@ -201,10 +245,11 @@ def configure_from_environment(ctx: Any, router: Any = None) -> dict[str, Any]:
         )
         return report
 
+    tenant_id = resolve_tenant_id()
     try:
         install_conversational_executive(
             ctx,
-            tenant_id=(os.getenv(ENV_TENANT_ID) or "").strip() or DEFAULT_TENANT_ID,
+            tenant_id=tenant_id,
             device_id=device_id,
             requested_by=(os.getenv(ENV_REQUESTED_BY) or "").strip() or DEFAULT_REQUESTED_BY,
         )
@@ -215,13 +260,17 @@ def configure_from_environment(ctx: Any, router: Any = None) -> dict[str, Any]:
 
     report["conversational_executive_enabled"] = True
     report["device_id"] = device_id
+    # Named on the startup line, because "which tenant are conversational goals
+    # planned under" is the question whose wrong answer refuses every enrolled
+    # device while still looking configured.
+    report["tenant_id"] = tenant_id
     return report
 
 
 __all__ = [
     "CTX_ATTRIBUTE",
     "DEFAULT_REQUESTED_BY",
-    "DEFAULT_TENANT_ID",
+    "LOCAL_TENANT",
     "ENV_DELIBERATION",
     "ENV_DEVICE_ID",
     "ENV_ENABLED",
@@ -231,4 +280,5 @@ __all__ = [
     "configure_from_environment",
     "install_conversational_executive",
     "resolve",
+    "resolve_tenant_id",
 ]

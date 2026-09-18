@@ -98,45 +98,57 @@ _TRAILING_PUNCT = " \t\r\n.!?,;:\"'"
 # Recognition
 # ---------------------------------------------------------------------------
 
-#: Constructions in which a person asks Bartholomew to bring something about.
-#: Anchored at the start, because "I wonder if you could sort the files out" is
-#: musing and "could you sort the files out" is asking, and the difference is
-#: where the ask sits in the sentence.
-_REQUEST_RES = (
-    re.compile(
-        r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:bartholomew|barth)?[\s,]*"
-        r"(?:please\s+)?(?:can|could|would|will)\s+you\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:bartholomew|barth)?[\s,]*"
-        r"(?:i(?:'d| would)\s+like\s+you\s+to|i\s+(?:need|want)\s+you\s+to|"
-        r"i\s+need\s+(?:a|an|my|the|these|those|this|that)\b)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:bartholomew|barth)?[\s,]*"
-        r"(?:please|help\s+me|for\s+me[, ])\b",
-        re.IGNORECASE,
-    ),
-    #: A bare imperative. The verb set is closed and every member of it is a
-    #: verb of *doing something to something*, which is why "tell", "explain",
-    #: "remind" and "remember" are absent: they ask for words or for memory,
-    #: both of which are already somebody else's surface.
-    re.compile(
-        r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:bartholomew|barth)?[\s,]*"
-        r"(?:sort|tidy|organise|organize|clean|clear|start|set\s+up|"
-        r"make|create|write|draft|open|launch|put|copy|paste|close|"
-        r"arrange|prepare|fix|get|"
-        # Consequential verbs, claimed **so that they are refused in the
-        # Executive's own words** rather than falling through to a model that
-        # has no way to do them and every way to sound as though it did.
-        # `executive/intent.py`'s out-of-vocabulary rule owns that refusal, and
-        # deliberation is forbidden from reopening one.
-        r"delete|remove|erase|uninstall|install|download|send|email|e-mail|"
-        r"post|publish|buy|purchase|pay|order|rename|move|overwrite)\b",
-        re.IGNORECASE,
-    ),
+#: The closed set of things Bartholomew can be asked to *do*. One vocabulary,
+#: used by every request construction below, so "can you X" and a bare "X" are
+#: held to the same standard and cannot drift apart.
+#:
+#: Every member is a verb of **doing something to something**. "tell", "say",
+#: "explain", "recommend", "remind", "remember", "think" and "find" are
+#: deliberately absent: they ask for words, for an opinion or for memory, and
+#: each of those is already somebody else's surface.
+_ACTION_VERBS = (
+    r"sort|tidy|organise|organize|clean|clear|start|set\s+up|"
+    r"make|create|write|draft|open|launch|put|copy|paste|close|"
+    r"arrange|prepare|fix|get|"
+    # Consequential verbs, claimed **so that they are refused in the
+    # Executive's own words** rather than falling through to a model that has
+    # no way to do them and every way to sound as though it did.
+    # `executive/intent.py`'s out-of-vocabulary rule owns that refusal, and
+    # deliberation is forbidden from reopening one.
+    r"delete|remove|erase|uninstall|install|download|send|email|e-mail|"
+    r"post|publish|buy|purchase|pay|order|rename|move|overwrite"
+)
+
+#: Optional lead-in: a greeting, Bartholomew's name, a politeness.
+_LEAD = r"^\s*(?:hey\s+|ok(?:ay)?\s+)?(?:bartholomew|barth)?[\s,]*(?:please[\s,]+)?"
+
+#: Optional ways of addressing the ask to him before the verb arrives. Each is
+#: **optional**, and none of them is sufficient on its own --- an action verb
+#: from `_ACTION_VERBS` must follow, which is the whole correction here.
+#:
+#: Requiring the verb is what separates "can you sort these files out" from
+#: "can you recommend a browser", "would you say this app is good" and "can you
+#: tell me where my files are". An earlier cut matched the auxiliary alone and
+#: claimed all four, which is exactly the false positive this module says it
+#: must not produce: those three are conversation, and answering them with a
+#: machine plan would be the "everything goes to the planner" behaviour the
+#: package brief forbids.
+_ADDRESS = (
+    r"(?:"
+    r"(?:can|could|would|will)\s+you\s+(?:please\s+|just\s+)?|"
+    r"i(?:'d| would)\s+like\s+you\s+to\s+(?:please\s+)?|"
+    r"i\s+(?:need|want)\s+you\s+to\s+(?:please\s+)?|"
+    r"help\s+me\s+(?:please\s+)?"
+    r")?"
+)
+
+#: One pattern: an optional lead, an optional address, and a **required**
+#: action verb. Anchored at the start, because "I wonder if you could sort the
+#: files out" is musing and "could you sort the files out" is asking, and the
+#: difference is where the ask sits in the sentence.
+_REQUEST_RE = re.compile(
+    _LEAD + _ADDRESS + rf"(?:{_ACTION_VERBS})\b",
+    re.IGNORECASE,
 )
 
 #: Closed set of nouns naming something that lives on the person's machine.
@@ -249,14 +261,10 @@ def parse_intent(text: str) -> GoalIntent | None:
     if _NOT_A_GOAL.search(cleaned):
         return None
 
-    trigger: str | None = None
-    for pattern in _REQUEST_RES:
-        match = pattern.match(cleaned)
-        if match:
-            trigger = _clean(match.group(0)).lower() or pattern.pattern[:24]
-            break
-    if trigger is None:
+    match = _REQUEST_RE.match(cleaned)
+    if match is None:
         return None
+    trigger = _clean(match.group(0)).lower()
 
     # A question opening that survived the request test ("Would you..." does
     # not open with one of these) is a question, not an instruction.

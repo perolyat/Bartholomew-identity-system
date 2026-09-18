@@ -17,7 +17,10 @@ whole point of printing it.
 
 Run it
 ------
-    # 1. Enrol the machine you want the goal planned against, then:
+    # 1. Enrol the machine you want the goal planned against -- under the same
+    #    tenant this process resolves, which the run prints as
+    #    `activation.tenant_id` (`local` on an unbound single-user deployment).
+    #    Then:
     export BARTH_EXECUTIVE_DELIBERATION=1
     export BARTH_CONVERSATIONAL_EXECUTIVE=1
     export BARTH_CONVERSATIONAL_EXECUTIVE_DEVICE_ID=<your enrolled device id>
@@ -34,8 +37,10 @@ What each outcome means
   the correct degradation, and it is evidence of the *plumbing*, not of plan
   quality.
 * ``parking_brake_denied`` — the brake is engaged. Release it and re-run.
-* ``refused`` — the device is not enrolled, or the goal asked for something
-  outside the capability vocabulary.
+* ``refused`` — the device is not enrolled **under the tenant this process
+  resolves** (`conversational_executive.resolve_tenant_id()`, printed as
+  ``activation.tenant_id``), or the goal asked for something outside the
+  capability vocabulary.
 
 The environment this was first run in had no Ollama and no cloud key, so it
 produced the second outcome. It is committed so the first outcome can be
@@ -86,6 +91,24 @@ async def main() -> int:
     await kernel.start()
 
     try:
+        # --- Step 2a: the Session F seams, exactly as `app.py` installs them.
+        #
+        # Without this the process-global actuation registry stays at the
+        # package's fail-closed default, so **every** device is refused and this
+        # script could never reach a proposal however well a model reasoned --
+        # the "not enrolled" would be this script's omission, not the
+        # deployment's state. `app.py` calls `install_seams` on startup and so
+        # must anything claiming to exercise the same path.
+        from bartholomew.integration.install import install_seams
+        from bartholomew.platform.runtime_registry import bound_runtime_user_id
+
+        seam_report = install_seams(
+            db_path=kernel.mem.db_path,
+            tenant_id=bound_runtime_user_id(),
+            runtime_cfg=getattr(kernel, "cfg", None),
+        )
+        report["seams"] = str(seam_report)
+
         # --- Step 3: the real router, and the real explicit activation. ----
         orch = Orchestrator(model_identity_config=getattr(kernel, "identity", None))
         router = getattr(orch, "router", None)
