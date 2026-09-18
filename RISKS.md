@@ -1331,8 +1331,8 @@
   > pool.
   >
   > **Repaired 2026-09-18 — the connection-lifecycle package (branch
-  > `claude/sqlite-connection-lifecycle-flkccb`; NOT MERGED, awaiting Taylor's User Approval
-  > Gate). Full record: `docs/SQLITE_CONNECTION_LIFECYCLE_REPAIR.md`.** The measured diagnosis
+  > `claude/sqlite-connection-lifecycle-flkccb`, PR #113, **approved at head `4a883a2` and merged
+  > as `b41c79e`**). Full record: `docs/SQLITE_CONNECTION_LIFECYCLE_REPAIR.md`.** The measured diagnosis
   > above is confirmed and completed: `close` is the dominant term, and the reason is now
   > established rather than attributed to Windows generally. Every persistence helper takes a
   > `db_path` and owns a whole connection lifecycle, so between calls there is **no** connection to
@@ -1457,6 +1457,75 @@
     actual repair is the *clock*: `time.time()` rather than `int(time.time())`, so the lease's two
     readings measure the same thing and an `N`-second lease lasts `N` seconds at both ends.
   - **Risk category:** durable-work-queue correctness; secondarily test-suite trustworthiness.
+
+- **(2026-09-18, REPAIRED) A `lease_seconds=N` claim lease in `event_processing` had no reliable
+  duration in either direction.** `claim_batch()` read the clock twice — once with
+  `now = int(time.time())` when granting (`lease_expires_ts = now + lease_seconds`) and once, in a
+  later pass, to test for expiry. Both were truncated to the whole second, and truncation throws
+  away the sub-second phase at which each call happened, so the two readings were not measuring
+  the same thing:
+  - **Too short.** A claim taken at `T.996` stored `T+1` and was already expired 5 ms later, when
+    the second counter reached `T+1`.
+  - **Too long.** A claim taken at `T.004` was held for almost a full second beyond the `N` asked
+    for.
+- **Why the short end mattered:** a claim is this module's only mutual exclusion. A lease released
+  the moment after it is granted lets two passes hold one event at once. Re-processing here is
+  idempotent by design, so the damage was bounded — but the lease did not provide the guarantee
+  its own docstring states ("A claim is a lease with an expiry").
+- **Evidence:** measured before the change, 10 of 60 claims deliberately aligned to 4 ms before a
+  second boundary were released by the very next call, every one showing the claim at fraction
+  `.996` and the recheck at `.001` of the next second; away from the boundary (0.1, 0.5, 0.9,
+  0.97) it never occurred. It had been presenting as an intermittent failure of
+  `tests/test_event_backbone_processing.py::
+  test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing`, named on the pre-existing
+  list in `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` (run 34942899213) and seen again while
+  verifying the SQLite connection-lifecycle package. It was never that package's: the defect is
+  wall-clock phase.
+- **Repair:** the lease clock is real seconds (`time.time()`), not whole ones. An `N`-second lease
+  now lasts `N` seconds. No schema change: the column stays numeric, pre-existing whole-second
+  rows compare correctly against a float, and the only reader outside the module already compares
+  it to `time.time()`. `now_ts` still accepts an integer.
+- **A first attempt at this fix was wrong, and is recorded because the tests that caught it are
+  the value here.** Making the expiry comparison strict (`<` rather than `<=`) removes the
+  too-short case and looks like a one-operator fix — but it makes an `N`-second lease last between
+  `N` and `N+1` seconds, which **fails four existing tests** in
+  `tests/test_event_backbone_store.py` that claim with `lease_seconds=1` and wait 1.1 s for a
+  recovery. Fixing one end of the lease simply moves the defect to the other. Only a clock that
+  measures the same thing at both readings fixes it.
+- **Proof:** `tests/test_event_lease_expiry_boundary.py` — 18 tests driving the clock through
+  `now_ts` rather than racing a phase, plus one that busy-waits to a real second boundary across
+  12 trials. **11 fail against the unfixed code**, including the wall-clock one; and
+  `TestALeaseIsNotTooLong` (5 tests) fails against the rejected strict-comparison variant, so the
+  wrong fix cannot pass either. The spent-attempt behaviour (a crash-loop stays bounded) is
+  asserted alongside, so the fix cannot quietly alter it.
+- **Risk category:** durable-work-queue correctness. **Status:** closed by this change.
+
+- **(2026-09-18) A durable-memory leak assertion can fail on its own timestamps.**
+  `tests/test_forecast_chat_seam.py::TestTheRecord::
+  test_no_external_content_is_written_to_durable_memory` dumps every table to JSON and asserts the
+  literal substring `"19.4"` — the stub forecast's temperature — is absent. Every row carries an
+  ISO-8601 timestamp with microseconds, so **any write landing in second 19 of a minute with a
+  fraction beginning `4` spells `19.4` and fails the assertion**. Observed on
+  `claude/event-lease-truncation-race` at head `748e9e4`: `assert '19.4' not in '[[1, "forec...'`,
+  with pytest's own diff pointing at `-18T07:28:19.401767Z`, a timestamp.
+  - **The property it is defending is right; the check is not.** External provider content must
+    not become durable knowledge, and that is worth asserting. A bare substring scan over a JSON
+    dump of every column cannot distinguish the provider's number from a coincidence in an
+    unrelated field, so the test is both able to pass while content leaks in a different form and
+    able to fail while nothing leaked at all. What failed here is the second.
+  - **Not caused by the lease repair, and not this package's.** The defect is wall-clock
+    coincidence in a test of the forecast chat seam; the lease change is in `event_processing` and
+    touches nothing this test reads.
+  - **Shape of the real fix, for its owner:** assert against the parsed values of the columns that
+    could carry provider content, or exclude timestamp columns from the scan, rather than
+    substring-matching a whole-table JSON dump. A distinctive sentinel value in the stub forecast
+    (one that cannot occur in a timestamp) would remove the coincidence without changing what the
+    test defends.
+  - **Risk category:** test-suite trustworthiness. **Third distinct time-dependent test defect
+    surfaced on 2026-09-18**, after the device-consent TTL race and the event-processing lease
+    clock. The common shape is worth naming: *assertions that depend on the wall clock without
+    controlling it*. Two of the three were latent for months and surfaced only once a larger
+    failure stopped masking them.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the

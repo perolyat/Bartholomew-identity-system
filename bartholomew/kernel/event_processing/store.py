@@ -178,7 +178,10 @@ class ProcessingRecord:
     attempts: int
     claim_token: str | None
     claimed_at: str | None
-    lease_expires_ts: int | None
+    #: When this claim's lease runs out, in epoch seconds. A float since the
+    #: lease clock became real seconds (see the note above `claim_batch()`);
+    #: rows written before that hold whole seconds and compare identically.
+    lease_expires_ts: float | None
     last_attempt_at: str | None
     last_error: str | None
     settled_at: str | None
@@ -453,6 +456,52 @@ def new_claim_token() -> str:
     return uuid.uuid4().hex
 
 
+# ---------------------------------------------------------------------------
+# Why the lease clock is `time.time()` and not `int(time.time())`
+# ---------------------------------------------------------------------------
+#
+# A lease has two clock readings: one when it is granted
+# (`lease_expires_ts = now + lease_seconds`) and one, in a later pass, when it
+# is tested for expiry. While both were truncated with `int()`, they were not
+# measuring the same thing -- truncation throws away the sub-second phase at
+# which each call happened, and the two calls are at different phases.
+#
+# The consequence is that a `lease_seconds=N` lease had no reliable duration in
+# *either* direction:
+#
+#   * Too short. A claim taken at `T.996` stored `T+1` and was already expired
+#     5 ms later, when the second counter reached `T+1`. Measured before this
+#     change: 10 of 60 claims deliberately aligned to 4 ms before a second
+#     boundary were released by the very next call, each showing the claim at
+#     fraction `.996` and the recheck at `.001` of the next second. Away from
+#     the boundary (0.1, 0.5, 0.9, 0.97) it never happened -- which is why it
+#     presented as an intermittent test failure rather than as a defect.
+#   * Too long. A claim taken at `T.004` stored `T+1` and was held for almost a
+#     full second beyond the `N` asked for.
+#
+# The first of those is the one that matters: a claim is this module's only
+# mutual exclusion, and a lease released the moment after it was granted lets
+# two passes hold the same event at once. Re-processing here is idempotent by
+# design, so the damage was bounded -- but the lease did not provide the
+# guarantee its own docstring states ("A claim is a lease with an expiry").
+#
+# Storing real seconds fixes both ends at once, and is why this is a clock
+# change rather than an adjustment to the comparison. An `N`-second lease now
+# lasts `N` seconds. Nothing about the schema changes: the column stays
+# numeric, existing whole-second rows compare correctly against a float, and
+# the only reader outside this module already compares it to `time.time()`.
+#
+# Alternatives that were tried and rejected. Making the expiry comparison
+# strict (`<` instead of `<=`) removes the too-short case but makes an
+# `N`-second lease last between `N` and `N+1` seconds, which breaks every
+# caller and test that waits `N + 0.1` for a recovery -- the guarantee simply
+# moves from one end to the other. Granting `lease_seconds + 1` has the same
+# shape and additionally stores a number the caller did not ask for.
+#
+# `now_ts` still accepts an integer, so a caller that wants to drive the clock
+# in whole seconds is unaffected.
+
+
 def claim_batch(
     db_path: str,
     *,
@@ -470,7 +519,9 @@ def claim_batch(
     1. **Recover expired leases.** Anything still `claimed` past its expiry
        goes back to `captured`. Its spent attempt is *kept*: a process that
        died holding the event may well have died because of it, and a
-       crash-loop must be bounded like any other repeated failure.
+       crash-loop must be bounded like any other repeated failure. "Past its
+       expiry" is measured in real seconds -- see the note above this
+       function for why that had to be said out loud.
     2. **Quarantine the exhausted.** Anything `captured` that has already used
        its attempts is moved out of the way before the selection below, so a
        poison event cannot be picked ahead of healthy ones a second time.
@@ -482,7 +533,10 @@ def claim_batch(
     runtime binding (the single-user local deployment) claims exactly the
     events captured with no binding, and never another runtime's.
     """
-    now = int(time.time()) if now_ts is None else int(now_ts)
+    # Real seconds, not whole ones -- see the note above this function. The
+    # grant clock and the expiry clock must measure the same thing, or the
+    # lease's real duration depends on the sub-second phase it was taken at.
+    now = time.time() if now_ts is None else float(now_ts)
     now_text = _now_iso()
     lease_until = now + max(1, int(lease_seconds))
     claimed: list[ProcessingRecord] = []

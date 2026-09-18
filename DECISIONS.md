@@ -3757,8 +3757,8 @@
 ## Decision: a SQLite connection is owned by a bounded unit of work, not by a single statement
 
 - **Status:** established 2026-09-18 by the SQLite connection-lifecycle foundation repair
-  (branch `claude/sqlite-connection-lifecycle-flkccb`, **NOT MERGED**, awaiting Taylor's User
-  Approval Gate). Record: `docs/SQLITE_CONNECTION_LIFECYCLE_REPAIR.md`. Implements the package
+  (branch `claude/sqlite-connection-lifecycle-flkccb`, PR #113, **approved at head `4a883a2` and
+  merged 2026-09-18 as `b41c79e`**). Record: `docs/SQLITE_CONNECTION_LIFECYCLE_REPAIR.md`. Implements the package
   chartered by the preceding entry ("SQLite connection-lifetime repair is a separate package,
   scoped to reuse and never a process-wide pool") without widening it.
 - **Decision:** a caller that performs several database operations as one unit of work declares
@@ -3795,4 +3795,43 @@
     scope today; every other `wal_db()` caller is unchanged and already scope-capable.
   - Holding a scope for an unbounded period would be a defect, not a feature; it is asserted
     against for `SchedulerStore`.
+- **Date:** 2026-09-18
+
+## Decision: a lease's two clock readings must measure the same thing
+
+- **Status:** established 2026-09-18 by the event-processing lease repair (branch
+  `claude/event-lease-truncation-race`, **NOT MERGED**, awaiting Taylor's User Approval Gate).
+  Found while verifying the SQLite connection-lifecycle package and deliberately split out of it,
+  because it is a durable-queue correctness question rather than a connection-lifetime one.
+- **Decision:** a lease is granted and tested against the same clock, at the same resolution. In
+  `event_processing`, that clock is `time.time()` — real seconds. An `N`-second lease lasts `N`
+  seconds: not `(N-1, N]`, and not `[N, N+1)`.
+- **Why:** `claim_batch()` truncated both readings with `int()`. Truncation discards the
+  sub-second phase at which each call happened, and the two calls are at different phases, so the
+  lease's real duration was whatever the phase difference made it. A claim taken at `T.996` was
+  expired 5 ms later; one taken at `T.004` was held almost a second too long. A claim is this
+  module's only mutual exclusion, so the short end let two passes hold the same event.
+- **Alternatives considered:**
+  - *Make the expiry comparison strict (`<`).* **Tried, and rejected on evidence.** It removes the
+    too-short case and reads like a one-operator fix, but it makes an `N`-second lease last up to
+    `N+1` seconds and **fails four existing tests** in `tests/test_event_backbone_store.py` that
+    wait `1.1 s` for a `lease_seconds=1` recovery. Fixing one end of a lease moves the defect to
+    the other end; only matching the two clock readings removes it. `TestALeaseIsNotTooLong` in
+    `tests/test_event_lease_expiry_boundary.py` exists to fail if anyone reaches for this again.
+  - *Grant `lease_seconds + 1`.* Same shape as the above, and additionally stores a number the
+    caller did not ask for.
+  - *Lengthen the leases in the tests that exposed it.* Hides the defect and leaves production
+    with a lease that can expire on grant.
+  - *A migration to a sub-second column.* Unnecessary: SQLite's column affinity is numeric, a
+    float compares correctly against the whole-second rows already stored, and the single reader
+    outside the module already compares the value to `time.time()`.
+- **Consequences:**
+  - Callers waiting `N + ε` for a recovery keep working, because the lease is no longer able to
+    run long either.
+  - `lease_expires_ts` is a float going forward; rows written before this change are whole
+    seconds and need no migration.
+  - `now_ts` still accepts an integer, so a caller driving the clock in whole seconds is
+    unaffected.
+  - The spent attempt is still kept on recovery, so a crash-loop stays bounded — asserted
+    explicitly so this change cannot have altered it.
 - **Date:** 2026-09-18
