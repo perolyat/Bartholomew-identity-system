@@ -1,8 +1,15 @@
 # EXEC-02 — Conversational Executive Deliberation Integration
 
-**Status:** implemented on `claude/exec-02-conversational-integration-82tk0o`, **not merged.**
-Awaiting Taylor at the User Approval Gate.
+**Status:** **merged.** Approved by Taylor at the User Approval Gate and merged to
+`main` in PR #115 on 2026-09-18.
+**Provenance:** reviewed head `c3f1c5c`; merge commit / `main` after merge `25cfd90`.
 **Baseline it was built on:** `origin/main` at `c5cb3a0` (the merge of PR #114).
+
+> **Written at merge, not retrofitted.** EXEC-01's header read *"implemented, not
+> merged"* and was stale from the moment PR #108 merged — a defect the Project
+> Control & Documentation Reset had to correct, and which `RISKS.md` records as a
+> project-control risk in its own right. This header was updated in the same hour
+> as the merge, for that reason.
 **Scope:** the conversational surface's route into the Executive. No governance,
 actuation, verification, recovery, memory, ECI, identity or consent system was
 redesigned, and the Executive's own cognition was not changed at all.

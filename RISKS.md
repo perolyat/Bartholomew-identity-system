@@ -1631,18 +1631,18 @@ the EXEC-01 package record (`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §8, §1
 inside a work-package document is a limitation the next session will not find.
 
 - **R-EXEC01-1 — ~~Executive cognition is not reachable from normal conversation.~~ ADDRESSED by
-  EXEC-02 (built 2026-09-18, branch `claude/exec-02-conversational-integration-82tk0o`,
-  **unmerged**).** The original entry, true at `a64f5af`, read: "`/api/chat` has no path to the
+  EXEC-02 (PR #115, merged 2026-09-18 as `25cfd90`).** The original entry, true at `a64f5af`, read: "`/api/chat` has no path to the
   Executive; `bartholomew/kernel/runtime_contract.py` holds no import from the executive package.
   A goal typed into chat falls through to a conversational reply." EXEC-02 closes it by adding a
   last entry to `_CHAT_DISPATCH` that hands a recognised outcome-level goal to the **same**
-  `run_executive_task_through_runtime_contract()` the operator console calls. **Two qualifications
-  that keep this from being over-read:** it is *unmerged*, so `main` still carries the original
-  condition; and it is *default-off*, so a deployment that sets neither switch still falls through
-  to a conversational reply exactly as before. See
+  `run_executive_task_through_runtime_contract()` the operator console calls. **One qualification that keeps this
+  from being over-read:** it is *default-off*, so a deployment that sets neither switch still
+  falls through to a conversational reply exactly as before. Merging changed what Bartholomew
+  *can* be configured to reach, not what he does by default. See
   `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`.
-- **R-EXEC01-2 — ~~The deliberation port is not enabled in shipped production wiring.~~ ADDRESSED
-  by EXEC-02 (unmerged), and the *misreading* it warned about is now more available, not less.**
+- **R-EXEC01-2 — ~~The deliberation port is not enabled in shipped production wiring.~~ CLOSED
+  by EXEC-02 (merged as `25cfd90`), and the *misreading* it warned about is now more available,
+  not less.**
   The original entry: "`install_deliberation_port` has no production caller (verified at
   `a64f5af`)." EXEC-02 gives it one —
   `bartholomew/integration/conversational_executive.configure_from_environment`, called from the
@@ -1712,13 +1712,15 @@ inside a work-package document is a limitation the next session will not find.
   is a single short bootstrap that must be updated when `main` moves materially, Airtable
   owns live status so the repository is no longer the only place status can rot, and
   `START_HERE.md` §3 rule 3 requires material chat-only findings to be promoted to a durable
-  record. **Residual risk:** all three depend on discipline at the end of a session, and
+  record. **Exercised 2026-09-18 (EXEC-02, PR #115):** the merge provenance was written in the
+  same hour as the merge rather than discovered stale by a later reset — the first package to
+  do so. **Residual risk:** all three depend on discipline at the end of a session, and
   nothing enforces them mechanically.
 
 
-## EXEC-02 residual risks (recorded 2026-09-18, branch `claude/exec-02-conversational-integration-82tk0o`, **unmerged**)
+## EXEC-02 residual risks (PR #115, merged 2026-09-18 as `25cfd90`)
 
-Carried-forward limitations of built-but-unmerged work. Full record:
+Carried-forward limitations of **merged** work. Full record:
 `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` §10.
 
 - **R-EXEC02-1 — The goal recogniser's vocabulary is a closed list, and lists drift.**
@@ -1744,3 +1746,43 @@ Carried-forward limitations of built-but-unmerged work. Full record:
   cognition. What it changes is *how often* deliberation runs, because an ordinary conversation
   can now trigger it. The defences are unchanged and separately tested; the exposure surface is
   larger. **Stated so it is not discovered later as a surprise.**
+
+
+## R-RETRIEVAL-1 — the FTS5 availability cache is process-global and latches on any failure (recorded 2026-09-18)
+
+**Found while investigating a red CI job during the EXEC-02 User Approval Gate. Not EXEC-02's,
+not fixed by it, and recorded here rather than repaired inside an unrelated package.**
+
+`bartholomew/kernel/retrieval.py`'s `_check_fts5_once()` caches FTS5 availability in the
+module-global `_fts5_available_cache`. Two properties make it dangerous together:
+
+1. **It is not keyed by database.** The first probe in a process answers for every later caller,
+   whatever database they are retrieving from.
+2. **It latches `False` on any exception.** The probe wraps `sqlite3.connect()` and the FTS5
+   check in a bare `except Exception: available = False`, so a transient or unrelated failure —
+   an unopenable path, a locked file, a patched probe in a test that is never reset — disables
+   lexical retrieval for the **remainder of the process**, silently.
+
+**What it produced.** `tests/test_w03d_memory_poisoning.py::TestPoisonedExternalContent::
+test_email_shaped_poison_is_framed_and_powerless` failed in Merge Candidate run 35396770160 with
+*"the seeded note was not recalled"* — a chat prompt built with no memory context at all. It did
+not reproduce in four subsequent runs (local on the branch, local on an `origin/main` control, and
+twice more in CI across py3.10 and py3.11).
+
+**What is established and what is not.** The global latch is real and is read directly from the
+code. **What tripped it in that run is not established** — the obvious candidate,
+`tests/integration/test_fts_unavailable_vector_quality.py` (which forces the probe `False` inside
+a `patch` block and never resets the cache afterwards), is *not in that job's marker selection*
+and therefore cannot be the culprit. That hypothesis was tested and discarded rather than
+presented as a root cause.
+
+**Why it matters beyond one red job.** A silent, process-wide loss of lexical retrieval does not
+announce itself: the chat turn still succeeds, the reply is still generated, and the only symptom
+is that nothing is recalled. In production that is Bartholomew quietly forgetting, and it is the
+same shape as the three wall-clock-dependent defects recorded on 2026-09-18 — behaviour depending
+on uncontrolled process state.
+
+**What would close it:** key the cache by database (or drop it), replace the blanket `except` with
+one that distinguishes "FTS5 is genuinely absent" from "this probe failed", and make the degraded
+state visible rather than silent. Scope deliberately, as its own package; do not fold it into
+unrelated work.

@@ -169,8 +169,8 @@ these five states is the most easily lost and most expensive thing in this proje
 | Windows observe → reason → act → verify golden path | **Integrated (operator-only)** | Wave 3, PR #101. Reached through `POST /api/operator/tasks`, not through ordinary conversation. Real-world acceptance still outstanding. |
 | Local-model generation and truthful readiness | **Integrated** | BGPR-01, PR #102. Blocking generation moved off the event loop; readiness reports model reachability distinctly from model selection. |
 | External Capability Interface core boundary | **Integrated** | FND-04, PR #107. Endpoint identity, capability advertisement, availability, governed flow, result correlation — proven by a reference vertical slice. **No real external product is attached.** |
-| **Executive goal-to-plan deliberation** | **Present, enabled only by an operator (default OFF)** | EXEC-01, PR #108, gave the cognition; EXEC-02 (branch `claude/exec-02-conversational-integration-82tk0o`, **unmerged**) gave it a production caller. `BARTH_EXECUTIVE_DELIBERATION` is the switch; a model being reachable still enables nothing. See §5. |
-| Conversational chat reaching **goal-to-plan deliberation** | **Built, unmerged; enabled only by an operator (default OFF)** | EXEC-02, branch `claude/exec-02-conversational-integration-82tk0o`, awaiting the User Approval Gate. Read this precisely. Chat always traversed the Runtime Contract's **Executive stage** — it builds a `CandidateAction` that Governance genuinely consumes. What that stage now also reaches, when `BARTH_CONVERSATIONAL_EXECUTIVE` and a device id are set, is `bartholomew/executive/`'s goal-to-plan deliberation: a last entry in `_CHAT_DISPATCH` hands a recognised outcome-level goal to the **same** seam the operator console calls. EXEC-02 deepened an Executive stage that already existed; it did not attach a new brain. Default-off, and **no real-model plan-quality evidence exists** — `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` §8 states exactly how far the real-path evidence goes. |
+| **Executive goal-to-plan deliberation** | **Present, enabled only by an operator (default OFF)** | EXEC-01, PR #108, gave the cognition; EXEC-02 (PR #115, merged 2026-09-18 as `25cfd90`) gave it a production caller. `BARTH_EXECUTIVE_DELIBERATION` is the switch; a model being reachable still enables nothing. See §5. |
+| Conversational chat reaching **goal-to-plan deliberation** | **Integrated; enabled only by an operator (default OFF)** | EXEC-02, PR #115, merged 2026-09-18 as `25cfd90`. Read this precisely. Chat always traversed the Runtime Contract's **Executive stage** — it builds a `CandidateAction` that Governance genuinely consumes. What that stage now also reaches, when `BARTH_CONVERSATIONAL_EXECUTIVE` and a device id are set, is `bartholomew/executive/`'s goal-to-plan deliberation: a last entry in `_CHAT_DISPATCH` hands a recognised outcome-level goal to the **same** seam the operator console calls. EXEC-02 deepened an Executive stage that already existed; it did not attach a new brain. Default-off, and **no real-model plan-quality evidence exists** — `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` §8 states exactly how far the real-path evidence goes. |
 | Unattended / ambient operation | **Not authorised** | Not a build gap but a governance one: it sits inside Band A's restricted envelope and needs its own recorded decision. Slice 2 supports the Band 0 **attended** checkpoint only. |
 | AIRI as a presence endpoint | **Conceptual** | Architectural role agreed; no production integration. |
 | Household robotics / embodied endpoints | **Conceptual** | Tracked as a strategic backlog item in Airtable `Work Packages` (status: not started); no repository record carries an approval, so none is claimed here. Robots would be capability endpoints through the ECI, never a second executive. Nothing built. |
@@ -200,8 +200,8 @@ inferred), and every proposed parameter goes through the real device allowlists.
 
 **What it did not accomplish — all four verified in code at `a64f5af`:**
 
-- **Its deliberation is not reachable from chat.** *(Addressed by EXEC-02, unmerged — see §5a.)* Chat already traverses the Runtime Contract's Executive *stage*; what it did not reach, at `a64f5af`, is `bartholomew/executive/`'s goal-to-plan deliberation, because `bartholomew/kernel/runtime_contract.py` held no import from that package. The gap was depth in an existing stage, not a missing brain.
-- **It is not enabled anywhere.** *(Addressed by EXEC-02, unmerged — see §5a.)* At
+- **Its deliberation is not reachable from chat.** *(Closed by EXEC-02, merged as `25cfd90` — see §5a.)* Chat already traverses the Runtime Contract's Executive *stage*; what it did not reach, at `a64f5af`, is `bartholomew/executive/`'s goal-to-plan deliberation, because `bartholomew/kernel/runtime_contract.py` held no import from that package. The gap was depth in an existing stage, not a missing brain.
+- **It is not enabled anywhere.** *(Closed by EXEC-02, merged as `25cfd90` — see §5a.)* At
   `a64f5af`, `install_deliberation_port` had **no production caller**; a deployment that does not call it keeps exactly the pre-EXEC-01
   Executive. This is deliberate — enabling model-led reasoning on someone's computer
   is an operator's decision, not a side effect of a provider being reachable.
@@ -211,11 +211,19 @@ inferred), and every proposed parameter goes through the real device allowlists.
   better at using them; there are no new ones. Deliberation provenance is not
   persisted on the task row (it reaches the `ActionReflection` audit trail).
 
-## 5a. EXEC-02 — conversational Executive integration (built, **unmerged**)
+## 5a. EXEC-02 — conversational Executive integration, stated precisely
 
-**Not merged.** Branch `claude/exec-02-conversational-integration-82tk0o`, built on `c5cb3a0`
-(the merge of PR #114), awaiting Taylor at the User Approval Gate.
-Full record: `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`.
+**Merged.** PR #115, reviewed head `c3f1c5c`, merge commit `25cfd90`, built on `c5cb3a0`
+(the merge of PR #114). Approved by Taylor at the User Approval Gate on 2026-09-18.
+Full record: `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`. Decision:
+`DECISIONS.md`, "Conversation reaches the Executive through the dispatch table's last entry,
+behind an explicit switch".
+
+**CI at merge — all three tiers, on the reviewed head, before merging.** PR Fast green;
+Integration 3/3; Merge Candidate **7/7**, including the Windows full default suite and
+real-Win32 governed actuation. This is deliberately recorded because §9 of EXEC-01's own
+document exists to settle the opposite case: the Merge Candidate tier never ran on PR #108
+before merge, and failed one job of seven when it ran on `main` afterwards.
 
 **What it accomplished.** An outcome-level goal typed into ordinary conversation — "sort these
 files out for me" — can now reach EXEC-01's goal-to-plan cognition and produce a bounded,
@@ -235,10 +243,13 @@ It calls the **same** Executive seam the operator console calls. There is no sec
   reachable enables neither**. There is no default device id.
 - **It does not turn conversation into tasks.** "The files are a mess" and "sort out what you
   think about Tolstoy" are conversation and stay conversation.
-- **No real-model plan-quality evidence exists.** R-EXEC01-3 stands unchanged. The real-path
-  evidence reached a live outbound model call from a chat message and stopped there, because no
-  model was provisioned in the build environment; the package document §8 names the blocker and
-  the exact steps to finish the proof on the Windows PC.
+- **No real-model plan-quality evidence exists.** R-EXEC01-3 stands unchanged **and is not
+  closed by this merge**. The real-path evidence reached a live outbound model call from a chat
+  message and stopped there, because no model was provisioned in the build environment; the
+  package document §8 names the blocker and the exact steps to finish the proof on the Windows
+  PC. **"EXEC-02 is merged" must never be read as "Bartholomew now plans from goals in
+  production"** — that needs two environment variables and a named device id, and it still
+  proposes rather than acts.
 
 ### What comes next — the approved sequence
 
