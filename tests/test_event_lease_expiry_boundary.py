@@ -36,6 +36,7 @@ import time
 
 import pytest
 
+from bartholomew.kernel.db_ctx import db_session
 from bartholomew.kernel.event_processing import store
 
 
@@ -175,3 +176,43 @@ class TestTheRaceItRepairs:
             f"{len(losses)}/{trials} leases were released by the very next call; "
             f"(claim, recheck) sub-second phases: {losses}"
         )
+
+
+class TestTheLeaseInsideABoundedConnectionScope:
+    """The combination this module gained when the SQLite connection-lifecycle
+    repair landed (PR #113).
+
+    `event_processing`'s `_connect()` *is* `db_ctx.wal_db()`, so a caller that
+    opens a `db_session()` around a processing pass now has `claim_batch()`
+    borrow that one connection instead of opening its own. Nothing in the
+    repository does that yet, which is exactly why it is worth pinning: the
+    lease's correctness must not depend on who owns the connection, and
+    `claim_batch()` runs an explicit `BEGIN IMMEDIATE` that a borrowed
+    connection has to leave clean for the next borrower.
+    """
+
+    def test_the_lease_is_unchanged_when_the_connection_is_borrowed(self, db):
+        with db_session(db, label="processing-pass"):
+            assert len(_claim(db, at=1000.996)) == 1
+            assert _claim(db, at=1001.995) == [], "a borrowed connection shortened the lease"
+            assert (
+                len(_claim(db, at=1000.996 + 1.1)) == 1
+            ), "a borrowed connection stopped the lease being recovered"
+
+    def test_a_claim_taken_in_a_scope_is_durable_after_the_scope_ends(self, db):
+        """The scope closes its connection on exit; a committed claim is not
+        rolled back with it."""
+        with db_session(db, label="processing-pass"):
+            assert len(_claim(db, at=2000.5)) == 1
+        record = store.get(db, "src", "evt-1")
+        assert record.state == store.STATE_CLAIMED
+        assert record.lease_expires_ts == 2001.5
+
+    def test_the_claim_leaves_no_transaction_open_on_the_borrowed_connection(self, db):
+        """`claim_batch()` opens `BEGIN IMMEDIATE` explicitly. On a connection
+        it does not own, it must still hand it back clean -- otherwise the next
+        borrower inherits a write lock, or has its own work committed by
+        someone else's commit."""
+        with db_session(db, label="processing-pass") as conn:
+            assert len(_claim(db, at=3000.5)) == 1
+            assert not conn.in_transaction

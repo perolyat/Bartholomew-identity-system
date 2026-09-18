@@ -8,13 +8,19 @@ Reuses canonical schema from MemoryStore and extends with scheduler tables.
 import json
 from typing import Any
 
-# Import wal_db context manager
-from bartholomew.kernel.db_ctx import wal_db
+# Import the connection-scope context managers. Every helper below takes a
+# `db_path` and opens its own connection through wal_db(); a caller doing
+# several of them as one unit of work wraps them in db_session(), and they
+# then share that one connection for the scope. Re-exported here so callers
+# of this module do not need to reach into db_ctx for it.
+from bartholomew.kernel.db_ctx import db_session, wal_db
 
 # Import canonical schema from MemoryStore
 from bartholomew.kernel.memory_store import SCHEMA as MEMORY_STORE_SCHEMA
 
 from . import containment
+
+__all__ = ["db_session"]  # re-export; the rest of this module is its functions
 
 # Scheduler-specific schema extensions
 SCHEDULER_SCHEMA = """

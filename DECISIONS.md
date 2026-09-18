@@ -3754,6 +3754,49 @@
     on it.
 - **Date:** 2026-09-17
 
+## Decision: a SQLite connection is owned by a bounded unit of work, not by a single statement
+
+- **Status:** established 2026-09-18 by the SQLite connection-lifecycle foundation repair
+  (branch `claude/sqlite-connection-lifecycle-flkccb`, PR #113, **approved at head `4a883a2` and
+  merged 2026-09-18 as `b41c79e`**). Record: `docs/SQLITE_CONNECTION_LIFECYCLE_REPAIR.md`. Implements the package
+  chartered by the preceding entry ("SQLite connection-lifetime repair is a separate package,
+  scoped to reuse and never a process-wide pool") without widening it.
+- **Decision:** a caller that performs several database operations as one unit of work declares
+  that scope with `bartholomew.kernel.db_ctx.db_session()`. Within the scope, on the thread that
+  opened it, `wal_db()` borrows the scope's connection; at scope exit the connection is closed.
+  Outside a scope, the existing per-call connection lifecycle is unchanged and remains the
+  default. A scope is bounded by a `with` block; there is no pool, no cache, and no connection
+  that outlives its scope.
+- **Why:** the per-operation lifecycle was not paying for a handle, it was paying for a WAL
+  teardown. Because each helper owns its whole connection, between calls nothing holds the
+  database open, so every close is the *last* close -- and SQLite's last close checkpoints the
+  entire WAL and unlinks `-wal` and `-shm`, which the next call recreates. Measured on the same
+  code path, 300 writes, ms/op connect|commit|close: 0.407|1.199|1.150 alone against
+  0.156|0.021|0.022 with another connection open. On Windows the same term was ~70 ms per close
+  and took the heavy-burst containment test to 108.4 s against a 120 s per-test timeout.
+- **Alternatives considered:** (a) a process-wide pool or a permanently open connection -- rejected
+  by the charter and by `tests/test_vector_store_handle_lifetime.py` /
+  `tests/test_sqlite_wal_cleanup.py`, which exist because an un-released handle is a Windows
+  defect; (b) raising the per-test timeout -- removes the signal, not the cost; (c) a
+  `contextvars.ContextVar` binding instead of thread-local -- rejected, because it would follow an
+  `await` onto an executor thread and hand that thread a `sqlite3.Connection` bound to another;
+  (d) making the scope implicit (auto-detected per call stack) -- rejected, because where a unit of
+  work begins and ends is a design statement the caller must make, not something to infer.
+- **Consequences:**
+  - The handle-release contract is preserved exactly: handles are released when the scope ends,
+    and a scope always ends. What changes is how many release points there are, not the guarantee.
+  - Transaction semantics are unchanged by construction: a borrowed `wal_db()` rolls back any
+    transaction still open when the call returns, which is what closing its own connection did.
+    An uncommitted write still does not persist, and a failed operation cannot have its partial
+    work committed by the next borrower.
+  - The binding is thread-local, so `SchedulerStore`'s single worker thread, the daemon's
+    executors and the event loop never share a connection.
+  - Adoption is incremental and opt-in. The scheduler tick and the containment bursts declare a
+    scope today; every other `wal_db()` caller is unchanged and already scope-capable.
+  - Holding a scope for an unbounded period would be a defect, not a feature; it is asserted
+    against for `SchedulerStore`.
+- **Date:** 2026-09-18
+
 ## Decision: a lease's two clock readings must measure the same thing
 
 - **Status:** established 2026-09-18 by the event-processing lease repair (branch
