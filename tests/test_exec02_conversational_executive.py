@@ -140,7 +140,9 @@ def _device():
 
 @pytest.fixture
 def mock_config_files(tmp_path):
-    (tmp_path / "kernel.yaml").write_text('timezone: "Australia/Brisbane"\nloop_interval_seconds: 1\n')
+    (tmp_path / "kernel.yaml").write_text(
+        'timezone: "Australia/Brisbane"\nloop_interval_seconds: 1\n',
+    )
     (tmp_path / "persona.yaml").write_text('name: "Test Bartholomew"\n')
     (tmp_path / "policy.yaml").write_text("policies: []\n")
     (tmp_path / "drives.yaml").write_text("drives: []\n")
@@ -253,7 +255,10 @@ class TestDisabledByDefault:
         assert port.prompts == []
 
     async def test_activation_refuses_to_be_half_specified(self, daemon):
-        for bad in ({"tenant_id": "", "device_id": DEVICE}, {"tenant_id": TENANT, "device_id": " "}):
+        for bad in (
+            {"tenant_id": "", "device_id": DEVICE},
+            {"tenant_id": TENANT, "device_id": " "},
+        ):
             with pytest.raises(ValueError):
                 install_conversational_executive(daemon, requested_by=REQUESTER, **bad)
 
@@ -298,7 +303,10 @@ class TestDeterministicDispatchIsUnchanged:
         monkeypatch.setattr(
             rc,
             "_CHAT_DISPATCH",
-            ((rc._DISPATCH_OBJECTIVE, _claims), (rc._DISPATCH_EXECUTIVE_GOAL, rc._handle_executive_goal)),
+            (
+                (rc._DISPATCH_OBJECTIVE, _claims),
+                (rc._DISPATCH_EXECUTIVE_GOAL, rc._handle_executive_goal),
+            ),
         )
         result = await run_chat_through_runtime_contract(enabled, GOAL, model)
         assert result.response == "the objective seam answered"
@@ -483,7 +491,11 @@ class TestGovernanceStillDecides:
     ):
         """Invariant 5/6: cognition never reopens a refusal, and the person is
         told rather than being handed a generated sentence about a deletion."""
-        result = await run_chat_through_runtime_contract(enabled, "Delete these files for me", model)
+        result = await run_chat_through_runtime_contract(
+            enabled,
+            "Delete these files for me",
+            model,
+        )
         action = result.executive_action
         assert action["outcome"] in {
             goal_intents.GOAL_OUTCOME_REFUSED,
@@ -718,9 +730,9 @@ class TestProductionActivationIsExplicit:
         ctx = self._Ctx()
         report = _clean_env.configure_from_environment(ctx, self._Router())
         assert report["deliberation_installed"] is True
-        assert report["conversational_executive_enabled"] is False, (
-            "cognition inside the Executive must not imply conversational routing"
-        )
+        assert (
+            report["conversational_executive_enabled"] is False
+        ), "cognition inside the Executive must not imply conversational routing"
 
     def test_conversational_routing_without_cognition_is_a_real_posture(
         self,
