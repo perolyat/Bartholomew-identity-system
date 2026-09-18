@@ -1412,6 +1412,43 @@
     *repeatably* all-green Windows completion Band 0 requires, and should be tracked as its own
     item rather than counted against the connection-lifecycle package.
 
+- **(2026-09-18) A `lease_seconds=N` claim lease in `event_processing` can expire after as little
+  as zero seconds. Root-caused and reproduced; NOT repaired — it is a different subsystem's
+  correctness question and was deliberately not absorbed into the connection-lifecycle package.**
+  `bartholomew/kernel/event_processing/store.py::claim_batch()` computes
+  `now = int(time.time())` and `lease_until = now + lease_seconds`, then recovers expired claims
+  with `WHERE lease_expires_ts <= ?` against a second, separately truncated `int(time.time())`.
+  Both ends are truncated to the whole second, so the **real** duration of an `N`-second lease is
+  anywhere in `(N-1, N]` seconds, not `N`. At `N = 1` that means a lease taken in the last
+  milliseconds of a wall-clock second is **already expired on the very next call**.
+  - **Reproduced deterministically**, not inferred: 60 trials each seeded with one captured row
+    and claimed at a busy-waited alignment 4 ms before a second boundary, each followed
+    immediately by a second `claim_batch`. The lease was lost in **10 of 60**; every loss shows
+    the claim at fraction `.996` and the recheck at fraction `.001` of the next second. Away from
+    the boundary (fractions 0.1, 0.5, 0.9, 0.97) it never occurs.
+  - **This is the mechanism behind
+    `tests/test_event_backbone_processing.py::
+    test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing`,** which claims with
+    `lease_seconds=1` and then asserts that an immediate second pass claims nothing. Observed
+    twice on the connection-lifecycle branch (one local serial full run; CI "Tests + coverage
+    (Ubuntu, py3.10)" on `615e780`, `assert 1 == 0`), and named on the pre-existing list in
+    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` (run 34942899213) before that branch existed. It is
+    **not** caused by the connection-lifecycle repair: the defect is wall-clock phase, the repair
+    only ever removes work from the window, a second full-suite run on the same branch was clean,
+    and the branch's fully green Windows Merge Candidate (35312520515) passed it.
+  - **It is a product defect, not only a test defect.** A durable work queue that can release a
+    claim it has only just granted will let two passes process one event concurrently. This
+    module's re-processing is idempotent by design, which bounds the damage, but the lease does
+    not provide the guarantee its own docstring states ("A claim is a lease with an expiry").
+  - **Proposed fix, one operator, in the safe direction:** compare with `lease_expires_ts < ?`
+    rather than `<=`. An `N`-second lease then lasts between `N` and `N+1` real seconds instead
+    of between `N-1` and `N`. For a lease, granting slightly long is safe (the work is recovered
+    a moment later and re-processing is idempotent) while expiring early is not. It needs its own
+    test at the boundary phase. **Not applied here** — it changes a durable-queue recovery
+    semantic in a governance-adjacent subsystem and belongs to that subsystem's owner, under the
+    User Approval Gate, not to the SQLite lifecycle package.
+  - **Risk category:** durable-work-queue correctness; secondarily test-suite trustworthiness.
+
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
   **chat**, **training**, and **sight/voice** surfaces, the shared Reflection sink is the sole
