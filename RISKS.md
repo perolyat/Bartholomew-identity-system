@@ -1379,8 +1379,12 @@
   > trace closing with `nothing: no worker crashed and no phase reported a bad outcome`, the
   > heavy-burst test again absent from the cost table, and the device-consent failure not
   > recurring. That is the **first fully green Windows Merge Candidate since the blocker was
-  > named**. Band 0 still needs *repeatably* all-green Windows completion, so this is two runs,
-  > not yet the record.
+  > named**. **Third run, 35319175282 (head `091567c`): fully green again, all seven jobs** —
+  > two consecutive. Against the same-morning `main` control that lost a worker to the blocker,
+  > and against a prior record of two green and three red across four heads with every red that
+  > same worker kill, this is a real change. Band 0 asks for *repeatably* all-green Windows
+  > completion: three runs is a reasonable basis for that judgement, not a proof of it, and the
+  > call is Taylor's at the reassessment rather than this package's to declare.
 
 - **(2026-09-18) Time-budget assertions on per-operation SQLite paths, in tests this package did
   not adopt the connection scope for.** `tests/test_device_consent_channel.py::
