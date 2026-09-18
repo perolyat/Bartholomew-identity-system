@@ -1440,13 +1440,18 @@
     claim it has only just granted will let two passes process one event concurrently. This
     module's re-processing is idempotent by design, which bounds the damage, but the lease does
     not provide the guarantee its own docstring states ("A claim is a lease with an expiry").
-  - **Proposed fix, one operator, in the safe direction:** compare with `lease_expires_ts < ?`
-    rather than `<=`. An `N`-second lease then lasts between `N` and `N+1` real seconds instead
-    of between `N-1` and `N`. For a lease, granting slightly long is safe (the work is recovered
-    a moment later and re-processing is idempotent) while expiring early is not. It needs its own
-    test at the boundary phase. **Not applied here** — it changes a durable-queue recovery
-    semantic in a governance-adjacent subsystem and belongs to that subsystem's owner, under the
-    User Approval Gate, not to the SQLite lifecycle package.
+  - **Repaired in its own package, PR #114 (`claude/event-lease-truncation-race`, NOT MERGED).**
+    Not applied here: it changes a durable-queue recovery semantic in a governance-adjacent
+    subsystem, and belongs to that subsystem's owner under the User Approval Gate rather than to
+    the SQLite lifecycle package. Full record there.
+  - **A first proposal made from this branch was wrong, and is corrected here rather than left
+    to mislead.** It read: compare with `lease_expires_ts < ?` rather than `<=`, "one operator in
+    the safe direction", on the reasoning that a lease erring long is free. **It is not free.**
+    That variant makes an `N`-second lease last between `N` and `N+1` seconds and **fails four
+    existing tests** in `tests/test_event_backbone_store.py` that claim with `lease_seconds=1` and
+    wait 1.1 s for a recovery. Fixing one end of a lease moves the defect to the other end. The
+    actual repair is the *clock*: `time.time()` rather than `int(time.time())`, so the lease's two
+    readings measure the same thing and an `N`-second lease lasts `N` seconds at both ends.
   - **Risk category:** durable-work-queue correctness; secondarily test-suite trustworthiness.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
