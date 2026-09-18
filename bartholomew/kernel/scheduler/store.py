@@ -34,9 +34,13 @@ constructs its own and closes it itself when the loop exits.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
+from .. import db_ctx
 from ..blocking_executor import ExecutorClosedError, SingleWorkerExecutor
 from . import persistence
 from .health import get_system_metrics as _get_system_metrics
@@ -78,6 +82,49 @@ class SchedulerStore:
 
     async def _call(self, fn, *args) -> Any:
         return await self._worker.submit(fn, *args)
+
+    # -- bounded connection scope -------------------------------------------
+
+    @contextlib.asynccontextmanager
+    async def unit_of_work(self, label: str = "") -> AsyncIterator[None]:
+        """Hold one SQLite connection open across a bounded run of operations.
+
+        Every method on this facade runs on the same single worker thread, so
+        a `db_ctx.db_session()` entered on that thread covers all of them.
+        Inside this scope the persistence helpers borrow that one connection
+        instead of opening and closing one each; when the scope exits the
+        connection is closed on the worker thread that owns it.
+
+        This is a scope, not a pool. The connection lives exactly as long as
+        the `async with`, holds no lock while idle (no transaction is left
+        open between operations), and is never shared with another thread --
+        the binding is thread-local to the worker.
+
+        Use it around a genuine unit of work, such as one scheduler tick.
+        Entering it around the whole process lifetime would defeat the point
+        of the handle-release contract and is not what it is for.
+        """
+        stack = contextlib.ExitStack()
+
+        def _enter() -> None:
+            stack.enter_context(
+                db_ctx.db_session(self.db_path, label=label or "scheduler-unit-of-work"),
+            )
+
+        await self._call(_enter)
+        try:
+            yield
+        finally:
+            # Shielded: a cancellation delivered while the body was running
+            # must not leave the worker thread holding an open connection.
+            try:
+                await asyncio.shield(self._worker.submit(stack.close))
+            except ExecutorClosedError:
+                # The worker is gone; its thread-local binding goes with it.
+                log.warning(
+                    "unit_of_work: store closed before its scope ended (%s)",
+                    self.db_path,
+                )
 
     # -- persistence.py mirror ----------------------------------------------
 

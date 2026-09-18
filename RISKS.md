@@ -1262,7 +1262,8 @@
   > production publisher reaches it today.
   >
   > **Amendment (2026-09-17) — the "stalled tail" is root-caused and corrected; the name was wrong
-  > (PR #112, NOT MERGED, awaiting Taylor's User Approval Gate).** It was never a property of a
+  > (PR #112, **merged 2026-09-18 as `9ca2d4a`**; this entry previously said "NOT MERGED, awaiting
+  > Taylor's User Approval Gate", which went stale at that merge and is corrected here).** It was never a property of a
   > test, which is why repeated investigation found no property of the unlucky test to explain it.
   > It is a **lost-wakeup deadlock in pytest-xdist's own controller**. Three simultaneous Windows
   > stacks show the controller's main thread parked in `queue.get` inside `DSession.loop_once` on an
@@ -1328,6 +1329,134 @@
   > *is* the 70 ms.** So this is a trade against an existing, defect-driven contract, not a free
   > optimisation. Scoped reuse only (a `db_session()` held across a burst), never a process-wide
   > pool.
+  >
+  > **Repaired 2026-09-18 — the connection-lifecycle package (branch
+  > `claude/sqlite-connection-lifecycle-flkccb`; NOT MERGED, awaiting Taylor's User Approval
+  > Gate). Full record: `docs/SQLITE_CONNECTION_LIFECYCLE_REPAIR.md`.** The measured diagnosis
+  > above is confirmed and completed: `close` is the dominant term, and the reason is now
+  > established rather than attributed to Windows generally. Every persistence helper takes a
+  > `db_path` and owns a whole connection lifecycle, so between calls there is **no** connection to
+  > the database and every `wal_db()` exit is the *last* close — which is not a handle release but
+  > a full WAL checkpoint plus the unlink of `-wal` and `-shm`, recreated by the next call. The
+  > ownership boundary was the statement, not the unit of work. Controlled A/B on the same code
+  > path, 300 writes, ms/op connect|commit|close: **0.407|1.199|1.150 as the sole connection
+  > against 0.156|0.021|0.022 with any other connection open** — commit and close both collapse
+  > ~50x, because neither the checkpoint nor the file rebuild happens. The repair is the scoped
+  > reuse this entry required and nothing else: `db_ctx.db_session()`, a bounded scope that binds
+  > one connection **thread-locally** (never a `ContextVar`, which would follow an `await` onto an
+  > executor thread) and closes it in `finally`; inside it `wal_db()` borrows, and a borrowed call
+  > still rolls back an uncommitted transaction on return, so transaction semantics are bit-for-bit
+  > what closing its own connection did. Not a pool, nothing cached, no global registry, no
+  > timeout/pragma/WAL change, no test weakened. Adopted by `SchedulerStore.unit_of_work()` and one
+  > scheduler tick, and by the containment file's four emission bursts. **Linux evidence:** the
+  > 1000-emission burst 4.54 s → 0.105 s; the heavy-burst containment test 2.23 s → 0.20 s; 34 new
+  > deterministic lifecycle tests (`tests/test_db_session_lifecycle.py`) including a
+  > `/proc/self/fd` handle enumeration with the cyclic collector disabled, thread-confinement, and
+  > a scope-is-not-a-pool guard; the handle-release suites this entry warned about
+  > (`test_vector_store_handle_lifetime`, `test_sqlite_wal_cleanup`) unchanged and passing.
+  > **Still open, and the reason this entry does not close:** the decisive measurement is a Windows
+  > one and has not been taken. Band 0's condition is *repeatably* all-green Windows completion,
+  > so what is owed is more than one Merge Candidate run on this branch showing the heavy-burst
+  > test well inside the unchanged 120 s per-test timeout with no worker killed. Until then the
+  > accurate statement is **technically repaired and evidenced on Linux, pending Windows
+  > confirmation** — not that Band 0 is clear.
+  >
+  > **Windows confirmation, 2026-09-18 (run 35311115266, head `6750227`).** Taken, and it holds.
+  > The heavy-burst containment test no longer appears in the run's slowest-reports table or in
+  > its SQLite cost table at all — it was `1036 opens | 0.4 s connect | 33.8 s commit | 72.3 s
+  > close | 108.4 s wall` and is now below the 15th entry of both (1.3 s). No worker was lost, no
+  > stall was recorded, all four workers reached `session_finish` and `process_exit`, and the job
+  > completed in 16:30 with 5098 passed. The **control is same-day and on the base branch**: the
+  > Merge Candidate for `main` at `9ca2d4a` (run 35301649186, 2026-09-18 03:22, the post-#112
+  > push) failed with `WORKER LOST gw3 died on
+  > test_a_heavy_system_generated_burst_leaves_every_genuine_row_untouched` — the blocker
+  > exactly. The nothing-changed-but-this comparison is therefore direct.
+  >
+  > One test failed in that run, and it is **not this class and not this package's**: see the
+  > separate entry below.
+  >
+  > **Second run, 35312520515 (head `350479e`): fully green — all seven jobs**, the Windows
+  > trace closing with `nothing: no worker crashed and no phase reported a bad outcome`, the
+  > heavy-burst test again absent from the cost table, and the device-consent failure not
+  > recurring. That is the **first fully green Windows Merge Candidate since the blocker was
+  > named**. **Third run, 35319175282 (head `091567c`): fully green again, all seven jobs** —
+  > two consecutive. Against the same-morning `main` control that lost a worker to the blocker,
+  > and against a prior record of two green and three red across four heads with every red that
+  > same worker kill, this is a real change. Band 0 asks for *repeatably* all-green Windows
+  > completion: three runs is a reasonable basis for that judgement, not a proof of it, and the
+  > call is Taylor's at the reassessment rather than this package's to declare.
+
+- **(2026-09-18) Time-budget assertions on per-operation SQLite paths, in tests this package did
+  not adopt the connection scope for.** `tests/test_device_consent_channel.py::
+  test_a_late_answer_after_expiry_cannot_resurrect_the_start` failed on Windows in run
+  35311115266 with "the ask never appeared". The test configures `ttl_seconds=1` and then polls
+  up to 5 s for the ask to show up as *pending*; the run's own SQLite trace shows that test at
+  `253 opens | 3 commits | 4.0 s commit | 14.3 s wall`, so a single commit took seconds and the
+  ask had already expired by the time it was observable. The assertion races the TTL it sets.
+  - **Not new, and not caused by the connection-lifecycle repair.** The class is already on the
+    record: `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` §(run 34942899213) names this same file and
+    `tests/test_event_backbone_processing.py::
+    test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing` (a 1 s lease) together as
+    "time-budget assertions on per-operation SQLite paths", failing on `main` before this
+    package existed. The repair has no mechanism to cause it: `db_session()` changes behaviour
+    only inside a scope, and neither of these paths opens one. What changed is exposure — with
+    the heavy-burst test no longer killing a worker and requeueing its work, the run's test
+    distribution differs, and a latent race surfaces where it previously hid behind a bigger
+    failure.
+  - **Deliberately not absorbed here.** The connection-lifecycle package is scoped to the
+    lifecycle; repairing the device-consent and event-backbone timing assertions means touching
+    those subsystems' own semantics (what "expired" means when the write that creates the row
+    can take seconds), which is their design question, not this one's.
+  - **The shape of the real fix, for whoever takes it:** either these paths adopt a
+    `db_session()` for the ask/claim unit of work — the cost the repair removes is exactly what
+    they are losing the race to — or the assertions stop keying on wall-clock TTLs and drive
+    expiry deterministically. The first is preferable: it removes the cost rather than
+    tolerating it.
+  - **Risk category:** test-suite trustworthiness on Windows. It is a live obstacle to the
+    *repeatably* all-green Windows completion Band 0 requires, and should be tracked as its own
+    item rather than counted against the connection-lifecycle package.
+
+- **(2026-09-18) A `lease_seconds=N` claim lease in `event_processing` can expire after as little
+  as zero seconds. Root-caused and reproduced; NOT repaired — it is a different subsystem's
+  correctness question and was deliberately not absorbed into the connection-lifecycle package.**
+  `bartholomew/kernel/event_processing/store.py::claim_batch()` computes
+  `now = int(time.time())` and `lease_until = now + lease_seconds`, then recovers expired claims
+  with `WHERE lease_expires_ts <= ?` against a second, separately truncated `int(time.time())`.
+  Both ends are truncated to the whole second, so the **real** duration of an `N`-second lease is
+  anywhere in `(N-1, N]` seconds, not `N`. At `N = 1` that means a lease taken in the last
+  milliseconds of a wall-clock second is **already expired on the very next call**.
+  - **Reproduced deterministically**, not inferred: 60 trials each seeded with one captured row
+    and claimed at a busy-waited alignment 4 ms before a second boundary, each followed
+    immediately by a second `claim_batch`. The lease was lost in **10 of 60**; every loss shows
+    the claim at fraction `.996` and the recheck at fraction `.001` of the next second. Away from
+    the boundary (fractions 0.1, 0.5, 0.9, 0.97) it never occurs.
+  - **This is the mechanism behind
+    `tests/test_event_backbone_processing.py::
+    test_a_crash_after_claiming_loses_nothing_and_duplicates_nothing`,** which claims with
+    `lease_seconds=1` and then asserts that an immediate second pass claims nothing. Observed
+    twice on the connection-lifecycle branch (one local serial full run; CI "Tests + coverage
+    (Ubuntu, py3.10)" on `615e780`, `assert 1 == 0`), and named on the pre-existing list in
+    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` (run 34942899213) before that branch existed. It is
+    **not** caused by the connection-lifecycle repair: the defect is wall-clock phase, the repair
+    only ever removes work from the window, a second full-suite run on the same branch was clean,
+    and the branch's fully green Windows Merge Candidate (35312520515) passed it.
+  - **It is a product defect, not only a test defect.** A durable work queue that can release a
+    claim it has only just granted will let two passes process one event concurrently. This
+    module's re-processing is idempotent by design, which bounds the damage, but the lease does
+    not provide the guarantee its own docstring states ("A claim is a lease with an expiry").
+  - **Repaired in its own package, PR #114 (`claude/event-lease-truncation-race`, NOT MERGED).**
+    Not applied here: it changes a durable-queue recovery semantic in a governance-adjacent
+    subsystem, and belongs to that subsystem's owner under the User Approval Gate rather than to
+    the SQLite lifecycle package. Full record there.
+  - **A first proposal made from this branch was wrong, and is corrected here rather than left
+    to mislead.** It read: compare with `lease_expires_ts < ?` rather than `<=`, "one operator in
+    the safe direction", on the reasoning that a lease erring long is free. **It is not free.**
+    That variant makes an `N`-second lease last between `N` and `N+1` seconds and **fails four
+    existing tests** in `tests/test_event_backbone_store.py` that claim with `lease_seconds=1` and
+    wait 1.1 s for a recovery. Fixing one end of a lease moves the defect to the other end. The
+    actual repair is the *clock*: `time.time()` rather than `int(time.time())`, so the lease's two
+    readings measure the same thing and an `N`-second lease lasts `N` seconds at both ends.
+  - **Risk category:** durable-work-queue correctness; secondarily test-suite trustworthiness.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the

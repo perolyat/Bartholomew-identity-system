@@ -288,82 +288,91 @@ async def run_scheduler(ctx: Any) -> None:
                 drive_fn = registry[task_id]["fn"]
                 nudge, success = await _run_drive(ctx, task_id, drive_fn)
                 _beat(ctx, drive=task_id)
-                result_meta: dict[str, Any] = {}
+                # One executed tick is one unit of work against the scheduler
+                # database: the nudge write, the tick record and the next-run
+                # update share a single connection instead of opening and
+                # closing one each. The scope is the tick, not the process --
+                # the connection is closed on the worker thread when this
+                # block exits, so every handle is released as before. See
+                # db_ctx.db_session() for why the per-call lifecycle was the
+                # dominant cost.
+                async with store.unit_of_work(label=f"tick:{task_id}"):
+                    result_meta: dict[str, Any] = {}
 
-                # Persist the nudge (if any) BEFORE the tick, so the tick can
-                # record truthfully what became of it. WP-A1 requirement E:
-                # this used to be wrapped in contextlib.suppress(Exception),
-                # which meant a locked or failing database discarded a queued
-                # item while the run still reported success -- indistinguish-
-                # able from "there was nothing to persist". A dropped
-                # obligation nobody can detect is exactly what D2 forbids,
-                # and it makes the S1 queue-integrity invariant untestable.
-                if nudge:
+                    # Persist the nudge (if any) BEFORE the tick, so the tick can
+                    # record truthfully what became of it. WP-A1 requirement E:
+                    # this used to be wrapped in contextlib.suppress(Exception),
+                    # which meant a locked or failing database discarded a queued
+                    # item while the run still reported success -- indistinguish-
+                    # able from "there was nothing to persist". A dropped
+                    # obligation nobody can detect is exactly what D2 forbids,
+                    # and it makes the S1 queue-integrity invariant untestable.
+                    if nudge:
+                        try:
+                            outcome = await store.insert_nudge_contained(
+                                nudge.kind,
+                                nudge.message,
+                                nudge.actions,
+                                nudge.reason,
+                                nudge.created_ts,
+                                getattr(nudge, "escalation", None),
+                                getattr(nudge, "dedup_identity", None),
+                            )
+                            result_meta["nudge"] = outcome
+                        except Exception as e:
+                            # Visible and safe: the tick is recorded as a FAILURE
+                            # carrying the error, and the failure is logged at
+                            # ERROR. Nothing here infers that the item was a
+                            # duplicate, was already represented, or is
+                            # disposable -- the only claim made is that
+                            # persistence did not happen.
+                            success = 0
+                            result_meta["nudge"] = {
+                                "outcome": "persistence_failed",
+                                "kind": nudge.kind,
+                                "reason": nudge.reason,
+                                "error": f"{type(e).__name__}: {e}",
+                            }
+                            log.error(
+                                "[Scheduler] Nudge persistence FAILED for %s "
+                                "(kind=%s reason=%s): %s -- the emitted item was "
+                                "NOT queued and is not assumed to be represented",
+                                task_id,
+                                nudge.kind,
+                                nudge.reason,
+                                e,
+                            )
+                            print(f"[Scheduler] Nudge persistence FAILED for {task_id}: {e}")
+
+                    finished_ts = int(time.time())
+                    dur_ms = (finished_ts - started_ts) * 1000
+
+                    # Persist tick
                     try:
-                        outcome = await store.insert_nudge_contained(
-                            nudge.kind,
-                            nudge.message,
-                            nudge.actions,
-                            nudge.reason,
-                            nudge.created_ts,
-                            getattr(nudge, "escalation", None),
-                            getattr(nudge, "dedup_identity", None),
-                        )
-                        result_meta["nudge"] = outcome
-                    except Exception as e:
-                        # Visible and safe: the tick is recorded as a FAILURE
-                        # carrying the error, and the failure is logged at
-                        # ERROR. Nothing here infers that the item was a
-                        # duplicate, was already represented, or is
-                        # disposable -- the only claim made is that
-                        # persistence did not happen.
-                        success = 0
-                        result_meta["nudge"] = {
-                            "outcome": "persistence_failed",
-                            "kind": nudge.kind,
-                            "reason": nudge.reason,
-                            "error": f"{type(e).__name__}: {e}",
-                        }
-                        log.error(
-                            "[Scheduler] Nudge persistence FAILED for %s "
-                            "(kind=%s reason=%s): %s -- the emitted item was "
-                            "NOT queued and is not assumed to be represented",
+                        await store.insert_tick(
                             task_id,
-                            nudge.kind,
-                            nudge.reason,
-                            e,
+                            started_ts,
+                            finished_ts,
+                            success,
+                            idempotency_key,
+                            result_meta,
                         )
-                        print(f"[Scheduler] Nudge persistence FAILED for {task_id}: {e}")
+                    except Exception as e:
+                        # If insert fails due to duplicate key, that's OK
+                        if "unique" not in str(e).lower():
+                            print(f"[Scheduler] Error inserting tick for {task_id}: {e}")
 
-                finished_ts = int(time.time())
-                dur_ms = (finished_ts - started_ts) * 1000
-
-                # Persist tick
-                try:
-                    await store.insert_tick(
-                        task_id,
-                        started_ts,
-                        finished_ts,
-                        success,
-                        idempotency_key,
-                        result_meta,
+                    # Compute next run time
+                    next_ts, new_window_state = cadence_module.compute_next_run(
+                        last_run_ts=scheduled_ts,
+                        scheduled_ts=scheduled_ts,
+                        cadence_str=cadence_str,
+                        now_ts=now_ts,
+                        window_state=due_task["window_state"],
                     )
-                except Exception as e:
-                    # If insert fails due to duplicate key, that's OK
-                    if "unique" not in str(e).lower():
-                        print(f"[Scheduler] Error inserting tick for {task_id}: {e}")
 
-                # Compute next run time
-                next_ts, new_window_state = cadence_module.compute_next_run(
-                    last_run_ts=scheduled_ts,
-                    scheduled_ts=scheduled_ts,
-                    cadence_str=cadence_str,
-                    now_ts=now_ts,
-                    window_state=due_task["window_state"],
-                )
-
-                # Update scheduled task
-                await store.update_next_run(task_id, next_ts, scheduled_ts, new_window_state)
+                    # Update scheduled task
+                    await store.update_next_run(task_id, next_ts, scheduled_ts, new_window_state)
 
                 # Log tick execution
                 print(f"[Scheduler] tick={task_id} ok={success} dur_ms={dur_ms} next={next_ts}")
