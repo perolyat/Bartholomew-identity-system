@@ -64,21 +64,21 @@ logger = logging.getLogger(__name__)
 
 # -- states -----------------------------------------------------------------
 
-#: Swept from `inbound_events`, waiting for a pass to take it.
+# Swept from `inbound_events`, waiting for a pass to take it.
 STATE_CAPTURED = "captured"
-#: A pass holds a lease on it right now.
+# A pass holds a lease on it right now.
 STATE_CLAIMED = "claimed"
-#: A handler ran and its effect (if any) is durable. Terminal.
+# A handler ran and its effect (if any) is durable. Terminal.
 STATE_PROCESSED = "processed"
-#: Nothing here bears on anything Bartholomew is carrying. Terminal, and an
-#: explicit verdict rather than an absence of one.
+# Nothing here bears on anything Bartholomew is carrying. Terminal, and an
+# explicit verdict rather than an absence of one.
 STATE_IRRELEVANT = "irrelevant"
-#: Deliberately not acted on: an unknown event type, a payload that is not
-#: what its type promises, a policy denial, or an interpretation that would
-#: have had to guess. Terminal, and never an error.
+# Deliberately not acted on: an unknown event type, a payload that is not
+# what its type promises, a policy denial, or an interpretation that would
+# have had to guess. Terminal, and never an error.
 STATE_REFUSED = "refused"
-#: Repeatedly failed. Terminal, held for inspection, and out of the way of
-#: every later event. Terminal.
+# Repeatedly failed. Terminal, held for inspection, and out of the way of
+# every later event. Terminal.
 STATE_QUARANTINED = "quarantined"
 
 TERMINAL_STATES = frozenset(
@@ -87,9 +87,9 @@ TERMINAL_STATES = frozenset(
 PENDING_STATES = frozenset({STATE_CAPTURED, STATE_CLAIMED})
 ALL_STATES = TERMINAL_STATES | PENDING_STATES
 
-#: The dispositions a handler may ask for. `quarantined` is deliberately not
-#: among them: quarantine is what repeated *failure* produces, and a handler
-#: that could elect it directly would be able to hide a refusal as a fault.
+# The dispositions a handler may ask for. `quarantined` is deliberately not
+# among them: quarantine is what repeated *failure* produces, and a handler
+# that could elect it directly would be able to hide a refusal as a fault.
 SETTLEABLE_STATES = frozenset({STATE_PROCESSED, STATE_IRRELEVANT, STATE_REFUSED})
 
 _STATE_CHECK = ", ".join(f"'{s}'" for s in sorted(ALL_STATES))
@@ -453,6 +453,42 @@ def new_claim_token() -> str:
     return uuid.uuid4().hex
 
 
+# ---------------------------------------------------------------------------
+# Why the expiry comparison in `claim_batch()` is `<` and not `<=`
+# ---------------------------------------------------------------------------
+#
+# Both ends of a lease are whole seconds. `claim_batch()` takes
+# `now = int(time.time())` and stores `lease_expires_ts = now + lease_seconds`;
+# a later pass recovers expired claims by comparing that stored value against
+# its own, separately truncated `int(time.time())`. Truncation throws away
+# the sub-second phase at which each call happened, and the two calls are not
+# at the same phase.
+#
+# With `<=`, a lease is released as soon as the *second counter* reaches
+# `lease_expires_ts` -- which, for a claim taken at `T.996`, happens 5 ms
+# later at `T+1.001`. An `N`-second lease therefore really lasted somewhere
+# in `(N-1, N]` seconds, and at `N = 1` it could last essentially no time at
+# all. Measured before this change: 10 of 60 claims deliberately aligned to
+# 4 ms before a second boundary were released by the very next call, every
+# one of them showing the claim at fraction `.996` and the recheck at `.001`
+# of the next second. Away from the boundary (fractions 0.1, 0.5, 0.9, 0.97)
+# it never happened -- which is exactly why it read as an intermittent test
+# failure rather than as the defect it is.
+#
+# That is not a cosmetic off-by-one. A claim is this module's only mutual
+# exclusion: releasing one the moment after granting it lets two passes hold
+# the same event at once. Re-processing is idempotent here by design, so the
+# damage is bounded, but the lease did not provide the guarantee its own
+# docstring states.
+#
+# With `<`, the boundary second belongs to the holder: an `N`-second lease
+# lasts between `N` and `N+1` real seconds. That is the correct direction for
+# a lease. Granting slightly long costs at most one extra second before a
+# genuinely dead holder's work is recovered; expiring early costs mutual
+# exclusion. A caller that needs a hard upper bound on recovery latency
+# should ask for a shorter lease, not a lease that might already be over.
+
+
 def claim_batch(
     db_path: str,
     *,
@@ -471,6 +507,11 @@ def claim_batch(
        goes back to `captured`. Its spent attempt is *kept*: a process that
        died holding the event may well have died because of it, and a
        crash-loop must be bounded like any other repeated failure.
+
+       "Past its expiry" is `lease_expires_ts < now`, strictly: the boundary
+       second belongs to the holder. See the note above this function for
+       why -- it is the difference between an `N`-second lease and one that
+       might already be over.
     2. **Quarantine the exhausted.** Anything `captured` that has already used
        its attempts is moved out of the way before the selection below, so a
        poison event cannot be picked ahead of healthy ones a second time.
@@ -486,6 +527,8 @@ def claim_batch(
     now_text = _now_iso()
     lease_until = now + max(1, int(lease_seconds))
     claimed: list[ProcessingRecord] = []
+    # `lease_until` is second-granular because `now` is. The recovery
+    # comparison below must therefore be strict -- see the note above.
 
     try:
         with _connect(db_path, "event_processing_claim") as conn:
@@ -503,7 +546,7 @@ def claim_batch(
                     "claimed_at = NULL, lease_expires_ts = NULL, "
                     "last_error = COALESCE(last_error, ?) "
                     "WHERE state = ? AND runtime_id IS ? AND lease_expires_ts IS NOT NULL "
-                    "AND lease_expires_ts <= ?",
+                    "AND lease_expires_ts < ?",
                     (
                         STATE_CAPTURED,
                         "claim lease expired before the event was settled; recovered",

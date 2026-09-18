@@ -3753,3 +3753,35 @@
   - Until it lands, repeatably all-green Windows completion remains blocked, and Band 0 stays gated
     on it.
 - **Date:** 2026-09-17
+
+## Decision: a lease errs long, never short — the boundary second belongs to its holder
+
+- **Status:** established 2026-09-18 by the event-processing lease-truncation repair (branch
+  `claude/event-lease-truncation-race`, **NOT MERGED**, awaiting Taylor's User Approval Gate).
+  Found while verifying the SQLite connection-lifecycle package and deliberately split out of it,
+  because it is a durable-queue correctness question rather than a connection-lifetime one.
+- **Decision:** where a lease is stored with whole-second granularity, the expiry comparison is
+  strict (`lease_expires_ts < now`), not inclusive. A lease asked for as `N` seconds lasts between
+  `N` and `N + 1` real seconds. It may never last less than `N`.
+- **Why:** `claim_batch()` truncates both ends of the lease to the second — `now = int(time.time())`
+  when granting, and a separately truncated `int(time.time())` when recovering — and the two calls
+  are not at the same sub-second phase. With an inclusive comparison the lease was released as
+  soon as the second counter *reached* its expiry, so a claim taken at `T.996` was expired 5 ms
+  later and an `N`-second lease really lasted `(N-1, N]`. At `N = 1` that is no lease at all.
+  A claim is this module's only mutual exclusion; releasing one immediately after granting it
+  lets two passes hold the same event.
+- **Alternatives considered:** (a) sub-second lease timestamps — a schema change and a migration
+  for a defect one operator fixes, and it would leave every other second-granular comparison in
+  the codebase with the same latent shape; (b) granting `lease_seconds + 1` at claim time —
+  numerically equivalent but states the wrong thing, since the caller did not ask for `N + 1`;
+  (c) changing the tests that exposed it to use longer leases — hides the defect and leaves
+  production with a lease that can expire on grant.
+- **Consequences:**
+  - Recovery of a genuinely dead holder's work can take up to one second longer. That is the
+    accepted cost, and it is the safe direction: the work is recovered a moment later and
+    re-processing is idempotent by design, whereas early expiry costs mutual exclusion outright.
+  - A caller needing a hard upper bound on recovery latency asks for a shorter lease rather than
+    relying on a lease that might already be over.
+  - The spent attempt is still kept on recovery, so a crash-loop stays bounded — asserted
+    explicitly so this change cannot have altered it.
+- **Date:** 2026-09-18
