@@ -1546,7 +1546,13 @@ async def _handle_executive_goal(
     record["governance_allowed"] = bool(getattr(result, "governance_allowed", False))
     record["proposed_action_ids"] = list(getattr(result, "proposed_action_ids", None) or [])
     if getattr(result, "reason", None):
-        record["error" if outcome == goal_intents.GOAL_OUTCOME_FAILED else "reason"] = result.reason
+        # A failure is recorded under `error`, as the other recognisers record
+        # theirs; everything else -- a question, a refusal, a brake -- is a
+        # `reason`, because none of those is a malfunction.
+        if outcome == goal_intents.GOAL_OUTCOME_FAILED:
+            record["error"] = result.reason
+        else:
+            record["reason"] = result.reason
 
     plan = getattr(result, "plan", None)
     if plan is not None:
