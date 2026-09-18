@@ -3671,3 +3671,85 @@
   - **No implementation change is authorised by this entry.** It states the policy that governs
     future review; the current code already matches it.
 - **Shorthand:** *infer the means, not additional authority.*
+
+---
+
+## Decision: the parallel test run has an execution contract, and a re-drive is a reported defect, not a retry
+
+- **Decision:** the controller side of the parallel test run is governed by a written contract
+  (`docs/WINDOWS_TEST_EXECUTION_CONTRACT.md`, clauses W1–W14) covering worker ownership, loss
+  detection, replacement, the disposition of a lost worker's work, backpressure, timeout and
+  cancellation, cleanup, shutdown, and completion of the final worker and final item. Three
+  corrections are always on, on every platform and in every tier: a load-scope scheduler that
+  tolerates a still-collecting replacement node; work accounting that fails any run in which a
+  collected test never produced a terminal report; and a scheduler re-drive that, when no test has
+  finished for a bounded interval *and* the scheduler still holds queued work *and* a node would
+  actually be given a unit, posts one event onto the controller's own queue so the assignment
+  happens on the thread that may perform it. **Every re-drive is counted, printed and named as a
+  defect in the terminal summary.** `BARTHO_XDIST_CONTRACT=0` restores stock behaviour for all
+  three.
+- **Alternatives:**
+  - *Raise the 40-minute job cap.* Rejected: it conceals the defect and buys nothing, since the
+    deadlock is permanent rather than slow.
+  - *Retry, sleep, or poll until it passes.* Rejected, and the re-drive is deliberately not one:
+    its trigger is a measured fact about the scheduler's own state, and its action is the single
+    call the controller failed to make. A re-drive that was not needed is a no-op.
+  - *Serialise the suite.* Rejected: it hides a controller defect behind a large, permanent cost to
+    every run on every platform.
+  - *Pin or fork pytest-xdist.* Rejected for now: the correction uses `pytest_xdist_make_scheduler`
+    and one bound attribute, both supported extension points, and leaves the upstream class
+    untouched. Recorded so it can be withdrawn when upstream fixes the defect.
+- **Why:** the Windows Merge Candidate could not finish inside its cap on any head, `main`
+  included, and four investigations framed around "the last test" found nothing, because the defect
+  was never in a test. It is a lost-wakeup deadlock in pytest-xdist's controller: under
+  `--dist loadfile` a worker blocks before the last test of its unit (it prefetches `nextitem`),
+  the controller assigns the next unit only while handling a completion event, and `loop_once`'s
+  two-second wake only asks whether every node has died. The wake-up and the work are mutually
+  dependent. Left alone the run is cancelled at the cap with no summary, no junit and no diagnosis,
+  which is why this had survived repeated attention.
+- **Consequences:**
+  - A green parallel run is now a claim about *all* the work: a collected test that never reported
+    turns the run red and names the missing ids, so silent loss cannot pass for success.
+  - A run that needed re-driving still says so. Nothing in this contract is allowed to make a red
+    run green or a defective run quiet; the summary distinguishes "completed" from "completed
+    correctly".
+  - The diagnostics are opt-in (`BARTHO_EXEC_TRACE`), so the guarantee that a stranded run ends
+    *observably* rather than at the job cap depends on the trace being enabled. The re-drive
+    therefore announces its own give-up bound explicitly rather than falling silent.
+  - **This contract does not make Windows green.** It makes the run complete and makes its failures
+    legible. The remaining Windows blocker is the per-operation SQLite connection lifecycle and is a
+    separate package (see `RISKS.md`, and the entry below).
+- **Date:** 2026-09-17
+
+---
+
+## Decision: SQLite connection-lifetime repair is a separate package, scoped to reuse and never a process-wide pool
+
+- **Decision:** the per-operation SQLite connection lifecycle on Windows is repaired as its own
+  follow-on work package, not inside the Windows execution-contract package (PR #112). The repair
+  is **scoped connection reuse** — a connection explicitly held across a burst and explicitly
+  closed, such as a `db_session()` context manager — and **never a silent process-wide connection
+  pool**. The existing Windows handle-release requirements are preserved, not relaxed.
+- **Alternatives:**
+  - *Fold it into PR #112.* Rejected by Taylor at the User Approval Gate (2026-09-17): it would
+    change storage lifetime across MemoryStore, scheduler persistence and the vector store inside a
+    package chartered for test-execution machinery, leaving that PR without a reviewable boundary.
+  - *A process-wide connection pool.* Rejected: `tests/test_vector_store_handle_lifetime.py` and
+    `tests/test_sqlite_wal_cleanup.py` deliberately require every call to release its handles before
+    returning, because on Windows an open file cannot be deleted — those tests exist because that
+    defect happened. A pool trades this defect for the `WinError 32` class.
+  - *Raise the 120-second per-test timeout.* Rejected as a primary fix: it concedes tests running at
+    90 % of their own budget and removes the signal without removing the cost.
+- **Why:** the cost is now measured rather than asserted. For the test that kills workers:
+  `1036 opens = 0.4 s connect | 1031 commits = 33.8 s | close = 72.3 s | wall = 108.4 s` —
+  connect + commit + close is 106.5 s of 108.4 s, **98 % of the test**, and the dominant term is
+  **`close`, at about 70 ms each**. An earlier claim that the cost was the connection *open* is
+  withdrawn; opens are 0.4 ms. At 108.4 s against a 120 s timeout, one Merge Candidate run passed
+  and another on the identical commit did not.
+- **Consequences:**
+  - The close those Windows tests mandate *is* the 70 ms, so the repair is an explicit trade against
+    an existing, defect-driven contract and must be designed as one — with its own lifecycle,
+    contention, cancellation and cleanup tests — rather than treated as an optimisation.
+  - Until it lands, repeatably all-green Windows completion remains blocked, and Band 0 stays gated
+    on it.
+- **Date:** 2026-09-17

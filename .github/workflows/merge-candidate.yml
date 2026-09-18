@@ -284,17 +284,42 @@ jobs:
       # one line per test): a worker that dies or a suite that stalls before
       # the junit file is written leaves the per-test lines as the only record
       # of which tests ran, on which worker, and which never finished.
+      # BARTHO_EXEC_TRACE turns on the execution trace (scripts/ci/execution_trace.py):
+      # both ends of every report are timestamped, so a stalled tail can be
+      # attributed to the test or to the harness instead of being inferred
+      # from a cancellation. The abort bound is the run's own ending: ten
+      # minutes with no report at all from any worker is far outside anything
+      # this suite legitimately does, and ending there leaves the queue state
+      # and every worker's stacks on disk. It is deliberately well inside the
+      # job's 40-minute cap -- the cap is not raised, it is made unreachable.
       - name: Default test suite on Windows (parallel, no coverage)
+        env:
+          BARTHO_EXEC_TRACE: "1"
+          BARTHO_EXEC_TRACE_DIR: exec-trace
+          BARTHO_EXEC_STALL_WARN_S: "180"
+          BARTHO_EXEC_STALL_ABORT_S: "600"
         run: python -m pytest -p no:cacheprovider -vv -n auto --dist loadfile --junitxml=junit-windows-full.xml
 
-      - name: Upload junit
+      - name: Upload junit and execution trace
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-windows-full
-          path: junit-windows-full.xml
+          path: |
+            junit-windows-full.xml
+            exec-trace/
           if-no-files-found: ignore
           retention-days: 30
+
+      # Last on purpose. A log API returns the tail of the job, and the
+      # upload step's own output is long enough to fill that window on its
+      # own -- which is how run 35196083601 went red with the name of the
+      # failing test unreachable without downloading an artifact. The
+      # summary ends with what failed, so it has to be the last thing the
+      # job prints.
+      - name: Execution trace summary
+        if: always()
+        run: python -m scripts.ci.summarise_trace exec-trace
 
   smoke:
     name: smoke

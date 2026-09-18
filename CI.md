@@ -329,6 +329,35 @@ afterwards. It was **not** retried, quarantined, re-marked, or given a longer ti
 not counted as environmental noise — it is preserved as evidence for the Phase B persistence
 audit (see [RISKS.md](RISKS.md)). If it fails in CI, diagnose it; do not paper over it.
 
+**The parallel run has a contract, and it reports on itself (added 2026-09-17, PR #112):**
+the controller side of `-n auto` is governed by
+[`docs/WINDOWS_TEST_EXECUTION_CONTRACT.md`](docs/WINDOWS_TEST_EXECUTION_CONTRACT.md). Three things
+are always on, on every platform and in every tier, and each produces output you should read rather
+than ignore:
+
+- `work accounting: TESTS LOST` — a test that was collected never produced a terminal report. The
+  run is red and the missing ids are named. **This is never noise.** It means work was lost rather
+  than run, and a summary line that looks green without it would have been wrong.
+- `xdist contract: the scheduler stalled and was re-driven N time(s)` — the run *completed*, but it
+  completed over a pytest-xdist defect: the controller stopped handing queued work to idle workers
+  and had to be re-asked. A non-zero count is a real defect report, not a health metric. It is
+  yellow rather than red because the work did get done.
+- `xdist-contract: giving up after N re-drives` — re-driving did not restore progress, so the run is
+  stalled for some other reason. Set `BARTHO_EXEC_TRACE=1` to capture stacks and let the watchdog
+  end the run instead of the job cap.
+
+`BARTHO_XDIST_CONTRACT=0` restores stock pytest-xdist behaviour for all three. It exists so a defect
+in the corrections cannot block a release; **it is not for making a red run green.**
+
+**Diagnosing a Windows run that hangs or loses a worker:** set `BARTHO_EXEC_TRACE=1` (the Merge
+Candidate's Windows job already does) and read the `Execution trace summary` step. It answers, in
+order: did every worker reach session finish, or did one stop existing (`session_finish=NO` with
+`process_exit=NO` is the `os._exit` signature of `pytest-timeout`'s thread method, i.e. a test that
+blew its 120 s budget); how much of a slow report was the test versus getting the report to the
+controller; what was queued and outstanding at a stall; and what the storage-heavy tests cost, split
+into connect, commit and close. A worker that stops existing has its in-flight test reported as
+failed with no message, so **that row names the test the worker died on, not a test that failed.**
+
 **Process:**
 - Fix one at a time (smallest surface first)
 - Add/adjust tests for each fix

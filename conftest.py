@@ -233,8 +233,29 @@ def _reset_device_consent_channel():
     device_consent.reset_for_tests()
 
 
+def pytest_xdist_make_scheduler(config, log):
+    """Use the collection-aware load-scope scheduler.
+
+    See `scripts/ci/xdist_contract.py`: pytest-xdist's own loadscope /
+    loadfile scheduler crashes the controller with a KeyError when a
+    worker dies while a replacement for an earlier death is still
+    collecting. Returning None here for any other distribution mode
+    leaves pytest-xdist's own choice untouched.
+    """
+    from scripts.ci.xdist_contract import make_safe_scheduler
+
+    return make_safe_scheduler(config, log)
+
+
 def pytest_configure(config):
     """Configure pytest with custom markers and settings."""
+    # The test-execution contract (worker replacement, work accounting) is
+    # always on; the trace behind it turns itself on from the environment.
+    from scripts.ci import execution_trace, xdist_contract
+
+    xdist_contract.install(config)
+    execution_trace.install(config)
+
     config.addinivalue_line(
         "markers",
         "integration: marks tests as integration tests (may be slower)",
