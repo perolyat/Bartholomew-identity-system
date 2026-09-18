@@ -11,10 +11,11 @@ This is a kernel-local copy to avoid coupling to the API layer.
 
 import gc
 import logging
+import os
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 
 _checkpoint_log = logging.getLogger("bartholomew.kernel.db_ctx.checkpoint")
@@ -314,6 +315,178 @@ def close_all_and_checkpoint(
     wal_checkpoint_truncate(db_path_or_uri, uri=uri)
 
 
+# ---------------------------------------------------------------------------
+# Bounded connection scopes (db_session)
+# ---------------------------------------------------------------------------
+#
+# Why this exists -- the measured defect, not a guess.
+#
+# Every persistence helper in this repository takes a `db_path` and owns a
+# whole connection lifecycle: `wal_db()` opens a connection, the helper does
+# one small thing, and the connection is closed again. When that connection is
+# the *only* connection to the database -- which it always is, between calls --
+# closing it is not a cheap handle release. SQLite runs a checkpoint of the
+# entire WAL and then deletes the `-wal` and `-shm` files; the next call has to
+# recreate them. That is the cost that was previously attributed to "close",
+# and it is paid once per tiny operation.
+#
+# Measured on Linux, 300 single-row writes through `wal_db()` (ms per
+# operation, connect / commit / close):
+#
+#     sole connection            0.407 / 1.199 / 1.150
+#     another connection open    0.156 / 0.021 / 0.022
+#
+# The second row is the same code doing the same work; the only difference is
+# that closing is no longer the *last* close, so no checkpoint-and-unlink
+# happens. On Windows, where creating and deleting files is far more
+# expensive, the same term was measured at roughly 70 ms per close.
+#
+# The repair is an explicit, bounded ownership boundary rather than a pool:
+# a caller that is about to do several database operations as one unit of work
+# declares that scope with `db_session()`. Inside the scope, and only on the
+# thread that opened it, `wal_db()` borrows the session's connection instead of
+# opening its own. When the scope ends the connection is closed, so every
+# handle is released exactly as before -- once per unit of work instead of once
+# per statement.
+#
+# What this deliberately is NOT:
+#   * not a process-wide pool -- nothing is cached, nothing is reused across
+#     scopes, and there is no global registry of live connections;
+#   * not a long-lived connection -- a session lasts exactly as long as its
+#     `with` block and is closed in `finally`;
+#   * not shared between threads -- the binding is thread-local, so a second
+#     thread touching the same file gets its own connection, and SQLite objects
+#     never cross a thread boundary;
+#   * not a change to transaction semantics -- see `wal_db()` below.
+
+
+class _SessionState(threading.local):
+    """Per-thread map of database key -> active session.
+
+    `threading.local` rather than a `contextvars.ContextVar`: the value being
+    scoped is a `sqlite3.Connection`, which is bound to the thread that is
+    allowed to use it. A context variable would follow an `await` onto another
+    thread's executor and hand that thread a connection it must not touch.
+    """
+
+    def __init__(self) -> None:
+        self.scopes: dict[str, _Session] = {}
+
+
+class _Session:
+    """One bounded connection scope. Internal; obtained via `db_session()`."""
+
+    __slots__ = ("conn", "depth", "key", "label")
+
+    def __init__(self, key: str, conn: sqlite3.Connection, label: str) -> None:
+        self.key = key
+        self.conn = conn
+        self.label = label
+        self.depth = 0
+
+
+_sessions = _SessionState()
+
+
+def session_key(db_path_or_uri: str, *, uri: bool = False) -> str:
+    """The identity a session is keyed on: one key per database file.
+
+    Two callers naming the same file by different paths must share one scope,
+    or the scope would silently not apply. URIs are keyed verbatim (their
+    query string can change what is opened -- `mode=ro`, `cache=shared` -- so
+    two URIs are the same database only when they are the same string), and
+    `:memory:` is keyed verbatim because each such connection is its own
+    private database and must never be shared.
+    """
+    if uri or db_path_or_uri == ":memory:" or db_path_or_uri.startswith("file:"):
+        return db_path_or_uri
+    return os.path.realpath(db_path_or_uri)
+
+
+def active_session_connection(
+    db_path_or_uri: str,
+    *,
+    uri: bool = False,
+) -> sqlite3.Connection | None:
+    """The connection bound to this thread for `db_path_or_uri`, or None.
+
+    Exposed for tests and diagnostics. A `None` here is the normal state:
+    outside a `db_session()` scope every call owns its own connection.
+    """
+    session = _sessions.scopes.get(session_key(db_path_or_uri, uri=uri))
+    return session.conn if session else None
+
+
+def in_session(db_path_or_uri: str, *, uri: bool = False) -> bool:
+    """Whether this thread currently holds a `db_session()` for this database."""
+    return session_key(db_path_or_uri, uri=uri) in _sessions.scopes
+
+
+@contextmanager
+def db_session(
+    db_path_or_uri: str,
+    *,
+    uri: bool = False,
+    timeout: float = 30.0,
+    label: str = "",
+) -> Iterator[sqlite3.Connection]:
+    """Bind one WAL connection to this thread for the duration of a scope.
+
+    Use it around a *bounded unit of work* -- one scheduler tick, one request,
+    one burst of related writes -- where opening and closing a connection per
+    statement is the dominant cost. Every `wal_db()` call made on this thread,
+    for this database, inside the scope borrows this connection.
+
+    Contract:
+      * The connection is closed when the scope exits, on the success path and
+        on the exception path alike. Nothing survives the `with`.
+      * Any transaction still open at scope exit is rolled back before the
+        close -- which is what closing the connection would have done anyway.
+        A unit of work that does not commit does not persist.
+      * Scopes nest: an inner `db_session()` for the same database on the same
+        thread reuses the outer connection and does not close it. The
+        outermost scope owns the close.
+      * The binding is thread-local. Another thread inside this scope is
+        unaffected and opens its own connections as usual.
+      * It is not a cache: leaving the scope and re-entering it opens a new
+        connection.
+
+    Yields:
+        The bound connection, for callers that want it directly.
+    """
+    key = session_key(db_path_or_uri, uri=uri)
+    existing = _sessions.scopes.get(key)
+    if existing is not None:
+        # Re-entrant: the outer scope owns the connection and its close.
+        existing.depth += 1
+        try:
+            yield existing.conn
+        finally:
+            existing.depth -= 1
+        return
+
+    conn = connect(db_path_or_uri, uri=uri, timeout=timeout)
+    session = _Session(key, conn, label)
+    _sessions.scopes[key] = session
+    try:
+        set_wal_pragmas(conn)
+        yield conn
+    finally:
+        # Unbind before releasing, so nothing can borrow a closing connection.
+        _sessions.scopes.pop(key, None)
+        _rollback_quietly(conn)
+        close_quietly(conn)
+
+
+def _rollback_quietly(conn: sqlite3.Connection) -> None:
+    """Roll back an open transaction, ignoring a connection already gone."""
+    try:
+        if conn.in_transaction:
+            conn.rollback()
+    except sqlite3.Error:
+        pass
+
+
 @contextmanager
 def wal_db(
     db_path_or_uri: str,
@@ -360,6 +533,14 @@ def wal_db(
         label: Optional caller-supplied tag for the instrumentation log
             (only used when `checkpoint` is set)
 
+    Inside an enclosing `db_session()` for the same database, on the same
+    thread, steps 1, 2 and 3 do not happen: the session's already-configured
+    connection is borrowed and the session's exit closes it. The observable
+    per-call semantics are unchanged -- an uncommitted transaction is still
+    discarded when the call returns -- but the open/close (and the WAL
+    checkpoint-and-unlink that the last close performs) is paid once per
+    session instead of once per call. See the `db_session()` block above.
+
     Yields:
         SQLite connection configured for WAL mode
 
@@ -368,6 +549,25 @@ def wal_db(
         ...     conn.execute("CREATE TABLE IF NOT EXISTS t(x)")
         ...     conn.commit()
     """
+    session = _sessions.scopes.get(session_key(db_path_or_uri, uri=uri))
+    if session is not None:
+        # Borrowed from an enclosing db_session() on this thread. The scope,
+        # not this call, owns the connection and its close.
+        try:
+            yield session.conn
+        finally:
+            # Exactly what closing our own connection would have done: an
+            # uncommitted transaction does not survive the operation. Without
+            # this, a caller that raised part-way through a write would leave
+            # a dirty transaction for the *next* borrower to commit.
+            _rollback_quietly(session.conn)
+            if checkpoint:
+                # Run it on the session's own connection: the fresh-connection
+                # dance exists to work around a *closed* connection's handles,
+                # and there is no close here to work around.
+                _checkpoint_on(session.conn, checkpoint, db_path_or_uri, label)
+        return
+
     conn = None
     try:
         conn = connect(db_path_or_uri, uri=uri, timeout=timeout)
@@ -380,3 +580,33 @@ def wal_db(
         # Then checkpoint with a fresh connection, if requested
         if checkpoint:
             wal_checkpoint(db_path_or_uri, uri=uri, timeout=timeout, mode=checkpoint, label=label)
+
+
+def _checkpoint_on(
+    conn: sqlite3.Connection,
+    mode: str,
+    db_path_or_uri: str,
+    label: str,
+) -> tuple[int, int, int] | None:
+    """Checkpoint through an already-open connection (session path)."""
+    if mode not in _VALID_CHECKPOINT_MODES:
+        raise ValueError(
+            f"wal_db: unknown checkpoint mode {mode!r}, expected one of {_VALID_CHECKPOINT_MODES}",
+        )
+    started = time.monotonic()
+    row = None
+    try:
+        row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+        return row
+    finally:
+        _checkpoint_log.debug(
+            "wal_checkpoint db=%s mode=%s label=%s thread=%s duration_ms=%.1f "
+            "result=%s in_transaction=%s scope=session",
+            db_path_or_uri,
+            mode,
+            label,
+            threading.current_thread().name,
+            (time.monotonic() - started) * 1000,
+            row,
+            conn.in_transaction,
+        )

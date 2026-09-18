@@ -34,6 +34,7 @@ import sqlite3
 import pytest
 
 from bartholomew.kernel.awaiting_response_store import AwaitingResponseStore
+from bartholomew.kernel.db_ctx import db_session
 from bartholomew.kernel.scheduler import containment
 from bartholomew.kernel.scheduler import persistence as sp
 from bartholomew.kernel.scheduler.health import (
@@ -150,11 +151,12 @@ class TestNoRecursiveQueueHealthGrowth:
         """The pure B-F001 loop: an empty queue plus repeated self-checks. If
         health items counted toward their own trigger, a large enough burst
         would eventually cross the threshold on its own."""
-        for tick in range(200):
-            metrics = get_system_metrics(db_path)
-            drift = check_drift(metrics)
-            if drift:
-                _emit_health(db_path, 3000 + tick, drift)
+        with db_session(db_path, label="drift-burst"):
+            for tick in range(200):
+                metrics = get_system_metrics(db_path)
+                drift = check_drift(metrics)
+                if drift:
+                    _emit_health(db_path, 3000 + tick, drift)
 
         assert (
             _pending(db_path) == []
@@ -396,9 +398,15 @@ class TestContainmentNeverDestroysAnObligation:
             )
         before = {r["id"]: dict(r) for r in _all_nudges(db_path)}
 
-        for i in range(500):
-            _emit_curiosity(db_path, 12000 + i)
-            _emit_health(db_path, 12000 + i)
+        # One burst is one unit of work: the emissions share a single
+        # connection for the scope and release it when the scope ends,
+        # instead of opening and closing one per emission. Nothing about
+        # what is asserted below changes -- see the assertions, which still
+        # read the database through independent connections.
+        with db_session(db_path, label="heavy-burst"):
+            for i in range(500):
+                _emit_curiosity(db_path, 12000 + i)
+                _emit_health(db_path, 12000 + i)
 
         after = {r["id"]: dict(r) for r in _all_nudges(db_path)}
         for gid in genuine_ids:
@@ -411,8 +419,9 @@ class TestContainmentNeverDestroysAnObligation:
         assert len(_pending(db_path, "task")) == 30
 
     def test_capacity_is_bounded_by_identity_and_never_by_shedding(self, db_path):
-        for i in range(300):
-            _emit_curiosity(db_path, 13000 + i)
+        with db_session(db_path, label="capacity-burst"):
+            for i in range(300):
+                _emit_curiosity(db_path, 13000 + i)
         # Every suppression is accounted for; nothing vanished silently.
         events = sp.list_containment_events(db_path, limit=1000)
         assert len(events) == 299
@@ -438,9 +447,10 @@ class TestAwaitingResponseSurvivesContainment:
         ]
         before = [e.to_dict() for e in entries]
 
-        for i in range(400):
-            _emit_curiosity(db_path, 14000 + i)
-            _emit_health(db_path, 14000 + i)
+        with db_session(db_path, label="awaiting-response-burst"):
+            for i in range(400):
+                _emit_curiosity(db_path, 14000 + i)
+                _emit_health(db_path, 14000 + i)
 
         after = [store.get(e.id).to_dict() for e in entries]
         assert after == before

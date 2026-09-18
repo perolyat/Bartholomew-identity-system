@@ -1262,7 +1262,8 @@
   > production publisher reaches it today.
   >
   > **Amendment (2026-09-17) — the "stalled tail" is root-caused and corrected; the name was wrong
-  > (PR #112, NOT MERGED, awaiting Taylor's User Approval Gate).** It was never a property of a
+  > (PR #112, **merged 2026-09-18 as `9ca2d4a`**; this entry previously said "NOT MERGED, awaiting
+  > Taylor's User Approval Gate", which went stale at that merge and is corrected here).** It was never a property of a
   > test, which is why repeated investigation found no property of the unlucky test to explain it.
   > It is a **lost-wakeup deadlock in pytest-xdist's own controller**. Three simultaneous Windows
   > stacks show the controller's main thread parked in `queue.get` inside `DSession.loop_once` on an
@@ -1328,6 +1329,37 @@
   > *is* the 70 ms.** So this is a trade against an existing, defect-driven contract, not a free
   > optimisation. Scoped reuse only (a `db_session()` held across a burst), never a process-wide
   > pool.
+  >
+  > **Repaired 2026-09-18 — the connection-lifecycle package (branch
+  > `claude/sqlite-connection-lifecycle-flkccb`; NOT MERGED, awaiting Taylor's User Approval
+  > Gate). Full record: `docs/SQLITE_CONNECTION_LIFECYCLE_REPAIR.md`.** The measured diagnosis
+  > above is confirmed and completed: `close` is the dominant term, and the reason is now
+  > established rather than attributed to Windows generally. Every persistence helper takes a
+  > `db_path` and owns a whole connection lifecycle, so between calls there is **no** connection to
+  > the database and every `wal_db()` exit is the *last* close — which is not a handle release but
+  > a full WAL checkpoint plus the unlink of `-wal` and `-shm`, recreated by the next call. The
+  > ownership boundary was the statement, not the unit of work. Controlled A/B on the same code
+  > path, 300 writes, ms/op connect|commit|close: **0.407|1.199|1.150 as the sole connection
+  > against 0.156|0.021|0.022 with any other connection open** — commit and close both collapse
+  > ~50x, because neither the checkpoint nor the file rebuild happens. The repair is the scoped
+  > reuse this entry required and nothing else: `db_ctx.db_session()`, a bounded scope that binds
+  > one connection **thread-locally** (never a `ContextVar`, which would follow an `await` onto an
+  > executor thread) and closes it in `finally`; inside it `wal_db()` borrows, and a borrowed call
+  > still rolls back an uncommitted transaction on return, so transaction semantics are bit-for-bit
+  > what closing its own connection did. Not a pool, nothing cached, no global registry, no
+  > timeout/pragma/WAL change, no test weakened. Adopted by `SchedulerStore.unit_of_work()` and one
+  > scheduler tick, and by the containment file's four emission bursts. **Linux evidence:** the
+  > 1000-emission burst 4.54 s → 0.105 s; the heavy-burst containment test 2.23 s → 0.20 s; 34 new
+  > deterministic lifecycle tests (`tests/test_db_session_lifecycle.py`) including a
+  > `/proc/self/fd` handle enumeration with the cyclic collector disabled, thread-confinement, and
+  > a scope-is-not-a-pool guard; the handle-release suites this entry warned about
+  > (`test_vector_store_handle_lifetime`, `test_sqlite_wal_cleanup`) unchanged and passing.
+  > **Still open, and the reason this entry does not close:** the decisive measurement is a Windows
+  > one and has not been taken. Band 0's condition is *repeatably* all-green Windows completion,
+  > so what is owed is more than one Merge Candidate run on this branch showing the heavy-burst
+  > test well inside the unchanged 120 s per-test timeout with no worker killed. Until then the
+  > accurate statement is **technically repaired and evidenced on Linux, pending Windows
+  > confirmation** — not that Band 0 is clear.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
