@@ -1745,9 +1745,10 @@ Carried-forward limitations of **merged** work. Full record:
   whenever the capability domain grows, the same standing obligation `INFERABLE_CAPABILITIES`
   carries (R-EXEC01-5). **Not a defect; a maintenance obligation that must not be forgotten.**
 - **R-EXEC02-2 — A goal can be stated in chat but not approved there.**
-  **Technical implementation gap closed** by the Governed Conversational Approval package
-  (`docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`); *see the qualification below before recording it
-  as resolved.* The original statement: the surface that understands a goal was not the surface
+  **CLOSED 2026-09-19** — the technical implementation gap is closed by the Governed Conversational
+  Approval package (PR #117, `docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`), approved by Taylor at
+  the User Approval Gate. *Read the qualification below: what closed is the implementation gap, not
+  the usefulness question.* The original statement: the surface that understands a goal was not the surface
   that authorises it, so approving a proposed action remained the operator console's, and the
   conversational experience was genuinely incomplete end-to-end.
   **What now exists:** a proposal presented in conversation can be approved or rejected in that
@@ -1761,7 +1762,7 @@ Carried-forward limitations of **merged** work. Full record:
   attended Windows testing. Nothing here may be read as closing R-EXEC01-3, Band 0, or
   conversational maturity. Two limitations are carried forward in their own right: the approver
   recorded for a conversational approval is the activation's **configured** `requested_by`, not a
-  principal the platform verified (§11.2 of the package document), and the three
+  principal the platform verified — now carried as **R-EXEC02-5** — and the three
   `ApprovalRequirement.ALWAYS` capability kinds are deliberately **not** authorisable from
   conversation and must still be approved at the operator console.
 - **R-EXEC02-3 — One device per deployment.** The activation names a single `device_id` and has
@@ -1773,6 +1774,28 @@ Carried-forward limitations of **merged** work. Full record:
   cognition. What it changes is *how often* deliberation runs, because an ordinary conversation
   can now trigger it. The defences are unchanged and separately tested; the exposure surface is
   larger. **Stated so it is not discovered later as a surprise.**
+- **R-EXEC02-5 — A conversational approval names a *configured* principal, not a verified one.**
+  *(Recorded 2026-09-19 at the R-EXEC02-2 User Approval Gate, on Taylor's explicit instruction, as
+  a condition of that approval.)* The operator console's approval arrives on an HTTP request
+  carrying the platform capability `action:approve` and a principal the platform verified. A chat
+  turn carries the conversational activation's configured `BARTH_CONVERSATIONAL_EXECUTIVE_
+  REQUESTED_BY` string and no verified principal at all, and that string is what
+  `ActionApproval.approver` records. It is never synthesised, never defaulted to "system" and
+  never inferred — `build_approval` refuses an anonymous approver — and the approval's `surface`
+  field makes a conversational decision distinguishable from a console one in the audit. But the
+  identity behind it is an *assumption of the deployment*, not a fact the system establishes.
+  **What makes it acceptable today:** a single-user local deployment, where whoever is typing into
+  chat is the person the activation names, and where the conversational surface is reachable only
+  from that machine. Taylor accepted it on those terms at the gate.
+  **What it gates.** Verified principal identity on the conversational approval surface must be
+  addressed *before* any of the following depends on it, and none of them may proceed on the
+  present mechanism: **multi-user deployment**; **remote approval** (a decision arriving from
+  somewhere other than the local surface); **household or trusted-user access**, where more than
+  one person can reach the same conversation; and **any higher-autonomy posture** that would let a
+  conversational approval carry more than it does now — including widening
+  `capabilities.CONVERSATIONAL_APPROVAL_INELIGIBLE`.
+  **Not a defect in the merged work; a named prerequisite for four specific futures.** Carried so
+  that the first package to need one of them finds this entry rather than discovering the gap.
 
 
 ## R-RETRIEVAL-1 — the FTS5 availability cache is process-global, unkeyed and collapses every failure into "absent" (recorded 2026-09-18, **substantially corrected 2026-09-19**)

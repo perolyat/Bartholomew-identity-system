@@ -262,11 +262,12 @@ It calls the **same** Executive seam the operator console calls. There is no sec
 
 ## 5b. R-EXEC02-2 — governed conversational approval, stated precisely
 
-**Implemented, not merged.** Built on `main` at `f99bf42`. Full record:
-`docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`. Decision: `DECISIONS.md`, "Conversation transports a
-human authority decision; it never becomes an authority". *This section must be updated with the
-PR number, the reviewed head, the merge commit and the CI evidence at the moment of merge — a
-stale status header is the R-CTRL-1 defect class.*
+**Merged.** PR #117, approved by Taylor at the User Approval Gate on 2026-09-19, built on `main`
+at `f99bf42`. Code head `07c5af8`, approved head `4e8799c`; all three CI tiers green on both, every
+job verified individually (PR Fast; Integration 3/3; Merge Candidate 7/7, including the Windows
+full default suite with real-Win32 governed actuation and the ≥70 % coverage gate on py3.10 and
+py3.11). Full record: `docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`. Decision: `DECISIONS.md`,
+"Conversation transports a human authority decision; it never becomes an authority".
 
 **What it accomplishes.** A proposal that EXEC-02 surfaced in conversation can be approved or
 rejected in that same conversation. The decision is recognised deterministically from the
@@ -291,6 +292,10 @@ authority and is now also the enforcement point for which capability classes a s
 - **No real-world evidence.** The automated evidence proves the implementation contract. Whether
   the completed journey is *useful* is an evidence question for the deferred attended Windows
   testing. **R-EXEC01-3 stands unchanged and Band 0 remains outstanding.**
+- **The approver is a configured name, not a verified principal.** Accepted at the gate *for this
+  single-user local deployment only*. **`RISKS.md` R-EXEC02-5** names the four futures that must
+  not proceed on it — multi-user, remote approval, household/trusted-user, and any higher-autonomy
+  posture, including widening which capability kinds conversation may authorise.
 
 ### What comes next — the approved sequence
 

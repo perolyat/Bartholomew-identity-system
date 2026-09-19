@@ -1,6 +1,8 @@
 # R-EXEC02-2 — Governed Conversational Approval
 
-**Status:** **implemented, not merged.** Awaiting Taylor's User Approval Gate.
+**Status:** **approved at the User Approval Gate, 2026-09-19, and merged.** PR #117.
+**Provenance:** code head `07c5af8`; approved head `4e8799c`; final reviewed head and merge
+commit in §10.
 **Baseline it was built on:** `origin/main` at `f99bf4245de4bbc2fce0836495341aa767895428`
 (the merge of PR #116).
 **Scope:** the governance boundary between the conversational surface and the existing
@@ -8,10 +10,15 @@ approval authority. No approval authority was created, replaced or duplicated; n
 Executive cognition was added; no capability was added; no action class became
 approvable that was not approvable before.
 
-> **Written before merge, and the status line above is the claim.** `RISKS.md` records
-> stale status headers as a project-control defect in its own right (R-CTRL-1). This
-> document must be updated with the reviewed head, the merge commit and the CI evidence
-> at the moment of merge — not afterwards, and not in a second PR.
+> **Written at merge, not retrofitted.** `RISKS.md` records stale status headers as a
+> project-control defect in its own right (R-CTRL-1), and EXEC-01's header claiming "not
+> merged" after PR #108 merged is the precedent that rule exists for. This header, §10's
+> CI table, `START_HERE.md` §5b and `MASTER_PLAN.md`'s Approval Ledger were all written in
+> the implementation PR, in the hour of the approval — not in a follow-up.
+>
+> **One field this PR structurally could not carry:** its own merge commit, which does not
+> exist until the merge happens. §10 names it; it is the merge of PR #117 and is the single
+> identifier a reader must take from git history rather than from this document.
 
 ---
 
@@ -322,15 +329,19 @@ was there before.
 
 ### CI
 
-**All three tiers green on the reviewed head `07c5af8b6f832e868b5b1b20c5965e20f33402c1`, run
-2026-09-19.** Every job was verified individually rather than read from the rollup, following the
-precedent §9 of `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` set.
+**All three tiers green on both heads, run 2026-09-19.** Every job on the code head was verified
+individually rather than read from the rollup, following the precedent §9 of
+`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` set.
 
-| Tier | Run | Result |
-|---|---|---|
-| PR Fast (`ci.yml`) | 35433585629 | **green** |
-| Integration (`integration.yml`) | 35433653500 | **3/3** |
-| Merge Candidate (`merge-candidate.yml`) | 35433653573 | **7/7** |
+| Head | What it is | PR Fast | Integration | Merge Candidate |
+|---|---|---|---|---|
+| `07c5af8` | the **code** head — every production and test change | 35433585629 green | 35433653500 **3/3** | 35433653573 **7/7** |
+| `4e8799c` | **approved head**; documentation only (this table) | 35434749438 green | 35434749440 **3/3** | 35434749433 **7/7** |
+
+A third head carries the merge-time documentation — this section, the header, `START_HERE.md` §5b,
+`MASTER_PLAN.md`'s Approval Ledger and `RISKS.md`'s R-EXEC02-2 closure and new R-EXEC02-5. Its tier
+results are in PR #117's own checks, and the **merge commit is the merge of PR #117**: the one
+identifier this document cannot carry, because it does not exist until the merge happens.
 
 Integration's three: Tests + coverage (Ubuntu py3.11, ≥70 % gate); Critical integration + lifecycle
 (Ubuntu py3.11); **Windows lifecycle + compatibility (py3.11)**, including *Governed Windows
