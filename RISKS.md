@@ -1787,7 +1787,7 @@ radius therefore depends entirely on the resolved mode:
 
 | Resolved mode | Effect of a latched `False` |
 |---|---|
-| `fts`, resolved from `BARTHO_RETRIEVAL_MODE` or `kernel.yaml` (not an explicit argument) | **degraded to vector-only — lexical retrieval genuinely lost** |
+| `fts`, resolved from `BARTHO_RETRIEVAL_MODE` or `kernel.yaml` (not an explicit argument) | **degraded to vector-only — lexical retrieval genuinely lost**, and in this repository's own default environment (no embedder provisioned) the degraded `vector` mode then raises `EmbedderUnavailableError`, so `get_retriever()` returns nothing at all rather than a weaker retriever |
 | `fts`, passed explicitly as an argument | honoured; no degradation (deliberate, and pinned by `tests/test_retrieval_fts5_fallback.py`) |
 | `hybrid` — **the repository default** (`config/kernel.yaml`) and what the chat path uses (`runtime_contract.py`'s `get_retriever(db_path=..., memory_store=...)`) | **`logger.info` only; the FTS arm still runs** |
 
@@ -1820,8 +1820,10 @@ at all.
 **This latch is not the explanation, and the entry no longer suggests it is.** Two independent
 reasons:
 
-* the latch is **constant for a whole process**, yet five other recall-dependent assertions in that
-  same file passed in that same run — a process-global switch cannot produce one isolated failure;
+* the latch is **constant for a whole process**, yet the same file's other recall-dependent
+  assertions passed in that same run — `test_poisoned_memory_is_framed_not_obeyed`, parametrised
+  over the four `POISON_PAYLOADS`, seeds a note and asserts it was recalled every time. A
+  process-global switch cannot produce one isolated failure among them;
 * on the mode that test actually resolves, a latched `False` does not suppress recall at all, as
   measured above.
 
@@ -1837,9 +1839,11 @@ Not as "Bartholomew quietly forgetting" — that was the over-claim. As a **late
 hazard**: a process-global, never-reset, unkeyed piece of state that erases the difference between
 four distinct causes, is consulted by a mode-selection branch, and is absent from every reporting
 surface. It is the same shape as the three wall-clock-dependent defects recorded on 2026-09-18 —
-behaviour depending on uncontrolled process state — and today it is one configuration change away
-(`retrieval.mode: fts` in `kernel.yaml`) from silently costing lexical retrieval for a whole
-process.
+behaviour depending on uncontrolled process state. Its blast radius is not hypothetical, but it
+does need **two** conditions together, not one: `retrieval.mode: fts` resolved from `kernel.yaml`
+or `BARTHO_RETRIEVAL_MODE` **and** a probe that actually latched `False`. On a deployment with
+both, the whole process loses lexical retrieval — announced once in a `logger.warning` at probe
+time, and reflected in no reporting surface thereafter.
 
 **What would close it:** key the cache by database, or drop the caching entirely; distinguish
 "FTS5 is genuinely absent" from "this probe failed" at **both** sites — `fts_client.fts5_available()`

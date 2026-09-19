@@ -157,7 +157,7 @@ these five states is the most easily lost and most expensive thing in this proje
 | Conversation through `/api/chat`, with memory capture and recall | **Operational** | Usable POC slice 1 (`2d443a9`, 2026-08-14): ordinary conversation produces durable, retrievable memory through the governed write path, and chat retrieval sees it. **Operational is not the same as useful** — Real-World Test #1 exercised exactly this and found the burden below break-even (§1). |
 | Conversational-primary UI: ordinary-user vs Workshop separation, obligation legibility, first-use orientation | **Operational** | UX Acceleration Sprint, PR #65, merged 2026-08-26 at Taylor's explicit instruction after independent adversarial review. Also carried the Test #1 UI defect repairs. Safety controls stay in the ordinary view. |
 | Memory Agency: list, search, correct, forget, export | **Operational** | PR #65, through the single governed `MemoryStore` authority. Correction is a conditional write, so a stale correction cannot destroy a newer legitimate one, and a user's deletion wins by construction. |
-| Conversational task control (an ordinary sentence performs a real `TasksSkill` operation) | **Operational** | Capability Acceleration Sprint, PR #66. Goes through the same governed Runtime Contract chokepoint — **note this when scoping EXEC-02: a sentence already causes a governed action; what it does not do is reach the Executive.** |
+| Conversational task control (an ordinary sentence performs a real `TasksSkill` operation) | **Operational** | Capability Acceleration Sprint, PR #66. Goes through the same governed Runtime Contract chokepoint — **this was the pre-EXEC-02 note: a sentence already caused a governed action; what it did not do was reach the Executive.** EXEC-02 (PR #115, `25cfd90`) closed that second half, default-off. |
 | Notification delivery (provider-agnostic outbound webhook) | **Present, enabled only by an operator (default OFF)** | Delivered with slice 1 as the `notify` skill's real outbound channel, but inert until `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` is set (`bartholomew/skills/notify.py`). Unset, a notification is recorded, not delivered. |
 | Proactive schedule/birthday reminders | **Present, enabled only by an operator (default OFF)** | Usable POC slice 2, 2026-08-25, `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md`. `schedule_reminders` in `config/kernel.yaml` is the **single** switch — deliberately no environment-variable override, so there is exactly one authority over whether Bartholomew may contact you unprompted. Surfaces one reminder per (fact, due date) plus one governed delivery. **Unattended operation is not authorised by it.** |
 | Objective continuity (Golden Path slice 2) | **Present, enabled only by an operator (default OFF)** | `objective_continuity` in `config/kernel.yaml`. Same class of switch as the reminders above. |
@@ -183,7 +183,7 @@ from "present, not enabled" — these have a real switch a person is meant to th
 when thrown. Treating a default-OFF capability as absent understates the system; treating it as
 operational overstates it.
 
-## 5. EXEC-01 — the most recent package, stated precisely
+## 5. EXEC-01 — the package EXEC-02 built on, stated precisely
 
 **Merged.** PR #108, reviewed head `2813c7b`, merge commit `a64f5af`.
 Full record: `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md`. Decision:
@@ -278,8 +278,9 @@ sequencing decision; `DECISIONS.md` carries it in full.
 prerequisite for Band 0 or for EXEC-02, and becomes blocking only if a concrete documentation
 inconsistency is shown to compromise test interpretation or project control.
 
-**EXEC-02 remains the next major Executive implementation package after the checkpoint**, and it is
-still **not started**. Read what it is precisely: Bartholomew **already has an Executive stage** in
+**EXEC-02 was the next major Executive implementation package in this sequence, and it is now
+merged** — PR #115, `25cfd90`, 2026-09-18 — ahead of the attended Band 0 checkpoint, which Taylor
+deferred and which remains outstanding. Read what it is precisely: Bartholomew **already has an Executive stage** in
 the runtime, and EXEC-02 **deepens and connects the existing Executive architecture** so that
 outcome-level goals reach the deliberation that already exists inside it. It does not attach, bolt
 on or wire in a separate Executive brain, and it must develop outward from the existing runtime,
@@ -319,8 +320,11 @@ run on pull requests without the label). Earlier wording that the Integration jo
 under normal PR behaviour" described the draft phase only and is superseded —
 `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 holds the full record with the check-run evidence.
 
-**`main` is currently red on the Merge Candidate tier**, and you should know this before you read a
-green-looking status anywhere else. At `a64f5af` that tier failed one job of seven — *Windows full
+**`main` was red on the Merge Candidate tier for the period this section describes. It is green
+now:** the most recent run on `main` (35405586837, at `25cfd90`, 2026-09-18) passed **7/7**,
+including the Windows full default suite and real-Win32 governed actuation. The history below is
+retained because one green run is repeatability evidence rather than proof, and because the Band 0
+checkpoint this mattered for is still outstanding. At `a64f5af` that tier failed one job of seven — *Windows full
 default suite* — at **3 failed, 4,987 passed, 79 skipped**. Two failures
 (`tests/test_event_backbone_drive.py` ×2) are named members of the writer-lock / WAL-contention class
 recorded in `RISKS.md` and analysed in `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7:
@@ -387,7 +391,7 @@ single storage worker and a governance-store first-touch race closed in the same
    2026-09-18) passed 7/7, including the Windows full default suite and real-Win32 governed
    actuation.** The repair arc behind that is PRs #110 and #112–#114. Retained here rather than
    deleted because one green run is repeatability evidence, not proof, and because the Band 0
-   checkpoint this was a prerequisite for is still outstanding (deferred by Taylor 2026-09-19).
+   checkpoint this was a prerequisite for is still outstanding (deferred by Taylor 2026-09-18).
    **The repair is built, root-caused, regression-tested and merged (PR #110, approved head
    `7f99358`, merge commit `6ccf693`)** —
    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. `tests/test_fnd04_eci_vertical_slice.py` is now
@@ -425,7 +429,8 @@ single storage worker and a governance-store first-touch race closed in the same
 | Risks, tech debt, open constraints | `RISKS.md` |
 | API and contract surfaces | `INTERFACES.md` |
 | Test strategy / CI tiers | `CI.md` (its header tier table is current; its body predates the four-tier structure) and `TEST_MATRIX.md` (**counts are of 2026-07-27 — it states a 915-test suite; the default suite is now roughly 4,987 tests**) |
-| The last Executive package in full | `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` |
+| The most recent Executive package in full | `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` (EXEC-02, merged `25cfd90`) |
+| The Executive package it built on | `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` |
 | The External Capability Interface in full | `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md` |
 | The Windows writer-lock / WAL repair: root cause, evidence, reclassifications | `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` |
 | Real-World Test #1 evidence and the approved register | `docs/evidence/test-1/` |

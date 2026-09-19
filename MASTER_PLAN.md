@@ -41,6 +41,9 @@
 > this pass, and nothing in it authorises implementation.** In particular it does not
 > authorise EXEC-02 (connecting the conversational surface to the Executive), which is
 > identified and **not started**.
+> *[Status as of 2026-09-19: that was true of this 2026-09-14 pass and is left as written.
+> EXEC-02 was separately approved by Taylor at the User Approval Gate and **merged** on
+> 2026-09-18 — PR #115, `25cfd90`. See this document's EXEC-02 entry and `START_HERE.md` §5a.]*
 >
 > **Previously (2026-08-20):** **Real-World Test #1 is complete and its Decision Register is
 > approved.** Taylor approved **Post-Test #1 Decision Register v2.2** on 2026-08-20 as the
@@ -873,7 +876,7 @@ package. **Listing a package is not authorisation to start it.**
   until both were addressed, EXEC-01's cognition was invisible to the user. **It required its own
   separate, explicit approval before any work began, and Taylor sequenced it on 2026-09-14 to
   follow the Windows reliability repair and the attended Band 0 checkpoint** (`DECISIONS.md`, "The
-  approved sequence") — a checkpoint Taylor then explicitly **deferred** on 2026-09-19 while
+  approved sequence") — a checkpoint Taylor then explicitly **deferred** on 2026-09-18 while
   travelling without access to the Windows PC, which is why EXEC-02 proceeded ahead of it. That
   attended checkpoint **remains outstanding**. Its scope is for its own brief to set, not this document; what the existing invariants already require of any such package is that it
   develop **outward from the Executive stage the runtime already has** — no second planner, no

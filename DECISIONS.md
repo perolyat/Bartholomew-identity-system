@@ -3526,15 +3526,21 @@
   - **EXEC-02 remains the next major Executive implementation package** after the checkpoint, and
     remains unstarted. It **deepens and connects the Executive architecture that already exists** —
     the runtime already has an Executive stage — rather than attaching a separate Executive brain.
-    > **Status note added 2026-09-18, and this clause alone is superseded.** EXEC-02 was
-    > implemented and **merged** at Taylor's User Approval Gate — PR #115, merge commit `25cfd90`
-    > (`START_HERE.md` §5a). "Remains unstarted" was true when this decision was recorded on
-    > 2026-09-14 and is not true now. **The sequencing decision itself is unchanged and still
-    > stands**; what changed is that Taylor **deferred** the attended Band 0 checkpoint on
-    > 2026-09-19, while travelling without access to the Windows PC, and explicitly released
+    > **⚠️ THIS CLAUSE ALONE SUPERSEDED 2026-09-19** by EXEC-02's merge. EXEC-02 was implemented
+    > and **merged** at Taylor's User Approval Gate on 2026-09-18 — PR #115, merge commit
+    > `25cfd90` (`START_HERE.md` §5a). "Remains unstarted" was true when this decision was
+    > recorded on 2026-09-14 and is not true now. **The sequencing decision itself is unchanged
+    > and still stands**; what changed is that Taylor **deferred** the attended Band 0 checkpoint
+    > on 2026-09-18, while travelling without access to the Windows PC, and explicitly released
     > EXEC-02 to proceed ahead of it. That checkpoint is **not failed, not passed, not waived —
-    > still required, still outstanding.** The decision text above is left as written, per this
-    > document's append-only convention; only this note reports the outcome.
+    > still required, still outstanding.** The decision text above is left as written and marked in
+    > place, which is how this document already handles supersession (see the
+    > "⚠️ SUPERSEDED 2026-08-17" banner earlier in this file); only this note reports the outcome.
+    >
+    > *On the date: Airtable records the deferral as 2026-09-19, which is the project's local
+    > Brisbane date (UTC+10) for the same moment this file dates 2026-09-18 in UTC. The UTC frame
+    > is used here because every other date in this note and in the EXEC-02 record is UTC, and
+    > mixing the two made the deferral appear to post-date the merge it preceded.*
 
 ## Decision: A SQLite statement that can wait for a lock never runs on the event-loop thread
 
