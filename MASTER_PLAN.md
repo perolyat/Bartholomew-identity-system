@@ -1063,6 +1063,21 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
 
 ### Approval Ledger
 
+- 2026-09-18 — **EXEC-02: conversational Executive deliberation integration** (PR #115, branch
+  `claude/exec-02-conversational-integration-82tk0o`): approved by Taylor at the User Approval Gate
+  at reviewed head `c3f1c5c` — **merge commit `25cfd90`**. Step 5 of the approved sequence, taken
+  ahead of step 4: Taylor **deferred** the attended Band 0 checkpoint on 2026-09-18 while
+  travelling without access to the Windows PC, and released EXEC-02 to proceed. That checkpoint is
+  **not failed, not passed, not waived — still required, still outstanding.** All three CI tiers
+  were green on `c3f1c5c` before merge (PR Fast; Integration 3/3; Merge Candidate 7/7, including
+  the Windows full default suite and real-Win32 governed actuation), and the post-merge Merge
+  Candidate on `main` at `25cfd90` was **7/7**. The approval does **not** close **R-EXEC01-3** —
+  no real-model plan-quality evidence exists — and the capability is **default-off**, behind
+  `BARTH_EXECUTIVE_DELIBERATION` and `BARTH_CONVERSATIONAL_EXECUTIVE` plus a required
+  `BARTH_CONVERSATIONAL_EXECUTIVE_DEVICE_ID`; a reachable model enables neither switch, and a
+  proposal still stops at `pending_approval`. Records:
+  `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`, `START_HERE.md` §5a, `DECISIONS.md`.
+
 - 2026-09-16 — **Windows writer-lock / WAL reliability repair, with the skill-execution
   concurrency contract it made necessary** (PR #110, branch
   `claude/windows-wal-reliability-repair-emrrf4`): approved by Taylor at the User Approval Gate at
