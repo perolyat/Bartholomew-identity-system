@@ -332,7 +332,9 @@ class TestTheExactProposalIsApproved:
         result = await _say(enabled, model, "yes")
         reply = result.response.lower()
         assert "approved" in reply
-        assert "has not run yet" in reply
+        assert "recording it is not running it" in reply
+        # And it does not assert a fact about the machine it cannot know.
+        assert "has not run" not in reply
 
     async def test_the_model_was_never_asked_whether_permission_was_granted(
         self,
@@ -373,6 +375,70 @@ class TestTheExactProposalIsRejected:
         assert result.approval_action["outcome"] == ca.OUTCOME_STALE
         assert _row(enabled.mem.db_path, action_id).state is ActionState.CANCELLED
         assert await _approvals(enabled) == []
+
+    async def test_withdrawing_an_already_leased_action_does_not_claim_nothing_happened(
+        self,
+        enabled,
+        model,
+        registry,
+        config,
+    ):
+        """`store.mark_cancelled` accepts a leased action on purpose, and its own
+        docstring says cancelling one "does not reach out and stop a device --
+        nothing here can". So the withdrawal holds, but it did not *prevent*
+        anything, and this surface must not imply that it did."""
+        _, action_id = await _propose(enabled, model)
+        await _say(enabled, model, "yes")
+        await action_seam.run_action_dispatch_through_runtime_contract(
+            enabled,
+            tenant_id=TENANT,
+            device_id=DEVICE,
+            action_id=action_id,
+            registry=registry,
+        )
+        assert _row(enabled.mem.db_path, action_id).state is ActionState.LEASED
+
+        # The slot was consumed by the approval, so re-arm it: the person is
+        # withdrawing the same proposal they were shown, just too late.
+        await ca._write(
+            enabled,
+            ca.PresentedProposal(
+                presentation_id="pres-late",
+                tenant_id=TENANT,
+                device_id=DEVICE,
+                requested_by=REQUESTER,
+                action_id=action_id,
+                capability=_row(enabled.mem.db_path, action_id).capability,
+                capability_version=1,
+                parameter_fingerprint=_row(
+                    enabled.mem.db_path,
+                    action_id,
+                ).parameter_fingerprint,
+                action_expires_at=_row(enabled.mem.db_path, action_id).expires_at,
+                presented_at="2026-09-19T00:00:00Z",
+            ),
+        )
+
+        result = await ca.decide(enabled, config, ai.parse_decision("no"))
+
+        assert result.outcome == ca.OUTCOME_REJECTED
+        assert result.withdrawn_after_lease is True
+        assert "can never run" not in result.reply
+        assert "may have started" in result.reply
+        assert _row(enabled.mem.db_path, action_id).state is ActionState.CANCELLED
+
+    async def test_a_withdrawal_before_any_lease_may_still_promise_it_cannot_run(
+        self,
+        enabled,
+        model,
+        config,
+    ):
+        """Non-vacuity for the test above: the stronger sentence is still used
+        where it is actually true."""
+        await _propose(enabled, model)
+        result = await ca.decide(enabled, config, ai.parse_decision("no"))
+        assert result.withdrawn_after_lease is False
+        assert "can never run" in result.reply
 
     async def test_the_decision_is_preserved_as_evidence_not_deleted(self, enabled, model):
         _, action_id = await _propose(enabled, model)
@@ -443,6 +509,60 @@ class TestBindingToWhatWasShown:
 
         assert _row(enabled.mem.db_path, second).state is ActionState.APPROVED
         # The older one is untouched: it was superseded, not approved.
+        assert _row(enabled.mem.db_path, first).state is ActionState.PENDING_APPROVAL
+
+    async def test_a_failed_re_arm_retires_the_older_proposal(self, enabled, model, config):
+        """The binding failure this module's docstring claims to prevent.
+
+        A is awaiting a decision. B is then put to the person, and arming B
+        fails. A must not still be what "yes" means: the person last saw B, and
+        authorising A instead would be an older proposal answering for a newer
+        one. Every failure path in `present_proposal` retires the old slot before
+        it can return, so the surface is left with nothing rather than with the
+        wrong thing.
+        """
+        _, first = await _propose(enabled, model)
+        assert (await ca.load_presentation(enabled, config)).action_id == first
+
+        # Arming fails for the reason ambiguity always fails: two at once.
+        armed, why_not = await ca.present_proposal(
+            enabled,
+            config,
+            action_ids=["act-b1", "act-b2"],
+            instruction="two things",
+        )
+        assert armed is None and "2 steps were proposed at once" in why_not
+
+        retired = await ca.load_presentation(enabled, config)
+        assert retired.state == ca.STATE_SUPERSEDED, "the older proposal is still live"
+
+        result = await ca.decide(enabled, config, ai.parse_decision("yes"))
+        assert result.outcome == ca.OUTCOME_STALE
+        assert "replaced by a newer one" in result.reply
+        assert _row(enabled.mem.db_path, first).state is ActionState.PENDING_APPROVAL
+        assert await _approvals(enabled) == []
+
+    async def test_a_re_arm_that_cannot_read_the_action_also_retires_the_older_one(
+        self,
+        enabled,
+        model,
+        config,
+    ):
+        """The same property on a different failure path, so the fix is not
+        pinned to one branch."""
+        _, first = await _propose(enabled, model)
+
+        armed, why_not = await ca.present_proposal(
+            enabled,
+            config,
+            action_ids=["act-does-not-exist"],
+            instruction="a ghost",
+        )
+        assert armed is None and "could not be read back" in why_not
+        assert (await ca.load_presentation(enabled, config)).state == ca.STATE_SUPERSEDED
+        assert (
+            await ca.decide(enabled, config, ai.parse_decision("yes"))
+        ).outcome == ca.OUTCOME_STALE
         assert _row(enabled.mem.db_path, first).state is ActionState.PENDING_APPROVAL
 
     async def test_a_presentation_from_another_conversation_is_not_this_ones(
@@ -1011,6 +1131,8 @@ class TestApprovalIsNotExecutionSuccess:
 
         await _say(enabled, model, "yes")
         assert "has not run yet" in (await _say(enabled, model, "did it work?")).response
+        # The *status* read may say this: it is read from the state column, not
+        # asserted from the fact that an approval succeeded.
 
         await action_seam.run_action_dispatch_through_runtime_contract(
             enabled,

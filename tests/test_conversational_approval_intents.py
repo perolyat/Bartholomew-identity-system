@@ -237,6 +237,7 @@ class TestRenderingIsTruthful:
             ai.render_stale("it changed."),
             ai.render_approved("act-1", "pc-1"),
             ai.render_rejected("act-1"),
+            ai.render_rejected_after_lease("act-1"),
             ai.render_refused("because"),
             ai.render_brake(),
             ai.render_ineligible("because"),
@@ -253,8 +254,38 @@ class TestRenderingIsTruthful:
 
     def test_approving_is_explicitly_distinguished_from_running(self):
         text = ai.render_approved("act-1", "pc-1").lower()
-        assert "has not run yet" in text
+        assert "recording it is not running it" in text
         assert "won't tell you it worked" in text
+
+    def test_approving_does_not_assert_the_action_has_not_run(self):
+        """Approving makes an action eligible to be leased, and a polling device
+        can lease and finish it between the authority's UPDATE and this sentence
+        reaching the person. Claiming it "has not run yet" would be an assertion
+        about the world the approval result does not establish --- the same class
+        of untruth this surface exists to refuse, pointing the other way."""
+        text = ai.render_approved("act-1", "pc-1").lower()
+        for claim in ("has not run", "hasn't run", "nothing has happened", "not started"):
+            assert claim not in text, claim
+        # What it may say is what is actually guaranteed.
+        assert "may pick it up at any moment" in text
+
+    def test_withdrawing_after_a_lease_does_not_promise_it_cannot_run(self):
+        """`store.mark_cancelled` accepts a leased action and its own docstring
+        says doing so cannot stop the device. "Can never run" would be false
+        reassurance about something possibly underway on the person's machine."""
+        text = ai.render_rejected_after_lease("act-1").lower()
+        assert "can never run" not in text
+        assert "may have started" in text
+        assert "can't reach out and stop a machine" in text
+        # The narrower thing withdrawal *does* buy is still stated.
+        assert "never be run again" in text
+
+    def test_the_cancelled_status_does_not_claim_nothing_happened(self):
+        """The state column cannot tell a withdrawal-before-lease from one
+        after, so the sentence must not assert either."""
+        text = ai.render_status("act-1", "cancelled").lower()
+        assert "nothing happened" not in text
+        assert "may have started" in text
 
     def test_unknown_is_never_rendered_as_success(self):
         text = ai.render_status("act-1", "unknown").lower()

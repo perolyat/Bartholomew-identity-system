@@ -309,22 +309,63 @@ def render_stale(reason: str) -> str:
 
 
 def render_approved(action_id: str, device_id: str, summary: str = "") -> str:
-    """Authorised, recorded, and *not yet run*. The distinction is the point."""
+    """Authorised and recorded. Says what approving *did*, not what the machine has not.
+
+    **It deliberately does not claim the action has not run.** Approving makes an
+    action eligible to be leased, and a device that is polling can lease and even
+    complete it in the moment between the authority's UPDATE and this sentence
+    reaching the person. An earlier draft said "it has not run yet", which is an
+    assertion about the world that the approval result does not establish and
+    which could already be false as it was displayed --- the same class of
+    untruth, pointing the other way, that this surface exists to refuse. Raised
+    by automated review on PR #117, confirmed, and pinned by
+    `TestRenderingIsTruthful::test_approving_does_not_assert_the_action_has_not_run`.
+
+    What it says instead is exactly what is guaranteed: the approval is recorded,
+    approving is not running, the machine may act at any moment, and no claim of
+    success will be made without an observed and verified effect.
+    """
     body = (summary or "").strip()
     head = (
         f"Approved — that's your authorisation recorded against {action_id}, and "
-        f"nothing else. It's now eligible for {device_id} to pick up and run; it "
-        "has not run yet, and I won't tell you it worked until the machine has "
-        "reported back and the effect has been checked independently."
+        f"nothing else. Recording it is not running it: {device_id} may pick it up "
+        "at any moment from now. Ask me how it went and I'll read back the state; "
+        "I won't tell you it worked until the machine has reported and the effect "
+        "has been checked independently."
     )
     return f"{head}\n\n{body}" if body else head
 
 
 def render_rejected(action_id: str) -> str:
-    """Withdrawn on the person's instruction, and recorded as their decision."""
+    """Withdrawn before any device had it. It genuinely can never run."""
     return (
         f"Dropped — {action_id} is withdrawn on your instruction and can never run. "
         "That decision is on the record as yours; I haven't deleted it."
+    )
+
+
+def render_rejected_after_lease(action_id: str) -> str:
+    """Withdrawn, but a device already had it. Says so rather than reassuring.
+
+    `store.mark_cancelled` accepts a `leased` action on purpose, and its own
+    docstring is explicit that doing so "does not reach out and stop a device --
+    nothing here can". What withdrawal buys in that case is real but narrower:
+    the action can never be leased again and any result the device later reports
+    is refused, so it can never be *recorded* as having succeeded. What it does
+    not buy is the thing a person hears in "it can never run".
+
+    Saying "nothing happened" here would be false reassurance about something
+    that may be happening on their machine as they read it. Raised by automated
+    review on PR #117, confirmed against `mark_cancelled`'s accepted from-states,
+    and pinned by `TestTheExactProposalIsRejected::
+    test_withdrawing_an_already_leased_action_does_not_claim_nothing_happened`.
+    """
+    return (
+        f"Withdrawn — but be aware your PC had already picked {action_id} up before "
+        "you said so, so it may have started. I can't reach out and stop a machine "
+        "mid-action; what withdrawing does is make sure it can never be run again "
+        "and that no result for it will be recorded. Check the machine itself if it "
+        "matters whether it got as far as taking effect."
     )
 
 
@@ -370,7 +411,15 @@ _STATUS_SENTENCES = {
         "not know whether it worked, and I'm not going to guess — check the machine "
         "itself before assuming either way."
     ),
-    "cancelled": "was withdrawn before it ran, so nothing happened.",
+    # Deliberately not "so nothing happened": an action can be withdrawn *after*
+    # a device leased it, and the state column alone cannot tell the two apart
+    # afterwards. What is true of every cancelled action is that it can never run
+    # again and can never be recorded as a success.
+    "cancelled": (
+        "was withdrawn, so it can never run again and no result for it will be "
+        "recorded. If your PC had already picked it up before you withdrew it, it "
+        "may have started; the state alone cannot tell you which."
+    ),
     "refused": "was refused by governance and never ran.",
     "aborted_by_brake": (
         "was stopped by the Parking Brake after your PC had picked it up. Some of "
@@ -421,6 +470,7 @@ __all__ = [
     "render_nothing_to_report",
     "render_refused",
     "render_rejected",
+    "render_rejected_after_lease",
     "render_stale",
     "render_status",
 ]

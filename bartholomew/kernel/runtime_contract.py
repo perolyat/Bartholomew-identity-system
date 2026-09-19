@@ -1742,6 +1742,11 @@ async def _handle_conversational_decision(
     #: Named separately from the outcome so an audit reader never has to infer
     #: "a person authorised this" from a word in a reply.
     record["human_decision_recorded"] = bool(result.decision_recorded)
+    if getattr(result, "withdrawn_after_lease", False):
+        # A withdrawal that landed after the device already had it. On the record
+        # because it changes what the withdrawal achieved: the action can never
+        # run again, but it was not prevented from running.
+        record["withdrawn_after_lease"] = True
     if result.action_id:
         record["action_id"] = result.action_id
     if result.action_state:

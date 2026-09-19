@@ -387,6 +387,65 @@ person's burden. Both deferred Windows-PC items remain deferred, neither passed 
 
 ---
 
+## 11a. Three defects found by review *after* the approval, and fixed before the merge
+
+An automated Codex review ran when the PR was marked ready for review, after Taylor had approved
+it, and found **three real defects — two P1, one P2**. Every one was a *false statement to the
+person*, which is the single thing this package exists to prevent, so each was verified against
+the code and fixed rather than carried. They are recorded here rather than quietly folded in,
+because the merged diff is therefore not byte-for-byte what was approved.
+
+None of them touches the authority model, the binding, the lifecycle or either judgement Taylor
+ruled on. All three are corrections to what Bartholomew *says*.
+
+**1. A failed re-arm left an older proposal answering for a newer one (P1).**
+`present_proposal` returned early on each of its failure paths — two steps proposed at once, an
+unreadable row, a `MemoryStore` write the consent gate refused — without touching the existing
+record. So if proposal A was awaiting a decision and presenting proposal B failed, the slot still
+pointed at A, and the person, having just been shown B, could say "yes" and authorise A. **That is
+exactly the binding failure this document's own table claims to prevent** ("an old conversational
+turn approving a newer proposal"), so the claim was false as written. Fixed by retiring the live
+presentation to a new `superseded` state at the *top* of `present_proposal`, before any path that
+can fail is reached: every exit except a successful arm now leaves the surface with nothing rather
+than with the wrong thing. Pinned on two separate failure paths, so the fix is not tied to one
+branch.
+
+**2. "It has not run yet" was an assertion the approval result does not establish (P2).**
+Approving makes an action eligible to be leased, and a device that is polling can lease and even
+complete it between the authority's conditional UPDATE and the reply reaching the person — so the
+sentence could already be false as it was displayed. The same class of untruth this surface exists
+to refuse, pointing the other way. `render_approved` now says what is actually guaranteed:
+the authorisation is recorded, *recording it is not running it*, the machine may pick it up at any
+moment, and no claim of success will be made without an observed and verified effect. A test
+forbids the renderer from asserting non-execution at all.
+
+**3. Withdrawing an already-leased action promised something withdrawal cannot deliver (P1).**
+`store.mark_cancelled` accepts a `leased` action deliberately, and *its own docstring* says doing
+so "does not reach out and stop a device — nothing here can". `render_rejected` nonetheless said
+the action "can never run", and the `cancelled` status sentence said it "was withdrawn before it
+ran, so nothing happened" — false reassurance about something that may be executing on the
+person's machine as they read it. Fixed by reading the pre-cancellation state (it is unreadable
+afterwards, because the column is overwritten) and rendering the leased case separately: the
+withdrawal holds and is worth having — the action can never be leased again and no result for it
+will be recorded — but it did not *prevent* execution, and the reply says so and says to check the
+machine. `withdrawn_after_lease` is carried on the chat record, so an audit can tell a withdrawal
+that prevented an action from one that only disowned its result. The `cancelled` status sentence
+no longer asserts either possibility, because the state column genuinely cannot tell them apart.
+
+**Evidence after the fixes:** 172 tests across the three suites, all green; the EXEC-01/EXEC-02,
+Governance, Windows action, no-bypass, chat-seam and privacy-guard regressions green; full default
+suite 5,489 run with the same two pre-existing `test_kernel_db_path_resolution.py` failures and no
+others. CI tiers re-run on the final head.
+
+**What this says about the package's own review.** Three defects of the exact class the package is
+built to prevent survived its author's adversarial pass and 164 tests, and were caught by a
+reviewer reading the diff cold. Two of them contradicted claims made in this very document. That is
+worth recording plainly: a test suite that asserts a property is not the same as a property
+holding, and the renderer tests were checking for forbidden *completion* claims while missing
+forbidden *non-completion* ones.
+
+---
+
 ## 12. Residual risks carried forward
 
 1. **R-EXEC02-1** (closed-list goal vocabulary) — unchanged. The decision vocabulary in

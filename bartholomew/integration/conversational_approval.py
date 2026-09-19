@@ -82,7 +82,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from bartholomew.actuation import seam as action_seam
@@ -114,6 +114,11 @@ STATE_APPROVED = "approved"
 #: evidence of what happened, and erasing it would leave an audit unable to
 #: tell a refusal from a conversation that never took place.
 STATE_REJECTED = "rejected"
+#: A newer proposal was put to the person, so this one is no longer what "yes"
+#: means. Written **before** the replacement is attempted, so that a failure to
+#: arm the new one cannot leave the old one answering for it. See
+#: `present_proposal`.
+STATE_SUPERSEDED = "superseded"
 
 #: Outcome tokens this module reports to the chat surface. Distinct values,
 #: because "nothing is pending", "it changed since I showed you" and "the brake
@@ -262,6 +267,11 @@ class DecisionResult:
     #: fields here at all: this module cannot make either true and must not
     #: offer a shape that suggests it could.
     decision_recorded: bool = False
+    #: True when the withdrawal landed *after* a device had already leased the
+    #: action. The withdrawal still holds -- it can never be leased again and no
+    #: result will be recorded -- but it did not prevent execution, and nothing
+    #: on this surface may imply that it did.
+    withdrawn_after_lease: bool = False
     provenance_degraded: bool = False
     provenance_error: str | None = None
 
@@ -395,6 +405,26 @@ async def present_proposal(
     nothing to approve. Two or more is an ambiguity, and this seam resolves
     ambiguity by declining rather than by choosing.
     """
+    # **Retire whatever was awaiting a decision first, before anything can fail.**
+    #
+    # Every exit below this point except a successful arm leaves the surface with
+    # no live presentation, and that ordering is the whole of the correctness
+    # here. An earlier cut returned early on each failure without touching the
+    # existing record, so if proposal A was awaiting a decision and presenting
+    # proposal B failed --- two steps at once, an unreadable row, a `MemoryStore`
+    # write the consent gate refused --- the slot still pointed at A. The person,
+    # having just been shown B, could then say "yes" and authorise A: an older
+    # proposal answering for a newer one, which is precisely the binding failure
+    # this module's docstring claims to prevent. Raised by automated review on
+    # PR #117, confirmed, and pinned by
+    # `TestBindingToWhatWasShown::test_a_failed_re_arm_retires_the_older_proposal`.
+    #
+    # Superseding is safe in every case, including the ones that go on to arm
+    # successfully: the new record overwrites this one in the same slot. And it
+    # takes nothing away --- the action itself is untouched and the operator
+    # console can still approve either.
+    retired = await _supersede_awaiting(ctx, config)
+
     ids = [str(a) for a in (action_ids or []) if a]
     if len(ids) != 1:
         return None, (
@@ -402,6 +432,12 @@ async def present_proposal(
         )
 
     action_id = ids[0]
+    if retired is not None:
+        logger.info(
+            "Conversational approval for %s was retired; %s is being presented instead",
+            retired,
+            action_id,
+        )
     try:
         stored = await run_off_loop(
             action_store.get_action,
@@ -436,6 +472,35 @@ async def present_proposal(
     if error is not None:
         return None, error
     return record, None
+
+
+async def _supersede_awaiting(ctx: Any, config: Any) -> str | None:
+    """Retire the live presentation, if there is one. Returns its action id.
+
+    Called at the top of `present_proposal`, so the window in which an old
+    proposal can answer for a new one is closed before any of the ways of
+    failing to present the new one can be reached.
+
+    A failure to write the supersession is logged rather than raised, and the
+    consequence is stated plainly because it is the one residual case: the older
+    record stays awaiting. It is bounded by the action's own expiry, which
+    `decide` re-checks, and it is still an action the person was genuinely shown
+    --- but it is not the one they were shown last, so it is worth a loud log.
+    """
+    existing = await load_presentation(ctx, config)
+    if existing is None or existing.state != STATE_AWAITING:
+        return None
+    superseded = replace(existing, state=STATE_SUPERSEDED)
+    error = await _write(ctx, superseded)
+    if error is not None:
+        logger.error(
+            "The conversational presentation of %s could not be retired (%s); it may "
+            "still answer a bare 'yes' until the action expires",
+            existing.action_id,
+            error,
+        )
+        return None
+    return existing.action_id
 
 
 async def _record_decision(
@@ -528,11 +593,14 @@ async def _resolve_target(
             ),
         )
     if record.state != STATE_AWAITING:
-        already = (
-            "you already approved that one"
-            if record.state == STATE_APPROVED
-            else "you already told me to drop that one"
-        )
+        already = {
+            STATE_APPROVED: "you already approved that one",
+            STATE_REJECTED: "you already told me to drop that one",
+            STATE_SUPERSEDED: (
+                "that proposal was replaced by a newer one, and the newer one is not "
+                "available for approval here"
+            ),
+        }.get(record.state, f"that proposal is {record.state}")
         return (
             None,
             None,
@@ -729,6 +797,27 @@ async def _reject(
     ability to happen, and a gate that stopped somebody saying no would be a
     gate that made things less safe.
     """
+    # **Read the state before withdrawing it, because withdrawing overwrites it.**
+    #
+    # `store.mark_cancelled` accepts a `leased` action deliberately, and its own
+    # docstring is explicit that cancelling one "does not reach out and stop a
+    # device -- nothing here can". So a withdrawal that lands after a device has
+    # taken the action is real but narrower than it sounds: the action can never
+    # be leased again and any result it later reports is refused, but it may be
+    # running as the person reads the reply.
+    #
+    # Once the row is `cancelled` the state column cannot say which of the two it
+    # was, so the pre-state is captured here or not at all. Saying "nothing
+    # happened" without it would be false reassurance about something possibly
+    # underway on their machine. Raised by automated review on PR #117.
+    before = await run_off_loop(
+        action_store.get_action,
+        _db_path(ctx),
+        tenant_id=config.tenant_id,
+        action_id=record.action_id,
+    )
+    was_leased = before is not None and before.state is ActionState.LEASED
+
     result = await action_seam.cancel_action_through_runtime_contract(
         ctx,
         tenant_id=config.tenant_id,
@@ -747,10 +836,18 @@ async def _reject(
         )
         return DecisionResult(
             outcome=OUTCOME_REJECTED,
-            reply=approval_intents.render_rejected(record.action_id),
+            reply=(
+                approval_intents.render_rejected_after_lease(record.action_id)
+                if was_leased
+                else approval_intents.render_rejected(record.action_id)
+            ),
             action_id=record.action_id,
             action_state=ActionState.CANCELLED.value,
             decision_recorded=True,
+            #: Recorded because it changes what the withdrawal actually achieved,
+            #: and an audit reader must be able to tell a withdrawal that
+            #: prevented an action from one that only disowned its result.
+            withdrawn_after_lease=was_leased,
             provenance_degraded=bool(getattr(result, "provenance_degraded", False)),
             provenance_error=getattr(result, "provenance_error", None),
         )
@@ -824,6 +921,7 @@ __all__ = [
     "STATE_APPROVED",
     "STATE_AWAITING",
     "STATE_REJECTED",
+    "STATE_SUPERSEDED",
     "DecisionResult",
     "PresentedProposal",
     "decide",
