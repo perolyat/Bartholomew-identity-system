@@ -1712,9 +1712,13 @@ inside a work-package document is a limitation the next session will not find.
   is a single short bootstrap that must be updated when `main` moves materially, Airtable
   owns live status so the repository is no longer the only place status can rot, and
   `START_HERE.md` §3 rule 3 requires material chat-only findings to be promoted to a durable
-  record. **Exercised 2026-09-18 (EXEC-02, PR #115):** the merge provenance was written in the
-  same hour as the merge rather than discovered stale by a later reset — the first package to
-  do so. **Residual risk:** all three depend on discipline at the end of a session, and
+  record. **Exercised 2026-09-18 (EXEC-02, PR #115/#116):** the merge provenance was written in
+  the same hour as the merge rather than discovered stale by a later reset, following the
+  precedent PR #111 set for #110 (`9bdeed6`, "record the approval and merge of the writer-lock
+  repair"). *An earlier draft of this line called EXEC-02 the first package to do so; that was
+  false, and #111 is the precedent — corrected here rather than left standing, since an
+  over-claim inside the entry about documentation currency would be self-refuting.*
+  **Residual risk:** all three depend on discipline at the end of a session, and
   nothing enforces them mechanically.
 
 
@@ -1748,41 +1752,98 @@ Carried-forward limitations of **merged** work. Full record:
   larger. **Stated so it is not discovered later as a surprise.**
 
 
-## R-RETRIEVAL-1 — the FTS5 availability cache is process-global and latches on any failure (recorded 2026-09-18)
+## R-RETRIEVAL-1 — the FTS5 availability cache is process-global, unkeyed and collapses every failure into "absent" (recorded 2026-09-18, **substantially corrected 2026-09-19**)
 
 **Found while investigating a red CI job during the EXEC-02 User Approval Gate. Not EXEC-02's,
 not fixed by it, and recorded here rather than repaired inside an unrelated package.**
 
+> **This entry's first draft was wrong in its central claim and is corrected in full below.** It
+> asserted that a latched cache "disables lexical retrieval for the remainder of the process,
+> silently", and that "in production that is Bartholomew quietly forgetting". Neither holds on the
+> default configuration or on the chat path. The error was caught by adversarial review of PR #116
+> and confirmed by direct experiment before this rewrite. It is recorded rather than quietly
+> edited, because an over-claim inside the risk register is the same defect class R-CTRL-1 exists
+> for.
+
+### What is true, and verified
+
 `bartholomew/kernel/retrieval.py`'s `_check_fts5_once()` caches FTS5 availability in the
-module-global `_fts5_available_cache`. Two properties make it dangerous together:
+module-global `_fts5_available_cache`:
 
-1. **It is not keyed by database.** The first probe in a process answers for every later caller,
-   whatever database they are retrieving from.
-2. **It latches `False` on any exception.** The probe wraps `sqlite3.connect()` and the FTS5
-   check in a bare `except Exception: available = False`, so a transient or unrelated failure —
-   an unopenable path, a locked file, a patched probe in a test that is never reset — disables
-   lexical retrieval for the **remainder of the process**, silently.
+1. **It is not keyed by database, and is never re-probed.** The first probe in a process answers
+   for every later caller, whatever database they retrieve from, for the life of the process.
+2. **It collapses every failure mode into "FTS5 is absent", in two places.**
+   `fts_client.fts5_available()` wraps its probe in `except Exception: return False`
+   (`fts_client.py:86-87`), and `_check_fts5_once()` additionally wraps `sqlite3.connect()` in
+   `except Exception: available = False` (`retrieval.py:60-62`). So "FTS5 is genuinely missing
+   from this SQLite build", "the database was locked at probe time", "the path could not be
+   opened" and "a test patched the probe and never reset the global" all latch identically. The
+   information needed to tell them apart is destroyed at the lower site first.
 
-**What it produced.** `tests/test_w03d_memory_poisoning.py::TestPoisonedExternalContent::
-test_email_shaped_poison_is_framed_and_powerless` failed in Merge Candidate run 35396770160 with
-*"the seeded note was not recalled"* — a chat prompt built with no memory context at all. It did
-not reproduce in four subsequent runs (local on the branch, local on an `origin/main` control, and
-twice more in CI across py3.10 and py3.11).
+### What it actually costs — narrower than first recorded, and configuration-dependent
 
-**What is established and what is not.** The global latch is real and is read directly from the
-code. **What tripped it in that run is not established** — the obvious candidate,
-`tests/integration/test_fts_unavailable_vector_quality.py` (which forces the probe `False` inside
-a `patch` block and never resets the cache afterwards), is *not in that job's marker selection*
-and therefore cannot be the culprit. That hypothesis was tested and discarded rather than
-presented as a root cause.
+The cache is read in **exactly one place**: `get_retriever()`, `retrieval.py:1066-1078`. The blast
+radius therefore depends entirely on the resolved mode:
 
-**Why it matters beyond one red job.** A silent, process-wide loss of lexical retrieval does not
-announce itself: the chat turn still succeeds, the reply is still generated, and the only symptom
-is that nothing is recalled. In production that is Bartholomew quietly forgetting, and it is the
-same shape as the three wall-clock-dependent defects recorded on 2026-09-18 — behaviour depending
-on uncontrolled process state.
+| Resolved mode | Effect of a latched `False` |
+|---|---|
+| `fts`, resolved from `BARTHO_RETRIEVAL_MODE` or `kernel.yaml` (not an explicit argument) | **degraded to vector-only — lexical retrieval genuinely lost** |
+| `fts`, passed explicitly as an argument | honoured; no degradation (deliberate, and pinned by `tests/test_retrieval_fts5_fallback.py`) |
+| `hybrid` — **the repository default** (`config/kernel.yaml`) and what the chat path uses (`runtime_contract.py`'s `get_retriever(db_path=..., memory_store=...)`) | **`logger.info` only; the FTS arm still runs** |
 
-**What would close it:** key the cache by database (or drop it), replace the blanket `except` with
-one that distinguishes "FTS5 is genuinely absent" from "this probe failed", and make the degraded
-state visible rather than silent. Scope deliberately, as its own package; do not fold it into
-unrelated work.
+**Measured, not reasoned.** Seeding a note and forcing `retrieval._fts5_available_cache = False`
+before the call returns the same retriever and the same row as an unforced probe:
+
+```
+latch=None  (normal probe) : retriever=FTSOnlyRetriever  results=1
+latch=False (failed probe) : retriever=FTSOnlyRetriever  results=1
+```
+
+So on the default and chat paths, a latched cache does **not** cost recall.
+
+### It is not silent in logs — it is invisible in reporting
+
+`_check_fts5_once()` emits one `logger.warning` when it latches unavailable (`retrieval.py:64-69`),
+and the fts→vector degradation emits another. What is genuinely missing is any reflection in the
+**reporting surfaces**: `describe_retrieval()` — the accessor that exists precisely so health, CLI
+and result contracts cannot drift from reality — carries **no FTS-availability field at all**, so
+nothing an operator or a result contract reads says lexical retrieval was dropped. The embedding
+degradation is reported there; the FTS one is not.
+
+### What it does NOT explain — the red job
+
+`tests/test_w03d_memory_poisoning.py::TestPoisonedExternalContent::test_email_shaped_poison_is_framed_and_powerless`
+failed **once**, in Merge Candidate run 35396770160 on the superseded head `167f94c`, with *"the
+seeded note was not recalled"* — the captured prompt was the bare user text, with no memory context
+at all.
+
+**This latch is not the explanation, and the entry no longer suggests it is.** Two independent
+reasons:
+
+* the latch is **constant for a whole process**, yet five other recall-dependent assertions in that
+  same file passed in that same run — a process-global switch cannot produce one isolated failure;
+* on the mode that test actually resolves, a latched `False` does not suppress recall at all, as
+  measured above.
+
+**The cause of that single failure remains unknown.** It has not reproduced in **seven** subsequent
+runs of the same selection (`-m "integration or slow"`): Integration run 35397651638 (py3.11),
+Merge Candidate run 35397651639 (py3.10 and py3.11) on `c3f1c5c`, post-merge Merge Candidate run
+35405586837 (py3.10 and py3.11) on `main` at `25cfd90`, plus two local full runs — one on the
+branch, one on an `origin/main` control worktree — both 314 passed / 25 skipped / 0 failed.
+
+### Why it is still worth recording
+
+Not as "Bartholomew quietly forgetting" — that was the over-claim. As a **latent correctness
+hazard**: a process-global, never-reset, unkeyed piece of state that erases the difference between
+four distinct causes, is consulted by a mode-selection branch, and is absent from every reporting
+surface. It is the same shape as the three wall-clock-dependent defects recorded on 2026-09-18 —
+behaviour depending on uncontrolled process state — and today it is one configuration change away
+(`retrieval.mode: fts` in `kernel.yaml`) from silently costing lexical retrieval for a whole
+process.
+
+**What would close it:** key the cache by database, or drop the caching entirely; distinguish
+"FTS5 is genuinely absent" from "this probe failed" at **both** sites — `fts_client.fts5_available()`
+first, since that is where the distinction is destroyed, and `_check_fts5_once()` second, because
+changing only the latter cannot recover it; and surface FTS availability in `describe_retrieval()`
+alongside the embedding status it already reports. Scope deliberately, as its own package; do not
+fold it into unrelated work.

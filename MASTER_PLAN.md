@@ -853,14 +853,29 @@ package. **Listing a package is not authorisation to start it.**
   `claude/bartholomew-control-reset-rdszk7`, PR #109. This pass: `START_HERE.md`
   created, EXEC-01 provenance and CI record corrected, this document's currency restored,
   the GitHub/Airtable source hierarchy recorded, Airtable aligned.
-- ⏭ **NEXT, identified and NOT started: EXEC-02 — connect the conversational surface to
-  the existing Executive.** Ordinary user goals arriving at `/api/chat` do not enter the
-  Executive path; `bartholomew/kernel/runtime_contract.py` holds no import from the executive
-  package, and `install_deliberation_port` has no production caller. Until both are
-  addressed, EXEC-01's cognition is invisible to the user. **This requires its own
-  separate, explicit approval before any work begins, and Taylor sequenced it on 2026-09-14 to
+- ✅ **EXEC-02 — connect the conversational surface to the existing Executive.** 2026-09-18 —
+  **approved by Taylor at the User Approval Gate**; branch
+  `claude/exec-02-conversational-integration-82tk0o`, PR #115, reviewed head `c3f1c5c`, merge
+  commit `25cfd90`. All three CI tiers were green on the reviewed head before merge (PR Fast;
+  Integration 3/3; Merge Candidate 7/7 including the Windows full default suite and real-Win32
+  governed actuation), and the post-merge Merge Candidate on `main` at `25cfd90` was also 7/7.
+  Full record: `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`; current-state summary in
+  `START_HERE.md` §5a.
+  **Read the result precisely.** It is **default-off** behind two independent environment
+  switches plus a required device id, a reachable model enables neither, and it **proposes rather
+  than acts** — every proposal still stops at `pending_approval`. **"EXEC-02 is merged" must not be
+  read as "Bartholomew now plans from goals in production", and R-EXEC01-3 is not closed by it: no
+  real-model plan-quality evidence exists.**
+  *The paragraph below is the pre-merge framing, kept because it records the sequencing decision
+  and the condition EXEC-02 was written against.* Before it, ordinary user goals arriving at
+  `/api/chat` did not enter the Executive path: `bartholomew/kernel/runtime_contract.py` held no
+  import from the executive package, and `install_deliberation_port` had no production caller;
+  until both were addressed, EXEC-01's cognition was invisible to the user. **It required its own
+  separate, explicit approval before any work began, and Taylor sequenced it on 2026-09-14 to
   follow the Windows reliability repair and the attended Band 0 checkpoint** (`DECISIONS.md`, "The
-  approved sequence"). Its scope is for its own brief to set, not this document; what the existing invariants already require of any such package is that it
+  approved sequence") — a checkpoint Taylor then explicitly **deferred** on 2026-09-19 while
+  travelling without access to the Windows PC, which is why EXEC-02 proceeded ahead of it. That
+  attended checkpoint **remains outstanding**. Its scope is for its own brief to set, not this document; what the existing invariants already require of any such package is that it
   develop **outward from the Executive stage the runtime already has** — no second planner, no
   governance bypass, deterministic recognition first, the existing `ModelRouter` and `TaskIntent`
   contracts — and a recommendation, not a requirement set here, is that live-model end-to-end

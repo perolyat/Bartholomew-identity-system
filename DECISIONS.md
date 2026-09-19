@@ -3526,6 +3526,15 @@
   - **EXEC-02 remains the next major Executive implementation package** after the checkpoint, and
     remains unstarted. It **deepens and connects the Executive architecture that already exists** —
     the runtime already has an Executive stage — rather than attaching a separate Executive brain.
+    > **Status note added 2026-09-18, and this clause alone is superseded.** EXEC-02 was
+    > implemented and **merged** at Taylor's User Approval Gate — PR #115, merge commit `25cfd90`
+    > (`START_HERE.md` §5a). "Remains unstarted" was true when this decision was recorded on
+    > 2026-09-14 and is not true now. **The sequencing decision itself is unchanged and still
+    > stands**; what changed is that Taylor **deferred** the attended Band 0 checkpoint on
+    > 2026-09-19, while travelling without access to the Windows PC, and explicitly released
+    > EXEC-02 to proceed ahead of it. That checkpoint is **not failed, not passed, not waived —
+    > still required, still outstanding.** The decision text above is left as written, per this
+    > document's append-only convention; only this note reports the outcome.
 
 ## Decision: A SQLite statement that can wait for a lock never runs on the event-loop thread
 

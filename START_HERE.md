@@ -5,7 +5,8 @@
 > the work, and what to read next* — and nothing else. It is deliberately short.
 >
 > **Created:** 2026-09-14 (Project Control & Documentation Reset).
-> **Current as of:** `main` = `a64f5af` (the merge commit for PR #108 / EXEC-01).
+> **Current as of:** `main` = `25cfd90` (the merge commit for PR #115 / EXEC-02, 2026-09-18).
+> *Previously `a64f5af` (PR #108 / EXEC-01).*
 >
 > **What this document is the authority for:** the **source hierarchy** (§3), the
 > **current-state snapshot** (§4, §5), and the **bootstrap procedure** (§9). It is
@@ -140,7 +141,7 @@ ideas) are permanently non-authoritative by design.
 
 ## 4. What is actually true today
 
-`main` = `a64f5af`. **Read the status column literally.** The distinction between
+`main` = `25cfd90`. **Read the status column literally.** The distinction between
 these five states is the most easily lost and most expensive thing in this project.
 
 | State | Means |
@@ -219,11 +220,17 @@ Full record: `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`. Decision:
 `DECISIONS.md`, "Conversation reaches the Executive through the dispatch table's last entry,
 behind an explicit switch".
 
-**CI at merge — all three tiers, on the reviewed head, before merging.** PR Fast green;
-Integration 3/3; Merge Candidate **7/7**, including the Windows full default suite and
-real-Win32 governed actuation. This is deliberately recorded because §9 of EXEC-01's own
-document exists to settle the opposite case: the Merge Candidate tier never ran on PR #108
-before merge, and failed one job of seven when it ran on `main` afterwards.
+**CI — all three tiers on the reviewed head *before* merging, and the Merge Candidate tier again
+on `main` *after*.** On `c3f1c5c`: PR Fast green; Integration 3/3; Merge Candidate **7/7**,
+including the Windows full default suite and real-Win32 governed actuation. On `main` at
+`25cfd90` after the merge: Merge Candidate **7/7** again (run 35405586837, all seven jobs
+verified individually).
+
+Both halves are recorded deliberately, because §9 of EXEC-01's own document exists to settle the
+opposite case: the Merge Candidate tier **never ran on PR #108 before merge**, and **failed one
+job of seven** when it ran on `main` afterwards. EXEC-02 ran it before merge and after, and passed
+both times — so `main` is green on the tier that actually exercises Windows, and no post-merge
+regression was introduced.
 
 **What it accomplished.** An outcome-level goal typed into ordinary conversation — "sort these
 files out for me" — can now reach EXEC-01's goal-to-plan cognition and produce a bounded,
@@ -353,9 +360,16 @@ single storage worker and a governance-store first-touch race closed in the same
 
 `RISKS.md` is the durable authority; this is the short list a new session needs.
 
-1. **Executive cognition is unreachable from normal use.** The headline risk. The
-   most valuable cognition in the system is invisible to the user.
-2. **Deliberation is not enabled in shipped wiring.** No production caller.
+1. **Executive cognition is reachable from normal conversation, but only when an operator turns
+   it on.** *(The former headline risk — "unreachable from normal use" — was closed by EXEC-02,
+   PR #115, merged as `25cfd90`; `RISKS.md` R-EXEC01-1.)* **What replaces it is smaller but real:**
+   until `BARTH_CONVERSATIONAL_EXECUTIVE` and a device id are set, a goal typed into chat still
+   falls through to a conversational reply, so the cognition stays invisible to a default
+   deployment by design.
+2. **Deliberation has a production caller, and it is off by default.** *(Closed by EXEC-02;
+   R-EXEC01-2.)* `configure_from_environment` wires it from API startup behind
+   `BARTH_EXECUTIVE_DELIBERATION`. **The standing risk is the misreading, not the design:**
+   "EXEC-02 is merged" must never be read as "Bartholomew now plans from goals in production".
 3. **No real-model plan-quality evidence.** The one thing tests cannot substitute for.
 4. **Real-world usefulness is unproven and previously failed.** Automated evidence
    materially exceeds live-usefulness evidence.
@@ -368,11 +382,14 @@ single storage worker and a governance-store first-touch race closed in the same
    because a future capability does **not** become inferable merely by being implemented.
 7. **Parking Brake read/write authority split** remains open (constraint C6,
    gated at Band B / safety gate S5). Not closed by Test #1.
-8. **`main`'s Merge Candidate tier is red** — the Windows writer-lock / WAL-contention class
-   (§7). **No longer deferred: as of 2026-09-14 this is a pre-Band-0 repair requirement**, because
-   Band 0 evidence must not be contaminated by a known reliability defect. **The repair is built,
-   root-caused, regression-tested and merged (PR #110, approved head `7f99358`, merge commit
-   `6ccf693`)** —
+8. **`main`'s Merge Candidate tier was red** — the Windows writer-lock / WAL-contention class
+   (§7). **Now green: the most recent Merge Candidate run on `main` (35405586837, at `25cfd90`,
+   2026-09-18) passed 7/7, including the Windows full default suite and real-Win32 governed
+   actuation.** The repair arc behind that is PRs #110 and #112–#114. Retained here rather than
+   deleted because one green run is repeatability evidence, not proof, and because the Band 0
+   checkpoint this was a prerequisite for is still outstanding (deferred by Taylor 2026-09-19).
+   **The repair is built, root-caused, regression-tested and merged (PR #110, approved head
+   `7f99358`, merge commit `6ccf693`)** —
    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. `tests/test_fnd04_eci_vertical_slice.py` is now
    classified **same root cause, by log evidence**. What that PR does **not** close: the Windows
    "stalled tail" hang that cancelled the `57f86f8` run at the job cap, which is a different
