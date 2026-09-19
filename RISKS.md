@@ -2,7 +2,16 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-14 (**Project Control & Documentation Reset**). Three changes.
+> **Last updated:** 2026-09-19 — **EXEC-02 merge currency note and one new risk
+> (documentation-only).** Two changes. **(1)** Existing entries are **amended, not duplicated**, to
+> record that EXEC-02 merged as `25cfd90` (PR #115, 2026-09-18): **R-EXEC01-1** and
+> **R-EXEC01-2**, the **R-CTRL-1** mitigation note, and the **EXEC-02 residual risks** section.
+> **R-EXEC01-3 is NOT closed by that merge** — no real-model plan-quality evidence exists.
+> **(2)** One new entry at the end of this document, **R-RETRIEVAL-1**. **No risk is removed and no
+> resolved risk is revived. No production code, tests, schemas, migrations or runtime configuration
+> changed by this pass.**
+>
+> **Previously (2026-09-14, Project Control & Documentation Reset). Three changes.**
 > **(1)** A new section at the end of this document records the five residual risks the merged
 > EXEC-01 package (PR #108, merge `a64f5af`) deliberately carries forward (**R-EXEC01-1** to
 > **R-EXEC01-5**), plus two project-control risks: **R-CTRL-1**, documentation currency itself,
@@ -1631,18 +1640,18 @@ the EXEC-01 package record (`docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §8, §1
 inside a work-package document is a limitation the next session will not find.
 
 - **R-EXEC01-1 — ~~Executive cognition is not reachable from normal conversation.~~ ADDRESSED by
-  EXEC-02 (built 2026-09-18, branch `claude/exec-02-conversational-integration-82tk0o`,
-  **unmerged**).** The original entry, true at `a64f5af`, read: "`/api/chat` has no path to the
+  EXEC-02 (PR #115, merged 2026-09-18 as `25cfd90`).** The original entry, true at `a64f5af`, read: "`/api/chat` has no path to the
   Executive; `bartholomew/kernel/runtime_contract.py` holds no import from the executive package.
   A goal typed into chat falls through to a conversational reply." EXEC-02 closes it by adding a
   last entry to `_CHAT_DISPATCH` that hands a recognised outcome-level goal to the **same**
-  `run_executive_task_through_runtime_contract()` the operator console calls. **Two qualifications
-  that keep this from being over-read:** it is *unmerged*, so `main` still carries the original
-  condition; and it is *default-off*, so a deployment that sets neither switch still falls through
-  to a conversational reply exactly as before. See
+  `run_executive_task_through_runtime_contract()` the operator console calls. **One qualification that keeps this
+  from being over-read:** it is *default-off*, so a deployment that sets neither switch still
+  falls through to a conversational reply exactly as before. Merging changed what Bartholomew
+  *can* be configured to reach, not what he does by default. See
   `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`.
-- **R-EXEC01-2 — ~~The deliberation port is not enabled in shipped production wiring.~~ ADDRESSED
-  by EXEC-02 (unmerged), and the *misreading* it warned about is now more available, not less.**
+- **R-EXEC01-2 — ~~The deliberation port is not enabled in shipped production wiring.~~ CLOSED
+  by EXEC-02 (merged as `25cfd90`), and the *misreading* it warned about is now more available,
+  not less.**
   The original entry: "`install_deliberation_port` has no production caller (verified at
   `a64f5af`)." EXEC-02 gives it one —
   `bartholomew/integration/conversational_executive.configure_from_environment`, called from the
@@ -1712,13 +1721,19 @@ inside a work-package document is a limitation the next session will not find.
   is a single short bootstrap that must be updated when `main` moves materially, Airtable
   owns live status so the repository is no longer the only place status can rot, and
   `START_HERE.md` §3 rule 3 requires material chat-only findings to be promoted to a durable
-  record. **Residual risk:** all three depend on discipline at the end of a session, and
+  record. **Exercised 2026-09-18 (EXEC-02, PR #115/#116):** the merge provenance was written in
+  the same hour as the merge rather than discovered stale by a later reset, following the
+  precedent PR #111 set for #110 (`9bdeed6`, "record the approval and merge of the writer-lock
+  repair"). *An earlier draft of this line called EXEC-02 the first package to do so; that was
+  false, and #111 is the precedent — corrected here rather than left standing, since an
+  over-claim inside the entry about documentation currency would be self-refuting.*
+  **Residual risk:** all three depend on discipline at the end of a session, and
   nothing enforces them mechanically.
 
 
-## EXEC-02 residual risks (recorded 2026-09-18, branch `claude/exec-02-conversational-integration-82tk0o`, **unmerged**)
+## EXEC-02 residual risks (PR #115, merged 2026-09-18 as `25cfd90`)
 
-Carried-forward limitations of built-but-unmerged work. Full record:
+Carried-forward limitations of **merged** work. Full record:
 `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` §10.
 
 - **R-EXEC02-1 — The goal recogniser's vocabulary is a closed list, and lists drift.**
@@ -1744,3 +1759,106 @@ Carried-forward limitations of built-but-unmerged work. Full record:
   cognition. What it changes is *how often* deliberation runs, because an ordinary conversation
   can now trigger it. The defences are unchanged and separately tested; the exposure surface is
   larger. **Stated so it is not discovered later as a surprise.**
+
+
+## R-RETRIEVAL-1 — the FTS5 availability cache is process-global, unkeyed and collapses every failure into "absent" (recorded 2026-09-18, **substantially corrected 2026-09-19**)
+
+**Found while investigating a red CI job during the EXEC-02 User Approval Gate. Not EXEC-02's,
+not fixed by it, and recorded here rather than repaired inside an unrelated package.**
+
+> **This entry's first draft was wrong in its central claim and is corrected in full below.** It
+> asserted that a latched cache "disables lexical retrieval for the remainder of the process,
+> silently", and that "in production that is Bartholomew quietly forgetting". Neither holds on the
+> default configuration or on the chat path. The error was caught by adversarial review of PR #116
+> and confirmed by direct experiment before this rewrite. It is recorded rather than quietly
+> edited, because an over-claim inside the risk register is the same defect class R-CTRL-1 exists
+> for.
+
+### What is true, and verified
+
+`bartholomew/kernel/retrieval.py`'s `_check_fts5_once()` caches FTS5 availability in the
+module-global `_fts5_available_cache`:
+
+1. **It is not keyed by database, and is never re-probed.** The first probe in a process answers
+   for every later caller, whatever database they retrieve from, for the life of the process.
+2. **It collapses every failure mode into "FTS5 is absent", in two places.**
+   `fts_client.fts5_available()` wraps its probe in `except Exception: return False`
+   (`fts_client.py:86-87`), and `_check_fts5_once()` additionally wraps `sqlite3.connect()` in
+   `except Exception: available = False` (`retrieval.py:60-62`). So "FTS5 is genuinely missing
+   from this SQLite build", "the database was locked at probe time", "the path could not be
+   opened" and "a test patched the probe and never reset the global" all latch identically. The
+   information needed to tell them apart is destroyed at the lower site first.
+
+### What it actually costs — narrower than first recorded, and configuration-dependent
+
+The cache is read in **exactly one place**: `get_retriever()`, `retrieval.py:1066-1078`. The blast
+radius therefore depends entirely on the resolved mode:
+
+| Resolved mode | Effect of a latched `False` |
+|---|---|
+| `fts`, resolved from `BARTHO_RETRIEVAL_MODE` or `kernel.yaml` (not an explicit argument) | **degraded to vector-only — lexical retrieval genuinely lost**, and in this repository's own default environment (no embedder provisioned) the degraded `vector` mode then raises `EmbedderUnavailableError`, so `get_retriever()` returns nothing at all rather than a weaker retriever |
+| `fts`, passed explicitly as an argument | honoured; no degradation (deliberate, and pinned by `tests/test_retrieval_fts5_fallback.py`) |
+| `hybrid` — **the repository default** (`config/kernel.yaml`) and what the chat path uses (`runtime_contract.py`'s `get_retriever(db_path=..., memory_store=...)`) | **`logger.info` only; the FTS arm still runs** |
+
+**Measured, not reasoned.** Seeding a note and forcing `retrieval._fts5_available_cache = False`
+before the call returns the same retriever and the same row as an unforced probe:
+
+```
+latch=None  (normal probe) : retriever=FTSOnlyRetriever  results=1
+latch=False (failed probe) : retriever=FTSOnlyRetriever  results=1
+```
+
+So on the default and chat paths, a latched cache does **not** cost recall.
+
+### It is not silent in logs — it is invisible in reporting
+
+`_check_fts5_once()` emits one `logger.warning` when it latches unavailable (`retrieval.py:64-69`),
+and the fts→vector degradation emits another. What is genuinely missing is any reflection in the
+**reporting surfaces**: `describe_retrieval()` — the accessor that exists precisely so health, CLI
+and result contracts cannot drift from reality — carries **no FTS-availability field at all**, so
+nothing an operator or a result contract reads says lexical retrieval was dropped. The embedding
+degradation is reported there; the FTS one is not.
+
+### What it does NOT explain — the red job
+
+`tests/test_w03d_memory_poisoning.py::TestPoisonedExternalContent::test_email_shaped_poison_is_framed_and_powerless`
+failed **once**, in Merge Candidate run 35396770160 on the superseded head `167f94c`, with *"the
+seeded note was not recalled"* — the captured prompt was the bare user text, with no memory context
+at all.
+
+**This latch is not the explanation, and the entry no longer suggests it is.** Two independent
+reasons:
+
+* the latch is **constant for a whole process**, yet the same file's other recall-dependent
+  assertions passed in that same run —
+  `TestEmbeddedInstructions::test_a_poisoned_memory_arrives_inside_the_non_instructional_frame`,
+  parametrised over the four `POISON_PAYLOADS`, seeds a note and asserts `payload in prompt` with
+  the message *"the seeded memory was not recalled; the test proves nothing"*. A process-global
+  switch cannot produce one isolated failure among them;
+* on the mode that test actually resolves, a latched `False` does not suppress recall at all, as
+  measured above.
+
+**The cause of that single failure remains unknown.** It has not reproduced in **seven** subsequent
+runs of the same selection (`-m "integration or slow"`): Integration run 35397651638 (py3.11),
+Merge Candidate run 35397651639 (py3.10 and py3.11) on `c3f1c5c`, post-merge Merge Candidate run
+35405586837 (py3.10 and py3.11) on `main` at `25cfd90`, plus two local full runs — one on the
+branch, one on an `origin/main` control worktree — both 314 passed / 25 skipped / 0 failed.
+
+### Why it is still worth recording
+
+Not as "Bartholomew quietly forgetting" — that was the over-claim. As a **latent correctness
+hazard**: a process-global, never-reset, unkeyed piece of state that erases the difference between
+four distinct causes, is consulted by a mode-selection branch, and is absent from every reporting
+surface. It is the same shape as the three wall-clock-dependent defects recorded on 2026-09-18 —
+behaviour depending on uncontrolled process state. Its blast radius is not hypothetical, but it
+does need **two** conditions together, not one: `retrieval.mode: fts` resolved from `kernel.yaml`
+or `BARTHO_RETRIEVAL_MODE` **and** a probe that actually latched `False`. On a deployment with
+both, the whole process loses lexical retrieval — announced once in a `logger.warning` at probe
+time, and reflected in no reporting surface thereafter.
+
+**What would close it:** key the cache by database, or drop the caching entirely; distinguish
+"FTS5 is genuinely absent" from "this probe failed" at **both** sites — `fts_client.fts5_available()`
+first, since that is where the distinction is destroyed, and `_check_fts5_once()` second, because
+changing only the latter cannot recover it; and surface FTS availability in `describe_retrieval()`
+alongside the embedding status it already reports. Scope deliberately, as its own package; do not
+fold it into unrelated work.

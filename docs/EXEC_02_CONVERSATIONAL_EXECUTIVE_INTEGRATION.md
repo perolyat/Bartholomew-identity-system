@@ -1,11 +1,20 @@
 # EXEC-02 — Conversational Executive Deliberation Integration
 
-**Status:** implemented on `claude/exec-02-conversational-integration-82tk0o`, **not merged.**
-Awaiting Taylor at the User Approval Gate.
+**Status:** **merged.** Approved by Taylor at the User Approval Gate and merged to
+`main` in PR #115 on 2026-09-18.
+**Provenance:** reviewed head `c3f1c5c`; merge commit / `main` after merge `25cfd90`.
 **Baseline it was built on:** `origin/main` at `c5cb3a0` (the merge of PR #114).
+**CI:** all three tiers green on `c3f1c5c` before merge, and Merge Candidate **7/7** again on
+`main` at `25cfd90` after it (run 35405586837). See §8.
 **Scope:** the conversational surface's route into the Executive. No governance,
 actuation, verification, recovery, memory, ECI, identity or consent system was
 redesigned, and the Executive's own cognition was not changed at all.
+
+> **Written at merge, not retrofitted.** EXEC-01's header read *"implemented, not merged"* and was
+> stale from the moment PR #108 merged — a defect the Project Control & Documentation Reset had to
+> correct, and which `RISKS.md` records as a project-control risk in its own right (R-CTRL-1). This
+> header was updated in the same hour as the merge, for that reason, following the precedent PR
+> #111 set for #110.
 
 ---
 
@@ -270,7 +279,37 @@ mapping is in its module docstring.
 **Regression.** `test_chat_dispatch_table.py`, `test_runtime_contract_chat_seam.py`,
 `test_objective_chat_seam.py`, `test_forecast_chat_seam.py`,
 `test_api_chat_runtime_contract.py`, the four `test_exec01_*.py` suites and
-`test_w03b_no_bypass.py`: 290 tests, green.
+`test_w03b_no_bypass.py`: 290 tests, green. Full default suite locally: 5,270 passed, 0 failed.
+
+### CI — before the merge, and again on `main` after it
+
+| When | Tier | Result |
+|---|---|---|
+| On `c3f1c5c`, before merge | PR Fast (`ci.yml`), run 35397651667 | green |
+| On `c3f1c5c`, before merge | Integration (`integration.yml`), run 35397651638 | **3/3** |
+| On `c3f1c5c`, before merge | Merge Candidate (`merge-candidate.yml`), run 35397651639 | **7/7** |
+| On `main` at `25cfd90`, **after** merge | Merge Candidate, run 35405586837 | **7/7** |
+
+Merge Candidate covers Quality, Ubuntu coverage on py3.10 **and** py3.11 under the ≥70 % gate,
+Critical integration + lifecycle on both Pythons, smoke, and the **Windows full default suite with
+real-Win32 governed actuation** (16m33s pre-merge, 18m11s post-merge, no worker loss in either).
+All seven jobs were verified individually in both runs rather than read from the rollup.
+
+**Why both halves are recorded.** §9 of `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` exists to
+settle the opposite case: the Merge Candidate tier **never ran on PR #108 before merge**, and
+**failed one job of seven** when it ran on `main` afterwards. EXEC-02 ran it before and after, and
+passed both times — so `main` is green on the tier that actually exercises Windows, and this merge
+introduced no post-merge regression.
+
+One CI failure did occur earlier, on the **superseded** head `167f94c`
+(`test_w03d_memory_poisoning`, FTS recalled nothing). It was established as not this package's:
+seven subsequent passes of the same selection, including an `origin/main` control worktree, and
+two structural reasons in the test itself (its `_Daemon` fixture carries no
+`conversational_executive`, so this package's handler returns `None` on its first gate; and the
+prompt is built before `_CHAT_DISPATCH` runs at all). **Its cause remains unknown** — a
+process-global retrieval latch found while investigating it was examined and *excluded* as the
+explanation, and is recorded on its own merits as **R-RETRIEVAL-1** in `RISKS.md`, deliberately
+not repaired inside this package.
 
 ### Real-model evidence — what was achieved, and the exact blocker
 

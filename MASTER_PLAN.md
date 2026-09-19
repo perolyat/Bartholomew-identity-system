@@ -41,6 +41,9 @@
 > this pass, and nothing in it authorises implementation.** In particular it does not
 > authorise EXEC-02 (connecting the conversational surface to the Executive), which is
 > identified and **not started**.
+> *[Status as of 2026-09-19: that was true of this 2026-09-14 pass and is left as written.
+> EXEC-02 was separately approved by Taylor at the User Approval Gate and **merged** on
+> 2026-09-18 — PR #115, `25cfd90`. See this document's EXEC-02 entry and `START_HERE.md` §5a.]*
 >
 > **Previously (2026-08-20):** **Real-World Test #1 is complete and its Decision Register is
 > approved.** Taylor approved **Post-Test #1 Decision Register v2.2** on 2026-08-20 as the
@@ -803,7 +806,10 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 The 2026-08-12 list below is preserved and remains accurate as history; it stops at
 2026-08-22 and therefore no longer describes the front of the queue. Everything here is a
 record of completed, merged, Taylor-approved work plus one identified-but-unauthorised next
-package. **Listing a package is not authorisation to start it.**
+package. *[Updated 2026-09-19: that one identified-but-unauthorised package was EXEC-02. It was
+separately approved by Taylor at the User Approval Gate and **merged** on 2026-09-18 — PR #115,
+`25cfd90` — so every entry in the list below is now ✅ merged.]* **Listing a package is not
+authorisation to start it.**
 
 - ✅ **Usable POC slice 2 — Proactive Schedule Reminders.** Implemented 2026-08-25,
   `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md`. Opt-in, **default OFF** (`schedule_reminders` in
@@ -845,22 +851,38 @@ package. **Listing a package is not authorisation to start it.**
 - ✅ **EXEC-01 — Goal-to-plan deliberation.** PR #108, reviewed head `2813c7b`, merge
   commit `a64f5af`, merged 2026-09-14. The Executive can turn an outcome-level goal into a
   bounded, validated proposal, inferring unstated intermediate steps, as the existing
-  `TaskIntent` through the existing seam. **Deliberately not connected to the
-  conversational surface, and not enabled in production wiring.** See
+  `TaskIntent` through the existing seam. **As shipped it was deliberately not connected to the
+  conversational surface, and not enabled in production wiring** *(both closed by EXEC-02, merged
+  2026-09-18 as `25cfd90`, and still default-off — see the EXEC-02 entry below)*. See
   `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` and `START_HERE.md` §5.
 - ✅ **Project Control & Documentation Reset.** 2026-09-14 — **approved by Taylor at the User
   Approval Gate**, conditional on required CI being green on the final pull-request head; branch
   `claude/bartholomew-control-reset-rdszk7`, PR #109. This pass: `START_HERE.md`
   created, EXEC-01 provenance and CI record corrected, this document's currency restored,
   the GitHub/Airtable source hierarchy recorded, Airtable aligned.
-- ⏭ **NEXT, identified and NOT started: EXEC-02 — connect the conversational surface to
-  the existing Executive.** Ordinary user goals arriving at `/api/chat` do not enter the
-  Executive path; `bartholomew/kernel/runtime_contract.py` holds no import from the executive
-  package, and `install_deliberation_port` has no production caller. Until both are
-  addressed, EXEC-01's cognition is invisible to the user. **This requires its own
-  separate, explicit approval before any work begins, and Taylor sequenced it on 2026-09-14 to
+- ✅ **EXEC-02 — connect the conversational surface to the existing Executive.** 2026-09-18 —
+  **approved by Taylor at the User Approval Gate**; branch
+  `claude/exec-02-conversational-integration-82tk0o`, PR #115, reviewed head `c3f1c5c`, merge
+  commit `25cfd90`. All three CI tiers were green on the reviewed head before merge (PR Fast;
+  Integration 3/3; Merge Candidate 7/7 including the Windows full default suite and real-Win32
+  governed actuation), and the post-merge Merge Candidate on `main` at `25cfd90` was also 7/7.
+  Full record: `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`; current-state summary in
+  `START_HERE.md` §5a.
+  **Read the result precisely.** It is **default-off** behind two independent environment
+  switches plus a required device id, a reachable model enables neither, and it **proposes rather
+  than acts** — every proposal still stops at `pending_approval`. **"EXEC-02 is merged" must not be
+  read as "Bartholomew now plans from goals in production", and R-EXEC01-3 is not closed by it: no
+  real-model plan-quality evidence exists.**
+  *The paragraph below is the pre-merge framing, kept because it records the sequencing decision
+  and the condition EXEC-02 was written against.* Before it, ordinary user goals arriving at
+  `/api/chat` did not enter the Executive path: `bartholomew/kernel/runtime_contract.py` held no
+  import from the executive package, and `install_deliberation_port` had no production caller;
+  until both were addressed, EXEC-01's cognition was invisible to the user. **It required its own
+  separate, explicit approval before any work began, and Taylor sequenced it on 2026-09-14 to
   follow the Windows reliability repair and the attended Band 0 checkpoint** (`DECISIONS.md`, "The
-  approved sequence"). Its scope is for its own brief to set, not this document; what the existing invariants already require of any such package is that it
+  approved sequence") — a checkpoint Taylor then explicitly **deferred** on 2026-09-18 while
+  travelling without access to the Windows PC, which is why EXEC-02 proceeded ahead of it. That
+  attended checkpoint **remains outstanding**. Its scope is for its own brief to set, not this document; what the existing invariants already require of any such package is that it
   develop **outward from the Executive stage the runtime already has** — no second planner, no
   governance bypass, deterministic recognition first, the existing `ModelRouter` and `TaskIntent`
   contracts — and a recommendation, not a requirement set here, is that live-model end-to-end
@@ -1040,6 +1062,21 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
   dependencies, workflows, configuration or schema touched) — **not yet committed**
 
 ### Approval Ledger
+
+- 2026-09-18 — **EXEC-02: conversational Executive deliberation integration** (PR #115, branch
+  `claude/exec-02-conversational-integration-82tk0o`): approved by Taylor at the User Approval Gate
+  at reviewed head `c3f1c5c` — **merge commit `25cfd90`**. Step 5 of the approved sequence, taken
+  ahead of step 4: Taylor **deferred** the attended Band 0 checkpoint on 2026-09-18 while
+  travelling without access to the Windows PC, and released EXEC-02 to proceed. That checkpoint is
+  **not failed, not passed, not waived — still required, still outstanding.** All three CI tiers
+  were green on `c3f1c5c` before merge (PR Fast; Integration 3/3; Merge Candidate 7/7, including
+  the Windows full default suite and real-Win32 governed actuation), and the post-merge Merge
+  Candidate on `main` at `25cfd90` was **7/7**. The approval does **not** close **R-EXEC01-3** —
+  no real-model plan-quality evidence exists — and the capability is **default-off**, behind
+  `BARTH_EXECUTIVE_DELIBERATION` and `BARTH_CONVERSATIONAL_EXECUTIVE` plus a required
+  `BARTH_CONVERSATIONAL_EXECUTIVE_DEVICE_ID`; a reachable model enables neither switch, and a
+  proposal still stops at `pending_approval`. Records:
+  `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`, `START_HERE.md` §5a, `DECISIONS.md`.
 
 - 2026-09-16 — **Windows writer-lock / WAL reliability repair, with the skill-execution
   concurrency contract it made necessary** (PR #110, branch

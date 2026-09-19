@@ -5,7 +5,8 @@
 > the work, and what to read next* — and nothing else. It is deliberately short.
 >
 > **Created:** 2026-09-14 (Project Control & Documentation Reset).
-> **Current as of:** `main` = `a64f5af` (the merge commit for PR #108 / EXEC-01).
+> **Current as of:** `main` = `25cfd90` (the merge commit for PR #115 / EXEC-02, 2026-09-18).
+> *Previously `a64f5af` (PR #108 / EXEC-01).*
 >
 > **What this document is the authority for:** the **source hierarchy** (§3), the
 > **current-state snapshot** (§4, §5), and the **bootstrap procedure** (§9). It is
@@ -140,7 +141,7 @@ ideas) are permanently non-authoritative by design.
 
 ## 4. What is actually true today
 
-`main` = `a64f5af`. **Read the status column literally.** The distinction between
+`main` = `25cfd90`. **Read the status column literally.** The distinction between
 these five states is the most easily lost and most expensive thing in this project.
 
 | State | Means |
@@ -156,7 +157,7 @@ these five states is the most easily lost and most expensive thing in this proje
 | Conversation through `/api/chat`, with memory capture and recall | **Operational** | Usable POC slice 1 (`2d443a9`, 2026-08-14): ordinary conversation produces durable, retrievable memory through the governed write path, and chat retrieval sees it. **Operational is not the same as useful** — Real-World Test #1 exercised exactly this and found the burden below break-even (§1). |
 | Conversational-primary UI: ordinary-user vs Workshop separation, obligation legibility, first-use orientation | **Operational** | UX Acceleration Sprint, PR #65, merged 2026-08-26 at Taylor's explicit instruction after independent adversarial review. Also carried the Test #1 UI defect repairs. Safety controls stay in the ordinary view. |
 | Memory Agency: list, search, correct, forget, export | **Operational** | PR #65, through the single governed `MemoryStore` authority. Correction is a conditional write, so a stale correction cannot destroy a newer legitimate one, and a user's deletion wins by construction. |
-| Conversational task control (an ordinary sentence performs a real `TasksSkill` operation) | **Operational** | Capability Acceleration Sprint, PR #66. Goes through the same governed Runtime Contract chokepoint — **note this when scoping EXEC-02: a sentence already causes a governed action; what it does not do is reach the Executive.** |
+| Conversational task control (an ordinary sentence performs a real `TasksSkill` operation) | **Operational** | Capability Acceleration Sprint, PR #66. Goes through the same governed Runtime Contract chokepoint — **this was the pre-EXEC-02 note: a sentence already caused a governed action; what it did not do was reach the Executive.** EXEC-02 (PR #115, `25cfd90`) closed that second half, default-off. |
 | Notification delivery (provider-agnostic outbound webhook) | **Present, enabled only by an operator (default OFF)** | Delivered with slice 1 as the `notify` skill's real outbound channel, but inert until `BARTHOLOMEW_NOTIFY_WEBHOOK_URL` is set (`bartholomew/skills/notify.py`). Unset, a notification is recorded, not delivered. |
 | Proactive schedule/birthday reminders | **Present, enabled only by an operator (default OFF)** | Usable POC slice 2, 2026-08-25, `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md`. `schedule_reminders` in `config/kernel.yaml` is the **single** switch — deliberately no environment-variable override, so there is exactly one authority over whether Bartholomew may contact you unprompted. Surfaces one reminder per (fact, due date) plus one governed delivery. **Unattended operation is not authorised by it.** |
 | Objective continuity (Golden Path slice 2) | **Present, enabled only by an operator (default OFF)** | `objective_continuity` in `config/kernel.yaml`. Same class of switch as the reminders above. |
@@ -169,8 +170,8 @@ these five states is the most easily lost and most expensive thing in this proje
 | Windows observe → reason → act → verify golden path | **Integrated (operator-only)** | Wave 3, PR #101. Reached through `POST /api/operator/tasks`, not through ordinary conversation. Real-world acceptance still outstanding. |
 | Local-model generation and truthful readiness | **Integrated** | BGPR-01, PR #102. Blocking generation moved off the event loop; readiness reports model reachability distinctly from model selection. |
 | External Capability Interface core boundary | **Integrated** | FND-04, PR #107. Endpoint identity, capability advertisement, availability, governed flow, result correlation — proven by a reference vertical slice. **No real external product is attached.** |
-| **Executive goal-to-plan deliberation** | **Present, enabled only by an operator (default OFF)** | EXEC-01, PR #108, gave the cognition; EXEC-02 (branch `claude/exec-02-conversational-integration-82tk0o`, **unmerged**) gave it a production caller. `BARTH_EXECUTIVE_DELIBERATION` is the switch; a model being reachable still enables nothing. See §5. |
-| Conversational chat reaching **goal-to-plan deliberation** | **Built, unmerged; enabled only by an operator (default OFF)** | EXEC-02, branch `claude/exec-02-conversational-integration-82tk0o`, awaiting the User Approval Gate. Read this precisely. Chat always traversed the Runtime Contract's **Executive stage** — it builds a `CandidateAction` that Governance genuinely consumes. What that stage now also reaches, when `BARTH_CONVERSATIONAL_EXECUTIVE` and a device id are set, is `bartholomew/executive/`'s goal-to-plan deliberation: a last entry in `_CHAT_DISPATCH` hands a recognised outcome-level goal to the **same** seam the operator console calls. EXEC-02 deepened an Executive stage that already existed; it did not attach a new brain. Default-off, and **no real-model plan-quality evidence exists** — `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` §8 states exactly how far the real-path evidence goes. |
+| **Executive goal-to-plan deliberation** | **Present, enabled only by an operator (default OFF)** | EXEC-01, PR #108, gave the cognition; EXEC-02 (PR #115, merged 2026-09-18 as `25cfd90`) gave it a production caller. `BARTH_EXECUTIVE_DELIBERATION` is the switch; a model being reachable still enables nothing. See §5. |
+| Conversational chat reaching **goal-to-plan deliberation** | **Integrated; enabled only by an operator (default OFF)** | EXEC-02, PR #115, merged 2026-09-18 as `25cfd90`. Read this precisely. Chat always traversed the Runtime Contract's **Executive stage** — it builds a `CandidateAction` that Governance genuinely consumes. What that stage now also reaches, when `BARTH_CONVERSATIONAL_EXECUTIVE` and a device id are set, is `bartholomew/executive/`'s goal-to-plan deliberation: a last entry in `_CHAT_DISPATCH` hands a recognised outcome-level goal to the **same** seam the operator console calls. EXEC-02 deepened an Executive stage that already existed; it did not attach a new brain. Default-off, and **no real-model plan-quality evidence exists** — `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` §8 states exactly how far the real-path evidence goes. |
 | Unattended / ambient operation | **Not authorised** | Not a build gap but a governance one: it sits inside Band A's restricted envelope and needs its own recorded decision. Slice 2 supports the Band 0 **attended** checkpoint only. |
 | AIRI as a presence endpoint | **Conceptual** | Architectural role agreed; no production integration. |
 | Household robotics / embodied endpoints | **Conceptual** | Tracked as a strategic backlog item in Airtable `Work Packages` (status: not started); no repository record carries an approval, so none is claimed here. Robots would be capability endpoints through the ECI, never a second executive. Nothing built. |
@@ -182,7 +183,7 @@ from "present, not enabled" — these have a real switch a person is meant to th
 when thrown. Treating a default-OFF capability as absent understates the system; treating it as
 operational overstates it.
 
-## 5. EXEC-01 — the most recent package, stated precisely
+## 5. EXEC-01 — the package EXEC-02 built on, stated precisely
 
 **Merged.** PR #108, reviewed head `2813c7b`, merge commit `a64f5af`.
 Full record: `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md`. Decision:
@@ -200,8 +201,8 @@ inferred), and every proposed parameter goes through the real device allowlists.
 
 **What it did not accomplish — all four verified in code at `a64f5af`:**
 
-- **Its deliberation is not reachable from chat.** *(Addressed by EXEC-02, unmerged — see §5a.)* Chat already traverses the Runtime Contract's Executive *stage*; what it did not reach, at `a64f5af`, is `bartholomew/executive/`'s goal-to-plan deliberation, because `bartholomew/kernel/runtime_contract.py` held no import from that package. The gap was depth in an existing stage, not a missing brain.
-- **It is not enabled anywhere.** *(Addressed by EXEC-02, unmerged — see §5a.)* At
+- **Its deliberation is not reachable from chat.** *(Closed by EXEC-02, merged as `25cfd90` — see §5a.)* Chat already traverses the Runtime Contract's Executive *stage*; what it did not reach, at `a64f5af`, is `bartholomew/executive/`'s goal-to-plan deliberation, because `bartholomew/kernel/runtime_contract.py` held no import from that package. The gap was depth in an existing stage, not a missing brain.
+- **It is not enabled anywhere.** *(Closed by EXEC-02, merged as `25cfd90` — see §5a.)* At
   `a64f5af`, `install_deliberation_port` had **no production caller**; a deployment that does not call it keeps exactly the pre-EXEC-01
   Executive. This is deliberate — enabling model-led reasoning on someone's computer
   is an operator's decision, not a side effect of a provider being reachable.
@@ -211,11 +212,25 @@ inferred), and every proposed parameter goes through the real device allowlists.
   better at using them; there are no new ones. Deliberation provenance is not
   persisted on the task row (it reaches the `ActionReflection` audit trail).
 
-## 5a. EXEC-02 — conversational Executive integration (built, **unmerged**)
+## 5a. EXEC-02 — conversational Executive integration, stated precisely
 
-**Not merged.** Branch `claude/exec-02-conversational-integration-82tk0o`, built on `c5cb3a0`
-(the merge of PR #114), awaiting Taylor at the User Approval Gate.
-Full record: `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`.
+**Merged.** PR #115, reviewed head `c3f1c5c`, merge commit `25cfd90`, built on `c5cb3a0`
+(the merge of PR #114). Approved by Taylor at the User Approval Gate on 2026-09-18.
+Full record: `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`. Decision:
+`DECISIONS.md`, "Conversation reaches the Executive through the dispatch table's last entry,
+behind an explicit switch".
+
+**CI — all three tiers on the reviewed head *before* merging, and the Merge Candidate tier again
+on `main` *after*.** On `c3f1c5c`: PR Fast green; Integration 3/3; Merge Candidate **7/7**,
+including the Windows full default suite and real-Win32 governed actuation. On `main` at
+`25cfd90` after the merge: Merge Candidate **7/7** again (run 35405586837, all seven jobs
+verified individually).
+
+Both halves are recorded deliberately, because §9 of EXEC-01's own document exists to settle the
+opposite case: the Merge Candidate tier **never ran on PR #108 before merge**, and **failed one
+job of seven** when it ran on `main` afterwards. EXEC-02 ran it before merge and after, and passed
+both times — so `main` is green on the tier that actually exercises Windows, and no post-merge
+regression was introduced.
 
 **What it accomplished.** An outcome-level goal typed into ordinary conversation — "sort these
 files out for me" — can now reach EXEC-01's goal-to-plan cognition and produce a bounded,
@@ -235,10 +250,13 @@ It calls the **same** Executive seam the operator console calls. There is no sec
   reachable enables neither**. There is no default device id.
 - **It does not turn conversation into tasks.** "The files are a mess" and "sort out what you
   think about Tolstoy" are conversation and stay conversation.
-- **No real-model plan-quality evidence exists.** R-EXEC01-3 stands unchanged. The real-path
-  evidence reached a live outbound model call from a chat message and stopped there, because no
-  model was provisioned in the build environment; the package document §8 names the blocker and
-  the exact steps to finish the proof on the Windows PC.
+- **No real-model plan-quality evidence exists.** R-EXEC01-3 stands unchanged **and is not
+  closed by this merge**. The real-path evidence reached a live outbound model call from a chat
+  message and stopped there, because no model was provisioned in the build environment; the
+  package document §8 names the blocker and the exact steps to finish the proof on the Windows
+  PC. **"EXEC-02 is merged" must never be read as "Bartholomew now plans from goals in
+  production"** — that needs two environment variables and a named device id, and it still
+  proposes rather than acts.
 
 ### What comes next — the approved sequence
 
@@ -260,8 +278,9 @@ sequencing decision; `DECISIONS.md` carries it in full.
 prerequisite for Band 0 or for EXEC-02, and becomes blocking only if a concrete documentation
 inconsistency is shown to compromise test interpretation or project control.
 
-**EXEC-02 remains the next major Executive implementation package after the checkpoint**, and it is
-still **not started**. Read what it is precisely: Bartholomew **already has an Executive stage** in
+**EXEC-02 was the next major Executive implementation package in this sequence, and it is now
+merged** — PR #115, `25cfd90`, 2026-09-18 — ahead of the attended Band 0 checkpoint, which Taylor
+deferred and which remains outstanding. Read what it is precisely: Bartholomew **already has an Executive stage** in
 the runtime, and EXEC-02 **deepens and connects the existing Executive architecture** so that
 outcome-level goals reach the deliberation that already exists inside it. It does not attach, bolt
 on or wire in a separate Executive brain, and it must develop outward from the existing runtime,
@@ -301,8 +320,11 @@ run on pull requests without the label). Earlier wording that the Integration jo
 under normal PR behaviour" described the draft phase only and is superseded —
 `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 holds the full record with the check-run evidence.
 
-**`main` is currently red on the Merge Candidate tier**, and you should know this before you read a
-green-looking status anywhere else. At `a64f5af` that tier failed one job of seven — *Windows full
+**`main` was red on the Merge Candidate tier for the period this section describes. It is green
+now:** the most recent run on `main` (35405586837, at `25cfd90`, 2026-09-18) passed **7/7**,
+including the Windows full default suite and real-Win32 governed actuation. The history below is
+retained because one green run is repeatability evidence rather than proof, and because the Band 0
+checkpoint this mattered for is still outstanding. At `a64f5af` that tier failed one job of seven — *Windows full
 default suite* — at **3 failed, 4,987 passed, 79 skipped**. Two failures
 (`tests/test_event_backbone_drive.py` ×2) are named members of the writer-lock / WAL-contention class
 recorded in `RISKS.md` and analysed in `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7:
@@ -342,9 +364,16 @@ single storage worker and a governance-store first-touch race closed in the same
 
 `RISKS.md` is the durable authority; this is the short list a new session needs.
 
-1. **Executive cognition is unreachable from normal use.** The headline risk. The
-   most valuable cognition in the system is invisible to the user.
-2. **Deliberation is not enabled in shipped wiring.** No production caller.
+1. **Executive cognition is reachable from normal conversation, but only when an operator turns
+   it on.** *(The former headline risk — "unreachable from normal use" — was closed by EXEC-02,
+   PR #115, merged as `25cfd90`; `RISKS.md` R-EXEC01-1.)* **What replaces it is smaller but real:**
+   until `BARTH_CONVERSATIONAL_EXECUTIVE` and a device id are set, a goal typed into chat still
+   falls through to a conversational reply, so the cognition stays invisible to a default
+   deployment by design.
+2. **Deliberation has a production caller, and it is off by default.** *(Closed by EXEC-02;
+   R-EXEC01-2.)* `configure_from_environment` wires it from API startup behind
+   `BARTH_EXECUTIVE_DELIBERATION`. **The standing risk is the misreading, not the design:**
+   "EXEC-02 is merged" must never be read as "Bartholomew now plans from goals in production".
 3. **No real-model plan-quality evidence.** The one thing tests cannot substitute for.
 4. **Real-world usefulness is unproven and previously failed.** Automated evidence
    materially exceeds live-usefulness evidence.
@@ -357,11 +386,14 @@ single storage worker and a governance-store first-touch race closed in the same
    because a future capability does **not** become inferable merely by being implemented.
 7. **Parking Brake read/write authority split** remains open (constraint C6,
    gated at Band B / safety gate S5). Not closed by Test #1.
-8. **`main`'s Merge Candidate tier is red** — the Windows writer-lock / WAL-contention class
-   (§7). **No longer deferred: as of 2026-09-14 this is a pre-Band-0 repair requirement**, because
-   Band 0 evidence must not be contaminated by a known reliability defect. **The repair is built,
-   root-caused, regression-tested and merged (PR #110, approved head `7f99358`, merge commit
-   `6ccf693`)** —
+8. **`main`'s Merge Candidate tier was red** — the Windows writer-lock / WAL-contention class
+   (§7). **Now green: the most recent Merge Candidate run on `main` (35405586837, at `25cfd90`,
+   2026-09-18) passed 7/7, including the Windows full default suite and real-Win32 governed
+   actuation.** The repair arc behind that is PRs #110 and #112–#114. Retained here rather than
+   deleted because one green run is repeatability evidence, not proof, and because the Band 0
+   checkpoint this was a prerequisite for is still outstanding (deferred by Taylor 2026-09-18).
+   **The repair is built, root-caused, regression-tested and merged (PR #110, approved head
+   `7f99358`, merge commit `6ccf693`)** —
    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`. `tests/test_fnd04_eci_vertical_slice.py` is now
    classified **same root cause, by log evidence**. What that PR does **not** close: the Windows
    "stalled tail" hang that cancelled the `57f86f8` run at the job cap, which is a different
@@ -397,7 +429,8 @@ single storage worker and a governance-store first-touch race closed in the same
 | Risks, tech debt, open constraints | `RISKS.md` |
 | API and contract surfaces | `INTERFACES.md` |
 | Test strategy / CI tiers | `CI.md` (its header tier table is current; its body predates the four-tier structure) and `TEST_MATRIX.md` (**counts are of 2026-07-27 — it states a 915-test suite; the default suite is now roughly 4,987 tests**) |
-| The last Executive package in full | `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` |
+| The most recent Executive package in full | `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` (EXEC-02, merged `25cfd90`) |
+| The Executive package it built on | `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` |
 | The External Capability Interface in full | `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md` |
 | The Windows writer-lock / WAL repair: root cause, evidence, reclassifications | `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` |
 | Real-World Test #1 evidence and the approved register | `docs/evidence/test-1/` |

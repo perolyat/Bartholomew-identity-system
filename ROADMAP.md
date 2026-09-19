@@ -2,7 +2,21 @@
 
 > Milestones and stage gates with explicit exit criteria.
 >
-> **Last updated:** 2026-09-14 — **Project Control & Documentation Reset (currency note,
+> **Last updated:** 2026-09-19 — **EXEC-02 merge currency note (documentation-only).** No stage's
+> scope, sequencing, exit criteria or status changed by this pass, and **no band moved**.
+> **EXEC-02 is merged**: PR #115, merge commit `25cfd90`, approved by Taylor at the User Approval
+> Gate on 2026-09-18 (`START_HERE.md` §5a;
+> `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md`). It supersedes item **(2)** of the
+> 2026-09-14 note below, which is left as written because that block is a dated record.
+> **What it does not change:** EXEC-02 is default-off behind two explicit switches plus a required
+> device id, it proposes rather than acts, and **no real-model plan-quality evidence exists**
+> (R-EXEC01-3, open). The attended **Band 0** checkpoint it was sequenced behind was **deferred by
+> Taylor on 2026-09-18** while travelling without access to the Windows PC — **not failed, not
+> passed, not waived; still required and still outstanding.** The readiness bands are unchanged:
+> Band A before further unattended testing, Band B before real ambient sensing, Band C before full
+> Real-World Test #2. **Merging a package is not authorisation to move a band.**
+>
+> **Previously (2026-09-14):** **Project Control & Documentation Reset (currency note,
 > documentation-only).** No stage's scope, sequencing, exit criteria or status changed by this
 > pass, and nothing in it authorises implementation. Two things are recorded:
 >
@@ -14,16 +28,19 @@
 > **`START_HERE.md` is the authority for the current-state snapshot**; this document remains
 > the authority for stages, gates, exit criteria and the Band 0/A/B/C/D readiness structure.
 >
-> **(2) EXEC-02 is identified, sequenced, and NOT started.** Deepening the existing Executive so the
-> conversational surface reaches its goal-to-plan deliberation is the identified next implementation
-> package (`MASTER_PLAN.md`'s "Next 3 Moves"). **Taylor sequenced it on 2026-09-14**: it follows a
-> narrow Windows writer-lock/WAL reliability repair and one attended **Band 0** checkpoint, and
-> proceeds unless Band 0 reveals a material blocker (`DECISIONS.md`, "The approved sequence"). **It
-> is not started and not itself authorised to begin**, it creates no new stage, and it does not move
-> any band. The reliability repair is now a **pre-Band-0 requirement** so that Band 0 evidence is not
-> contaminated by a known defect. The readiness bands still govern real-world testing: Band A before further
-> unattended testing, Band B before real ambient sensing, Band C before full Real-World
-> Test #2. **Listing a package or a band is not authorisation to start work in it.**
+> **(2) EXEC-02 is identified, sequenced, and NOT started.** *(Superseded — see the 2026-09-19
+> currency note at the top of this document. Left as written, because this block is the dated record
+> of the 2026-09-14 pass and post-dated events do not belong inside it.)* Deepening the existing
+> Executive so the conversational surface reaches its goal-to-plan deliberation is the identified
+> next implementation package (`MASTER_PLAN.md`'s "Next 3 Moves"). **Taylor sequenced it on
+> 2026-09-14**: it follows a narrow Windows writer-lock/WAL reliability repair and one attended
+> **Band 0** checkpoint, and proceeds unless Band 0 reveals a material blocker (`DECISIONS.md`, "The
+> approved sequence"). **It is not started and not itself authorised to begin**, it creates no new
+> stage, and it does not move any band. The reliability repair is now a **pre-Band-0 requirement**
+> so that Band 0 evidence is not contaminated by a known defect. The readiness bands still govern
+> real-world testing: Band A before further unattended testing, Band B before real ambient sensing,
+> Band C before full Real-World Test #2. **Listing a package or a band is not authorisation to start
+> work in it.**
 >
 > **Previously (2026-08-20):** **Post-Test #1 readiness bands added** (documentation-only). One
 > new section, "Post-Test #1 readiness bands (approved 2026-08-20)", sits between the Usable POC
