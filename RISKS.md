@@ -2,7 +2,16 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-14 (**Project Control & Documentation Reset**). Three changes.
+> **Last updated:** 2026-09-19 — **EXEC-02 merge currency note and one new risk
+> (documentation-only).** Two changes. **(1)** Existing entries are **amended, not duplicated**, to
+> record that EXEC-02 merged as `25cfd90` (PR #115, 2026-09-18): **R-EXEC01-1** and
+> **R-EXEC01-2**, the **R-CTRL-1** mitigation note, and the **EXEC-02 residual risks** section.
+> **R-EXEC01-3 is NOT closed by that merge** — no real-model plan-quality evidence exists.
+> **(2)** One new entry at the end of this document, **R-RETRIEVAL-1**. **No risk is removed and no
+> resolved risk is revived. No production code, tests, schemas, migrations or runtime configuration
+> changed by this pass.**
+>
+> **Previously (2026-09-14, Project Control & Documentation Reset). Three changes.**
 > **(1)** A new section at the end of this document records the five residual risks the merged
 > EXEC-01 package (PR #108, merge `a64f5af`) deliberately carries forward (**R-EXEC01-1** to
 > **R-EXEC01-5**), plus two project-control risks: **R-CTRL-1**, documentation currency itself,
@@ -1821,9 +1830,11 @@ at all.
 reasons:
 
 * the latch is **constant for a whole process**, yet the same file's other recall-dependent
-  assertions passed in that same run — `test_poisoned_memory_is_framed_not_obeyed`, parametrised
-  over the four `POISON_PAYLOADS`, seeds a note and asserts it was recalled every time. A
-  process-global switch cannot produce one isolated failure among them;
+  assertions passed in that same run —
+  `TestEmbeddedInstructions::test_a_poisoned_memory_arrives_inside_the_non_instructional_frame`,
+  parametrised over the four `POISON_PAYLOADS`, seeds a note and asserts `payload in prompt` with
+  the message *"the seeded memory was not recalled; the test proves nothing"*. A process-global
+  switch cannot produce one isolated failure among them;
 * on the mode that test actually resolves, a latched `False` does not suppress recall at all, as
   measured above.
 

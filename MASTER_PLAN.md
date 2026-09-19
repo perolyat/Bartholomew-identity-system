@@ -806,7 +806,10 @@ See [PERF_BUDGETS.md](PERF_BUDGETS.md).
 The 2026-08-12 list below is preserved and remains accurate as history; it stops at
 2026-08-22 and therefore no longer describes the front of the queue. Everything here is a
 record of completed, merged, Taylor-approved work plus one identified-but-unauthorised next
-package. **Listing a package is not authorisation to start it.**
+package. *[Updated 2026-09-19: that one identified-but-unauthorised package was EXEC-02. It was
+separately approved by Taylor at the User Approval Gate and **merged** on 2026-09-18 — PR #115,
+`25cfd90` — so every entry in the list below is now ✅ merged.]* **Listing a package is not
+authorisation to start it.**
 
 - ✅ **Usable POC slice 2 — Proactive Schedule Reminders.** Implemented 2026-08-25,
   `docs/POC_SLICE_2_PROACTIVE_REMINDERS.md`. Opt-in, **default OFF** (`schedule_reminders` in
@@ -848,8 +851,9 @@ package. **Listing a package is not authorisation to start it.**
 - ✅ **EXEC-01 — Goal-to-plan deliberation.** PR #108, reviewed head `2813c7b`, merge
   commit `a64f5af`, merged 2026-09-14. The Executive can turn an outcome-level goal into a
   bounded, validated proposal, inferring unstated intermediate steps, as the existing
-  `TaskIntent` through the existing seam. **Deliberately not connected to the
-  conversational surface, and not enabled in production wiring.** See
+  `TaskIntent` through the existing seam. **As shipped it was deliberately not connected to the
+  conversational surface, and not enabled in production wiring** *(both closed by EXEC-02, merged
+  2026-09-18 as `25cfd90`, and still default-off — see the EXEC-02 entry below)*. See
   `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` and `START_HERE.md` §5.
 - ✅ **Project Control & Documentation Reset.** 2026-09-14 — **approved by Taylor at the User
   Approval Gate**, conditional on required CI being green on the final pull-request head; branch

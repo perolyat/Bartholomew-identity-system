@@ -3526,7 +3526,7 @@
   - **EXEC-02 remains the next major Executive implementation package** after the checkpoint, and
     remains unstarted. It **deepens and connects the Executive architecture that already exists** —
     the runtime already has an Executive stage — rather than attaching a separate Executive brain.
-    > **⚠️ THIS CLAUSE ALONE SUPERSEDED 2026-09-19** by EXEC-02's merge. EXEC-02 was implemented
+    > **⚠️ THIS CLAUSE ALONE SUPERSEDED 2026-09-18** by EXEC-02's merge. EXEC-02 was implemented
     > and **merged** at Taylor's User Approval Gate on 2026-09-18 — PR #115, merge commit
     > `25cfd90` (`START_HERE.md` §5a). "Remains unstarted" was true when this decision was
     > recorded on 2026-09-14 and is not true now. **The sequencing decision itself is unchanged
