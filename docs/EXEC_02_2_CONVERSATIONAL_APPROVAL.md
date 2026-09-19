@@ -322,13 +322,34 @@ was there before.
 
 ### CI
 
-*To be filled in at the User Approval Gate with the reviewed head and run ids, before merge.*
+**All three tiers green on the reviewed head `07c5af8b6f832e868b5b1b20c5965e20f33402c1`, run
+2026-09-19.** Every job was verified individually rather than read from the rollup, following the
+precedent §9 of `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` set.
 
-| When | Tier | Result |
+| Tier | Run | Result |
 |---|---|---|
-| on the reviewed head | PR Fast (`ci.yml`) | _pending_ |
-| on the reviewed head | Integration (`integration.yml`) | _pending_ |
-| on the reviewed head | Merge Candidate (`merge-candidate.yml`) | _pending_ |
+| PR Fast (`ci.yml`) | 35433585629 | **green** |
+| Integration (`integration.yml`) | 35433653500 | **3/3** |
+| Merge Candidate (`merge-candidate.yml`) | 35433653573 | **7/7** |
+
+Integration's three: Tests + coverage (Ubuntu py3.11, ≥70 % gate); Critical integration + lifecycle
+(Ubuntu py3.11); **Windows lifecycle + compatibility (py3.11)**, including *Governed Windows
+actuation (real Win32, nothing substituted)* and *(capabilities, governance, prohibitions)*.
+
+Merge Candidate's seven: Quality (black, ruff, pre-commit, packaging contract, wave manifest);
+Tests + coverage on **py3.10 and py3.11** under the ≥70 % gate; Critical integration + lifecycle on
+both Pythons; smoke; and the **Windows full default suite + actuation (py3.11)**, 19m31s, with
+real-Win32 governed actuation and no worker loss.
+
+Two tiers were skipped on the first push because both are label-gated on a draft PR
+(`ci:integration`, `ci:merge-candidate`). The labels were added and both ran on the same head; no
+code changed between the skip and the run.
+
+**The two local failures did not occur in CI.** `test_kernel_db_path_resolution.py` passed in every
+tier, on Ubuntu and on Windows, which confirms the reading in the paragraph above: they are an
+artefact of this container's terminal width under `-n 4`, not a property of the change.
+`tests/smoke/test_packaging_contract.py`, deselected locally for want of an editable install,
+passed in Quality, in Integration's Windows job and in Merge Candidate's Windows job.
 
 ### What remains unproven until real-world testing
 
