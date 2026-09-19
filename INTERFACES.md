@@ -791,3 +791,70 @@ planner and no memory.
 
 See `tests/test_fnd04_eci_boundary.py`, `tests/test_fnd04_eci_vertical_slice.py`, and
 `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md`.
+
+---
+
+## Conversational approval — implemented 2026-09-19 (R-EXEC02-2)
+
+**One approval authority, now reachable from two surfaces.** Nothing here is a second authority,
+a second store or a second path to a machine. The contract below is the *binding* between an
+utterance and a proposal; every governed decision still happens in
+`bartholomew/actuation/seam.py`.
+
+### `ActionApproval.surface` — `bartholomew/actuation/approval.py`
+
+An approval record now carries where the human decision arrived from. A closed set:
+
+| Value | Meaning |
+|---|---|
+| `operator_console` | `POST /api/operator/actions/{id}/approve`, and the value every approval written before this field existed reads back as |
+| `conversation` | the deterministic conversational-approval seam |
+
+**Provenance, not authority.** It is deliberately absent from `ActionApproval.authorizes()`:
+eligibility is decided once, at the moment of granting. An unknown surface is refused rather than
+recorded, because an unrecognised value in an audit row reads as provenance and carries none.
+
+### `grant_action_approval(..., surface=...)` — the enforcement point
+
+`surface` defaults to `operator_console`, so every existing caller is unchanged. When it is
+`conversation`, the authority additionally refuses any capability in
+`capabilities.CONVERSATIONAL_APPROVAL_INELIGIBLE` — a frozenset **derived from** the existing
+`ALWAYS_APPROVAL` set, never written twice. The check lives in the authority rather than in its
+callers so a second conversational caller inherits it.
+
+Today that is `clipboard_read`, `type_text` and `accessibility_action`. They remain approvable at
+the operator console exactly as before; nothing became less approvable.
+
+### `conversational_action_presentation` — a `MemoryStore` kind
+
+One row per conversational surface, keyed `tenant_id::device_id::requested_by`. Written through
+`MemoryStore.upsert_memory()` under the same call shape the approval itself uses — no second store.
+
+| Field | Purpose |
+|---|---|
+| `presentation_id` | identifies one act of showing a proposal to a person |
+| `tenant_id`, `device_id`, `requested_by` | the three ownership dimensions this build has; re-checked against the live activation on every read |
+| `action_id`, `capability`, `capability_version`, `parameter_fingerprint` | the proposal **as the person saw it**, compared field by field before any decision is carried |
+| `action_expires_at`, `presented_at` | bounds; no second clock is invented, the action's own expiry governs |
+| `state` | `awaiting_decision` / `approved` / `rejected`. A rejection is **kept**, never deleted |
+| `instruction`, `decision.utterance` | the person's own words, bounded and **not** registered as structural, so the privacy guard scans them like any other content |
+
+**It authorises nothing.** Nothing downstream reads it; the action envelope does not know it
+exists. It is a pointer, held so a pronoun in a sentence can be resolved to a noun. Consumption
+remains the authority's conditional `pending_approval -> approved` UPDATE, so a lost bookkeeping
+write leaves the record incomplete and never permissive.
+
+### Chat surface
+
+`RuntimeContractResult.approval_action` — the per-recogniser record, beside and never inside
+`executive_action`. It carries `human_decision_recorded` (true only when the *authority* recorded
+a decision on that pass) and, always false, `executed` and `verified`.
+
+The dispatch entry is **first** in `_CHAT_DISPATCH`, which is safe only because the recogniser
+claims an utterance solely when the whole of it is a bare decision; anything with content of its
+own falls through to the recogniser that has always owned it. It gates on EXEC-02's existing,
+default-off activation and adds no switch of its own.
+
+See `tests/test_conversational_approval.py`, `tests/test_conversational_approval_intents.py`,
+`tests/test_conversational_approval_no_bypass.py`, and
+`docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`.

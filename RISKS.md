@@ -1744,12 +1744,26 @@ Carried-forward limitations of **merged** work. Full record:
   turn with a plan nobody asked for, and costs trust — but it means the two sets need reviewing
   whenever the capability domain grows, the same standing obligation `INFERABLE_CAPABILITIES`
   carries (R-EXEC01-5). **Not a defect; a maintenance obligation that must not be forgotten.**
-- **R-EXEC02-2 — A goal can be stated in chat but not approved there.** The surface that
-  understands a goal is not the surface that authorises it: approving a proposed action remains
-  the operator console's. That is a real seam in the experience, deliberately left, because
-  exposing approval on the conversational surface is a governance question and not a cognition
-  one. **Consequence:** the conversational experience is genuinely incomplete end-to-end, and
-  nothing should describe it as a finished user journey.
+- **R-EXEC02-2 — A goal can be stated in chat but not approved there.**
+  **Technical implementation gap closed** by the Governed Conversational Approval package
+  (`docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`); *see the qualification below before recording it
+  as resolved.* The original statement: the surface that understands a goal was not the surface
+  that authorises it, so approving a proposed action remained the operator console's, and the
+  conversational experience was genuinely incomplete end-to-end.
+  **What now exists:** a proposal presented in conversation can be approved or rejected in that
+  conversation. The decision is recognised deterministically from the person's own words (never by
+  a model), bound to the exact proposal they were shown by action id, device, capability, version
+  and `parameter_fingerprint`, and carried to
+  `bartholomew/actuation/seam.grant_action_approval()` — which remains the **sole** approval
+  authority and is now the enforcement point for which capability classes a surface may carry.
+  **What is *not* closed by it.** The implementation contract is proved by automated evidence; the
+  *usefulness* of the completed journey is not, and is an evidence question for the deferred
+  attended Windows testing. Nothing here may be read as closing R-EXEC01-3, Band 0, or
+  conversational maturity. Two limitations are carried forward in their own right: the approver
+  recorded for a conversational approval is the activation's **configured** `requested_by`, not a
+  principal the platform verified (§11.2 of the package document), and the three
+  `ApprovalRequirement.ALWAYS` capability kinds are deliberately **not** authorisable from
+  conversation and must still be approved at the operator console.
 - **R-EXEC02-3 — One device per deployment.** The activation names a single `device_id` and has
   no default. A deployment with two machines cannot express "that one" conversationally. Opening
   it would need a recogniser and a consent question this package did not open.

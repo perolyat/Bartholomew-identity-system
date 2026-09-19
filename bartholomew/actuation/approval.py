@@ -36,6 +36,16 @@ bound to                so it cannot authorise
 plus `expires_at`, so it cannot authorise execution after it lapses, and
 `approver`, so authorisation is never anonymous.
 
+**`surface` is provenance, never authority.** It records *where* the human
+decision arrived from -- the operator console, or ordinary conversation -- so
+an audit can tell a decision made on a surface that verified a principal apart
+from one made on a surface that did not. It is deliberately absent from
+`authorizes()`: what a surface may be used to approve is decided once, at the
+moment of granting, by `seam.grant_action_approval`. An approval that already
+exists is an approval, and re-deciding its eligibility at dispatch would mean a
+configuration change could silently revoke a decision a person had already
+made and been told was recorded.
+
 **An approval is not a brake override.** `seam.py` re-reads the Parking Brake
 immediately before dispatch and refuses on an engagement regardless of any
 approval. That ordering is the contract, and it is asserted in
@@ -63,6 +73,23 @@ KIND: str = "windows_action_approval"
 #: The longest an approval may outlive its grant. An approval is a decision
 #: about a moment, and a moment does not last an hour.
 MAX_APPROVAL_TTL_SECONDS = 900
+
+#: The operator console, or any caller that did not name a surface. The value
+#: an approval granted before this field existed reads back as, because that is
+#: what those approvals were: `POST /api/operator/actions/{id}/approve` was the
+#: only way to grant one.
+SURFACE_OPERATOR_CONSOLE = "operator_console"
+
+#: Ordinary conversation, through the deterministic conversational-approval
+#: seam. Subject to `capabilities.CONVERSATIONAL_APPROVAL_INELIGIBLE`.
+SURFACE_CONVERSATION = "conversation"
+
+#: The closed set. A surface this build does not know is refused rather than
+#: recorded, because an unrecognised surface in an audit row is worse than no
+#: approval at all: it reads as provenance and carries none.
+APPROVAL_SURFACES: frozenset[str] = frozenset(
+    {SURFACE_OPERATOR_CONSOLE, SURFACE_CONVERSATION},
+)
 
 
 class ApprovalError(ValueError):
@@ -101,6 +128,10 @@ class ActionApproval:
     granted_at: str
     expires_at: str
     note: str | None = None
+    #: Where the human's decision arrived from. Provenance, not authority --
+    #: see the module docstring. Defaults to the operator console because that
+    #: is what every approval granted before this field existed actually was.
+    surface: str = SURFACE_OPERATOR_CONSOLE
 
     # -- persistence ------------------------------------------------------
 
@@ -124,6 +155,7 @@ class ActionApproval:
             "granted_at": self.granted_at,
             "expires_at": self.expires_at,
             "note": self.note,
+            "surface": self.surface,
         }
 
     @classmethod
@@ -139,6 +171,7 @@ class ActionApproval:
             granted_at=str(data["granted_at"]),
             expires_at=str(data["expires_at"]),
             note=data.get("note"),
+            surface=str(data.get("surface") or SURFACE_OPERATOR_CONSOLE),
         )
 
     def to_summary_text(self) -> str:
@@ -251,6 +284,10 @@ class ActionApproval:
             )
         if not self.approver:
             errors.append("approver is required -- authorisation is never anonymous")
+        if self.surface not in APPROVAL_SURFACES:
+            errors.append(
+                f"{self.surface!r} is not a surface an approval may be granted from",
+            )
         return errors
 
 
@@ -260,6 +297,7 @@ def build_approval(
     approver: str,
     note: str | None = None,
     ttl_seconds: int | None = None,
+    surface: str = SURFACE_OPERATOR_CONSOLE,
     now: datetime | None = None,
 ) -> ActionApproval:
     """Mint an approval bound to `request` as it stands at this moment.
@@ -271,6 +309,10 @@ def build_approval(
     The approval never outlives the action: an approval window longer than the
     action's own would be a window with nothing behind it.
     """
+    if surface not in APPROVAL_SURFACES:
+        raise ApprovalError(
+            f"{surface!r} is not a surface an approval may be granted from",
+        )
     if not isinstance(approver, str) or not approver.strip():
         raise ApprovalError(
             "an approval must name its approver; authorisation is never anonymous",
@@ -300,6 +342,7 @@ def build_approval(
         granted_at=to_iso(moment),
         expires_at=to_iso(expiry),
         note=(note.strip()[:280] if isinstance(note, str) and note.strip() else None),
+        surface=surface,
     )
     problems = approval.validate()
     if problems:  # pragma: no cover - build_approval fills every field above

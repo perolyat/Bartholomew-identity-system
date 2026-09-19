@@ -71,9 +71,16 @@ from bartholomew.orchestrator.safety.governance_store import (
 )
 
 from . import arming, store, verification
+from .approval import (
+    APPROVAL_SURFACES,
+    SURFACE_CONVERSATION,
+    SURFACE_OPERATOR_CONSOLE,
+    ActionApproval,
+    ApprovalError,
+    build_approval,
+)
 from .approval import KIND as APPROVAL_KIND
-from .approval import ActionApproval, ApprovalError, build_approval
-from .capabilities import UnsupportedCapabilityError
+from .capabilities import CONVERSATIONAL_APPROVAL_INELIGIBLE, UnsupportedCapabilityError
 from .devices import (
     SUPPORTED_PLATFORM,
     DeviceCapabilityRegistry,
@@ -856,6 +863,7 @@ async def grant_action_approval(
     approver: str,
     note: str | None = None,
     ttl_seconds: int | None = None,
+    surface: str = SURFACE_OPERATOR_CONSOLE,
     registry: DeviceCapabilityRegistry | None = None,
 ) -> ActionSeamResult:
     """Grant an approval bound to one action exactly as it stands.
@@ -883,10 +891,20 @@ async def grant_action_approval(
 
     What does gate an approval: the platform capability `action:approve` at the
     HTTP boundary, the Parking Brake above, the action being in
-    `pending_approval`, and the action still passing validation against the
-    device's *current* allowlists. And an approval authorises nothing on its
-    own -- every gate, gate 9 on the dispatch kind included, runs again at
-    lease.
+    `pending_approval`, the action still passing validation against the
+    device's *current* allowlists, and -- for a surface weaker than the
+    operator console -- whether the capability may be authorised from that
+    surface at all. And an approval authorises nothing on its own -- every
+    gate, gate 9 on the dispatch kind included, runs again at lease.
+
+    **The surface eligibility check lives here, not in the caller.** `surface`
+    is how a human decision reached this function, and
+    `capabilities.CONVERSATIONAL_APPROVAL_INELIGIBLE` names the kinds a
+    conversational decision may not carry. Putting the check in the
+    conversational adapter would mean a second conversational caller written
+    later inherited nothing; putting it here means every caller does. The
+    refusal is truthful and names the capability, so a person told "not from
+    here" knows where to go instead.
     """
     kind = ACTION_KIND_APPROVE
     observation, candidate_action = _observation(kind, None)
@@ -937,12 +955,40 @@ async def grant_action_approval(
             request=request,
         )
 
+    if surface not in APPROVAL_SURFACES:
+        return ActionSeamResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=False,
+            status=ActionResultStatus.REFUSED,
+            category=ErrorCategory.APPROVAL_INVALID,
+            reason=f"{surface!r} is not a surface an approval may be granted from",
+            action=stored,
+            request=request,
+        )
+    if surface == SURFACE_CONVERSATION and request.capability in CONVERSATIONAL_APPROVAL_INELIGIBLE:
+        return ActionSeamResult(
+            observation=observation,
+            candidate_action=candidate_action,
+            governance_allowed=False,
+            status=ActionResultStatus.REFUSED,
+            category=ErrorCategory.APPROVAL_INVALID,
+            reason=(
+                f"{request.capability.value} always requires a per-action approval "
+                "and cannot be authorised in conversation; approve it from the "
+                "operator console"
+            ),
+            action=stored,
+            request=request,
+        )
+
     try:
         approval = build_approval(
             request,
             approver=approver,
             note=note,
             ttl_seconds=ttl_seconds,
+            surface=surface,
         )
     except ApprovalError as e:
         return ActionSeamResult(
@@ -1054,7 +1100,15 @@ async def grant_action_approval(
         action=moved,
         reason=None,
         category=None,
-        extra={"approver": approval.approver, "approval_expires_at": approval.expires_at},
+        extra={
+            "approver": approval.approver,
+            "approval_expires_at": approval.expires_at,
+            # Provenance, on the audit row as well as on the approval: an audit
+            # reader must be able to tell a decision made on a surface that
+            # verified a principal from one made on a surface that did not.
+            "approval_surface": approval.surface,
+            **({"approval_note": approval.note} if approval.note else {}),
+        },
     )
     return ActionSeamResult(
         observation=observation,

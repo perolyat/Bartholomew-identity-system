@@ -276,7 +276,20 @@ class TestDeterministicDispatchIsUnchanged:
         deterministic recogniser keeps first refusal on every utterance."""
         names = [name for name, _ in rc._CHAT_DISPATCH]
         assert names[-1] == rc._DISPATCH_EXECUTIVE_GOAL
-        assert names[:3] == [rc._DISPATCH_TASK, rc._DISPATCH_FORECAST, rc._DISPATCH_OBJECTIVE]
+        # R-EXEC02-2 added `approval` ahead of these. The property this test
+        # exists for is unchanged and is asserted directly rather than through
+        # a fixed index: the three deterministic instruction recognisers keep
+        # their relative order, and every one of them still gets first refusal
+        # before the Executive goal entry. The approval recogniser claims only
+        # utterances that are, in their entirety, a bare decision, so it cannot
+        # take a turn away from any of them -- proved separately in
+        # `tests/test_conversational_approval_intents.py`.
+        assert [n for n in names if n != rc._DISPATCH_APPROVAL][:3] == [
+            rc._DISPATCH_TASK,
+            rc._DISPATCH_FORECAST,
+            rc._DISPATCH_OBJECTIVE,
+        ]
+        assert names[0] == rc._DISPATCH_APPROVAL
 
     async def test_an_explicit_task_instruction_is_not_diverted_to_the_executive(
         self,

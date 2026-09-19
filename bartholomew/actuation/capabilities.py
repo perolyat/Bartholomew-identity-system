@@ -268,6 +268,26 @@ ALWAYS_APPROVAL: frozenset[CapabilityKind] = frozenset(
     kind for kind, d in _DESCRIPTORS.items() if d.approval is ApprovalRequirement.ALWAYS
 )
 
+#: The kinds that may **not** be authorised from the conversational surface.
+#:
+#: Derived from `ALWAYS_APPROVAL` rather than written as a second list, so the
+#: two can never drift and so this is a *restatement* of an existing governance
+#: distinction rather than a new one. The reasoning, in one line: the three
+#: `ApprovalRequirement.ALWAYS` kinds are the ones that read or synthesise
+#: content on the person's behalf, they are the kinds no configuration may ever
+#: place under autonomy, and conversation is a weaker approval surface than the
+#: operator console -- a chat turn carries the runtime's *configured*
+#: `requested_by`, not a principal the platform verified on a request.
+#:
+#: So conversational approval reaches the six kinds an approver could already
+#: authorise from a surface of equal strength, and refuses the three that were
+#: already singled out as requiring the strongest one. This narrows what chat
+#: can do; it widens nothing. The refusal is truthful and names this list.
+#:
+#: **Enforced in `seam.grant_action_approval`, not by its callers**, so a second
+#: conversational caller written later cannot skip it.
+CONVERSATIONAL_APPROVAL_INELIGIBLE: frozenset[CapabilityKind] = ALWAYS_APPROVAL
+
 #: The kinds a caller may declare idempotent. Everything else runs at most
 #: once, whatever a request asks for -- see `CapabilityDescriptor`.
 IDEMPOTENT_ELIGIBLE: frozenset[CapabilityKind] = frozenset(

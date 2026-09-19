@@ -3919,3 +3919,74 @@
     evidence reached a live outbound model call from a chat message and stopped there for want of
     a provisioned model.
 - **Date:** 2026-09-18
+
+---
+
+## Decision: Conversation transports a human authority decision; it never becomes an authority
+
+- **Decision:** R-EXEC02-2 is closed by routing a conversational approval into the **existing**
+  approval authority, and by adding no authority of any kind. Concretely, and each clause is
+  load-bearing:
+  1. `bartholomew/actuation/seam.grant_action_approval()` remains the **sole** approval authority,
+     and `cancel_action_through_runtime_contract()` the sole withdrawal seam. The conversational
+     surface calls the same functions the operator HTTP route calls, with the same contracts;
+  2. a **pure recogniser** (`bartholomew/kernel/approval_intents.py`), a sibling of
+     `goal_intents.py` held to the same discipline, decides whether an utterance is a decision. It
+     claims one only when the **whole** utterance, trimmed of an optional lead-in and politeness,
+     is a member of a closed phrase set. **No model is ever asked whether permission was granted;**
+  3. a **presentation record** (`conversational_action_presentation`, through `MemoryStore`) binds
+     a decision to the exact proposal the person was shown — action id, device, capability,
+     capability version and `parameter_fingerprint`. It **authorises nothing**: nothing downstream
+     reads it, and forging one buys only the right to ask the authority, which re-reads the action,
+     re-validates it, re-reads the brake and refuses if anything has moved;
+  4. **one-shot consumption stays the authority's conditional `pending_approval -> approved`
+     UPDATE.** The presentation record is bookkeeping; if its write is lost, a repeated "yes" is
+     still refused, by the authority, for the action no longer awaiting approval;
+  5. **surface eligibility is enforced inside the authority**, not by its callers. `surface` is
+     recorded on the approval as provenance and is deliberately absent from `authorizes()`;
+  6. **no new feature flag.** The handler gates on EXEC-02's existing, default-off activation.
+- **Alternatives:**
+  - *Let a model decide whether the person said yes.* Rejected outright. If a generated inference
+    could grant permission, a sufficiently persuasive page of text in the model's context would be
+    an approval and the whole `pending_approval` gate would be decorative.
+  - *Resolve "yes" against whatever is currently pending.* Rejected. It would let a sentence in
+    chat authorise an action created at the console that the person never saw, which is the exact
+    failure the presentation record exists to prevent.
+  - *A conversational approval store, or a chat-specific execution path.* Rejected under the
+    one-authority rule. A second store is a second authority however it is described, and the
+    package's own AST test now pins the complete repository-wide set of approval-granting callers.
+  - *Substring or prefix matching on "yes".* Rejected. "If I say yes, what happens?", 'Does "yes"
+    approve it?' and "yes — but change the folder first" are all conversation, and a qualified or
+    quoted affirmative is not an unambiguous grant. Whole-utterance matching is what makes the
+    first position in `_CHAT_DISPATCH` safe.
+  - *Accept "ok", "sure", "fine", "sounds good" as approval.* Rejected. They are what a person says
+    while still thinking. The direction of error is deliberate: one more word costs nothing, and an
+    unintended action on somebody's machine costs trust.
+  - *A new feature flag for conversational approval.* Rejected as a way of avoiding the authority
+    question. The governance work is done in the authority; a switch would only have deferred it.
+  - *Let conversation approve every capability the console can.* Deliberately **not** taken. The
+    three `ApprovalRequirement.ALWAYS` kinds are refused conversationally, derived from the
+    existing set rather than a new list, because the console's approval carries a verified
+    principal and a chat turn carries a configured name. This **narrows** what chat reaches and
+    widens nothing.
+- **Why:** EXEC-02 got a sentence as far as a governed `pending_approval` row and stopped, so the
+  journey was incomplete and nothing should have described it as finished. The gap was never a
+  missing approval mechanism — the envelope's eleven gates already did the job correctly. It was
+  that nothing conversational could reach them *safely*, because a chat surface has no row to click
+  and "yes" on its own does not name an action. The repair therefore had to be a binding, not a
+  mechanism.
+- **Consequences:**
+  - A person can complete the goal-to-authorisation journey in one conversation, for six of the
+    nine Windows capability kinds.
+  - Approving is still never executing: the surface distinguishes proposed, awaiting approval,
+    approved, started, failed, verified success and `unknown`, and `unknown` is never rendered as
+    success.
+  - An audit can tell "the model suggested this" from "the user authorised this": they are two
+    Reflection rows, and the approval record names the surface the decision arrived through.
+  - **The approver is the activation's configured `requested_by`, not a verified principal.** True
+    enough for a single-user local deployment; recorded in `RISKS.md` as a carried limitation
+    rather than solved speculatively.
+  - **No real-world evidence.** The implementation contract is proved; whether the completed
+    journey is *useful* is an evidence question for the deferred attended Windows testing.
+    R-EXEC01-3 stands unchanged.
+- **Date:** 2026-09-19
