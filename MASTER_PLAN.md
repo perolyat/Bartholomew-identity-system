@@ -1063,6 +1063,30 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
 
 ### Approval Ledger
 
+- 2026-09-19 — **R-EXEC02-2: governed conversational approval** (PR #117, branch
+  `claude/conversational-approval-governance-i8srpi`): approved by Taylor at the User Approval Gate
+  at head `4e8799c` (code head `07c5af8`; the difference is documentation only). Closes the
+  **technical implementation gap** in R-EXEC02-2 — a proposal surfaced in conversation can now be
+  approved or rejected in that conversation, through
+  `bartholomew/actuation/seam.grant_action_approval()`, which remains the **sole** approval
+  authority. All three CI tiers were green on both heads, every job verified individually: PR Fast;
+  Integration **3/3**; Merge Candidate **7/7**, including the Windows full default suite with
+  real-Win32 governed actuation and the ≥70 % coverage gate on py3.10 and py3.11.
+  **The approval carries two conditions, both binding.** (1) `clipboard_read`, `type_text` and
+  `accessibility_action` stay ineligible for conversational approval — *"do not weaken the existing
+  ALWAYS approval requirements"* — so widening `CONVERSATIONAL_APPROVAL_INELIGIBLE` must return to a
+  gate. (2) The configured `requested_by` is accepted as the approver *for the present single-user
+  local deployment only*, and the limitation is preserved as **`RISKS.md` R-EXEC02-5**, which names
+  the four futures that must not proceed on it: multi-user, remote approval, household/trusted-user,
+  and any higher-autonomy posture.
+  The approval does **not** close **R-EXEC01-3** — no real-model plan-quality evidence exists — does
+  not move a band, and does not declare the conversational journey *useful*: that is the deferred
+  attended Band 0 / Windows testing's question, and that checkpoint remains **not failed, not
+  passed, not waived**. The capability stays **default-off** behind EXEC-02's existing switches;
+  this package added no new flag. R-EXEC02-1, R-EXEC02-3, R-EXEC02-4 and R-RETRIEVAL-1 are
+  unchanged. Records: `docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`, `DECISIONS.md`, `INTERFACES.md`,
+  `RISKS.md`, `COGNITIVE_RUNTIME.md`, `START_HERE.md` §5b.
+
 - 2026-09-18 — **EXEC-02: conversational Executive deliberation integration** (PR #115, branch
   `claude/exec-02-conversational-integration-82tk0o`): approved by Taylor at the User Approval Gate
   at reviewed head `c3f1c5c` — **merge commit `25cfd90`**. Step 5 of the approved sequence, taken

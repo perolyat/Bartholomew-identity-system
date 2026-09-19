@@ -92,7 +92,16 @@ class TestDispatchOrder:
         goes after both.
         """
         names = [name for name, _ in rc._CHAT_DISPATCH]
-        assert names[:2] == [rc._DISPATCH_TASK, rc._DISPATCH_FORECAST]
+        # R-EXEC02-2 added `approval` ahead of these. The property this test
+        # exists for is unchanged and is asserted directly rather than through
+        # a fixed index: task control is still consulted before every other
+        # *instruction* recogniser, so an explicit task instruction is never
+        # reinterpreted as something else. The approval entry claims only
+        # utterances that are, in their entirety, a bare decision -- it carries
+        # no instruction vocabulary at all -- which is pinned by
+        # `tests/test_conversational_approval_intents.py`.
+        instructions = [n for n in names if n != rc._DISPATCH_APPROVAL]
+        assert instructions[:2] == [rc._DISPATCH_TASK, rc._DISPATCH_FORECAST]
 
     async def test_every_entry_is_a_named_pair_of_callables(self):
         for entry in rc._CHAT_DISPATCH:

@@ -5,8 +5,9 @@
 > the work, and what to read next* — and nothing else. It is deliberately short.
 >
 > **Created:** 2026-09-14 (Project Control & Documentation Reset).
-> **Current as of:** `main` = `25cfd90` (the merge commit for PR #115 / EXEC-02, 2026-09-18).
-> *Previously `a64f5af` (PR #108 / EXEC-01).*
+> **Current as of:** `main` = `f99bf42` (the merge commit for PR #116, EXEC-02's
+> documentation/provenance follow-up, 2026-09-19).
+> *Previously `25cfd90` (PR #115 / EXEC-02), and `a64f5af` before that (PR #108 / EXEC-01).*
 >
 > **What this document is the authority for:** the **source hierarchy** (§3), the
 > **current-state snapshot** (§4, §5), and the **bootstrap procedure** (§9). It is
@@ -244,7 +245,8 @@ It calls the **same** Executive seam the operator console calls. There is no sec
 **What it did not accomplish, and must not be read as:**
 
 - **It does not make Bartholomew autonomous.** Nothing runs. A proposal stops at
-  `pending_approval`, and approving it is still the operator console's.
+  `pending_approval`. *(Approving it was the operator console's alone at the time of that merge;
+  see §5b, which closes the technical half of that gap and changes nothing else in this list.)*
 - **It does not enable itself.** `BARTH_CONVERSATIONAL_EXECUTIVE` and
   `BARTH_EXECUTIVE_DELIBERATION` both default off, neither implies the other, and **a model being
   reachable enables neither**. There is no default device id.
@@ -257,6 +259,43 @@ It calls the **same** Executive seam the operator console calls. There is no sec
   PC. **"EXEC-02 is merged" must never be read as "Bartholomew now plans from goals in
   production"** — that needs two environment variables and a named device id, and it still
   proposes rather than acts.
+
+## 5b. R-EXEC02-2 — governed conversational approval, stated precisely
+
+**Merged.** PR #117, approved by Taylor at the User Approval Gate on 2026-09-19, built on `main`
+at `f99bf42`. Code head `07c5af8`, approved head `4e8799c`; all three CI tiers green on both, every
+job verified individually (PR Fast; Integration 3/3; Merge Candidate 7/7, including the Windows
+full default suite with real-Win32 governed actuation and the ≥70 % coverage gate on py3.10 and
+py3.11). Full record: `docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`. Decision: `DECISIONS.md`,
+"Conversation transports a human authority decision; it never becomes an authority".
+
+**What it accomplishes.** A proposal that EXEC-02 surfaced in conversation can be approved or
+rejected in that same conversation. The decision is recognised deterministically from the
+person's own words, bound to the exact proposal they were shown, and carried to
+`bartholomew/actuation/seam.grant_action_approval()` — which remains the **sole** approval
+authority and is now also the enforcement point for which capability classes a surface may carry.
+
+**What it must not be read as:**
+
+- **It is not a second authority.** No parallel approval store, no chat-specific execution path,
+  no model-based approval, no bypass of the envelope, the brake, audit, verification or recovery.
+  The presentation record that binds "yes" to one proposal authorises nothing: forging one buys
+  only the right to *ask* the authority, which then refuses anything that has moved.
+- **It does not widen what may be approved.** It *narrows*: the three
+  `ApprovalRequirement.ALWAYS` kinds (`clipboard_read`, `type_text`, `accessibility_action`) are
+  deliberately not authorisable from conversation and still need the operator console.
+- **It does not enable itself.** No new switch. It gates on EXEC-02's same default-off
+  activation, and a runtime without it does not even run the recogniser.
+- **Approving is not executing, and executing is not succeeding.** The surface distinguishes
+  proposed, awaiting approval, approved, started, failed, verified success and `unknown`, and
+  `unknown` is never rendered as success.
+- **No real-world evidence.** The automated evidence proves the implementation contract. Whether
+  the completed journey is *useful* is an evidence question for the deferred attended Windows
+  testing. **R-EXEC01-3 stands unchanged and Band 0 remains outstanding.**
+- **The approver is a configured name, not a verified principal.** Accepted at the gate *for this
+  single-user local deployment only*. **`RISKS.md` R-EXEC02-5** names the four futures that must
+  not proceed on it — multi-user, remote approval, household/trusted-user, and any higher-autonomy
+  posture, including widening which capability kinds conversation may authorise.
 
 ### What comes next — the approved sequence
 

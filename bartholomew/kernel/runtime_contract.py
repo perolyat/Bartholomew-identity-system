@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import (
+    approval_intents,
     candidate_learning,
     consent_gate,
     forecast_intents,
@@ -206,6 +207,17 @@ class RuntimeContractResult:
     #: this surface -- whether anything was executed or independently verified.
     #: Defaulted so existing construction sites are unaffected.
     executive_action: dict[str, Any] | None = None
+
+    #: R-EXEC02-2: what this turn's bare authority decision --- "yes", "no",
+    #: "did that work" --- did through the *existing* approval authority, or
+    #: None when the turn contained none, which is every turn on a runtime
+    #: that has not enabled the conversational Executive and almost every turn
+    #: on one that has. Records the decision recognised, the proposal it was
+    #: bound to, what the authority decided and the action's state afterwards.
+    #: It never records an execution or a verification, because this surface
+    #: performs neither. Defaulted so existing construction sites are
+    #: unaffected.
+    approval_action: dict[str, Any] | None = None
 
     #: Set when a forecast this turn obtained was recorded as evidence
     #: against a live objective. Names the objective and the event kind, so
@@ -1571,12 +1583,186 @@ async def _handle_executive_goal(
         record["provenance_error"] = getattr(result, "provenance_error", None)
 
     record["reply"] = _goal_reply(intent, result, outcome)
+
+    # R-EXEC02-2: remember what was just put in front of the person, so that a
+    # later "yes" can be bound to *this* proposal rather than to whatever
+    # happens to be pending. Last, and after the reply is settled, so arming
+    # can never change what the Executive did or what the person is told about
+    # it -- and so a failure to arm costs the person the conversational
+    # shortcut and nothing else. The proposal still exists and the operator
+    # console can still approve it.
+    if outcome == goal_intents.GOAL_OUTCOME_PROPOSED:
+        armed, why_not = await _arm_conversational_approval(
+            daemon,
+            config,
+            action_ids=record["proposed_action_ids"],
+            instruction=intent.instruction,
+        )
+        record["approval_armed"] = armed is not None
+        if armed is not None:
+            record["approval_presentation_id"] = armed.presentation_id
+            record["reply"] += "\n\n" + approval_intents.render_armed(armed.action_id)
+        elif why_not:
+            record["approval_not_armed_reason"] = why_not
+
+    return record
+
+
+async def _arm_conversational_approval(
+    daemon: KernelDaemon,
+    config: Any,
+    *,
+    action_ids: list[str],
+    instruction: str,
+) -> tuple[Any, str | None]:
+    """Record the proposal this turn presented. Never raises.
+
+    Returns `(record_or_None, reason_it_was_not_armed)`. Arming is a
+    convenience for resolving a pronoun later; it grants nothing, and every
+    failure path here leaves the person exactly where EXEC-02 left them --
+    with a governed proposal awaiting approval on the operator console.
+    """
+    adapter = _conversational_approval()
+    if adapter is None:  # pragma: no cover - a tree without the integration package
+        return None, "the conversational approval seam is not available"
+    try:
+        return await adapter.present_proposal(
+            daemon,
+            config,
+            action_ids=list(action_ids or []),
+            instruction=instruction,
+        )
+    except Exception:
+        logger.exception("Could not arm conversational approval for a proposal")
+        return None, "what I showed you could not be recorded"
+
+
+# -----------------------------------------------------------------------------
+# R-EXEC02-2: a human authority decision, carried from conversation to the one
+# approval authority.
+#
+# The whole of this section's safety posture is that it decides nothing. It
+# recognises that a person said "yes" --- deterministically, from their own
+# words, with no model consulted --- resolves which proposal they were shown,
+# and hands both to `actuation/seam.py`, which re-reads the Parking Brake,
+# re-validates the action against the device's current allowlists, enforces
+# which capability classes this surface may carry, and consumes the approval
+# with the same conditional UPDATE the operator console's approval goes
+# through. Conversation transports the decision. It never becomes the
+# authority.
+# -----------------------------------------------------------------------------
+
+
+def _conversational_approval() -> Any:
+    """The conversational-approval adapter, resolved by name, or None.
+
+    Resolved lazily for the same reason `_conversational_executive_config` is:
+    `bartholomew.kernel` keeps no import edge to `bartholomew.integration`, and
+    a missing package is *reported* rather than worked around.
+    """
+    import importlib  # noqa: PLC0415
+
+    try:
+        return importlib.import_module("bartholomew.integration.conversational_approval")
+    except ImportError:  # pragma: no cover - a tree without the integration package
+        return None
+
+
+async def _handle_conversational_decision(
+    daemon: KernelDaemon,
+    observation: Observation,
+) -> dict[str, Any] | None:
+    """Route a bare "yes"/"no"/"did that work" to the existing approval authority.
+
+    Returns None --- the answer for almost every utterance, and for *every*
+    utterance on a runtime that has not explicitly enabled the conversational
+    Executive --- and the turn then proceeds exactly as it did before.
+
+    **Three gates, in this order, and the first two are free.** The activation
+    must be installed; the utterance must be a whole-utterance decision by
+    `approval_intents.parse_decision`; and only then is anything read from a
+    store or handed to an authority. A runtime with no `conversational_executive`
+    never even runs the recogniser.
+
+    **Why this entry is first in the dispatch table, and why that is safe.**
+    "cancel that" and "no" must be read as decisions about a proposal that was
+    just put to the person, not reinterpreted by a later recogniser. The entry
+    is safe in first position precisely because the recogniser claims only
+    utterances that are, in their entirety, a decision: anything carrying
+    content of its own --- "yes, open notepad", "no, the other folder" --- falls
+    straight through to the recognisers that have always owned it.
+
+    **Never raises.** A decision that could not be carried is reported as one.
+    It is never allowed to fall through to the model, because a generated
+    sentence about an approval is the one thing this surface must not be able to
+    produce.
+    """
+    config = _conversational_executive_config(daemon)
+    if config is None:
+        return None
+
+    decision = approval_intents.parse_decision(observation.raw_content or "")
+    if decision is None:
+        return None
+
+    adapter = _conversational_approval()
+    if adapter is None:
+        return None
+
+    record: dict[str, Any] = {
+        "decision": decision.kind,
+        "matched": decision.matched,
+        "device_id": config.device_id,
+        #: Nothing on this surface can make either of these true. Approving is
+        #: not executing and executing is not succeeding; both happen behind
+        #: the device lease, and both are recorded there.
+        "executed": False,
+        "verified": False,
+    }
+
+    try:
+        if decision.kind == approval_intents.DECISION_STATUS:
+            result = await adapter.report_status(daemon, config)
+        else:
+            result = await adapter.decide(daemon, config, decision)
+    except Exception:
+        logger.exception(
+            "The conversational approval seam raised; reporting it truthfully",
+        )
+        record["outcome"] = adapter.OUTCOME_REFUSED
+        record["error"] = "an internal error interrupted it"
+        record["reply"] = approval_intents.render_refused(
+            "an internal error interrupted it",
+        )
+        return record
+
+    record["outcome"] = result.outcome
+    record["reply"] = result.reply
+    #: True only when the *authority* recorded a human decision on this pass.
+    #: Named separately from the outcome so an audit reader never has to infer
+    #: "a person authorised this" from a word in a reply.
+    record["human_decision_recorded"] = bool(result.decision_recorded)
+    if getattr(result, "withdrawn_after_lease", False):
+        # A withdrawal that landed after the device already had it. On the record
+        # because it changes what the withdrawal achieved: the action can never
+        # run again, but it was not prevented from running.
+        record["withdrawn_after_lease"] = True
+    if result.action_id:
+        record["action_id"] = result.action_id
+    if result.action_state:
+        record["action_state"] = result.action_state
+    if result.reason:
+        record["reason"] = result.reason
+    if result.provenance_degraded:
+        record["provenance_degraded"] = True
+        record["provenance_error"] = result.provenance_error
     return record
 
 
 #: Dispatch names, one per explicit-instruction recogniser. Constants rather
 #: than bare strings so the table below and the result-field reads in
 #: `run_chat_through_runtime_contract()` cannot drift apart silently.
+_DISPATCH_APPROVAL = "approval"
 _DISPATCH_TASK = "task"
 _DISPATCH_FORECAST = "forecast"
 _DISPATCH_OBJECTIVE = "objective"
@@ -1598,6 +1784,14 @@ _CHAT_DISPATCH: tuple[
     tuple[str, Callable[[KernelDaemon, Observation], Awaitable[dict[str, Any] | None]]],
     ...,
 ] = (
+    # R-EXEC02-2. **First, and only because its recogniser is the narrowest in
+    # the table.** It claims an utterance only when the whole of it is a
+    # decision -- "yes", "go ahead", "cancel that" -- so it can never take a
+    # turn away from a recogniser below it: every one of those needs content
+    # this one refuses to look past. It is first so that a decision about a
+    # proposal just put to the person is read as one, rather than being
+    # reinterpreted as an instruction of its own by a broader recogniser.
+    (_DISPATCH_APPROVAL, _handle_conversational_decision),
     (_DISPATCH_TASK, _handle_task_intent),
     (_DISPATCH_FORECAST, _handle_forecast_intent),
     # Golden Path slice 2. Last, deliberately: "add a task to ring the
@@ -1735,6 +1929,7 @@ async def run_chat_through_runtime_contract(
     forecast_action: dict[str, Any] | None = None
     objective_action: dict[str, Any] | None = None
     executive_action: dict[str, Any] | None = None
+    approval_action: dict[str, Any] | None = None
     objective_evidence: dict[str, Any] | None = None
 
     if governance_allowed:
@@ -1761,6 +1956,7 @@ async def run_chat_through_runtime_contract(
         forecast_action = recognised.get(_DISPATCH_FORECAST)
         objective_action = recognised.get(_DISPATCH_OBJECTIVE)
         executive_action = recognised.get(_DISPATCH_EXECUTIVE_GOAL)
+        approval_action = recognised.get(_DISPATCH_APPROVAL)
 
         # Golden Path slice 2: a forecast obtained during this turn becomes
         # evidence on the objective it bears on. After the reply is settled
@@ -1831,6 +2027,13 @@ async def run_chat_through_runtime_contract(
             # verified here. An audit reader must be able to tell a plan from a
             # performance.
             details["executive_action"] = executive_action
+        if approval_action is not None:
+            # The separation this record exists for: `human_decision_recorded`
+            # is the person's authority decision reaching the authority, and it
+            # sits beside -- never inside -- the `executive_action` record of
+            # what the model and the Executive reasoned. "The model suggested
+            # this" and "the user authorised this" are two rows, not one.
+            details["approval_action"] = approval_action
         if objective_evidence is not None:
             # External content entering an objective's durable history is
             # exactly the kind of thing that must be visible afterwards.
@@ -1885,6 +2088,7 @@ async def run_chat_through_runtime_contract(
         forecast_action=forecast_action,
         objective_action=objective_action,
         executive_action=executive_action,
+        approval_action=approval_action,
         objective_evidence=objective_evidence,
         provenance_degraded=reflection_outcome.error is not None,
         provenance_error=reflection_outcome.error,
