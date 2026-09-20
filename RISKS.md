@@ -9,7 +9,9 @@
 > repair was implemented against that diagnosis, not a revised one. It is marked **RESOLVED
 > pending the User Approval Gate**, not closed, because nothing is merged. **(2)** One new entry,
 > **R-RETRIEVAL-2**, recording a *separate* defect found while testing the repair and deliberately
-> **not** repaired by it: `get_retriever()` can return a retriever that cannot retrieve. **No risk
+> **not** repaired by it: `get_retriever()` can return a retriever that cannot retrieve. **(3)** One
+> further new entry, **R-TEST-1**, a pre-existing test-robustness defect found while classifying that
+> package's tier failures and likewise not absorbed into it. **No risk
 > is removed and no resolved risk is revived.** This pass **does** accompany a production code
 > change — the R-RETRIEVAL-1 repair on branch `claude/r-retrieval-1-fts5-fix-qru53y`, unmerged —
 > and says so rather than claiming documentation-only.
@@ -2002,3 +2004,36 @@ risk being closed, not a regression.
 raise (consistent with the explicit-`vector` branch), or return a retriever that is explicitly and
 inspectably empty. Then make the factory and `describe_retrieval()` agree, and pin it. Scope it as
 its own small package; do not fold it into unrelated work.
+
+---
+
+## R-TEST-1 — `test_kernel_db_path_resolution.py` asserts a substring against `rich`-wrapped output (recorded 2026-09-20)
+
+**Pre-existing. Not caused by, and not repaired by, the R-RETRIEVAL-1 package** — found while
+classifying that package's tier failures, and recorded separately rather than absorbed into it.
+
+Three tests in `tests/test_kernel_db_path_resolution.py` assert `expected_db_path in result.output`
+against a Typer/`rich` console rendering. When the temporary database path is long enough, `rich`
+wraps it across a line and inserts a newline mid-path, so the substring is no longer present and
+the assertion fails on output that is in fact correct:
+
+```
+AssertionError: assert '.../test_brake_on_without_db_engag0/live/barth.db' in
+  '... Database: \n/tmp/pytest-of-root/pytest-5/popen-gw0/test_brake_on_without_db_engag0/live/bart\nh.db ...'
+```
+
+**Reproduced on unmodified `main`.** In a clean `git worktree` of `origin/main` at `840c3c5`,
+`pytest tests/test_kernel_db_path_resolution.py -n auto --dist loadfile` gives **3 failed,
+11 passed**. Run serially, the same file passes.
+
+**Why it is worth recording rather than ignoring.** Whether it fails, and how many of the three
+fail, depends on the rendered path's length — which depends on the pytest session number and the
+`xdist` worker id, both of which vary run to run. That is a test that can go red without anything
+changing, which is the "behaviour depending on uncontrolled process state" class this register
+already tracks. It also costs review time on every unrelated PR, because a red default tier has to
+be classified by hand before it can be dismissed.
+
+**What would close it:** assert against output with the terminal width pinned wide (or `rich`
+wrapping disabled), or normalise whitespace out of `result.output` before the substring check, or
+assert on the resolved path the command computed rather than on its rendered presentation. Small;
+its own change, not folded into unrelated work.

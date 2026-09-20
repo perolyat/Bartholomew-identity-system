@@ -364,23 +364,24 @@ Run locally on this branch at `4033e3e`, Python 3.11.15, with the package instal
 |---|---|---|
 | Focused (this package) | `pytest tests/test_retrieval_fts5_availability_contract.py` | **33 passed** |
 | Retrieval-adjacent | 10 retrieval/FTS/hybrid/health test files | **105 passed** |
-| Default (PR Fast equivalent) | `pytest -p no:cacheprovider -n auto --dist loadfile` | **5525 passed, 2 skipped, 2 failed** |
+| Default (PR Fast equivalent) | `pytest -p no:cacheprovider -n auto --dist loadfile` | **5526 passed, 2 skipped, 3 failed** |
 | Integration / slow | `pytest -m "integration or slow" -p no:cacheprovider` | **314 passed, 25 skipped, 0 failed** |
-| Lint | `ruff check .` / `black --check .` | clean (516 files) |
+| Lint | `ruff check .` / `black --check .` | clean (515 files) |
 
 The integration/slow tier's **314 passed / 25 skipped / 0 failed** is the same count
 `RISKS.md` records for the full local runs on `main` and on the EXEC-02 branch. It includes
 `tests/test_w03d_memory_poisoning.py` — the file whose isolated recall failure is discussed
 in §7 — which passed.
 
-### The two default-tier failures are pre-existing, and the evidence says so
+### The default-tier failures are pre-existing, and the evidence says so
 
 ```
 FAILED tests/test_kernel_db_path_resolution.py::test_brake_on_without_db_engages_the_database_the_server_reads
+FAILED tests/test_kernel_db_path_resolution.py::test_brake_status_without_db_reports_the_servers_database
 FAILED tests/test_kernel_db_path_resolution.py::test_brake_without_db_and_without_env_uses_the_project_default
 ```
 
-Both are `rich` wrapping a long temp path across a line in the CLI's output, so a
+All three are `rich` wrapping a long temp path across a line in the CLI's output, so an
 `assert <path> in result.output` substring check misses:
 
 ```
@@ -389,10 +390,16 @@ AssertionError: assert '.../test_brake_on_without_db_engag0/live/barth.db' in
 ```
 
 They are **not** regressions and are unrelated to retrieval. Classified by control, not by
-inspection: the same two tests were run under the same `-n auto --dist loadfile` command in
-a clean `git worktree` of `origin/main` at `840c3c5`, and **failed identically there**. The
-`xdist` worker directory (`popen-gw0/…`) is what pushes the path past the wrap width, which
-is why they pass when the same file is run serially.
+inspection: the same tests were run under the same `-n auto --dist loadfile` command in a
+clean `git worktree` of `origin/main` at `840c3c5`, and **failed identically there** —
+3 failed, 11 passed. The `xdist` worker directory (`popen-gw0/…`) is what pushes the path
+past the wrap width, which is why they pass when the same file is run serially.
+
+**How many of them fail varies between runs, on both trees**, because the temp path's
+length depends on the pytest session number and worker id: an earlier run of this tier saw
+two of the three. That variability is itself the tell that the assertion, not the code
+under test, is what is fragile. It is recorded as **R-TEST-1** in `RISKS.md` — a separate,
+pre-existing test-robustness defect, not absorbed into this package.
 
 Three further failures seen on the first pass —
 `tests/smoke/test_packaging_contract.py::test_declared_console_script_runs_help[bartholomew]`,
