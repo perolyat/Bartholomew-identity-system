@@ -12,6 +12,8 @@ import logging
 import os
 import re
 import sqlite3
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import aiosqlite
@@ -59,12 +61,136 @@ def _term_frequency_rank(value: str | None, summary: str | None, terms: list[str
     return -float(count)
 
 
+class FTS5Status(str, Enum):
+    """The three states an FTS5 availability probe can truthfully report.
+
+    The distinction between `ABSENT` and `PROBE_ERROR` is the whole point of
+    this type, and it is the defect R-RETRIEVAL-1 records: a probe that failed
+    is not the same fact as a SQLite build without FTS5, and collapsing the
+    two destroys the only information a caller needs to decide whether to
+    degrade retrieval permanently or simply try again.
+    """
+
+    #: The probe ran and FTS5 works. Conclusive.
+    AVAILABLE = "available"
+    #: The probe ran and SQLite reported no FTS5 module. Conclusive.
+    ABSENT = "absent"
+    #: The probe could not be completed, so nothing is known either way.
+    PROBE_ERROR = "probe_error"
+
+
+@dataclass(frozen=True)
+class FTS5ProbeResult:
+    """The outcome of one FTS5 probe, with the reason it reached it.
+
+    `available` is deliberately *not* the only field. A caller that reads it
+    alone gets the old fail-safe answer -- False when anything went wrong --
+    which is correct for "should I use FTS right now?" and wrong for "is FTS5
+    missing from this build?". Callers making a durable decision (caching the
+    answer, degrading a configured retrieval mode, reporting degradation to an
+    operator) must read `status`/`conclusive` instead.
+    """
+
+    status: FTS5Status
+    #: The SQLite/exception text behind a non-AVAILABLE status, for diagnosis.
+    detail: str | None = None
+
+    @property
+    def available(self) -> bool:
+        """True only when the probe positively established FTS5 works."""
+        return self.status is FTS5Status.AVAILABLE
+
+    @property
+    def conclusive(self) -> bool:
+        """True when this result actually answers the question.
+
+        A `PROBE_ERROR` answers nothing: it must never be cached as a
+        capability fact and must never be reported as degradation.
+        """
+        return self.status in (FTS5Status.AVAILABLE, FTS5Status.ABSENT)
+
+    def as_dict(self) -> dict:
+        """Serializable form for health/readiness surfaces and CLI output."""
+        return {
+            "status": self.status.value,
+            "available": self.available,
+            "conclusive": self.conclusive,
+            "detail": self.detail,
+        }
+
+
+def _is_fts5_absent_error(message: str) -> bool:
+    """Whether a SQLite error text positively means "this build has no FTS5".
+
+    Deliberately narrow. Anything not recognised here stays `PROBE_ERROR`,
+    which is the safe direction for truthfulness: an unrecognised failure is
+    never cached and never used to justify dropping a configured retrieval
+    arm, so a mistake here costs a repeated probe rather than silent recall
+    loss.
+    """
+    lowered = message.lower()
+    return "no such module" in lowered and "fts5" in lowered
+
+
+def probe_fts5(conn: sqlite3.Connection) -> FTS5ProbeResult:
+    """
+    Runtime probe for FTS5 availability, reporting *why* it answered.
+
+    Attempts to create a throwaway temp virtual table using FTS5. A SQLite
+    "no such module: fts5" is the one error that conclusively means the build
+    lacks FTS5; every other failure (a locked database, a closed or invalid
+    connection, a patched probe in a test) is inconclusive and reported as
+    `PROBE_ERROR`.
+
+    Note that a successful CREATE settles the question even if the cleanup
+    DROP then fails -- FTS5 demonstrably worked. The previous implementation
+    reported that case as unavailable.
+
+    Args:
+        conn: Active SQLite connection
+
+    Returns:
+        FTS5ProbeResult carrying the status and the detail behind it
+
+    Example:
+        >>> conn = sqlite3.connect(":memory:")
+        >>> result = probe_fts5(conn)
+        >>> if result.available:
+        ...     print("FTS5 is available")
+        ... elif result.status is FTS5Status.ABSENT:
+        ...     print("FTS5 is genuinely missing from this build")
+        ... else:
+        ...     print(f"FTS5 could not be probed: {result.detail}")
+    """
+    try:
+        conn.execute("CREATE VIRTUAL TABLE temp.__fts5_probe USING fts5(x)")
+    except sqlite3.OperationalError as exc:
+        message = str(exc)
+        if _is_fts5_absent_error(message):
+            return FTS5ProbeResult(FTS5Status.ABSENT, message)
+        return FTS5ProbeResult(FTS5Status.PROBE_ERROR, f"OperationalError: {message}")
+    except Exception as exc:
+        return FTS5ProbeResult(FTS5Status.PROBE_ERROR, f"{type(exc).__name__}: {exc}")
+
+    try:
+        conn.execute("DROP TABLE temp.__fts5_probe")
+    except Exception as exc:  # pragma: no cover - cleanup only
+        # FTS5 already proved itself by creating the table; a failed cleanup
+        # does not unprove it.
+        logger.debug("FTS5 probe table cleanup failed: %s", exc)
+
+    return FTS5ProbeResult(FTS5Status.AVAILABLE)
+
+
 def fts5_available(conn: sqlite3.Connection) -> bool:
     """
-    Runtime probe for FTS5 availability in SQLite.
+    Fail-safe boolean view of `probe_fts5()`: "can I use FTS right now?".
 
-    Attempts to create a throwaway temp virtual table using FTS5.
-    Returns True if FTS5 is available, False otherwise.
+    Returns False for *any* non-available outcome, exactly as before, so every
+    existing caller keeps its fail-safe behaviour unchanged. Callers that need
+    to tell a missing FTS5 build apart from a failed probe -- because they
+    cache the answer, degrade a retrieval mode or report it to an operator --
+    must call `probe_fts5()` and read `status`, not this.
 
     Args:
         conn: Active SQLite connection
@@ -79,12 +205,7 @@ def fts5_available(conn: sqlite3.Connection) -> bool:
         ... else:
         ...     print("FTS5 not available, falling back")
     """
-    try:
-        conn.execute("CREATE VIRTUAL TABLE temp.__fts5_probe USING fts5(x)")
-        conn.execute("DROP TABLE temp.__fts5_probe")
-        return True
-    except Exception:
-        return False
+    return probe_fts5(conn).available
 
 
 def _load_tokenizer_config() -> str:
@@ -369,14 +490,28 @@ class FTSClient:
             conn: Active SQLite connection
 
         Raises:
-            RuntimeError: If FTS5 extension is not compiled into SQLite
+            RuntimeError: If FTS5 is absent, or if the probe could not be
+                completed. Both still fail closed -- this is an ingestion
+                path and must not proceed on an unproven FTS5 -- but the
+                message says which of the two happened rather than asserting
+                a missing build for every failure.
         """
-        if not fts5_available(conn):
+        result = probe_fts5(conn)
+        if result.available:
+            return
+        if result.status is FTS5Status.ABSENT:
             raise RuntimeError(
                 "SQLite FTS5 is not available in this Python build. "
                 "Install a Python/SQLite build compiled with FTS5. "
-                "Note: This is unrelated to the vector extension (vss0).",
+                "Note: This is unrelated to the vector extension (vss0). "
+                f"SQLite reported: {result.detail}",
             )
+        raise RuntimeError(
+            "The SQLite FTS5 availability probe could not be completed, so "
+            "FTS5 support is unknown and this operation fails closed rather "
+            "than proceeding. This is NOT a statement that FTS5 is missing. "
+            f"Probe failure: {result.detail}",
+        )
 
     def init_schema(self, auto_heal: bool = True) -> None:
         """

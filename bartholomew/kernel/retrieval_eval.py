@@ -215,8 +215,11 @@ def run_evaluation(
     reports = {mode: evaluate_mode(db_path, mode, cases) for mode in modes}
 
     return {
-        # The context without which every number below is meaningless.
-        "retrieval": describe_retrieval(),
+        # The context without which every number below is meaningless -- and
+        # it must describe THIS database, not whatever BARTHO_DB_PATH or
+        # kernel.yaml happens to resolve to, or the FTS status reported
+        # alongside these numbers would belong to a different database.
+        "retrieval": describe_retrieval(db_path=db_path),
         "corpus_size": len(corpus),
         "case_count": len(cases),
         "reports": reports,

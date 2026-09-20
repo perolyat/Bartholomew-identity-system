@@ -2,14 +2,30 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-19 — **EXEC-02 merge currency note and one new risk
-> (documentation-only).** Two changes. **(1)** Existing entries are **amended, not duplicated**, to
+> **Last updated:** 2026-09-20 — **R-RETRIEVAL-1 repaired; one new risk it exposed.** Two changes.
+> **(1)** **R-RETRIEVAL-1 is amended, not duplicated,** with a resolution block recording the root
+> cause, the repair, the evidence and the pre-fix control that proves the regression cases failed
+> before it. Its substance as recorded on 2026-09-19 is **unchanged and still correct** — the
+> repair was implemented against that diagnosis, not a revised one. It is marked **RESOLVED
+> pending the User Approval Gate**, not closed, because nothing is merged. **(2)** One new entry,
+> **R-RETRIEVAL-2**, recording a *separate* defect found while testing the repair and deliberately
+> **not** repaired by it: `get_retriever()` can return a retriever that cannot retrieve. **(3)** One
+> further new entry, **R-TEST-1**, which was **recorded in error and corrected and closed the same
+> day**: the test fragility it described was already diagnosed and already mitigated in the CI
+> workflows (`COLUMNS: "200"`), which the recording session failed to check. It is corrected in
+> place rather than deleted, per R-CTRL-1. **No risk
+> is removed and no resolved risk is revived.** This pass **does** accompany a production code
+> change — the R-RETRIEVAL-1 repair on branch `claude/r-retrieval-1-fts5-fix-qru53y`, unmerged —
+> and says so rather than claiming documentation-only.
+>
+> **Previously (2026-09-19, EXEC-02 merge currency note and one new risk, documentation-only).**
+> Two changes. **(1)** Existing entries were **amended, not duplicated**, to
 > record that EXEC-02 merged as `25cfd90` (PR #115, 2026-09-18): **R-EXEC01-1** and
 > **R-EXEC01-2**, the **R-CTRL-1** mitigation note, and the **EXEC-02 residual risks** section.
 > **R-EXEC01-3 is NOT closed by that merge** — no real-model plan-quality evidence exists.
-> **(2)** One new entry at the end of this document, **R-RETRIEVAL-1**. **No risk is removed and no
-> resolved risk is revived. No production code, tests, schemas, migrations or runtime configuration
-> changed by this pass.**
+> **(2)** One new entry at the end of this document, **R-RETRIEVAL-1**. **No risk was removed and no
+> resolved risk revived. No production code, tests, schemas, migrations or runtime configuration
+> changed by that pass.**
 >
 > **Previously (2026-09-14, Project Control & Documentation Reset). Three changes.**
 > **(1)** A new section at the end of this document records the five residual risks the merged
@@ -1798,7 +1814,7 @@ Carried-forward limitations of **merged** work. Full record:
   that the first package to need one of them finds this entry rather than discovering the gap.
 
 
-## R-RETRIEVAL-1 — the FTS5 availability cache is process-global, unkeyed and collapses every failure into "absent" (recorded 2026-09-18, **substantially corrected 2026-09-19**)
+## R-RETRIEVAL-1 — the FTS5 availability cache is process-global, unkeyed and collapses every failure into "absent" (recorded 2026-09-18, **substantially corrected 2026-09-19**, **RESOLVED 2026-09-20 pending the User Approval Gate**)
 
 **Found while investigating a red CI job during the EXEC-02 User Approval Gate. Not EXEC-02's,
 not fixed by it, and recorded here rather than repaired inside an unrelated package.**
@@ -1899,3 +1915,177 @@ first, since that is where the distinction is destroyed, and `_check_fts5_once()
 changing only the latter cannot recover it; and surface FTS availability in `describe_retrieval()`
 alongside the embedding status it already reports. Scope deliberately, as its own package; do not
 fold it into unrelated work.
+
+---
+
+### RESOLVED 2026-09-20 — implemented, tested, **not merged**
+
+> **Amended, not duplicated.** Everything above stands as recorded on 2026-09-19. The repair was
+> re-derived from the code at `840c3c5` before anything changed and **confirmed that diagnosis in
+> full** — including its corrected, narrower blast radius. Nothing above is withdrawn.
+
+**Branch:** `claude/r-retrieval-1-fts5-fix-qru53y`, off `main` at
+`840c3c54c695c9ce13e0aff008e110157a39c473`.
+**Canonical package evidence:** `docs/R_RETRIEVAL_1_FTS5_AVAILABILITY_REPAIR.md`.
+
+**Root cause, in one line:** the code stored a *conclusion* (`bool`) where it should have stored an
+*observation*. A bare boolean cannot say which database it describes, whether the observation
+completed, or why it answered as it did — so scope, recovery and reporting were all unachievable
+from the value that was kept, and all three defects above follow from that single choice.
+
+**What changed.** `fts_client.probe_fts5()` returns a frozen `FTS5ProbeResult` carrying
+`FTS5Status.AVAILABLE | ABSENT | PROBE_ERROR` and the detail behind it; only a SQLite "no such
+module … fts5" is `ABSENT`, every other failure is `PROBE_ERROR`. `fts5_available()` remains a
+fail-safe boolean view over it, so no existing caller's behaviour changes. In `retrieval.py` the
+process-global `_fts5_available_cache` is **removed** in favour of `_fts5_probe_cache`, keyed by the
+resolved database, storing **only conclusive** outcomes — an inconclusive probe (including a failed
+`sqlite3.connect()`, which is no longer an absence claim) is never cached, so the next call
+re-probes. `check_fts5()` and `reset_fts5_cache()` are the supported API. The degradation gate now
+requires **proof**: a config-resolved `fts` degrades to `vector` only on `ABSENT`, never on a probe
+that merely failed. `describe_retrieval()` gains a `db_path` argument and an `fts` block, a
+conclusively absent FTS5 moves `mode_effective`, an unknown one deliberately moves nothing, and
+`/api/health` and the CLI read the same accessor.
+
+**Evidence that the regression cases actually regressed.**
+`docs/evidence/r-retrieval-1/fts5_availability_control.py` asks the three questions above against
+whichever probe seam the tree it runs in has. On `origin/main` at `840c3c5`, in a clean worktree:
+**SCOPE FAIL, RECOVERY FAIL, REPORTING FAIL** (exit 1). On this branch: all three **PASS** (exit 0).
+`tests/test_retrieval_fts5_availability_contract.py` adds **37 tests**, written as forbidden states —
+a transient failure must not latch, database A must not answer for B, an unfinished probe must not
+be recorded as a capability fact, reporting must not claim health it lacks *or* degradation it has
+not established, and the default hybrid path must not lose its lexical arm (proved end to end by
+seeding a memory and retrieving it, not by asserting a retriever's type). **Adversarial review of the
+repair found one defect the repair itself introduced** — a reporting sentence that blamed an absent
+FTS5 for a vector-only outage, in a cell no test covered — fixed and pinned before the PR opened;
+`docs/R_RETRIEVAL_1_FTS5_AVAILABILITY_REPAIR.md` §8a records it rather than amending it away.
+**A Codex review when the PR was marked ready found three more, all in code this package added,
+all the same underlying mistake**: adding database-specific state to `describe_retrieval()` changed
+what its callers owe it, and three callers were not updated — a "matching is lexical only" claim
+surviving the removal of the lexical arm, the evaluation report describing a different database
+than it measured, and `/api/health` probing (and able to *create*) a database the server does not
+serve, because the kernel resolves `BARTH_DB_PATH` while `describe_retrieval()` resolved
+`BARTHO_DB_PATH`. All three fixed and pinned; §8b records them, including one pin that initially
+could not fail and had to be rewritten.
+
+**What this does NOT claim.** The isolated poisoned-memory CI recall failure of run 35396770160 was
+**not reproduced and is not fixed by this**. The reasoning above — that a process-constant latch
+cannot produce one isolated failure among sibling assertions that passed, and that the mode that
+test resolves does not lose recall to a latched `False` — was re-checked against the code and still
+holds. **Its cause remains unknown.** It is not this.
+
+**Why RESOLVED and not closed:** nothing is merged. This entry closes when the package passes
+Taylor's User Approval Gate and merges; until then the defect is still on `main`.
+
+---
+
+## R-RETRIEVAL-2 — `get_retriever()` can return a retriever that cannot retrieve (recorded 2026-09-20)
+
+**Found while testing the R-RETRIEVAL-1 repair. Deliberately NOT repaired by it**, because it is a
+different defect in a different contract, and correcting FTS5 availability does not require it.
+
+With **no embedder available and FTS5 conclusively absent**, `get_retriever()` resolves `hybrid` →
+`fts` (the embedder degradation) and returns an `FTSOnlyRetriever` over a database with no FTS5
+behind it. That object satisfies the `.retrieve()` interface and can never return a result.
+
+**The reporting side is already truthful** — after the R-RETRIEVAL-1 repair,
+`describe_retrieval()` reports `mode_effective: "none"` and `degraded: true` for exactly this state.
+So the defect is narrow and specific: **the factory's contract disagrees with the reporting
+contract.** The analogous case one branch away already gets this right — an explicit `vector`
+request with no embedder raises `EmbedderUnavailableError` rather than "quietly returning lexical
+results under a vector label" — and this is the same mistake with the arms swapped.
+
+**What is at risk.** A caller that checks `get_retriever()` returned *something* and proceeds will
+get empty results with no exception. The reporting surfaces do say so, so an operator who reads
+`/api/health` is not misled; a caller who reads only the return value is.
+
+**Severity: moderate, and narrower than it sounds.** It needs both conditions at once — no embedder
+*and* no FTS5 — which is a deployment with no retrieval capability at all. On such a deployment
+retrieval is already gone; the defect is that the failure is silent at the factory rather than
+loud.
+
+**Confirmed by evidence, not reasoned:**
+`tests/test_retrieval_fts5_availability_contract.py::TestSeparatelyRecordedDefect::test_hybrid_without_embedder_or_fts_returns_a_retriever_that_cannot_retrieve`
+constructs the state and asserts both halves — reporting says `none`, the factory hands back an
+`FTSOnlyRetriever`. It is a **characterisation test**, pinning today's behaviour so a future repair
+has a starting point. If it begins failing because `get_retriever()` started raising, that is this
+risk being closed, not a regression.
+
+**What would close it:** decide what `get_retriever()` owes a caller when no arm is operational —
+raise (consistent with the explicit-`vector` branch), or return a retriever that is explicitly and
+inspectably empty. Then make the factory and `describe_retrieval()` agree, and pin it. Scope it as
+its own small package; do not fold it into unrelated work.
+
+---
+
+## R-TEST-1 — **RECORDED IN ERROR 2026-09-20, CORRECTED AND CLOSED THE SAME DAY**
+
+> **This entry was wrong in its central claim and is corrected in full below rather than
+> deleted.** It asserted an unrecorded test-robustness defect — "a test that can go red without
+> anything changing", which "costs review time on every unrelated PR". **The repository had
+> already diagnosed this exact failure mode and already mitigated it**, and the session that
+> recorded this entry did not check the CI workflows before writing it. It is preserved rather
+> than quietly removed, because an over-claim inside the risk register is the same defect class
+> R-CTRL-1 exists for, and because R-RETRIEVAL-1's own entry set that precedent four days
+> earlier.
+
+### What was recorded
+
+That three tests in `tests/test_kernel_db_path_resolution.py` assert `expected_db_path in
+result.output` against a Typer/`rich` rendering, and fail when `rich` wraps a long temp path
+mid-token; that this fires unpredictably because the path length depends on the pytest session
+number and `xdist` worker id; and that it was pre-existing, unmitigated and worth tracking.
+
+### What is actually true
+
+The **mechanism** is right and was correctly identified. Everything built on top of it is wrong.
+
+`.github/workflows/ci.yml` has carried this since before the R-RETRIEVAL-1 branch existed:
+
+```yaml
+  # A wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output. Without it, xdist worker tmp paths (…/popen-gw0/…) push the DB-path
+  # the brake commands print past an 80-col default and split it mid-token, so
+  # a substring assertion like ".../barth.db" fails on ".../ba
+rth.db". The
+  # tests are correct; only the rendered width was environment-dependent.
+  COLUMNS: "200"
+```
+
+`integration.yml` and `merge-candidate.yml` carry the same variable, each pointing back at that
+rationale. So the defect was **already found, already root-caused in exactly these terms, and
+already fixed at the only layer where it bit** — and the last sentence of that comment states
+the correct conclusion this entry failed to reach: *the tests are correct; only the rendered
+width was environment-dependent.*
+
+**Measured, not reasoned.** On the R-RETRIEVAL-1 branch, same command, same machine:
+
+```
+without COLUMNS (an 80-col default) : 3 failed, 11 passed
+COLUMNS=200     (what CI sets)      : 14 passed
+```
+
+### What that means for the claims made
+
+| Claim as recorded | Status |
+|---|---|
+| "a test that can go red without anything changing" | **False** anywhere `COLUMNS` is set, which is every CI tier |
+| "costs review time on every unrelated PR" | **False** — CI has been green on this file throughout |
+| "pre-existing … not repaired" | **False** — repaired before this branch existed |
+| the wrapping mechanism itself | **Correct**, and independently correct in `ci.yml` |
+
+### Why the R-RETRIEVAL-1 package saw it at all
+
+Its sandbox ran `pytest` directly, without the workflow environment, so `COLUMNS` was unset and
+the 80-column default applied. **That is a property of how that session invoked the suite, not a
+property of the repository.** The correct reading of those three local failures was always "this
+sandbox is not reproducing CI's environment", and the surrounding evidence — the `origin/main`
+control worktree failing identically, and PR #117's merge commit recording the same two
+failures — was consistent with that and did not require a new risk to explain it.
+
+### Disposition
+
+**CLOSED — no action required, nothing to fix.** The one genuinely useful residue is operational,
+not a risk: a session running this suite outside the workflows should export `COLUMNS=200`, or
+expect these three tests to fail on rendering rather than on behaviour.
+
+**No code, test, schema, migration or workflow is changed by this correction.**
