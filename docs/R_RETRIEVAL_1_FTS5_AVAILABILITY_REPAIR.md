@@ -1,7 +1,7 @@
 # R-RETRIEVAL-1 — FTS5 Availability / Retrieval Correctness Repair
 
-**Status:** implemented, tested, **CI green**, **not merged**. Awaiting Taylor's User Approval
-Gate. PR #118 (draft); head `4d2e5de`.
+**Status:** implemented, tested, **all three CI tiers green**, **not merged**. Awaiting Taylor's
+User Approval Gate. PR #118 (ready for review); code head `7fd4fa7`.
 **Baseline it was built on:** `origin/main` at `840c3c54c695c9ce13e0aff008e110157a39c473`
 (the merge of PR #117).
 **Branch:** `claude/r-retrieval-1-fts5-fix-qru53y`.
@@ -425,106 +425,82 @@ fix restored : 37 passed
 
 ## 9. CI and tier results
 
-### 9.1 GitHub CI — green, every job verified individually
+### 9.1 GitHub CI — all three tiers green, every job verified individually
 
-Run 35501036504 (`CI`), head `4d2e5de`, **conclusion `success`**, 4/4 jobs:
+Head `7fd4fa7`. The PR was marked ready for review and given the `ci:merge-candidate` label,
+which is what the Merge Candidate jobs gate on for a pull request.
+
+**`CI` — run 35501036504 / 35502757524, `success`, 4/4**
 
 | Job | Result |
 |---|---|
 | Quality (format, lint, packaging contract) | success — `pre-commit` (black, ruff, hygiene), `pip check`, Starlette security floor, packaging contract, wave manifest |
-| PR Fast tests (Ubuntu, py3.11, parallel) | **success — the full default suite, zero failures** |
-| Windows fast (packaging, lifecycle, actuation suites) | success — including real-Win32 governed actuation |
-| smoke | success — including `/api/health`, which now serves the new FTS fields |
+| PR Fast tests (Ubuntu, py3.11, parallel) | success — the full default suite |
+| Windows fast (packaging, lifecycle, actuation) | success — including real-Win32 governed actuation |
+| smoke | success — including `/api/health`, which serves the new FTS fields |
 
-**The `Integration` and `Merge Candidate` tiers report `skipped`**: they do not run while the
-PR is a draft. Both were run locally instead (§9.2), and both will run on GitHub when the PR
-is marked ready for review.
+**`Integration` — run 35502757520, `success`**
 
-**CI's default suite passing with zero failures settles §9.3** — though not for the reason
-this document first gave. Every workflow sets `COLUMNS: "200"` precisely to stop `rich`
-wrapping long paths in captured CLI output; the sandbox ran `pytest` directly, without it.
-See §9.3.
+Tests + coverage, the integration/slow-marked tests, clean-start lifecycle, scheduler startup
+readiness and the parking-brake/governance set.
+
+**`Merge Candidate` — run 35502757545, `success`, 7/7**
+
+| Job | Result |
+|---|---|
+| Quality (format, lint, packaging contract) | success |
+| Tests + coverage (Ubuntu, py3.11) | success — **≥70% line-coverage gate met** |
+| Tests + coverage (Ubuntu, py3.10) | success — **≥70% line-coverage gate met** |
+| Critical integration + lifecycle (Ubuntu, py3.11) | success |
+| Critical integration + lifecycle (Ubuntu, py3.10) | success |
+| Windows full default suite + actuation (py3.11) | success — real Win32, nothing substituted |
+| smoke | success |
 
 ### 9.2 Local tiers
 
-Run locally on this branch at `4033e3e`, Python 3.11.15, with the package installed
-(`pip install -e .`) so the packaging-contract tests can see their console scripts.
+Run on this branch with the package installed (`pip install -e .`) **and `COLUMNS=200`, as every
+workflow sets** (§9.3), Python 3.11.15:
 
 | Tier | Command | Result |
 |---|---|---|
 | Focused (this package) | `pytest tests/test_retrieval_fts5_availability_contract.py` | **37 passed** |
-| Retrieval-adjacent | 10 retrieval/FTS/hybrid/health test files | **105 passed** |
-| Default (PR Fast equivalent) | `pytest -p no:cacheprovider -n auto --dist loadfile` | **5526 passed, 2 skipped, 3 failed** |
+| Retrieval-adjacent | 12 retrieval/FTS/hybrid/health/eval test files | **164 passed** |
+| Default (PR Fast equivalent) | `pytest -p no:cacheprovider -n auto --dist loadfile` | **5533 passed, 2 skipped, 0 failed** |
 | Integration / slow | `pytest -m "integration or slow" -p no:cacheprovider` | **314 passed, 25 skipped, 0 failed** |
-| Lint | `ruff check .` / `black --check .` | clean (515 files) |
+| Lint | `ruff check .` / `black --check .` | clean |
 
-The integration/slow tier's **314 passed / 25 skipped / 0 failed** is the same count
-`RISKS.md` records for the full local runs on `main` and on the EXEC-02 branch. It includes
-`tests/test_w03d_memory_poisoning.py` — the file whose isolated recall failure is discussed
-in §7 — which passed.
+The integration/slow tier's **314 passed / 25 skipped / 0 failed** matches the count `RISKS.md`
+records for full local runs on `main`. It includes `tests/test_w03d_memory_poisoning.py` — the file
+whose isolated recall failure is discussed in §7 — which passed.
 
-### 9.3 The local default-tier failures are pre-existing, and the evidence says so
+### 9.3 The three local failures this document first reported, and what they actually were
+
+Earlier revisions of this section reported `5526 passed, 2 skipped, 3 failed` locally, in
+`tests/test_kernel_db_path_resolution.py`, and recorded them as a new risk, **R-TEST-1**.
+
+**That was wrong, and R-TEST-1 is corrected and closed in `RISKS.md` as recorded in error.**
+The repository had already diagnosed and already fixed this before this branch existed.
+`ci.yml`, `integration.yml` and `merge-candidate.yml` all set `COLUMNS: "200"`, and `ci.yml`
+names the failure exactly:
+
+> A wide console so Rich/Click do not line-wrap long paths in captured CLI output. Without it,
+> xdist worker tmp paths (…/popen-gw0/…) push the DB-path the brake commands print past an
+> 80-col default and split it mid-token, so a substring assertion like ".../barth.db" fails on
+> ".../ba\nrth.db". **The tests are correct; only the rendered width was environment-dependent.**
+
+The session that wrote the earlier section did not read that env block before recording a risk
+about it. Measured on this branch, same command, same machine:
 
 ```
-FAILED tests/test_kernel_db_path_resolution.py::test_brake_on_without_db_engages_the_database_the_server_reads
-FAILED tests/test_kernel_db_path_resolution.py::test_brake_status_without_db_reports_the_servers_database
-FAILED tests/test_kernel_db_path_resolution.py::test_brake_without_db_and_without_env_uses_the_project_default
+without COLUMNS (80-col default) : 3 failed, 11 passed
+COLUMNS=200     (what CI sets)   : 14 passed
 ```
 
-All three are `rich` wrapping a long temp path across a line in the CLI's output, so an
-`assert <path> in result.output` substring check misses:
+Run as CI runs it, the whole default tier is green locally too (§9.2). The correct reading of
+those three failures was always **"this sandbox is not reproducing CI's environment"**, and a
+session running this suite outside the workflows should export `COLUMNS=200`.
 
-```
-AssertionError: assert '.../test_brake_on_without_db_engag0/live/barth.db' in
-  '... Database: \n/tmp/pytest-of-root/pytest-5/popen-gw0/test_brake_on_without_db_engag0/live/bart\nh.db ...'
-```
-
-They are **not** regressions and are unrelated to retrieval. Classified by control, not by
-inspection: the same tests were run under the same `-n auto --dist loadfile` command in a
-clean `git worktree` of `origin/main` at `840c3c5`, and **failed identically there** —
-3 failed, 11 passed. The `xdist` worker directory (`popen-gw0/…`) is what pushes the path
-past the wrap width, which is why they pass when the same file is run serially.
-
-> **Correction, made when this PR was marked ready for review.** This section first said the
-> failures were a fresh, unmitigated test-robustness defect, and recorded them as a new risk,
-> **R-TEST-1**. That was wrong, and R-TEST-1 is now corrected and closed in `RISKS.md` as
-> recorded in error. **The repository had already diagnosed and already fixed this**, before
-> this branch existed: `ci.yml`, `integration.yml` and `merge-candidate.yml` all set
-> `COLUMNS: "200"`, with a comment in `ci.yml` naming this exact failure — *"xdist worker tmp
-> paths (…/popen-gw0/…) push the DB-path the brake commands print past an 80-col default and
-> split it mid-token … The tests are correct; only the rendered width was
-> environment-dependent."*
->
-> The session that wrote this section did not read the workflow env block before recording a
-> risk about it. Measured on this branch, same command, same machine:
->
-> ```
-> without COLUMNS (80-col default) : 3 failed, 11 passed
-> COLUMNS=200     (what CI sets)   : 14 passed
-> ```
->
-> So the correct reading of these three failures was always **"this sandbox is not reproducing
-> CI's environment"**, not "the repository has a fragile test". Classifying them as *not this
-> package's* was right; the explanation attached to it was not, and the new risk was
-> unnecessary. A session running this suite outside the workflows should export
-> `COLUMNS=200`.
-
-Three further failures seen on the first pass —
-`tests/smoke/test_packaging_contract.py::test_declared_console_script_runs_help[bartholomew]`,
-`[bartholomew-backfill-fts]` and `test_no_undeclared_third_party_runtime_imports` — were this
-sandbox not having run `pip install -e .`
-(`FileNotFoundError: 'bartholomew'`, `PackageNotFoundError: No package metadata was found for
-bartholomew`). They also failed identically on the `origin/main` control, and all 9 tests in
-that file pass once the package is installed. CI installs it.
-
-A third, independent corroboration that they are not this package's: PR #117's own merge
-commit message, written by an earlier session, records "the two known pre-existing
-`test_kernel_db_path_resolution.py` failures, which reproduce on clean main".
-
-**No failure in any tier is attributable to this change, and GitHub CI is green on the
-current head.**
-
----
+**No failure in any tier, local or CI, is attributable to this change.**
 
 ## 10. Does R-RETRIEVAL-1 close?
 
