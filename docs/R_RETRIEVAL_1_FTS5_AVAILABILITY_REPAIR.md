@@ -373,9 +373,10 @@ Run 35501036504 (`CI`), head `4d2e5de`, **conclusion `success`**, 4/4 jobs:
 PR is a draft. Both were run locally instead (§9.2), and both will run on GitHub when the PR
 is marked ready for review.
 
-**CI's default suite passing with zero failures settles §9.3.** The three failures seen in
-the local sandbox did not occur on the runner, whose shorter temp paths do not reach the
-wrap width. The code is not what differs between the two; the rendered path length is.
+**CI's default suite passing with zero failures settles §9.3** — though not for the reason
+this document first gave. Every workflow sets `COLUMNS: "200"` precisely to stop `rich`
+wrapping long paths in captured CLI output; the sandbox ran `pytest` directly, without it.
+See §9.3.
 
 ### 9.2 Local tiers
 
@@ -417,11 +418,29 @@ clean `git worktree` of `origin/main` at `840c3c5`, and **failed identically the
 3 failed, 11 passed. The `xdist` worker directory (`popen-gw0/…`) is what pushes the path
 past the wrap width, which is why they pass when the same file is run serially.
 
-**How many of them fail varies between runs, on both trees**, because the temp path's
-length depends on the pytest session number and worker id: an earlier run of this tier saw
-two of the three. That variability is itself the tell that the assertion, not the code
-under test, is what is fragile. It is recorded as **R-TEST-1** in `RISKS.md` — a separate,
-pre-existing test-robustness defect, not absorbed into this package.
+> **Correction, made when this PR was marked ready for review.** This section first said the
+> failures were a fresh, unmitigated test-robustness defect, and recorded them as a new risk,
+> **R-TEST-1**. That was wrong, and R-TEST-1 is now corrected and closed in `RISKS.md` as
+> recorded in error. **The repository had already diagnosed and already fixed this**, before
+> this branch existed: `ci.yml`, `integration.yml` and `merge-candidate.yml` all set
+> `COLUMNS: "200"`, with a comment in `ci.yml` naming this exact failure — *"xdist worker tmp
+> paths (…/popen-gw0/…) push the DB-path the brake commands print past an 80-col default and
+> split it mid-token … The tests are correct; only the rendered width was
+> environment-dependent."*
+>
+> The session that wrote this section did not read the workflow env block before recording a
+> risk about it. Measured on this branch, same command, same machine:
+>
+> ```
+> without COLUMNS (80-col default) : 3 failed, 11 passed
+> COLUMNS=200     (what CI sets)   : 14 passed
+> ```
+>
+> So the correct reading of these three failures was always **"this sandbox is not reproducing
+> CI's environment"**, not "the repository has a fragile test". Classifying them as *not this
+> package's* was right; the explanation attached to it was not, and the new risk was
+> unnecessary. A session running this suite outside the workflows should export
+> `COLUMNS=200`.
 
 Three further failures seen on the first pass —
 `tests/smoke/test_packaging_contract.py::test_declared_console_script_runs_help[bartholomew]`,
@@ -431,9 +450,9 @@ sandbox not having run `pip install -e .`
 bartholomew`). They also failed identically on the `origin/main` control, and all 9 tests in
 that file pass once the package is installed. CI installs it.
 
-A third, independent corroboration: PR #117's own merge commit message, written by an
-earlier session, records "the two known pre-existing `test_kernel_db_path_resolution.py`
-failures, which reproduce on clean main".
+A third, independent corroboration that they are not this package's: PR #117's own merge
+commit message, written by an earlier session, records "the two known pre-existing
+`test_kernel_db_path_resolution.py` failures, which reproduce on clean main".
 
 **No failure in any tier is attributable to this change, and GitHub CI is green on the
 current head.**
@@ -460,7 +479,8 @@ What R-RETRIEVAL-1 does **not** close, and never covered: R-RETRIEVAL-2 (§8).
 
 ## 11. Remaining risks
 
-1. **R-RETRIEVAL-2** (§8) — new, recorded, not repaired here.
+1. **R-RETRIEVAL-2** (§8) — new, recorded, not repaired here. It is the only new risk this
+   package leaves behind: **R-TEST-1 was recorded in error and is closed** (§9.3).
 2. **The absence matcher is narrow by design.** A SQLite build reporting a missing FTS5 in
    wording `_is_fts5_absent_error()` does not recognise would be classified
    `PROBE_ERROR` — re-probed every call, never cached, never degrading a mode. The cost is

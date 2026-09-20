@@ -10,8 +10,10 @@
 > pending the User Approval Gate**, not closed, because nothing is merged. **(2)** One new entry,
 > **R-RETRIEVAL-2**, recording a *separate* defect found while testing the repair and deliberately
 > **not** repaired by it: `get_retriever()` can return a retriever that cannot retrieve. **(3)** One
-> further new entry, **R-TEST-1**, a pre-existing test-robustness defect found while classifying that
-> package's tier failures and likewise not absorbed into it. **No risk
+> further new entry, **R-TEST-1**, which was **recorded in error and corrected and closed the same
+> day**: the test fragility it described was already diagnosed and already mitigated in the CI
+> workflows (`COLUMNS: "200"`), which the recording session failed to check. It is corrected in
+> place rather than deleted, per R-CTRL-1. **No risk
 > is removed and no resolved risk is revived.** This pass **does** accompany a production code
 > change — the R-RETRIEVAL-1 repair on branch `claude/r-retrieval-1-fts5-fix-qru53y`, unmerged —
 > and says so rather than claiming documentation-only.
@@ -2007,37 +2009,75 @@ its own small package; do not fold it into unrelated work.
 
 ---
 
-## R-TEST-1 — `test_kernel_db_path_resolution.py` asserts a substring against `rich`-wrapped output (recorded 2026-09-20)
+## R-TEST-1 — **RECORDED IN ERROR 2026-09-20, CORRECTED AND CLOSED THE SAME DAY**
 
-**Pre-existing. Not caused by, and not repaired by, the R-RETRIEVAL-1 package** — found while
-classifying that package's tier failures, and recorded separately rather than absorbed into it.
+> **This entry was wrong in its central claim and is corrected in full below rather than
+> deleted.** It asserted an unrecorded test-robustness defect — "a test that can go red without
+> anything changing", which "costs review time on every unrelated PR". **The repository had
+> already diagnosed this exact failure mode and already mitigated it**, and the session that
+> recorded this entry did not check the CI workflows before writing it. It is preserved rather
+> than quietly removed, because an over-claim inside the risk register is the same defect class
+> R-CTRL-1 exists for, and because R-RETRIEVAL-1's own entry set that precedent four days
+> earlier.
 
-Three tests in `tests/test_kernel_db_path_resolution.py` assert `expected_db_path in result.output`
-against a Typer/`rich` console rendering. When the temporary database path is long enough, `rich`
-wraps it across a line and inserts a newline mid-path, so the substring is no longer present and
-the assertion fails on output that is in fact correct:
+### What was recorded
+
+That three tests in `tests/test_kernel_db_path_resolution.py` assert `expected_db_path in
+result.output` against a Typer/`rich` rendering, and fail when `rich` wraps a long temp path
+mid-token; that this fires unpredictably because the path length depends on the pytest session
+number and `xdist` worker id; and that it was pre-existing, unmitigated and worth tracking.
+
+### What is actually true
+
+The **mechanism** is right and was correctly identified. Everything built on top of it is wrong.
+
+`.github/workflows/ci.yml` has carried this since before the R-RETRIEVAL-1 branch existed:
+
+```yaml
+  # A wide console so Rich/Click do not line-wrap long paths in captured CLI
+  # output. Without it, xdist worker tmp paths (…/popen-gw0/…) push the DB-path
+  # the brake commands print past an 80-col default and split it mid-token, so
+  # a substring assertion like ".../barth.db" fails on ".../ba
+rth.db". The
+  # tests are correct; only the rendered width was environment-dependent.
+  COLUMNS: "200"
+```
+
+`integration.yml` and `merge-candidate.yml` carry the same variable, each pointing back at that
+rationale. So the defect was **already found, already root-caused in exactly these terms, and
+already fixed at the only layer where it bit** — and the last sentence of that comment states
+the correct conclusion this entry failed to reach: *the tests are correct; only the rendered
+width was environment-dependent.*
+
+**Measured, not reasoned.** On the R-RETRIEVAL-1 branch, same command, same machine:
 
 ```
-AssertionError: assert '.../test_brake_on_without_db_engag0/live/barth.db' in
-  '... Database: \n/tmp/pytest-of-root/pytest-5/popen-gw0/test_brake_on_without_db_engag0/live/bart\nh.db ...'
+without COLUMNS (an 80-col default) : 3 failed, 11 passed
+COLUMNS=200     (what CI sets)      : 14 passed
 ```
 
-**Reproduced on unmodified `main`.** In a clean `git worktree` of `origin/main` at `840c3c5`,
-`pytest tests/test_kernel_db_path_resolution.py -n auto --dist loadfile` gives **3 failed,
-11 passed**. Run serially, the same file passes. It does **not** currently fire on the GitHub
-runner, whose temp paths are shorter than the wrap width — CI run 35501036504's default suite is
-green — so this is latent rather than currently red, and it bites developers and sandboxes rather
-than CI today. PR #117's merge commit records the same class independently ("the two known
-pre-existing `test_kernel_db_path_resolution.py` failures, which reproduce on clean main").
+### What that means for the claims made
 
-**Why it is worth recording rather than ignoring.** Whether it fails, and how many of the three
-fail, depends on the rendered path's length — which depends on the pytest session number and the
-`xdist` worker id, both of which vary run to run. That is a test that can go red without anything
-changing, which is the "behaviour depending on uncontrolled process state" class this register
-already tracks. It also costs review time on every unrelated PR, because a red default tier has to
-be classified by hand before it can be dismissed.
+| Claim as recorded | Status |
+|---|---|
+| "a test that can go red without anything changing" | **False** anywhere `COLUMNS` is set, which is every CI tier |
+| "costs review time on every unrelated PR" | **False** — CI has been green on this file throughout |
+| "pre-existing … not repaired" | **False** — repaired before this branch existed |
+| the wrapping mechanism itself | **Correct**, and independently correct in `ci.yml` |
 
-**What would close it:** assert against output with the terminal width pinned wide (or `rich`
-wrapping disabled), or normalise whitespace out of `result.output` before the substring check, or
-assert on the resolved path the command computed rather than on its rendered presentation. Small;
-its own change, not folded into unrelated work.
+### Why the R-RETRIEVAL-1 package saw it at all
+
+Its sandbox ran `pytest` directly, without the workflow environment, so `COLUMNS` was unset and
+the 80-column default applied. **That is a property of how that session invoked the suite, not a
+property of the repository.** The correct reading of those three local failures was always "this
+sandbox is not reproducing CI's environment", and the surrounding evidence — the `origin/main`
+control worktree failing identically, and PR #117's merge commit recording the same two
+failures — was consistent with that and did not require a new risk to explain it.
+
+### Disposition
+
+**CLOSED — no action required, nothing to fix.** The one genuinely useful residue is operational,
+not a risk: a session running this suite outside the workflows should export `COLUMNS=200`, or
+expect these three tests to fail on rendering rather than on behaviour.
+
+**No code, test, schema, migration or workflow is changed by this correction.**
