@@ -178,7 +178,7 @@ those tests always meant. **No assertion was relaxed and no expectation was chan
 
 ## 5. Negative and forbidden states now tested
 
-`tests/test_retrieval_fts5_availability_contract.py` — **31 tests**, organised by the
+`tests/test_retrieval_fts5_availability_contract.py` — **33 tests**, organised by the
 statement each one forbids.
 
 | # | Statement proved | Test |
@@ -206,6 +206,7 @@ statement each one forbids.
 | 21 | Reporting **never** claims availability for an unprobeable database | `test_reporting_never_claims_availability_for_an_unprobeable_database` |
 | 22 | Honouring an explicit `fts` does not make it work — reported as `none` | `test_explicit_fts_on_an_absent_build_is_reported_as_no_effective_arm` |
 | 23 | `/api/health` carries the same answer, from the same accessor | `test_health_surface_carries_the_fts_answer` |
+| 24 | A vector-only outage does **not** blame FTS5 — in either of its two uncovered cells | `test_a_vector_only_outage_does_not_blame_fts5[available]`, `[probe_error]` |
 
 Test 17 is the one that matters most and the one type-stability assertions cannot give
 you: it seeds a real memory through `MemoryStore`, poisons the cache with another
@@ -253,7 +254,7 @@ against the repair. The full transcripts are in §6.4.
 ### 6.2 Focused tests
 
 ```
-tests/test_retrieval_fts5_availability_contract.py              31 passed
+tests/test_retrieval_fts5_availability_contract.py              33 passed
 ```
 
 ### 6.3 Retrieval-adjacent regression set
@@ -310,6 +311,50 @@ regression in this package.
 
 ---
 
+## 8a. One defect found by adversarial review of this package, and fixed before the PR
+
+Found by a five-dimension adversarial review of the diff, run before the PR was opened.
+**It was a defect this package itself introduced, in the reporting code it exists to make
+truthful** — which is why it is recorded here rather than quietly amended.
+
+**What was wrong.** `describe_retrieval()` appended
+
+> "No retrieval arm is operational: there is no embedder, and FTS5 is absent."
+
+gated only on `effective_mode == "none"`. A configured **`vector`** mode reaches `"none"`
+on the embedder alone and never passes through the FTS branch at all, so the sentence was
+emitted for `vector` + unavailable embedder **whatever FTS5 was doing** — including in the
+same payload whose own `fts` block said `"status": "available", "available": true`, served
+next to it in one `/api/health` response.
+
+The `probe_error` cell is the worse half: it asserted a **conclusive absence from an
+inconclusive observation**, which is the precise untruth §3.3 and `describe_retrieval()`'s
+own docstring say must not happen. Reproduced with no patching at all:
+
+```
+configured=vector, real probe (FTS5 present):
+  fts      : available available= True
+  effective: none
+  claims 'FTS5 is absent' in reason: True      <-- contradicts its own fts block
+```
+
+**Why nothing caught it.** The identical condition in its *hybrid* form is asserted
+against — `test_reporting_does_not_claim_degradation_when_fts_is_available` and
+`test_reporting_does_not_invent_degradation_from_an_unknown_probe` both assert
+`"FTS5 is absent" not in reason`. The `vector` route to `"none"` had no equivalent. Row 24
+of §5 is that gap closed, in both cells.
+
+**The fix** is one conjunct — `if effective_mode == "none" and fts_absent:` — inside the
+block this package added. Verified as a real regression test, not a decoration: with the
+conjunct removed both new cases fail with *"reporting blamed FTS5 for an outage FTS5 did
+not cause"*; with it restored both pass.
+
+This does **not** change the R-RETRIEVAL-2 entry's statement that reporting is truthful for
+*that* state (hybrid + no embedder + FTS5 conclusively absent) — that claim was checked
+against this finding and is accurate for the state it describes.
+
+---
+
 ## 9. CI and tier results
 
 Run locally on this branch at `4033e3e`, Python 3.11.15, with the package installed
@@ -317,7 +362,7 @@ Run locally on this branch at `4033e3e`, Python 3.11.15, with the package instal
 
 | Tier | Command | Result |
 |---|---|---|
-| Focused (this package) | `pytest tests/test_retrieval_fts5_availability_contract.py` | **31 passed** |
+| Focused (this package) | `pytest tests/test_retrieval_fts5_availability_contract.py` | **33 passed** |
 | Retrieval-adjacent | 10 retrieval/FTS/hybrid/health test files | **105 passed** |
 | Default (PR Fast equivalent) | `pytest -p no:cacheprovider -n auto --dist loadfile` | **5525 passed, 2 skipped, 2 failed** |
 | Integration / slow | `pytest -m "integration or slow" -p no:cacheprovider` | **314 passed, 25 skipped, 0 failed** |
@@ -372,7 +417,7 @@ condition `RISKS.md` names under "What would close it" is met:
 | distinguish genuine absence from a failed probe at `fts_client.fts5_available()` **first** | **done** — `probe_fts5()` is the new primary; `fts5_available()` is a view over it |
 | …and at `_check_fts5_once()` **second** | **done** — `check_fts5()` acts on `status`, and `sqlite3.connect()` failure is its own `PROBE_ERROR` |
 | surface FTS availability in `describe_retrieval()` | **done** — the `fts` block, plus `/api/health` and the CLI |
-| regression coverage for multiple databases, transient probe failure and reporting | **done** — §5, 31 tests |
+| regression coverage for multiple databases, transient probe failure and reporting | **done** — §5, 33 tests |
 | do not claim the unknown red CI failure is solved | **honoured** — §7 |
 
 What R-RETRIEVAL-1 does **not** close, and never covered: R-RETRIEVAL-2 (§8).

@@ -568,6 +568,52 @@ class TestReporting:
         assert described["mode_effective"] == "none"
         assert described["degraded"] is True
 
+    @pytest.mark.parametrize(
+        ("probe", "expected_status"),
+        [(AVAILABLE, "available"), (TRANSIENT, "probe_error")],
+    )
+    def test_a_vector_only_outage_does_not_blame_fts5(
+        self,
+        tmp_path,
+        monkeypatch,
+        probe,
+        expected_status,
+    ):
+        """A configured `vector` mode reaches "none" on the embedder alone.
+
+        Found by adversarial review of this package's own first implementation,
+        which appended "there is no embedder, and FTS5 is absent" for every
+        route to `mode_effective: none`. Configured `vector` never passes
+        through the FTS branch at all, so that sentence was emitted in the same
+        payload whose `fts` block said `available: true` -- and, on a probe that
+        merely failed, asserted a conclusive absence from an inconclusive
+        observation. Both cells are pinned here because neither was covered.
+        """
+        import bartholomew.kernel.embedding_engine as engine_module
+
+        db = _make_db(str(tmp_path / f"vector_only_{expected_status}.db"))
+        monkeypatch.setenv("BARTHO_RETRIEVAL_MODE", "vector")
+        monkeypatch.setenv("BARTHO_EMBED_ENABLED", "1")
+        monkeypatch.delenv("BARTHO_EMBED_ALLOW_FALLBACK", raising=False)
+        monkeypatch.setattr(
+            engine_module,
+            "_embedding_factory",
+            engine_module.EmbeddingEngineFactory(),
+        )
+
+        status = engine_module.get_embedding_status()
+        if status.mode is not engine_module.EmbeddingMode.UNAVAILABLE:
+            pytest.skip(f"a real embedder is provisioned here ({status.mode.value})")
+
+        with patch("bartholomew.kernel.retrieval.probe_fts5", return_value=probe):
+            described = describe_retrieval(db_path=db)
+
+        assert described["mode_effective"] == "none"
+        assert described["fts"]["status"] == expected_status
+        assert "FTS5 is absent" not in (
+            described["reason"] or ""
+        ), "reporting blamed FTS5 for an outage FTS5 did not cause"
+
     def test_health_surface_carries_the_fts_answer(self, tmp_path, monkeypatch):
         """`/api/health` reads the same accessor, so it cannot drift from it."""
         from bartholomew_api_bridge_v0_1.services.api.app import _retrieval_health

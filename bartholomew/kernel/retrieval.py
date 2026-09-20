@@ -271,7 +271,14 @@ def describe_retrieval(mode: str | None = None, db_path: str | None = None) -> d
                 f"{configured_mode} retrieval was requested but no embedder could "
                 "be loaded, so vector similarity is not contributing at all.",
             )
-            if effective_mode == "none":
+            # Only claimable when FTS5 was *proved* absent. A configured
+            # `vector` mode reaches "none" on the embedder alone, whatever
+            # FTS5 is doing, so without this conjunct the sentence asserts an
+            # absence the same payload's `fts` block contradicts -- and, on a
+            # probe that merely failed, asserts a conclusive absence from an
+            # inconclusive observation. That is the untruth this package
+            # exists to remove.
+            if effective_mode == "none" and fts_absent:
                 reasons.append(
                     "No retrieval arm is operational: there is no embedder, and FTS5 is absent.",
                 )
