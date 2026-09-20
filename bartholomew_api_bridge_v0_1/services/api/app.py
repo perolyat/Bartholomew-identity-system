@@ -1253,7 +1253,18 @@ def _retrieval_health() -> dict[str, Any]:
     try:
         from bartholomew.kernel.retrieval import describe_retrieval
 
-        described = describe_retrieval()
+        # The database this server actually serves, not whatever
+        # BARTHO_DB_PATH or kernel.yaml resolves to. They are different
+        # resolvers -- the kernel comes through BARTH_DB_PATH via
+        # `resolve_db_path()` -- so without this the FTS status reported here
+        # could describe a different database than the one answering queries.
+        db_path = None
+        if _kernel is not None:
+            db_path = getattr(_kernel.mem, "db_path", None)
+        if db_path is None:
+            db_path = resolve_db_path()
+
+        described = describe_retrieval(db_path=db_path)
         embedding = described["embedding"]
         fts = described["fts"]
         return {

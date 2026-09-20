@@ -614,18 +614,151 @@ class TestReporting:
             described["reason"] or ""
         ), "reporting blamed FTS5 for an outage FTS5 did not cause"
 
+    def test_disabled_embeddings_does_not_claim_lexical_matching_when_fts_is_absent(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Found by Codex review of this PR.
+
+        With embeddings DISABLED the reason has always said "matching is
+        lexical only". That is true while there IS a lexical arm. When FTS5 is
+        conclusively absent the arm was removed a few lines earlier, so the
+        same payload said `mode_effective: vector`, `fts.status: absent` and
+        "lexical only" all at once -- three statements that cannot all hold.
+        Nothing can match in that state, and reporting has to say so.
+        """
+        import bartholomew.kernel.embedding_engine as engine_module
+
+        db = _make_db(str(tmp_path / "disabled_no_fts.db"))
+        monkeypatch.setenv("BARTHO_RETRIEVAL_MODE", "hybrid")
+        monkeypatch.delenv("BARTHO_EMBED_ENABLED", raising=False)
+        monkeypatch.setattr(
+            engine_module,
+            "_embedding_factory",
+            engine_module.EmbeddingEngineFactory(),
+        )
+
+        status = engine_module.get_embedding_status()
+        if status.mode is not engine_module.EmbeddingMode.DISABLED:
+            pytest.skip(f"embeddings are not disabled here ({status.mode.value})")
+
+        with patch("bartholomew.kernel.retrieval.probe_fts5", return_value=ABSENT):
+            described = describe_retrieval(db_path=db)
+
+        reason = described["reason"] or ""
+        assert described["fts"]["status"] == "absent"
+        assert "lexical only" not in reason, "claimed a lexical arm that was just removed"
+        assert described["mode_effective"] == "none"
+        assert described["degraded"] is True
+
+    def test_reporting_never_creates_a_database_it_was_only_asked_about(self, tmp_path):
+        """Found by Codex review of this PR.
+
+        `describe_retrieval()` is read by `/api/health` and the CLI. Probing
+        used to go straight to `sqlite3.connect()`, which brings the file into
+        existence -- so merely asking a health endpoint what retrieval would do
+        could create `data/barth.db`. A reporting call must not have that side
+        effect, and "there is no database there yet" is not an FTS5 answer.
+        """
+        absent_db = tmp_path / "does_not_exist_yet.db"
+
+        result = check_fts5(str(absent_db))
+
+        assert not absent_db.exists(), "a reporting probe created the database"
+        assert result.status is FTS5Status.PROBE_ERROR
+        assert result.conclusive is False
+        assert retrieval._fts5_probe_cache == {}
+
+        described = describe_retrieval(db_path=str(absent_db))
+        assert not absent_db.exists()
+        assert described["fts"]["status"] == "probe_error"
+
+    def test_health_probes_the_database_the_server_actually_serves(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Found by Codex review of this PR.
+
+        The kernel resolves its database through `BARTH_DB_PATH` (via
+        `services/api/db.resolve_db_path`); `describe_retrieval()` resolves
+        `BARTHO_DB_PATH`/`kernel.yaml`. Two different resolvers, so a health
+        payload that let `describe_retrieval()` resolve for itself could report
+        FTS status for a database no query will ever touch.
+        """
+        from bartholomew_api_bridge_v0_1.services.api.app import _retrieval_health
+
+        # The two databases must be DISTINGUISHABLE, or this test cannot fail:
+        # if both exist and both have FTS5, the payload reads `available`
+        # whichever one was probed. The served one exists; the unrelated one
+        # deliberately does not, so probing the wrong database is visible as
+        # `probe_error` rather than hidden behind a matching answer.
+        served = _make_db(str(tmp_path / "served.db"))
+        unrelated = str(tmp_path / "never_created.db")
+        monkeypatch.setenv("BARTH_DB_PATH", served)
+        monkeypatch.setenv("BARTHO_DB_PATH", unrelated)
+
+        payload = _retrieval_health()
+
+        assert payload["retrieval_fts_status"] == "available"
+        assert payload["retrieval_fts_available"] is True
+        assert describe_retrieval(db_path=unrelated)["fts"]["status"] == "probe_error"
+
     def test_health_surface_carries_the_fts_answer(self, tmp_path, monkeypatch):
         """`/api/health` reads the same accessor, so it cannot drift from it."""
         from bartholomew_api_bridge_v0_1.services.api.app import _retrieval_health
 
+        # BARTH_DB_PATH, not BARTHO_DB_PATH: the health surface reports on the
+        # database the server serves, which is resolved by
+        # `services/api/db.resolve_db_path()`. This test used to set the other
+        # one and still passed, which is exactly the defect Codex found.
         db = _make_db(str(tmp_path / "health.db"))
-        monkeypatch.setenv("BARTHO_DB_PATH", db)
+        monkeypatch.setenv("BARTH_DB_PATH", db)
 
         with patch("bartholomew.kernel.retrieval.probe_fts5", return_value=ABSENT):
             payload = _retrieval_health()
 
         assert payload["retrieval_fts_status"] == "absent"
         assert payload["retrieval_fts_available"] is False
+
+
+# ---------------------------------------------------------------------------
+# 6a. Every reporting caller describes the database it is reporting on
+# ---------------------------------------------------------------------------
+
+
+@SKIP_WINDOWS_FTS
+class TestReportingCallersPassTheirDatabase:
+    """Found by Codex review of this PR.
+
+    Before this change `describe_retrieval()` carried nothing database-specific,
+    so a caller that let it resolve its own path lost nothing. Adding the `fts`
+    block changed that: every caller now has to name the database whose results
+    it is presenting, or the status it prints belongs to a different one.
+    """
+
+    def test_the_evaluation_report_describes_the_database_it_evaluated(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from bartholomew.kernel.retrieval_eval import run_evaluation
+
+        evaluated = str(tmp_path / "scratch_eval.db")
+        unrelated = _make_db(str(tmp_path / "configured_elsewhere.db"))
+        monkeypatch.setenv("BARTHO_DB_PATH", unrelated)
+
+        corpus = {
+            1: ("fact", "kestrel", "The kestrel hovers above the motorway verge"),
+            2: ("fact", "heron", "A heron stands in the shallows at dawn"),
+        }
+        cases = [("q1", "kestrel", (1,))]
+
+        report = run_evaluation(evaluated, corpus, cases, modes=("fts",))
+
+        assert report["retrieval"]["fts"]["db_path"] == evaluated
+        assert report["retrieval"]["fts"]["db_path"] != unrelated
 
 
 # ---------------------------------------------------------------------------

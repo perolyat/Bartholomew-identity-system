@@ -1950,7 +1950,7 @@ conclusively absent FTS5 moves `mode_effective`, an unknown one deliberately mov
 `docs/evidence/r-retrieval-1/fts5_availability_control.py` asks the three questions above against
 whichever probe seam the tree it runs in has. On `origin/main` at `840c3c5`, in a clean worktree:
 **SCOPE FAIL, RECOVERY FAIL, REPORTING FAIL** (exit 1). On this branch: all three **PASS** (exit 0).
-`tests/test_retrieval_fts5_availability_contract.py` adds **33 tests**, written as forbidden states —
+`tests/test_retrieval_fts5_availability_contract.py` adds **37 tests**, written as forbidden states —
 a transient failure must not latch, database A must not answer for B, an unfinished probe must not
 be recorded as a capability fact, reporting must not claim health it lacks *or* degradation it has
 not established, and the default hybrid path must not lose its lexical arm (proved end to end by
@@ -1958,6 +1958,14 @@ seeding a memory and retrieving it, not by asserting a retriever's type). **Adve
 repair found one defect the repair itself introduced** — a reporting sentence that blamed an absent
 FTS5 for a vector-only outage, in a cell no test covered — fixed and pinned before the PR opened;
 `docs/R_RETRIEVAL_1_FTS5_AVAILABILITY_REPAIR.md` §8a records it rather than amending it away.
+**A Codex review when the PR was marked ready found three more, all in code this package added,
+all the same underlying mistake**: adding database-specific state to `describe_retrieval()` changed
+what its callers owe it, and three callers were not updated — a "matching is lexical only" claim
+surviving the removal of the lexical arm, the evaluation report describing a different database
+than it measured, and `/api/health` probing (and able to *create*) a database the server does not
+serve, because the kernel resolves `BARTH_DB_PATH` while `describe_retrieval()` resolved
+`BARTHO_DB_PATH`. All three fixed and pinned; §8b records them, including one pin that initially
+could not fail and had to be rewritten.
 
 **What this does NOT claim.** The isolated poisoned-memory CI recall failure of run 35396770160 was
 **not reproduced and is not fixed by this**. The reasoning above — that a process-constant latch

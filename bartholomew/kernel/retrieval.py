@@ -58,6 +58,17 @@ def _fts5_cache_key(db_path: str) -> str:
     return os.path.abspath(db_path)
 
 
+def _names_a_missing_file(db_path: str) -> bool:
+    """Whether `db_path` names an ordinary file that does not exist yet.
+
+    SQLite's special forms (`:memory:`, `file:` URIs) and the empty string all
+    name something other than a path on disk, so they are never "missing".
+    """
+    if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
+        return False
+    return not os.path.exists(db_path)
+
+
 def check_fts5(db_path: str, *, force: bool = False) -> FTS5ProbeResult:
     """
     Whether FTS5 is usable for **this** database, with the reason behind it.
@@ -83,6 +94,19 @@ def check_fts5(db_path: str, *, force: bool = False) -> FTS5ProbeResult:
         cached = _fts5_probe_cache.get(key)
         if cached is not None:
             return cached
+
+    if _names_a_missing_file(db_path):
+        # Do not bring a database into existence merely to ask a question
+        # about it. `describe_retrieval()` is read by health and CLI surfaces
+        # now, and a reporting call must not create `data/barth.db` as a side
+        # effect. Unknown is the honest answer, and it is not cached, so the
+        # next call answers properly once the database exists.
+        result = FTS5ProbeResult(
+            FTS5Status.PROBE_ERROR,
+            f"no database at {db_path} yet, so FTS5 support for it is not established",
+        )
+        logger.debug("FTS5 availability for %s is UNKNOWN: %s", db_path, result.detail)
+        return result
 
     try:
         conn = sqlite3.connect(db_path)
@@ -283,13 +307,27 @@ def describe_retrieval(mode: str | None = None, db_path: str | None = None) -> d
                     "No retrieval arm is operational: there is no embedder, and FTS5 is absent.",
                 )
         elif embedding_status.mode is EmbeddingMode.DISABLED:
-            # Nothing is writing vectors, so the vector arm exists but has
-            # nothing meaningful in it. Not "degraded" -- the system is doing
-            # what it was configured to do -- but not semantic either.
-            reasons.append(
-                f"{configured_mode} retrieval is configured, but with embeddings "
-                "disabled no vectors are written, so matching is lexical only.",
-            )
+            if fts_absent:
+                # "Lexical only" is the usual truth here -- but not when the
+                # lexical arm was just removed a few lines above. With no
+                # vectors being written AND no FTS5, nothing can match at all,
+                # and saying "lexical only" next to `fts.status: absent` would
+                # be the same payload contradicting itself.
+                effective_mode = "none"
+                degraded = True
+                reasons.append(
+                    f"{configured_mode} retrieval is configured, but with embeddings "
+                    "disabled no vectors are written and SQLite FTS5 is absent, so "
+                    "no retrieval arm can match anything.",
+                )
+            else:
+                # Nothing is writing vectors, so the vector arm exists but has
+                # nothing meaningful in it. Not "degraded" -- the system is doing
+                # what it was configured to do -- but not semantic either.
+                reasons.append(
+                    f"{configured_mode} retrieval is configured, but with embeddings "
+                    "disabled no vectors are written, so matching is lexical only.",
+                )
         elif not embedding_status.semantic:
             degraded = True
             reasons.append(

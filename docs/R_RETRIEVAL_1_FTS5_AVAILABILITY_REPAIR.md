@@ -179,7 +179,7 @@ those tests always meant. **No assertion was relaxed and no expectation was chan
 
 ## 5. Negative and forbidden states now tested
 
-`tests/test_retrieval_fts5_availability_contract.py` — **33 tests**, organised by the
+`tests/test_retrieval_fts5_availability_contract.py` — **37 tests**, organised by the
 statement each one forbids.
 
 | # | Statement proved | Test |
@@ -208,6 +208,10 @@ statement each one forbids.
 | 22 | Honouring an explicit `fts` does not make it work — reported as `none` | `test_explicit_fts_on_an_absent_build_is_reported_as_no_effective_arm` |
 | 23 | `/api/health` carries the same answer, from the same accessor | `test_health_surface_carries_the_fts_answer` |
 | 24 | A vector-only outage does **not** blame FTS5 — in either of its two uncovered cells | `test_a_vector_only_outage_does_not_blame_fts5[available]`, `[probe_error]` |
+| 25 | Disabled embeddings do **not** claim "lexical only" once the lexical arm is gone | `test_disabled_embeddings_does_not_claim_lexical_matching_when_fts_is_absent` |
+| 26 | A reporting probe does **not** create the database it was asked about | `test_reporting_never_creates_a_database_it_was_only_asked_about` |
+| 27 | Health probes the database the **server serves**, not a differently-resolved one | `test_health_probes_the_database_the_server_actually_serves` |
+| 28 | The evaluation report describes the database it **evaluated** | `test_the_evaluation_report_describes_the_database_it_evaluated` |
 
 Test 17 is the one that matters most and the one type-stability assertions cannot give
 you: it seeds a real memory through `MemoryStore`, poisons the cache with another
@@ -255,7 +259,7 @@ against the repair. The full transcripts are in §6.4.
 ### 6.2 Focused tests
 
 ```
-tests/test_retrieval_fts5_availability_contract.py              33 passed
+tests/test_retrieval_fts5_availability_contract.py              37 passed
 ```
 
 ### 6.3 Retrieval-adjacent regression set
@@ -356,6 +360,69 @@ against this finding and is accurate for the state it describes.
 
 ---
 
+## 8b. Three defects found by Codex review when the PR was marked ready, and fixed
+
+All three are in code **this package added**, all three are P2, and all three are the same
+underlying mistake in three places: **adding database-specific state to
+`describe_retrieval()` changed what its callers owe it**, and not every caller was updated.
+Recorded, not amended away, for the reason §8a gives.
+
+### 1. "Lexical only" claimed after the lexical arm was removed
+
+With embeddings `DISABLED`, the reason has always said *"with embeddings disabled no vectors
+are written, so matching is lexical only"* — true while there **is** a lexical arm. When FTS5
+is conclusively absent, the branch above had already moved `hybrid` to `vector`, so one
+payload asserted `mode_effective: vector`, `fts.status: absent` and "lexical only"
+simultaneously. Three statements that cannot all hold, in the repository's **default
+embeddings-disabled environment**.
+
+Nothing can match in that state: no vectors are written and there is no FTS5. Reporting now
+says exactly that, and `mode_effective` is `none`.
+
+### 2. The evaluation report described the wrong database
+
+`retrieval_eval.run_evaluation(db_path=…)` seeds and measures its own database, then called
+`describe_retrieval()` bare — so after this change the FTS status printed beside those
+numbers came from `BARTHO_DB_PATH`/`kernel.yaml` instead. A scratch evaluation database could
+be reported `probe_error` because an unrelated configured database was unopenable. It now
+passes its own `db_path`.
+
+### 3. Health probed a different database than the server serves
+
+The kernel resolves its database through **`BARTH_DB_PATH`** (`services/api/db.resolve_db_path`);
+`describe_retrieval()` resolves **`BARTHO_DB_PATH`**/`kernel.yaml`. Two different resolvers, one
+letter apart. `_retrieval_health()` let `describe_retrieval()` resolve for itself, so the new
+FTS fields could describe a database no query will ever touch — and, because probing went
+straight to `sqlite3.connect()`, **could create `data/barth.db` as a side effect of reading a
+health endpoint**.
+
+Fixed in two parts: `_retrieval_health()` now passes `_kernel.mem.db_path` (falling back to
+`resolve_db_path()`), and `check_fts5()` no longer brings a database into existence to ask a
+question about it — a path with no file yet is `PROBE_ERROR`, uncached, so it answers
+properly once the database exists.
+
+### The existing test that was itself asserting through the defect
+
+`test_health_surface_carries_the_fts_answer` set `BARTHO_DB_PATH` and passed. It passed
+*because* health was reading the wrong variable. Correcting the code turned it red, which is
+the test doing its job a round late; it now sets `BARTH_DB_PATH`.
+
+### Each fix is pinned, and each pin was verified by reverting
+
+Rows 25–28 of §5. Every one was checked by reverting its fix and confirming the test goes
+red — and **one of them did not**: the health test first used two databases that both existed
+and both had FTS5, so it read `available` whichever was probed and passed with the fix
+reverted. A test that cannot fail is the false-success class this package exists to forbid,
+so it was rewritten to make the two databases distinguishable (one exists, one does not) and
+re-verified:
+
+```
+fix reverted : AssertionError: assert 'probe_error' == 'available'   (fails, as it must)
+fix restored : 37 passed
+```
+
+---
+
 ## 9. CI and tier results
 
 ### 9.1 GitHub CI — green, every job verified individually
@@ -385,7 +452,7 @@ Run locally on this branch at `4033e3e`, Python 3.11.15, with the package instal
 
 | Tier | Command | Result |
 |---|---|---|
-| Focused (this package) | `pytest tests/test_retrieval_fts5_availability_contract.py` | **33 passed** |
+| Focused (this package) | `pytest tests/test_retrieval_fts5_availability_contract.py` | **37 passed** |
 | Retrieval-adjacent | 10 retrieval/FTS/hybrid/health test files | **105 passed** |
 | Default (PR Fast equivalent) | `pytest -p no:cacheprovider -n auto --dist loadfile` | **5526 passed, 2 skipped, 3 failed** |
 | Integration / slow | `pytest -m "integration or slow" -p no:cacheprovider` | **314 passed, 25 skipped, 0 failed** |
@@ -470,7 +537,7 @@ condition `RISKS.md` names under "What would close it" is met:
 | distinguish genuine absence from a failed probe at `fts_client.fts5_available()` **first** | **done** — `probe_fts5()` is the new primary; `fts5_available()` is a view over it |
 | …and at `_check_fts5_once()` **second** | **done** — `check_fts5()` acts on `status`, and `sqlite3.connect()` failure is its own `PROBE_ERROR` |
 | surface FTS availability in `describe_retrieval()` | **done** — the `fts` block, plus `/api/health` and the CLI |
-| regression coverage for multiple databases, transient probe failure and reporting | **done** — §5, 33 tests |
+| regression coverage for multiple databases, transient probe failure and reporting | **done** — §5, 37 tests |
 | do not claim the unknown red CI failure is solved | **honoured** — §7 |
 
 What R-RETRIEVAL-1 does **not** close, and never covered: R-RETRIEVAL-2 (§8).
