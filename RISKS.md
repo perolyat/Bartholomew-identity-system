@@ -2024,7 +2024,11 @@ AssertionError: assert '.../test_brake_on_without_db_engag0/live/barth.db' in
 
 **Reproduced on unmodified `main`.** In a clean `git worktree` of `origin/main` at `840c3c5`,
 `pytest tests/test_kernel_db_path_resolution.py -n auto --dist loadfile` gives **3 failed,
-11 passed**. Run serially, the same file passes.
+11 passed**. Run serially, the same file passes. It does **not** currently fire on the GitHub
+runner, whose temp paths are shorter than the wrap width — CI run 35501036504's default suite is
+green — so this is latent rather than currently red, and it bites developers and sandboxes rather
+than CI today. PR #117's merge commit records the same class independently ("the two known
+pre-existing `test_kernel_db_path_resolution.py` failures, which reproduce on clean main").
 
 **Why it is worth recording rather than ignoring.** Whether it fails, and how many of the three
 fail, depends on the rendered path's length — which depends on the pytest session number and the

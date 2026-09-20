@@ -1,6 +1,7 @@
 # R-RETRIEVAL-1 — FTS5 Availability / Retrieval Correctness Repair
 
-**Status:** implemented, tested, **not merged**. Awaiting Taylor's User Approval Gate.
+**Status:** implemented, tested, **CI green**, **not merged**. Awaiting Taylor's User Approval
+Gate. PR #118 (draft); head `4d2e5de`.
 **Baseline it was built on:** `origin/main` at `840c3c54c695c9ce13e0aff008e110157a39c473`
 (the merge of PR #117).
 **Branch:** `claude/r-retrieval-1-fts5-fix-qru53y`.
@@ -357,6 +358,27 @@ against this finding and is accurate for the state it describes.
 
 ## 9. CI and tier results
 
+### 9.1 GitHub CI — green, every job verified individually
+
+Run 35501036504 (`CI`), head `4d2e5de`, **conclusion `success`**, 4/4 jobs:
+
+| Job | Result |
+|---|---|
+| Quality (format, lint, packaging contract) | success — `pre-commit` (black, ruff, hygiene), `pip check`, Starlette security floor, packaging contract, wave manifest |
+| PR Fast tests (Ubuntu, py3.11, parallel) | **success — the full default suite, zero failures** |
+| Windows fast (packaging, lifecycle, actuation suites) | success — including real-Win32 governed actuation |
+| smoke | success — including `/api/health`, which now serves the new FTS fields |
+
+**The `Integration` and `Merge Candidate` tiers report `skipped`**: they do not run while the
+PR is a draft. Both were run locally instead (§9.2), and both will run on GitHub when the PR
+is marked ready for review.
+
+**CI's default suite passing with zero failures settles §9.3.** The three failures seen in
+the local sandbox did not occur on the runner, whose shorter temp paths do not reach the
+wrap width. The code is not what differs between the two; the rendered path length is.
+
+### 9.2 Local tiers
+
 Run locally on this branch at `4033e3e`, Python 3.11.15, with the package installed
 (`pip install -e .`) so the packaging-contract tests can see their console scripts.
 
@@ -373,7 +395,7 @@ The integration/slow tier's **314 passed / 25 skipped / 0 failed** is the same c
 `tests/test_w03d_memory_poisoning.py` — the file whose isolated recall failure is discussed
 in §7 — which passed.
 
-### The default-tier failures are pre-existing, and the evidence says so
+### 9.3 The local default-tier failures are pre-existing, and the evidence says so
 
 ```
 FAILED tests/test_kernel_db_path_resolution.py::test_brake_on_without_db_engages_the_database_the_server_reads
@@ -409,7 +431,12 @@ sandbox not having run `pip install -e .`
 bartholomew`). They also failed identically on the `origin/main` control, and all 9 tests in
 that file pass once the package is installed. CI installs it.
 
-**No failure in any tier is attributable to this change.**
+A third, independent corroboration: PR #117's own merge commit message, written by an
+earlier session, records "the two known pre-existing `test_kernel_db_path_resolution.py`
+failures, which reproduce on clean main".
+
+**No failure in any tier is attributable to this change, and GitHub CI is green on the
+current head.**
 
 ---
 
