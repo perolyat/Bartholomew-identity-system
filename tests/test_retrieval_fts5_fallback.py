@@ -16,8 +16,13 @@ from conftest import SKIP_WINDOWS_FTS
 # Skip all tests in this module on Windows (FTS5/matchinfo not available)
 pytestmark = SKIP_WINDOWS_FTS
 
-from bartholomew.kernel.fts_client import fts5_available
-from bartholomew.kernel.retrieval import _check_fts5_once, get_retriever
+from bartholomew.kernel.fts_client import FTS5ProbeResult, FTS5Status, fts5_available
+from bartholomew.kernel.retrieval import _check_fts5_once, get_retriever, reset_fts5_cache
+
+#: What a SQLite build genuinely without FTS5 reports. These tests all mean
+#: that -- not "the probe failed" -- so they state it conclusively; the two
+#: are deliberately no longer interchangeable (R-RETRIEVAL-1).
+FTS5_ABSENT = FTS5ProbeResult(FTS5Status.ABSENT, "no such module: fts5")
 
 
 def _cleanup_db_connections(db_path: str) -> None:
@@ -75,9 +80,7 @@ def test_check_fts5_once_caches_result():
         conn.close()
 
         # Clear cache
-        from bartholomew.kernel import retrieval
-
-        retrieval._fts5_available_cache = None
+        reset_fts5_cache()
 
         # First call should check and cache
         result1 = _check_fts5_once(db_path)
@@ -123,13 +126,11 @@ def test_get_retriever_degrades_fts_mode_when_unavailable(monkeypatch):
             monkeypatch.setenv("BARTHO_RETRIEVAL_MODE", "fts")
 
             # Mock FTS5 as unavailable
-            with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-                mock.return_value = False
+            with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+                mock.return_value = FTS5_ABSENT
 
                 # Clear cache to force new check
-                from bartholomew.kernel import retrieval
-
-                retrieval._fts5_available_cache = None
+                reset_fts5_cache()
 
                 # Request default mode (resolves to "fts" via env var, not
                 # an explicit argument)
@@ -167,12 +168,10 @@ def test_get_retriever_honors_explicit_fts_mode_when_unavailable():
             )
             conn.close()
 
-            with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-                mock.return_value = False
+            with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+                mock.return_value = FTS5_ABSENT
 
-                from bartholomew.kernel import retrieval
-
-                retrieval._fts5_available_cache = None
+                reset_fts5_cache()
 
                 retriever = get_retriever(mode="fts", db_path=db_path)
 
@@ -215,13 +214,11 @@ def test_get_retriever_hybrid_logs_warning_when_fts_unavailable():
             conn.close()
 
             # Mock FTS5 as unavailable
-            with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-                mock.return_value = False
+            with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+                mock.return_value = FTS5_ABSENT
 
                 # Clear cache
-                from bartholomew.kernel import retrieval
-
-                retrieval._fts5_available_cache = None
+                reset_fts5_cache()
 
                 # Request hybrid mode
                 retriever = get_retriever(mode="hybrid", db_path=db_path)
@@ -267,13 +264,11 @@ def test_get_retriever_vector_mode_unaffected_by_fts_availability():
             conn.close()
 
             # Mock FTS5 as unavailable
-            with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-                mock.return_value = False
+            with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+                mock.return_value = FTS5_ABSENT
 
                 # Clear cache
-                from bartholomew.kernel import retrieval
-
-                retrieval._fts5_available_cache = None
+                reset_fts5_cache()
 
                 # Request vector mode
                 retriever = get_retriever(mode="vector", db_path=db_path)
@@ -302,13 +297,11 @@ def test_fts5_probe_logs_warning_once():
         conn.close()
 
         # Mock FTS5 as unavailable
-        with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-            mock.return_value = False
+        with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+            mock.return_value = FTS5_ABSENT
 
             # Clear cache
-            from bartholomew.kernel import retrieval
-
-            retrieval._fts5_available_cache = None
+            reset_fts5_cache()
 
             # Multiple calls
             _check_fts5_once(db_path)

@@ -1255,12 +1255,18 @@ def _retrieval_health() -> dict[str, Any]:
 
         described = describe_retrieval()
         embedding = described["embedding"]
+        fts = described["fts"]
         return {
             "retrieval_mode_configured": described["mode_configured"],
             "retrieval_mode_effective": described["mode_effective"],
             "retrieval_semantic": described["semantic"],
             "retrieval_degraded": described["degraded"],
             "retrieval_degraded_reason": described["reason"],
+            # The lexical arm's real capability (R-RETRIEVAL-1). `available`
+            # is False for an unprobeable database too, so `status` is the
+            # field that separates "FTS5 is missing" from "we do not know".
+            "retrieval_fts_status": fts["status"],
+            "retrieval_fts_available": fts["available"],
             "embedding_mode": embedding["mode"],
             "embedding_model": embedding["model"],
             "embedding_provider": embedding["provider"],
@@ -1273,6 +1279,8 @@ def _retrieval_health() -> dict[str, Any]:
             "retrieval_semantic": None,
             "retrieval_degraded": None,
             "retrieval_degraded_reason": f"Retrieval state could not be determined: {e}",
+            "retrieval_fts_status": "unknown",
+            "retrieval_fts_available": None,
             "embedding_mode": "unknown",
         }
 

@@ -12,10 +12,14 @@ from unittest.mock import patch
 
 import pytest
 
+from bartholomew.kernel.fts_client import FTS5ProbeResult, FTS5Status
 from bartholomew.kernel.memory_store import MemoryStore
-from bartholomew.kernel.retrieval import get_retriever
+from bartholomew.kernel.retrieval import get_retriever, reset_fts5_cache
 from bartholomew.kernel.vector_store import VectorStore
 from tests.helpers.synthetic import create_synthetic_embeddings
+
+#: Genuine absence, not a failed probe -- see R-RETRIEVAL-1.
+FTS5_ABSENT = FTS5ProbeResult(FTS5Status.ABSENT, "no such module: fts5")
 
 
 def create_quality_corpus(num_groups: int = 30, seed: int = 42):
@@ -188,13 +192,11 @@ async def test_vector_quality_maintained_when_fts_unavailable():
         vec_hit_rate = calculate_hit_rate(vec_results_list, queries, memory_map)
 
         # Test: hybrid with FTS unavailable
-        with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-            mock.return_value = False
+        with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+            mock.return_value = FTS5_ABSENT
 
             # Clear cache to force new check
-            from bartholomew.kernel import retrieval
-
-            retrieval._fts5_available_cache = None
+            reset_fts5_cache()
 
             hybrid_retriever = get_retriever(mode="hybrid", db_path=db_path)
             hybrid_results_list = []
@@ -256,12 +258,10 @@ async def test_hybrid_type_stable_when_fts_unavailable():
         os.environ["BARTHO_DB_PATH"] = db_path
 
         # Mock FTS as unavailable
-        with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-            mock.return_value = False
+        with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+            mock.return_value = FTS5_ABSENT
 
-            from bartholomew.kernel import retrieval
-
-            retrieval._fts5_available_cache = None
+            reset_fts5_cache()
 
             retriever = get_retriever(mode="hybrid", db_path=db_path)
 
@@ -320,12 +320,10 @@ async def test_no_crash_on_fts_queries_when_unavailable():
         os.environ["BARTHO_DB_PATH"] = db_path
 
         # Mock FTS unavailable
-        with patch("bartholomew.kernel.retrieval.fts5_available") as mock:
-            mock.return_value = False
+        with patch("bartholomew.kernel.retrieval.probe_fts5") as mock:
+            mock.return_value = FTS5_ABSENT
 
-            from bartholomew.kernel import retrieval
-
-            retrieval._fts5_available_cache = None
+            reset_fts5_cache()
 
             retriever = get_retriever(mode="hybrid", db_path=db_path)
 

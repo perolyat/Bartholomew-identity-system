@@ -23,54 +23,141 @@ from bartholomew.kernel.embedding_engine import (
     get_embedding_engine,
     get_embedding_status,
 )
-from bartholomew.kernel.fts_client import fts5_available
+from bartholomew.kernel.fts_client import FTS5ProbeResult, FTS5Status, probe_fts5
 from bartholomew.kernel.memory_rules import MemoryRulesEngine
 from bartholomew.kernel.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
 
-# FTS5 availability cache (probed once at startup)
-_fts5_available_cache: bool | None = None
+#: FTS5 availability, cached **per database** and only when conclusive.
+#:
+#: R-RETRIEVAL-1: this was a single process-global boolean, keyed by nothing
+#: and never re-probed, so the first probe in a process answered for every
+#: later caller whatever database they retrieved from, and a transient failure
+#: latched for the life of the process. Two rules replace that:
+#:
+#:   1. the key is the resolved database, so one database's answer can never
+#:      decide another's;
+#:   2. only a conclusive outcome (AVAILABLE or ABSENT) is stored. A
+#:      `PROBE_ERROR` is never written here, so the next caller re-probes and
+#:      a temporary failure cannot poison later retrieval.
+_fts5_probe_cache: dict[str, FTS5ProbeResult] = {}
 
 
-def _check_fts5_once(db_path: str) -> bool:
+def _fts5_cache_key(db_path: str) -> str:
+    """The identity of the database whose capability is being measured.
+
+    Real paths are normalised so two spellings of the same file share one
+    answer; SQLite's special forms (`:memory:`, `file:` URIs) are left alone
+    because normalising them as filesystem paths would be a lie about what
+    they name.
     """
-    Check if FTS5 is available (cached after first check).
+    if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
+        return db_path
+    return os.path.abspath(db_path)
 
-    Opens a connection to the database and probes for FTS5 support.
-    Result is cached to avoid repeated checks.
+
+def check_fts5(db_path: str, *, force: bool = False) -> FTS5ProbeResult:
+    """
+    Whether FTS5 is usable for **this** database, with the reason behind it.
+
+    Caches conclusive answers per database. An inconclusive probe -- the
+    database could not be opened, or the probe itself failed -- is returned
+    but never cached, so the next call tries again. That is the recovery
+    contract: a transient failure costs one extra probe, not a process
+    lifetime of degraded retrieval.
 
     Args:
         db_path: Path to SQLite database
+        force: Re-probe and overwrite any cached conclusive answer. Used by
+            callers that know the underlying build or file changed; the normal
+            path never needs it.
 
     Returns:
-        True if FTS5 is available, False otherwise
+        FTS5ProbeResult for this database
     """
-    global _fts5_available_cache
+    key = _fts5_cache_key(db_path)
 
-    if _fts5_available_cache is not None:
-        return _fts5_available_cache
+    if not force:
+        cached = _fts5_probe_cache.get(key)
+        if cached is not None:
+            return cached
 
-    # Probe FTS5 availability
     try:
         conn = sqlite3.connect(db_path)
-        available = fts5_available(conn)
-        conn.close()
-    except Exception:
-        available = False
-
-    _fts5_available_cache = available
-
-    if not available:
+    except Exception as exc:
+        # The database could not be opened at all. That says nothing about
+        # whether this SQLite build has FTS5, so it is not recorded as an
+        # answer and not cached.
+        result = FTS5ProbeResult(
+            FTS5Status.PROBE_ERROR,
+            f"could not open {db_path}: {type(exc).__name__}: {exc}",
+        )
         logger.warning(
-            "FTS5 not available; hybrid mode will operate vector-only "
-            "and fts mode will degrade to vector-only to keep API stable.",
+            "FTS5 availability for %s is UNKNOWN: %s. Not caching this; the "
+            "probe will be retried on the next retrieval.",
+            db_path,
+            result.detail,
+        )
+        return result
+
+    try:
+        result = probe_fts5(conn)
+    finally:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - close failure is not an answer
+            logger.debug("Closing the FTS5 probe connection for %s failed", db_path)
+
+    if not result.conclusive:
+        logger.warning(
+            "FTS5 availability for %s is UNKNOWN: %s. Not caching this; the "
+            "probe will be retried on the next retrieval.",
+            db_path,
+            result.detail,
+        )
+        return result
+
+    _fts5_probe_cache[key] = result
+
+    if result.status is FTS5Status.ABSENT:
+        logger.warning(
+            "FTS5 is absent for %s (%s); hybrid mode will operate vector-only "
+            "and fts mode resolved from config/env will degrade to vector-only "
+            "to keep the API stable.",
+            db_path,
+            result.detail,
         )
     else:
-        logger.debug("FTS5 is available")
+        logger.debug("FTS5 is available for %s", db_path)
 
-    return available
+    return result
+
+
+def reset_fts5_cache(db_path: str | None = None) -> None:
+    """Forget cached FTS5 answers -- all of them, or one database's.
+
+    The supported way to clear this state. Tests previously reassigned a
+    private module global, which is exactly the coupling R-RETRIEVAL-1 is
+    about; production callers that rebuild a database from scratch can use it
+    too.
+    """
+    if db_path is None:
+        _fts5_probe_cache.clear()
+    else:
+        _fts5_probe_cache.pop(_fts5_cache_key(db_path), None)
+
+
+def _check_fts5_once(db_path: str) -> bool:
+    """Fail-safe boolean view of `check_fts5()`: "can I use FTS right now?".
+
+    Retained for callers that only need the yes/no. Anything deciding whether
+    to *permanently* drop a retrieval arm, or reporting availability to an
+    operator, must read `check_fts5()` and its `status` -- a False here still
+    cannot tell an absent FTS5 from a failed probe.
+    """
+    return check_fts5(db_path).available
 
 
 def resolve_embedding_engine() -> tuple[EmbeddingEngine | None, Any]:
@@ -96,7 +183,7 @@ def resolve_embedding_engine() -> tuple[EmbeddingEngine | None, Any]:
         return None, get_embedding_status()
 
 
-def describe_retrieval(mode: str | None = None) -> dict[str, Any]:
+def describe_retrieval(mode: str | None = None, db_path: str | None = None) -> dict[str, Any]:
     """A truthful description of what retrieval will actually do right now.
 
     One accessor for every reporting surface -- health, CLI, result contracts
@@ -115,9 +202,32 @@ def describe_retrieval(mode: str | None = None) -> dict[str, Any]:
     the mode would call that hybrid and be believed, which is precisely the
     OP-W003 condition: retrieval mode and quality not known and not truthfully
     reported at the time.
+
+    R-RETRIEVAL-1 adds the lexical half of the same question. The embedding
+    degradation was reported here; the FTS one was not, so nothing an operator
+    or a result contract read could say that lexical retrieval had been
+    dropped. `fts` now carries that state, and a **conclusively absent** FTS5
+    moves `mode_effective` exactly as the embedder does.
+
+    An *unknown* FTS5 -- a probe that could not be completed -- deliberately
+    does neither. It is reported as `status: probe_error` and changes nothing
+    else: claiming degradation that has not been established is the same class
+    of untruth as hiding degradation that has.
+
+    Args:
+        mode: Retrieval mode to describe. As in `get_retriever`, passing one
+            explicitly is honoured rather than degraded.
+        db_path: The database to report FTS5 availability for. Resolved from
+            config/env exactly as `get_retriever` resolves it when None, so a
+            no-argument caller describes the database retrieval would use.
     """
+    mode_explicit = mode is not None
     configured_mode = _resolve_mode(mode)
     embedding_status = get_embedding_status()
+
+    resolved_db_path = _resolve_db_path(db_path)
+    fts_probe = check_fts5(resolved_db_path)
+    fts_absent = fts_probe.status is FTS5Status.ABSENT
 
     effective_mode = configured_mode
     degraded = embedding_status.degraded
@@ -125,15 +235,46 @@ def describe_retrieval(mode: str | None = None) -> dict[str, Any]:
     if embedding_status.reason:
         reasons.append(embedding_status.reason)
 
-    if configured_mode in ("hybrid", "vector"):
+    # The lexical arm first, mirroring the order `get_retriever` applies.
+    if fts_absent:
+        if configured_mode == "fts" and not mode_explicit:
+            effective_mode = "vector"
+            degraded = True
+            reasons.append(
+                "fts retrieval was requested from configuration but SQLite FTS5 "
+                "is absent, so lexical retrieval is not running and retrieval "
+                "degrades to vector-only.",
+            )
+        elif configured_mode == "fts":
+            # An explicit fts request is honoured -- and cannot match anything.
+            effective_mode = "none"
+            degraded = True
+            reasons.append(
+                "fts retrieval was requested explicitly and is honoured, but "
+                "SQLite FTS5 is absent, so the lexical arm cannot return "
+                "anything.",
+            )
+        elif configured_mode == "hybrid":
+            effective_mode = "vector"
+            degraded = True
+            reasons.append(
+                "hybrid retrieval is configured but SQLite FTS5 is absent, so "
+                "only the vector arm is contributing.",
+            )
+
+    if effective_mode in ("hybrid", "vector"):
         if embedding_status.mode is EmbeddingMode.UNAVAILABLE:
             # No engine at all: this mirrors what `get_retriever` will build.
-            effective_mode = "fts" if configured_mode == "hybrid" else "none"
+            effective_mode = "fts" if effective_mode == "hybrid" else "none"
             degraded = True
             reasons.append(
                 f"{configured_mode} retrieval was requested but no embedder could "
                 "be loaded, so vector similarity is not contributing at all.",
             )
+            if effective_mode == "none":
+                reasons.append(
+                    "No retrieval arm is operational: there is no embedder, and FTS5 is absent.",
+                )
         elif embedding_status.mode is EmbeddingMode.DISABLED:
             # Nothing is writing vectors, so the vector arm exists but has
             # nothing meaningful in it. Not "degraded" -- the system is doing
@@ -158,6 +299,9 @@ def describe_retrieval(mode: str | None = None) -> dict[str, Any]:
         "degraded": degraded,
         "reason": " ".join(reasons) or None,
         "embedding": embedding_status.as_dict(),
+        # The lexical capability behind `mode_effective`, and the database it
+        # was measured on -- configuration and runtime capability, separately.
+        "fts": {**fts_probe.as_dict(), "db_path": resolved_db_path},
     }
 
 
@@ -1062,19 +1206,43 @@ def get_retriever(
             )
             rules_engine = MemoryRulesEngine()
 
-    # Check FTS5 availability (cached)
-    fts_ok = _check_fts5_once(resolved_db_path)
+    # Check FTS5 availability for *this* database (conclusive answers cached)
+    fts_probe = check_fts5(resolved_db_path)
+    fts_ok = fts_probe.available
 
-    # Degrade mode if FTS5 unavailable, but ONLY if mode was NOT explicit
+    # Degrade mode if FTS5 is unavailable, but ONLY if mode was NOT explicit
     # When user explicitly requests a mode, honor it and let the retriever
-    # handle fallbacks internally (FTSOnlyRetriever has graceful fallbacks)
+    # handle fallbacks internally (FTSOnlyRetriever has graceful fallbacks).
+    #
+    # R-RETRIEVAL-1: degradation requires *proof* of absence, not merely a
+    # probe that failed. Dropping the lexical arm on an unproven absence is
+    # the expensive mistake -- in this repository's default environment the
+    # degraded vector mode then raises EmbedderUnavailableError and the caller
+    # gets no retriever at all -- so an inconclusive probe keeps the
+    # configured mode and is re-probed next time instead.
     if resolved_mode == "fts" and not fts_ok and not mode_explicit:
-        logger.warning("FTS mode from config/env but FTS5 unavailable; degrading to vector-only")
-        resolved_mode = "vector"
+        if fts_probe.status is FTS5Status.ABSENT:
+            logger.warning(
+                "FTS mode from config/env but FTS5 is absent for %s (%s); "
+                "degrading to vector-only",
+                resolved_db_path,
+                fts_probe.detail,
+            )
+            resolved_mode = "vector"
+        else:
+            logger.warning(
+                "FTS mode from config/env and the FTS5 probe for %s did not "
+                "conclude (%s); keeping lexical retrieval rather than degrading "
+                "on an unproven absence. The probe will be retried.",
+                resolved_db_path,
+                fts_probe.detail,
+            )
     elif resolved_mode == "hybrid" and not fts_ok:
         logger.info(
-            "Hybrid mode with FTS5 unavailable; "
+            "Hybrid mode with FTS5 %s for %s; "
             "will operate with vector-only (empty FTS candidates)",
+            "absent" if fts_probe.status is FTS5Status.ABSENT else "of unknown availability",
+            resolved_db_path,
         )
 
     # Vector-bearing modes need an embedder that actually works. When one is

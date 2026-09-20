@@ -136,11 +136,18 @@ def embeddings_stats(
         console.print(f"Reason: {status.reason}")
 
     try:
-        described = describe_retrieval()
+        # Described for *this* database, so the lexical answer below is about
+        # the database the rest of this command is reporting on.
+        described = describe_retrieval(db_path=db)
         console.print(
             f"Retrieval mode: {described['mode_configured']} configured, "
             f"{described['mode_effective']} effective",
         )
+        fts = described["fts"]
+        fts_colour = {"available": "green", "absent": "yellow"}.get(fts["status"], "red")
+        console.print(f"FTS5 (lexical): [{fts_colour}]{fts['status']}[/{fts_colour}]")
+        if fts["detail"]:
+            console.print(f"FTS5 detail: {fts['detail']}")
     except Exception as e:
         console.print(f"[red]Could not resolve retrieval mode: {e}[/red]")
 
