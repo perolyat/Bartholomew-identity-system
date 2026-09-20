@@ -1,7 +1,9 @@
 # R-RETRIEVAL-1 — FTS5 Availability / Retrieval Correctness Repair
 
-**Status:** implemented, tested, **all three CI tiers green**, **not merged**. Awaiting Taylor's
-User Approval Gate. PR #118 (ready for review); code head `7fd4fa7`.
+**Status:** implemented, tested, **all three CI tiers green**, **approved at Taylor's User
+Approval Gate and merged**. PR #118; approved head `0e1f75d` (code head `7fd4fa7`; the
+difference is documentation only), **merge commit `e2e682c093e0ce2e3f23744caeee9c7529d19e2b`**.
+Post-merge verification was run against merged `main` and the three control checks pass there.
 **Baseline it was built on:** `origin/main` at `840c3c54c695c9ce13e0aff008e110157a39c473`
 (the merge of PR #117).
 **Branch:** `claude/r-retrieval-1-fts5-fix-qru53y`.
@@ -504,7 +506,8 @@ session running this suite outside the workflows should export `COLUMNS=200`.
 
 ## 10. Does R-RETRIEVAL-1 close?
 
-**Yes, completely — on the evidence, and subject to the User Approval Gate.** Every
+**Yes, completely — on the evidence, and it did: the package was approved at the User Approval
+Gate and merged as `e2e682c`.** Every
 condition `RISKS.md` names under "What would close it" is met:
 
 | Closing condition (from `RISKS.md`) | Status |
@@ -542,8 +545,11 @@ What R-RETRIEVAL-1 does **not** close, and never covered: R-RETRIEVAL-2 (§8).
 
 ## 12. For the User Approval Gate
 
-- Nothing is merged. The branch is `claude/r-retrieval-1-fts5-fix-qru53y`; the PR is a
-  draft and will not be merged by the session that opened it.
+- *(As written before the gate: nothing was merged; the branch was
+  `claude/r-retrieval-1-fts5-fix-qru53y` and the PR was a draft that the session which opened
+  it would not merge.)* **Taylor approved the package at the User Approval Gate and merged
+  PR #118 as `e2e682c`.** The points below were what the gate was asked to weigh, and are
+  preserved as recorded.
 - No authority, autonomy, governance or privacy boundary is touched. Nothing became
   approvable, automatic or permitted that was not before.
 - No parallel memory or retrieval authority is introduced: the repair is inside the

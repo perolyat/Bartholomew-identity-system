@@ -1063,6 +1063,17 @@ Remaining work moved to P1 (Experience Kernel MVP) and beyond — see the Backlo
 
 ### Approval Ledger
 
+- 2026-09-20 — **R-RETRIEVAL-1: FTS5 availability / retrieval correctness repair** (PR #118,
+  branch `claude/r-retrieval-1-fts5-fix-qru53y`): approved by Taylor at the User Approval Gate at
+  head `0e1f75d` (code head `7fd4fa7`; the difference is documentation only) — **merge commit
+  `e2e682c093e0ce2e3f23744caeee9c7529d19e2b`**. Post-merge verification was run against merged
+  `main` and the package's three original control checks pass there. Closes **R-RETRIEVAL-1** in
+  `RISKS.md`. It closes nothing else: **R-RETRIEVAL-2 remains open and unrepaired**, the isolated
+  poisoned-memory CI recall failure **remains unexplained and is not claimed fixed**, and the
+  Windows worker-loss occurrence observed during the package remains preserved as evidence for
+  the scheduled Band 0 reassessment. No authority, autonomy, governance or privacy boundary
+  moved; no band moved. Records: `docs/R_RETRIEVAL_1_FTS5_AVAILABILITY_REPAIR.md`, `RISKS.md`.
+
 - 2026-09-19 — **R-EXEC02-2: governed conversational approval** (PR #117, branch
   `claude/conversational-approval-governance-i8srpi`): approved by Taylor at the User Approval Gate
   at head `4e8799c` (code head `07c5af8`; the difference is documentation only). Closes the

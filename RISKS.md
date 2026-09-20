@@ -6,8 +6,11 @@
 > **(1)** **R-RETRIEVAL-1 is amended, not duplicated,** with a resolution block recording the root
 > cause, the repair, the evidence and the pre-fix control that proves the regression cases failed
 > before it. Its substance as recorded on 2026-09-19 is **unchanged and still correct** — the
-> repair was implemented against that diagnosis, not a revised one. It is marked **RESOLVED
-> pending the User Approval Gate**, not closed, because nothing is merged. **(2)** One new entry,
+> repair was implemented against that diagnosis, not a revised one. It was marked **RESOLVED
+> pending the User Approval Gate** when this note was written, because nothing was merged then;
+> **it is now CLOSED — PR #118 was approved at the gate and merged on 2026-09-20 as
+> `e2e682c093e0ce2e3f23744caeee9c7529d19e2b`**, and post-merge verification on `main` passes.
+> **(2)** One new entry,
 > **R-RETRIEVAL-2**, recording a *separate* defect found while testing the repair and deliberately
 > **not** repaired by it: `get_retriever()` can return a retriever that cannot retrieve. **(3)** One
 > further new entry, **R-TEST-1**, which was **recorded in error and corrected and closed the same
@@ -15,8 +18,9 @@
 > workflows (`COLUMNS: "200"`), which the recording session failed to check. It is corrected in
 > place rather than deleted, per R-CTRL-1. **No risk
 > is removed and no resolved risk is revived.** This pass **does** accompany a production code
-> change — the R-RETRIEVAL-1 repair on branch `claude/r-retrieval-1-fts5-fix-qru53y`, unmerged —
-> and says so rather than claiming documentation-only.
+> change — the R-RETRIEVAL-1 repair on branch `claude/r-retrieval-1-fts5-fix-qru53y`, unmerged at
+> the time of writing and since merged as `e2e682c` (PR #118) — and says so rather than claiming
+> documentation-only.
 >
 > **Previously (2026-09-19, EXEC-02 merge currency note and one new risk, documentation-only).**
 > Two changes. **(1)** Existing entries were **amended, not duplicated**, to
@@ -1814,7 +1818,7 @@ Carried-forward limitations of **merged** work. Full record:
   that the first package to need one of them finds this entry rather than discovering the gap.
 
 
-## R-RETRIEVAL-1 — the FTS5 availability cache is process-global, unkeyed and collapses every failure into "absent" (recorded 2026-09-18, **substantially corrected 2026-09-19**, **RESOLVED 2026-09-20 pending the User Approval Gate**)
+## R-RETRIEVAL-1 — the FTS5 availability cache is process-global, unkeyed and collapses every failure into "absent" (recorded 2026-09-18, **substantially corrected 2026-09-19**, **CLOSED 2026-09-20 — merged as `e2e682c`, PR #118**)
 
 **Found while investigating a red CI job during the EXEC-02 User Approval Gate. Not EXEC-02's,
 not fixed by it, and recorded here rather than repaired inside an unrelated package.**
@@ -1918,7 +1922,12 @@ fold it into unrelated work.
 
 ---
 
-### RESOLVED 2026-09-20 — implemented, tested, **not merged**
+### CLOSED 2026-09-20 — implemented, tested, **approved at the User Approval Gate and merged**
+
+> *(This block was first recorded the same day as "RESOLVED … not merged", before the gate. It is
+> amended in place, not duplicated.)* **PR #118 merged as
+> `e2e682c093e0ce2e3f23744caeee9c7529d19e2b`**, approved head `0e1f75d`. Post-merge verification
+> was run against merged `main` and the three control checks below pass there.
 
 > **Amended, not duplicated.** Everything above stands as recorded on 2026-09-19. The repair was
 > re-derived from the code at `840c3c5` before anything changed and **confirmed that diagnosis in
@@ -1973,8 +1982,15 @@ cannot produce one isolated failure among sibling assertions that passed, and th
 test resolves does not lose recall to a latched `False` — was re-checked against the code and still
 holds. **Its cause remains unknown.** It is not this.
 
-**Why RESOLVED and not closed:** nothing is merged. This entry closes when the package passes
-Taylor's User Approval Gate and merges; until then the defect is still on `main`.
+**Why CLOSED:** this entry's own closing condition was that the package pass Taylor's User
+Approval Gate and merge. It did, on 2026-09-20, as `e2e682c` (PR #118) — so the defect is no
+longer on `main`, and the control script's three checks pass against merged `main`.
+
+**What this closure does NOT extend to.** **R-RETRIEVAL-2 below remains open and unrepaired.**
+The isolated poisoned-memory CI recall failure of run 35396770160 **remains unexplained and is
+still not claimed fixed**. The Windows worker-loss occurrence this package observed remains
+preserved as evidence for the scheduled Band 0 reassessment and is **not** reclassified by this
+merge.
 
 ---
 
