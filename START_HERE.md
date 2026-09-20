@@ -408,15 +408,14 @@ run on pull requests without the label). Earlier wording that the Integration jo
 under normal PR behaviour" described the draft phase only and is superseded —
 `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 holds the full record with the check-run evidence.
 
-**`main` was red on the Merge Candidate tier for the period this section describes, and the
-picture since is better but is not a green claim for today's head.** The most recent *verified*
-7/7 on that tier is PR #118's approved head `0e1f75d` (run 35503866701, 2026-09-20), including
-the Windows full default suite and real-Win32 governed actuation; before that, `main` itself
-passed 7/7 at `25cfd90` (run 35405586837, 2026-09-18). On `main` after those merges: the run at
-`e2e682c` (35506695964) was **cancelled** when PR #119 was pushed on top of it, and the run at
-the current head `98cd1ea` (35507457481) had **not finished** when this snapshot was written.
-**So no Merge Candidate result is claimed for `98cd1ea`** — check the run before relying on one.
-The history below is retained because one green run is repeatability evidence rather than proof,
+**`main` was red on the Merge Candidate tier for the period this section describes. It is green
+on the current head:** run 35507457481, on `main` at `98cd1ea`, passed **7/7** (2026-09-20), every
+job verified individually — Quality; Tests + coverage on py3.10 and py3.11 with the ≥70 % line
+gate; Critical integration + lifecycle on both; **the Windows full default suite with real-Win32
+governed actuation**; and smoke. Before it, PR #118's approved head `0e1f75d` passed 7/7 (run
+35503866701) and `main` passed 7/7 at `25cfd90` (run 35405586837, 2026-09-18). The intervening
+run on `main` at `e2e682c` (35506695964) was **cancelled** when PR #119 was pushed on top of it,
+so that head has no result of its own. The history below is retained because one green run is repeatability evidence rather than proof,
 and because the Band 0 checkpoint this mattered for is still outstanding. At `a64f5af` that tier failed one job of seven — *Windows full
 default suite* — at **3 failed, 4,987 passed, 79 skipped**. Two failures
 (`tests/test_event_backbone_drive.py` ×2) are named members of the writer-lock / WAL-contention class
@@ -480,11 +479,10 @@ single storage worker and a governance-store first-touch race closed in the same
 7. **Parking Brake read/write authority split** remains open (constraint C6,
    gated at Band B / safety gate S5). Not closed by Test #1.
 8. **`main`'s Merge Candidate tier was red** — the Windows writer-lock / WAL-contention class
-   (§7). **Green on the most recent evidence, but not verified on today's head:** `main` passed
-   7/7 at `25cfd90` (run 35405586837, 2026-09-18) and PR #118's approved head `0e1f75d` passed
-   7/7 (run 35503866701, 2026-09-20), both including the Windows full default suite and
-   real-Win32 governed actuation; the run on `main` at `98cd1ea` had not finished when this was
-   written (§7). The repair arc behind that is PRs #110 and #112–#114. Retained here rather than
+   (§7). **Green on the current head:** `main` at `98cd1ea` passed 7/7 (run 35507457481,
+   2026-09-20), including the Windows full default suite and real-Win32 governed actuation;
+   `25cfd90` (run 35405586837) and PR #118's approved head `0e1f75d` (run 35503866701) each
+   passed 7/7 before it (§7). The repair arc behind that is PRs #110 and #112–#114. Retained here rather than
    deleted because one green run is repeatability evidence, not proof, and because the Band 0
    checkpoint this was a prerequisite for is still outstanding (deferred by Taylor 2026-09-18).
    **The repair is built, root-caused, regression-tested and merged (PR #110, approved head
