@@ -268,7 +268,7 @@ test_retrieval_hot_reload.py, test_self_state_api.py           105 passed
 
 ### 6.4 Broader tiers
 
-*(Filled in at §9 below — Default tier, Integration/slow tier, lint.)*
+See §9.
 
 ---
 
@@ -312,7 +312,52 @@ regression in this package.
 
 ## 9. CI and tier results
 
-*(See §6.4.)*
+Run locally on this branch at `4033e3e`, Python 3.11.15, with the package installed
+(`pip install -e .`) so the packaging-contract tests can see their console scripts.
+
+| Tier | Command | Result |
+|---|---|---|
+| Focused (this package) | `pytest tests/test_retrieval_fts5_availability_contract.py` | **31 passed** |
+| Retrieval-adjacent | 10 retrieval/FTS/hybrid/health test files | **105 passed** |
+| Default (PR Fast equivalent) | `pytest -p no:cacheprovider -n auto --dist loadfile` | **5525 passed, 2 skipped, 2 failed** |
+| Integration / slow | `pytest -m "integration or slow" -p no:cacheprovider` | **314 passed, 25 skipped, 0 failed** |
+| Lint | `ruff check .` / `black --check .` | clean (516 files) |
+
+The integration/slow tier's **314 passed / 25 skipped / 0 failed** is the same count
+`RISKS.md` records for the full local runs on `main` and on the EXEC-02 branch. It includes
+`tests/test_w03d_memory_poisoning.py` — the file whose isolated recall failure is discussed
+in §7 — which passed.
+
+### The two default-tier failures are pre-existing, and the evidence says so
+
+```
+FAILED tests/test_kernel_db_path_resolution.py::test_brake_on_without_db_engages_the_database_the_server_reads
+FAILED tests/test_kernel_db_path_resolution.py::test_brake_without_db_and_without_env_uses_the_project_default
+```
+
+Both are `rich` wrapping a long temp path across a line in the CLI's output, so a
+`assert <path> in result.output` substring check misses:
+
+```
+AssertionError: assert '.../test_brake_on_without_db_engag0/live/barth.db' in
+  '... Database: \n/tmp/pytest-of-root/pytest-5/popen-gw0/test_brake_on_without_db_engag0/live/bart\nh.db ...'
+```
+
+They are **not** regressions and are unrelated to retrieval. Classified by control, not by
+inspection: the same two tests were run under the same `-n auto --dist loadfile` command in
+a clean `git worktree` of `origin/main` at `840c3c5`, and **failed identically there**. The
+`xdist` worker directory (`popen-gw0/…`) is what pushes the path past the wrap width, which
+is why they pass when the same file is run serially.
+
+Three further failures seen on the first pass —
+`tests/smoke/test_packaging_contract.py::test_declared_console_script_runs_help[bartholomew]`,
+`[bartholomew-backfill-fts]` and `test_no_undeclared_third_party_runtime_imports` — were this
+sandbox not having run `pip install -e .`
+(`FileNotFoundError: 'bartholomew'`, `PackageNotFoundError: No package metadata was found for
+bartholomew`). They also failed identically on the `origin/main` control, and all 9 tests in
+that file pass once the package is installed. CI installs it.
+
+**No failure in any tier is attributable to this change.**
 
 ---
 
