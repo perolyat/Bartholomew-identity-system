@@ -5,9 +5,11 @@
 > the work, and what to read next* — and nothing else. It is deliberately short.
 >
 > **Created:** 2026-09-14 (Project Control & Documentation Reset).
-> **Current as of:** `main` = `f99bf42` (the merge commit for PR #116, EXEC-02's
-> documentation/provenance follow-up, 2026-09-19).
-> *Previously `25cfd90` (PR #115 / EXEC-02), and `a64f5af` before that (PR #108 / EXEC-01).*
+> **Current as of:** `main` = `98cd1ea` (the merge commit for PR #119, the post-merge
+> documentation synchronisation for R-RETRIEVAL-1, 2026-09-20).
+> *Previously `e2e682c` (PR #118 / R-RETRIEVAL-1), `840c3c5` (PR #117 / R-EXEC02-2),
+> `f99bf42` (PR #116, EXEC-02's documentation/provenance follow-up), `25cfd90`
+> (PR #115 / EXEC-02), and `a64f5af` (PR #108 / EXEC-01).*
 >
 > **What this document is the authority for:** the **source hierarchy** (§3), the
 > **current-state snapshot** (§4, §5), and the **bootstrap procedure** (§9). It is
@@ -142,7 +144,7 @@ ideas) are permanently non-authoritative by design.
 
 ## 4. What is actually true today
 
-`main` = `25cfd90`. **Read the status column literally.** The distinction between
+`main` = `98cd1ea` (see the header). **Read the status column literally.** The distinction between
 these five states is the most easily lost and most expensive thing in this project.
 
 | State | Means |
@@ -263,7 +265,7 @@ It calls the **same** Executive seam the operator console calls. There is no sec
 ## 5b. R-EXEC02-2 — governed conversational approval, stated precisely
 
 **Merged.** PR #117, approved by Taylor at the User Approval Gate on 2026-09-19, built on `main`
-at `f99bf42`. Code head `07c5af8`, approved head `4e8799c`; all three CI tiers green on both, every
+at `f99bf42`, merged as `840c3c5`. Code head `07c5af8`, approved head `4e8799c`; all three CI tiers green on both, every
 job verified individually (PR Fast; Integration 3/3; Merge Candidate 7/7, including the Windows
 full default suite with real-Win32 governed actuation and the ≥70 % coverage gate on py3.10 and
 py3.11). Full record: `docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md`. Decision: `DECISIONS.md`,
@@ -296,6 +298,53 @@ authority and is now also the enforcement point for which capability classes a s
   single-user local deployment only*. **`RISKS.md` R-EXEC02-5** names the four futures that must
   not proceed on it — multi-user, remote approval, household/trusted-user, and any higher-autonomy
   posture, including widening which capability kinds conversation may authorise.
+
+## 5c. R-RETRIEVAL-1 — the FTS5 availability repair, and the doc sync that followed
+
+**Merged.** PR #118, approved by Taylor at the User Approval Gate on 2026-09-20 at head
+`0e1f75d` (code head `7fd4fa7`; the difference is documentation only), merge commit `e2e682c`,
+built on `main` at `840c3c5` (the merge of PR #117). All three CI tiers green on the approved
+head, every job verified individually: CI 4/4 (run 35503866671); Integration (35503866678);
+Merge Candidate 7/7 (35503866701), including the Windows full default suite with real-Win32
+governed actuation and the ≥70 % coverage gate on py3.10 and py3.11. Full record:
+`docs/R_RETRIEVAL_1_FTS5_AVAILABILITY_REPAIR.md`; the risk entry is `RISKS.md` R-RETRIEVAL-1,
+now **CLOSED**.
+
+**PR #119** (merge commit `98cd1ea`, 2026-09-20, the current head) was **documentation-only**
+and changed no behaviour. It moved the three documents that still described PR #118 as unmerged
+— the package record, `RISKS.md`'s R-RETRIEVAL-1 entry, and one `MASTER_PLAN.md` Approval Ledger
+entry — onto the post-merge facts. It repaired nothing and closed nothing.
+
+**What R-RETRIEVAL-1 accomplished.** A bounded correctness repair inside the retrieval layer's
+FTS5 availability contract, and nothing wider. The probe now returns a structured observation
+(`AVAILABLE` / `ABSENT` / `PROBE_ERROR`) instead of a bare bool; the cache is per-database and
+stores only *conclusive* outcomes, so a transient failure can no longer latch "FTS5 is absent"
+for the life of the process and for every other database; degrading a configured `fts` mode now
+requires **proven** absence; and `describe_retrieval()` — with `/api/health`, the CLI and the
+evaluation harness — reports FTS availability at all, which it previously did not. No retrieval
+architecture, memory, fusion/ranking or embedding change.
+
+**What it must not be read as:**
+
+- **It did not close R-RETRIEVAL-2.** That defect — with neither an embedder nor FTS5,
+  `get_retriever()` hands back an `FTSOnlyRetriever` that can never return a result, while
+  reporting correctly says `none` — was found while testing this repair and **deliberately left
+  unrepaired**. It is **open**, pinned only by a characterisation test. `RISKS.md` R-RETRIEVAL-2
+  is the authority and names its own closing condition.
+- **It did not explain or fix the poisoned-memory CI recall failure.** The single failure of
+  `tests/test_w03d_memory_poisoning.py::TestPoisonedExternalContent::test_email_shaped_poison_is_framed_and_powerless`
+  in Merge Candidate run 35396770160 **remains unexplained and is not claimed fixed**. The
+  availability latch was ruled out as its cause on evidence; nothing has replaced that
+  explanation.
+- **It did not reclassify the Windows worker loss.** A Windows worker-loss occurrence observed
+  during this package stands **preserved as evidence** for the **scheduled Band 0
+  reassessment**, at Taylor's explicit direction that it must not widen the package. Do not
+  treat it as resolved, absorbed or reclassified.
+- **It moved no band and no boundary.** No authority, autonomy, governance or privacy boundary
+  changed, and Bartholomew gained no capability. Retrieval reporting became truthful; that is
+  all.
+- **Band 0 is still deferred.** The attended Band 0 real-world checkpoint remains outstanding,
+  deferred by Taylor until he is back at the PC. Nothing merged since has changed that.
 
 ### What comes next — the approved sequence
 
@@ -360,10 +409,14 @@ under normal PR behaviour" described the draft phase only and is superseded —
 `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` §9 holds the full record with the check-run evidence.
 
 **`main` was red on the Merge Candidate tier for the period this section describes. It is green
-now:** the most recent run on `main` (35405586837, at `25cfd90`, 2026-09-18) passed **7/7**,
-including the Windows full default suite and real-Win32 governed actuation. The history below is
-retained because one green run is repeatability evidence rather than proof, and because the Band 0
-checkpoint this mattered for is still outstanding. At `a64f5af` that tier failed one job of seven — *Windows full
+on the current head:** run 35507457481, on `main` at `98cd1ea`, passed **7/7** (2026-09-20), every
+job verified individually — Quality; Tests + coverage on py3.10 and py3.11 with the ≥70 % line
+gate; Critical integration + lifecycle on both; **the Windows full default suite with real-Win32
+governed actuation**; and smoke. Before it, PR #118's approved head `0e1f75d` passed 7/7 (run
+35503866701) and `main` passed 7/7 at `25cfd90` (run 35405586837, 2026-09-18). The intervening
+run on `main` at `e2e682c` (35506695964) was **cancelled** when PR #119 was pushed on top of it,
+so that head has no result of its own. The history below is retained because one green run is repeatability evidence rather than proof,
+and because the Band 0 checkpoint this mattered for is still outstanding. At `a64f5af` that tier failed one job of seven — *Windows full
 default suite* — at **3 failed, 4,987 passed, 79 skipped**. Two failures
 (`tests/test_event_backbone_drive.py` ×2) are named members of the writer-lock / WAL-contention class
 recorded in `RISKS.md` and analysed in `docs/waves/W03/W03_MERGE_CANDIDATE_READINESS.md` §7:
@@ -426,9 +479,10 @@ single storage worker and a governance-store first-touch race closed in the same
 7. **Parking Brake read/write authority split** remains open (constraint C6,
    gated at Band B / safety gate S5). Not closed by Test #1.
 8. **`main`'s Merge Candidate tier was red** — the Windows writer-lock / WAL-contention class
-   (§7). **Now green: the most recent Merge Candidate run on `main` (35405586837, at `25cfd90`,
-   2026-09-18) passed 7/7, including the Windows full default suite and real-Win32 governed
-   actuation.** The repair arc behind that is PRs #110 and #112–#114. Retained here rather than
+   (§7). **Green on the current head:** `main` at `98cd1ea` passed 7/7 (run 35507457481,
+   2026-09-20), including the Windows full default suite and real-Win32 governed actuation;
+   `25cfd90` (run 35405586837) and PR #118's approved head `0e1f75d` (run 35503866701) each
+   passed 7/7 before it (§7). The repair arc behind that is PRs #110 and #112–#114. Retained here rather than
    deleted because one green run is repeatability evidence, not proof, and because the Band 0
    checkpoint this was a prerequisite for is still outstanding (deferred by Taylor 2026-09-18).
    **The repair is built, root-caused, regression-tested and merged (PR #110, approved head
@@ -438,7 +492,20 @@ single storage worker and a governance-store first-touch race closed in the same
    "stalled tail" hang that cancelled the `57f86f8` run at the job cap, which is a different
    symptom and is tracked separately in `RISKS.md`.
 9. **Documentation currency is itself a risk.** This reset repaired a control plane
-   that had drifted roughly a month behind `main`. See §10.
+   that had drifted roughly a month behind `main`. See §10. The same drift recurred: this
+   file's own current-state snapshot sat at PR #116 / `f99bf42` while `main` had moved through
+   PRs #117, #118 and #119.
+10. **R-RETRIEVAL-2 is open and unrepaired.** With no embedder *and* no FTS5,
+    `get_retriever()` returns a retriever that can never retrieve, silently, while the
+    reporting surfaces correctly say `none`. Found while testing R-RETRIEVAL-1 and deliberately
+    left out of it; pinned by a characterisation test only. `RISKS.md` R-RETRIEVAL-2.
+11. **One poisoned-memory CI recall failure remains unexplained.** Merge Candidate run
+    35396770160; not reproduced in subsequent runs, and **not** fixed by R-RETRIEVAL-1. Treat
+    any claim that it is resolved as unsupported.
+12. **A Windows worker-loss occurrence is held open as evidence.** Observed during the
+    R-RETRIEVAL-1 package and, at Taylor's direction, carried unmodified to the **scheduled
+    Band 0 reassessment** rather than reclassified. The attended Band 0 real-world checkpoint
+    itself remains deferred until Taylor is back at the PC.
 
 ## 9. How to bootstrap a new session
 
@@ -468,7 +535,9 @@ single storage worker and a governance-store first-touch race closed in the same
 | Risks, tech debt, open constraints | `RISKS.md` |
 | API and contract surfaces | `INTERFACES.md` |
 | Test strategy / CI tiers | `CI.md` (its header tier table is current; its body predates the four-tier structure) and `TEST_MATRIX.md` (**counts are of 2026-07-27 — it states a 915-test suite; the default suite is now roughly 4,987 tests**) |
+| The most recent merged package in full | `docs/R_RETRIEVAL_1_FTS5_AVAILABILITY_REPAIR.md` (R-RETRIEVAL-1, merged `e2e682c`, PR #118) |
 | The most recent Executive package in full | `docs/EXEC_02_CONVERSATIONAL_EXECUTIVE_INTEGRATION.md` (EXEC-02, merged `25cfd90`) |
+| Governed conversational approval in full | `docs/EXEC_02_2_CONVERSATIONAL_APPROVAL.md` (R-EXEC02-2, merged `840c3c5`, PR #117) |
 | The Executive package it built on | `docs/EXEC_01_GOAL_TO_PLAN_DELIBERATION.md` |
 | The External Capability Interface in full | `docs/FND_04_EXTERNAL_CAPABILITY_INTERFACE.md` |
 | The Windows writer-lock / WAL repair: root cause, evidence, reclassifications | `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` |
