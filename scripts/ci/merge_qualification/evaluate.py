@@ -118,12 +118,22 @@ def _evaluate_one_check(
             f"no run of this required check exists for {head_sha[:12]}",
         )
 
+    # Only the latest run of this workflow on this head is evidence about it.
+    # Earlier runs on the same head were superseded — every tier here sets
+    # `cancel-in-progress: true`, so a second trigger (a label, a ready-for-
+    # review) cancels the first, and reading that cancellation as this head's
+    # fate would make the gate permanently unsatisfiable. Observations the
+    # forge gave no ordinals for are all equally current, which is why the
+    # rule below still applies inside the selected group.
+    latest = max(observation.recency for observation in for_this_head)
+    current = [observation for observation in for_this_head if observation.recency == latest]
+
     outcomes = [
         (observation, classify_check_run(observation.status, observation.conclusion))
-        for observation in for_this_head
+        for observation in current
     ]
-    # Worst outcome wins: one red run is not cancelled out by a green re-run
-    # of a different job with the same name.
+    # Worst outcome wins within that run: one red job is not cancelled out by
+    # a green one reported alongside it.
     for wanted in (
         CheckOutcome.RED,
         CheckOutcome.UNKNOWN,

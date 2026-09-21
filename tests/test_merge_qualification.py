@@ -807,3 +807,105 @@ def test_qualify_fails_closed_when_the_forge_cannot_be_read(tmp_path, monkeypatc
     evidence = json.loads(out.read_text(encoding="utf-8"))
     assert evidence["verdict"] == "not_ready"
     assert {reason["code"] for reason in evidence["reasons"]} == {"head_sha_unknown"}
+
+
+# ---------------------------------------------------------------------------
+# Superseded runs on the same head.
+#
+# Every CI tier in this repository sets `cancel-in-progress: true`, so a
+# second trigger on the same commit -- applying the `ci:merge-candidate`
+# label to a PR that was just pushed, say -- cancels the first run of that
+# workflow. Both runs belong to the same head. Reading the cancelled one as
+# this head's fate would make the gate permanently unsatisfiable, and a gate
+# that can never say yes is a gate people learn to route around.
+#
+# Observed live on PR #121: run 35599799592 (Integration) cancelled
+# 35599799598 on head adb14fc while a later attempt was still running.
+# ---------------------------------------------------------------------------
+
+
+def _run(number, attempt, status, conclusion, sha=HEAD):
+    return CheckObservation(
+        "Merge Candidate",
+        "smoke",
+        sha,
+        status,
+        conclusion,
+        run_number=number,
+        run_attempt=attempt,
+    )
+
+
+def _one_required(*observations):
+    return evaluate(
+        QualificationInput(
+            repo="owner/name",
+            pr_number=1,
+            head_sha=HEAD,
+            required_checks=REQUIRED_ONE,
+            checks=observations,
+        ),
+    )
+
+
+def test_a_superseded_cancelled_run_does_not_veto_the_run_that_replaced_it():
+    report = _one_required(
+        _run(1, 1, "completed", "cancelled"),
+        _run(2, 1, "completed", "success"),
+    )
+    assert report.checks[0].outcome is CheckOutcome.GREEN
+    assert report.ready
+
+
+def test_a_later_red_run_is_not_rescued_by_an_earlier_green_one():
+    """The direction that matters: recency cannot launder a failure."""
+    report = _one_required(
+        _run(1, 1, "completed", "success"),
+        _run(2, 1, "completed", "failure"),
+    )
+    assert report.checks[0].outcome is CheckOutcome.RED
+    assert report.reason_codes == (ReasonCode.REQUIRED_CHECK_FAILING,)
+
+
+def test_a_later_run_still_in_progress_is_not_proven_by_an_earlier_green_one():
+    report = _one_required(
+        _run(1, 1, "completed", "success"),
+        _run(2, 1, "in_progress", None),
+    )
+    assert report.checks[0].outcome is CheckOutcome.INCOMPLETE
+    assert not report.ready
+
+
+def test_a_later_attempt_of_the_same_run_wins():
+    report = _one_required(
+        _run(7, 1, "completed", "failure"),
+        _run(7, 2, "completed", "success"),
+    )
+    assert report.checks[0].outcome is CheckOutcome.GREEN
+    assert report.ready
+
+    report = _one_required(
+        _run(7, 1, "completed", "success"),
+        _run(7, 2, "completed", "cancelled"),
+    )
+    assert report.checks[0].outcome is CheckOutcome.CANCELLED
+    assert not report.ready
+
+
+def test_observations_the_forge_gave_no_ordinals_for_stay_worst_wins():
+    """No ordering means no basis for preferring one. Fail closed."""
+    report = _one_required(
+        CheckObservation("Merge Candidate", "smoke", HEAD, "completed", "success"),
+        CheckObservation("Merge Candidate", "smoke", HEAD, "completed", "failure"),
+    )
+    assert report.checks[0].outcome is CheckOutcome.RED
+    assert not report.ready
+
+
+def test_recency_never_reaches_across_heads():
+    """A newer run of an older commit proves nothing about this head."""
+    report = _one_required(
+        _run(9, 1, "completed", "success", sha=OLDER),
+        _run(2, 1, "completed", "failure"),
+    )
+    assert report.checks[0].outcome is CheckOutcome.RED

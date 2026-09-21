@@ -70,6 +70,23 @@ distinguishes, and names in its evidence, the states that are *not* green:
 `red` · `incomplete` · `cancelled` · `skipped` · `missing` · `stale` (green, but for another head) ·
 `unknown` (including GitHub's `neutral`, and any conclusion the forge invents later).
 
+**Two things learned from running the gate against the live forge** (PR #121, head `adb14fc`),
+both corrected before this package was proposed:
+
+- **A superseded run on the same head is not that head's fate.** Every tier here sets
+  `cancel-in-progress: true`, so a second trigger on the same commit — applying the
+  `ci:merge-candidate` label to a PR that was just pushed — *cancels the first run of that
+  workflow*. Both runs belong to the same commit. Reading the cancelled one as the verdict makes
+  the gate permanently unsatisfiable, and a gate that can never say yes is a gate people learn to
+  route around. Only the **latest run and attempt** of a given `(workflow, job)` on that head is
+  evidence about it. Recency never launders a failure (a later red beats an earlier green, and a
+  later still-running job is not proven by an earlier green one), never reaches across heads, and
+  never applies to observations the forge gave no ordinals for — those stay worst-wins.
+- **A verdict taken before the tiers finish is not a fact about the head.** The gate runs seconds
+  after a push, when everything it requires is still queued. `--wait-minutes` makes it wait for the
+  required checks to settle. It is a *wait*, not an optimism: the printed verdict is whatever the
+  last look actually found, and the deadline expiring leaves the refusal standing.
+
 **The Merge Candidate tier is required.** It does not run on an ordinary pull request; it needs the
 `ci:merge-candidate` label. Until that label is applied and the tier is green on the exact head, the
 gate answers NOT READY. That is the correct answer, not a tooling gap — it is #108's defect,

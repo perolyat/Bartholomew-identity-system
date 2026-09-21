@@ -60,11 +60,16 @@ jobs:
       - name: Regression suite for the qualification evaluator
         run: python -m pytest tests/test_merge_qualification.py -p no:cacheprovider
 
+  # Long-running on purpose. The gate requires tiers that take the better
+  # part of an hour, so a verdict taken ninety seconds after the push says
+  # only that the gate was quicker than CI. `--wait-minutes` makes it wait
+  # for the required checks to settle; the verdict is still whatever the last
+  # look actually found, and the deadline is well inside the job cap.
   qualify:
     name: Qualify the current head
     needs: gate-self-test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -101,6 +106,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --pr "${{ steps.head.outputs.pr }}" \
             --out merge-qualification-evidence.json \
+            --wait-minutes 60 --poll-seconds 60 \
             | tee qualification.txt
 
       - name: Publish the evidence

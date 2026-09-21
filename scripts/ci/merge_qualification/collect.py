@@ -122,6 +122,8 @@ def _collect_checks(session: _Session, repo: str, head_sha: str) -> list[CheckOb
                     status=job.get("status"),
                     conclusion=job.get("conclusion"),
                     url=job.get("html_url"),
+                    run_number=run.get("run_number"),
+                    run_attempt=run.get("run_attempt"),
                 ),
             )
     return observations

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from .collect import collect
@@ -27,7 +28,11 @@ from .config import (
     load_dispositions,
 )
 from .evaluate import evaluate, verify_evidence_applies_to
-from .model import QualificationInput, QualificationReport, Verdict
+from .model import CheckOutcome, QualificationInput, QualificationReport, Verdict
+
+#: Outcomes that may still become green if the gate looks again later.
+#: Everything else is settled, and waiting on it would only burn the clock.
+_STILL_SETTLING = frozenset({CheckOutcome.INCOMPLETE, CheckOutcome.MISSING})
 
 EXIT_READY = 0
 EXIT_NOT_READY = 1
@@ -68,23 +73,47 @@ def _qualify(args: argparse.Namespace) -> int:
         print("failing closed: NOT READY", file=sys.stderr)
         return EXIT_CONTROL_STATE_BROKEN
 
-    collected = collect(args.repo, args.pr, token=args.token)
-    qualification_input = QualificationInput(
-        repo=collected.repo,
-        pr_number=collected.pr_number,
-        head_sha=collected.head_sha,
-        pr_commits=collected.pr_commits,
-        required_checks=config.required_checks,
-        checks=collected.checks,
-        findings=collected.findings,
-        dispositions=dispositions,
-        check_state_determined=collected.check_state_determined,
-        review_state_determined=collected.review_state_determined,
-    )
-    report = evaluate(
-        qualification_input,
-        github_resolution_satisfies_disposition=(config.github_resolution_satisfies_disposition),
-    )
+    deadline = time.monotonic() + max(0, args.wait_minutes) * 60
+    while True:
+        collected = collect(args.repo, args.pr, token=args.token)
+        qualification_input = QualificationInput(
+            repo=collected.repo,
+            pr_number=collected.pr_number,
+            head_sha=collected.head_sha,
+            pr_commits=collected.pr_commits,
+            required_checks=config.required_checks,
+            checks=collected.checks,
+            findings=collected.findings,
+            dispositions=dispositions,
+            check_state_determined=collected.check_state_determined,
+            review_state_determined=collected.review_state_determined,
+        )
+        report = evaluate(
+            qualification_input,
+            github_resolution_satisfies_disposition=(
+                config.github_resolution_satisfies_disposition
+            ),
+        )
+        # A verdict taken while a required tier is still queued or running
+        # says only that the gate was quicker than CI, which is not a fact
+        # about the head. Wait for the required checks to settle -- but never
+        # past the deadline, and never turning a refusal into a pass: the
+        # report printed below is whatever the last look actually found.
+        if report.ready or time.monotonic() >= deadline:
+            break
+        unsettled = sorted(
+            check.required.key for check in report.checks if check.outcome in _STILL_SETTLING
+        )
+        if not unsettled:
+            break
+        print(
+            f"waiting for {len(unsettled)} required check(s) to settle: "
+            + ", ".join(unsettled[:3])
+            + ("..." if len(unsettled) > 3 else ""),
+            flush=True,
+        )
+        time.sleep(max(1, args.poll_seconds))
+
     print(render(report))
     if args.out:
         Path(args.out).write_text(
@@ -127,6 +156,17 @@ def build_parser() -> argparse.ArgumentParser:
     qualify.add_argument("--dispositions", default=str(DISPOSITIONS_PATH))
     qualify.add_argument("--token", default=None)
     qualify.add_argument("--out", default=None, help="write the evidence JSON here")
+    qualify.add_argument(
+        "--wait-minutes",
+        type=int,
+        default=0,
+        help=(
+            "keep looking, up to this long, while a required check is still "
+            "queued, running or not yet registered. The verdict is always the "
+            "last look, never an optimistic one."
+        ),
+    )
+    qualify.add_argument("--poll-seconds", type=int, default=60)
     qualify.set_defaults(handler=_qualify)
 
     verify = subparsers.add_parser(

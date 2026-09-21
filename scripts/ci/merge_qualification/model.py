@@ -136,10 +136,27 @@ class CheckObservation:
     status: str | None
     conclusion: str | None
     url: str | None = None
+    #: The forge's own ordinals for the workflow run this job belongs to.
+    #: They exist so that a run *superseded on the same head* — which this
+    #: repository produces routinely, because every tier sets
+    #: `cancel-in-progress: true` and a label event re-triggers it — can be
+    #: told from the run that actually decided that head. `None` means the
+    #: forge gave no ordering, and unordered observations are all treated as
+    #: equally current.
+    run_number: int | None = None
+    run_attempt: int | None = None
 
     @property
     def key(self) -> str:
         return f"{self.workflow} / {self.job}"
+
+    @property
+    def recency(self) -> tuple[int, int]:
+        """Ordering key within one (workflow, job, head). Higher is later."""
+        return (
+            self.run_number if self.run_number is not None else -1,
+            self.run_attempt if self.run_attempt is not None else -1,
+        )
 
 
 @dataclass(frozen=True)
