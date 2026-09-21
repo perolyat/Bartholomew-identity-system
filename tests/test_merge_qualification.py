@@ -909,3 +909,77 @@ def test_recency_never_reaches_across_heads():
         _run(2, 1, "completed", "failure"),
     )
     assert report.checks[0].outcome is CheckOutcome.RED
+
+
+# ---------------------------------------------------------------------------
+# The REST fallback for review state.
+#
+# Some tokens and some network paths reach GitHub's REST API but not its
+# GraphQL endpoint (observed live in this package's own build environment:
+# GraphQL returned 403 while REST worked). Blanket-refusing there makes the
+# gate unusable rather than strict, so REST is used instead -- but it must
+# not be a softer path.
+# ---------------------------------------------------------------------------
+
+
+def test_rest_derived_findings_never_claim_forge_resolution():
+    from scripts.ci.merge_qualification.collect import findings_from_rest_comments
+
+    findings = findings_from_rest_comments(
+        [
+            {
+                "id": 555,
+                "user": {"login": "codex-review"},
+                "original_commit_id": OLDER,
+                "commit_id": HEAD,
+                "body": "This bypasses the allowlist.\nMore detail.",
+                "html_url": "https://example.invalid/555",
+            },
+        ],
+    )
+    (finding,) = findings
+    assert finding.finding_id == "review_comment:555"
+    assert finding.author == "codex-review"
+    # The commit the comment was WRITTEN against, not where it now lands.
+    assert finding.commit_sha == OLDER
+    # REST cannot report thread resolution, so it never claims any.
+    assert finding.thread_resolved is False
+    assert finding.excerpt == "This bypasses the allowlist."
+
+
+def test_rest_replies_fold_into_their_thread_root():
+    from scripts.ci.merge_qualification.collect import findings_from_rest_comments
+
+    findings = findings_from_rest_comments(
+        [
+            {"id": 1, "user": {"login": "codex-review"}, "commit_id": HEAD, "body": "Root."},
+            {
+                "id": 2,
+                "in_reply_to_id": 1,
+                "user": {"login": "someone"},
+                "commit_id": HEAD,
+                "body": "Reply.",
+            },
+        ],
+    )
+    assert [finding.finding_id for finding in findings] == ["review_comment:1"]
+
+
+def test_the_rest_fallback_cannot_make_the_gate_more_permissive():
+    """`thread_resolved=False` only ever moves a finding between two
+    blocking classifications, never into a passing one."""
+    from scripts.ci.merge_qualification.collect import findings_from_rest_comments
+
+    (against_head,) = findings_from_rest_comments(
+        [{"id": 1, "user": {"login": "codex-review"}, "commit_id": HEAD, "body": "Bug."}],
+    )
+    report = evaluate(_green_with_findings([against_head]))
+    assert report.findings[0].classification is FindingClassification.UNRESOLVED_SUBSTANTIVE
+    assert not report.ready
+
+    (against_older,) = findings_from_rest_comments(
+        [{"id": 2, "user": {"login": "codex-review"}, "commit_id": OLDER, "body": "Bug."}],
+    )
+    report = evaluate(_green_with_findings([against_older]))
+    assert report.findings[0].classification is FindingClassification.UNKNOWN
+    assert not report.ready

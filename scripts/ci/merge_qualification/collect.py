@@ -129,12 +129,54 @@ def _collect_checks(session: _Session, repo: str, head_sha: str) -> list[CheckOb
     return observations
 
 
-def _collect_findings(
+def findings_from_rest_comments(comments: list[dict]) -> list[ReviewFinding]:
+    """Normalise REST review comments into findings, fail-closed.
+
+    Used when the GraphQL review-thread API is unreachable. REST does not
+    report whether a thread was resolved on the forge, so every finding it
+    produces carries `thread_resolved=False`.
+
+    That is deliberately the conservative reading, and it cannot weaken a
+    verdict: this repository does not accept forge resolution as a
+    disposition in any case, so the only thing `False` changes is *which*
+    blocking classification a finding gets — `unresolved_substantive` for one
+    against the current head instead of `unknown`. Both refuse. The fallback
+    can therefore make the gate usable without GraphQL, and cannot make it
+    permissive.
+
+    Replies are folded into their thread root: a thread is one finding, and
+    dispositioning it disposes of the conversation, not of one message.
+    """
+    findings: list[ReviewFinding] = []
+    for comment in comments:
+        if comment.get("in_reply_to_id"):
+            continue
+        body = (comment.get("body") or "").strip()
+        findings.append(
+            ReviewFinding(
+                finding_id=f"review_comment:{comment.get('id')}",
+                author=((comment.get("user") or {}).get("login")) or "unknown",
+                commit_sha=comment.get("original_commit_id") or comment.get("commit_id"),
+                thread_resolved=False,
+                excerpt=body.splitlines()[0][:200] if body else "",
+                url=comment.get("html_url"),
+            ),
+        )
+    return findings
+
+
+def _collect_review_threads(
     session: _Session,
     owner: str,
     name: str,
     pr_number: int,
 ) -> list[ReviewFinding]:
+    """Review threads with their forge resolution state, via GraphQL.
+
+    Falls back to REST when GraphQL is unreachable — some tokens and some
+    network paths have REST but not GraphQL, and blanket-refusing there would
+    make the gate unusable rather than strict.
+    """
     findings: list[ReviewFinding] = []
     cursor = None
     for _ in range(20):
@@ -167,6 +209,22 @@ def _collect_findings(
         cursor = page_info.get("endCursor")
     else:  # pragma: no cover - defensive
         raise CollectionError("review threads did not terminate within 20 pages")
+
+    return findings
+
+
+def _collect_findings(
+    session: _Session,
+    owner: str,
+    name: str,
+    pr_number: int,
+) -> list[ReviewFinding]:
+    try:
+        findings = _collect_review_threads(session, owner, name, pr_number)
+    except CollectionError:
+        findings = findings_from_rest_comments(
+            session.rest_paged(f"/repos/{owner}/{name}/pulls/{pr_number}/comments"),
+        )
 
     for review in session.rest_paged(f"/repos/{owner}/{name}/pulls/{pr_number}/reviews"):
         body = (review.get("body") or "").strip()

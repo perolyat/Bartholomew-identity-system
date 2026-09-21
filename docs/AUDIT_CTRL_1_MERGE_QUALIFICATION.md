@@ -116,6 +116,15 @@ changed. That is #120, refused — and #91, whose findings were genuinely fixed,
 pull request, and a commit that is not one of this pull request's commits cannot dispose of a
 finding here.
 
+**Review state is read through GraphQL, with a REST fallback.** GraphQL is preferred because it
+reports forge-side thread resolution; some tokens and some network paths reach REST but not GraphQL
+(observed live in this package's own build environment, where GraphQL returned 403). The fallback
+cannot be a softer path: REST cannot report resolution, so every finding it produces carries
+`thread_resolved=False`, and since this repository does not accept forge resolution as a
+disposition anyway, that only moves a finding between two *blocking* classifications —
+`unresolved_substantive` instead of `unknown`. Both refuse. When neither path can be read at all,
+review state is indeterminate and qualification refuses outright.
+
 ### 3.4 Unknown fails closed
 
 A collector that cannot read check state or review state says so, by clearing
