@@ -1,0 +1,185 @@
+{
+  "name": "pr_101_required_tier_failing_on_exact_head",
+  "derived_from": "PR #101 (Wave 3 Windows golden path)",
+  "description": "Every other required job was green on the exact final head, and the Merge Candidate Windows job was red on that same head. Failing is a different fact from not-proven-green, and the gate must name it as failing.",
+  "input": {
+    "repo": "perolyat/bartholomew-identity-system",
+    "pr_number": 101,
+    "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+    "pr_commits": [
+      "77aa119ddddddddddddddddddddddddddddddddd",
+      "9f2c0d4ccccccccccccccccccccccccccccccccc"
+    ],
+    "required_checks": [
+      {
+        "workflow": "CI",
+        "job": "Quality (format, lint, packaging contract)"
+      },
+      {
+        "workflow": "CI",
+        "job": "PR Fast tests (Ubuntu, py3.11, parallel)"
+      },
+      {
+        "workflow": "CI",
+        "job": "Windows fast (packaging, lifecycle, actuation suites)"
+      },
+      {
+        "workflow": "CI",
+        "job": "smoke"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Tests + coverage (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Windows lifecycle + compatibility (py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Quality (format, lint, packaging contract)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.10)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.10)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Windows full default suite + actuation (py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "smoke"
+      }
+    ],
+    "checks": [
+      {
+        "workflow": "CI",
+        "job": "Quality (format, lint, packaging contract)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "PR Fast tests (Ubuntu, py3.11, parallel)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "Windows fast (packaging, lifecycle, actuation suites)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "smoke",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Tests + coverage (Ubuntu, py3.11)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Windows lifecycle + compatibility (py3.11)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Quality (format, lint, packaging contract)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.10)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.11)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.10)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Windows full default suite + actuation (py3.11)",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "smoke",
+        "head_sha": "9f2c0d4ccccccccccccccccccccccccccccccccc",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ],
+    "findings": [],
+    "dispositions": []
+  },
+  "expect": {
+    "verdict": "not_ready",
+    "reason_codes": {
+      "required_check_failing": 1
+    },
+    "check_outcomes": {
+      "Merge Candidate / Windows full default suite + actuation (py3.11)": "red",
+      "Merge Candidate / smoke": "green"
+    },
+    "finding_classifications": {}
+  }
+}

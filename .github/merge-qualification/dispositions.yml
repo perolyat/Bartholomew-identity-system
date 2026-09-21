@@ -1,0 +1,28 @@
+# Explicit dispositions of review findings (AUDIT-CTRL-1).
+#
+# A finding blocks merge qualification until a record here says, truthfully,
+# what became of it. This file is repository state: it arrives through a
+# reviewed commit, which is what makes it an acceptable control input. A
+# statement in a report, a chat message or a model's summary is not.
+#
+# classification must be one of:
+#   unresolved_substantive   - open, and it blocks. Recorded to be explicit.
+#   resolved_by_later_commit - fixed in this pull request. REQUIRES
+#                              resolved_by_commit: a full 40-character sha
+#                              that is one of this pull request's commits and
+#                              is strictly later than the commit the finding
+#                              was written against. Both are checked.
+#   stale_superseded_head    - written against a commit that is no longer the
+#                              head. Refused if the finding is in fact against
+#                              the current head.
+#   non_substantive          - never a defect (formatting chatter, a question
+#                              already answered, a bare acknowledgement).
+#
+# `unknown` is not a permitted classification. It is the state the evaluator
+# assigns when it cannot tell, and it blocks; writing it here would be
+# recording a decision that was never taken.
+#
+# Every record needs a rationale and a recorded_by. finding_id is the id the
+# gate prints: `review_comment:<id>` or `review:<id>`.
+schema_version: 1
+dispositions: []

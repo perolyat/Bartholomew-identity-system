@@ -61,6 +61,15 @@ Mark each as **PASS** or **BLOCKED**.
       errors" in CI)
 - [ ] All `ci.yml` jobs green: `quality`, `tests` (3.10 + 3.11, coverage gate ≥70%),
       `critical` (3.10 + 3.11), `windows` (3.11)
+- [ ] **Merge qualification reports READY for the exact current head** — not "CI looks green",
+      not a statement in the PR description. Run
+      `python -m scripts.ci.merge_qualification qualify --repo <owner/name> --pr <n>` (the
+      `Merge Qualification` workflow runs it on every push and publishes the evidence). It
+      requires the **Merge Candidate** tier, which needs the `ci:merge-candidate` label, and it
+      refuses while any substantive review finding against the current head is undispositioned.
+      **A new commit invalidates it** — re-qualify the new head. Added by AUDIT-CTRL-1 after four
+      pull requests (#108, #101, #91, #120) were reported merge-ready on evidence that did not
+      support it; `docs/AUDIT_CTRL_1_MERGE_QUALIFICATION.md` is the record.
 - [ ] No new undeclared runtime dependency (`tests/smoke/test_packaging_contract.py` enforces this)
 - [ ] Docs updated (canonical docs if behavior/interface changed)
 - [ ] Rollback note included for risky changes

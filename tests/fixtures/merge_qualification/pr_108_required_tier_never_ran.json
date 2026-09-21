@@ -1,0 +1,168 @@
+{
+  "name": "pr_108_required_tier_never_ran",
+  "derived_from": "PR #108 (EXEC-01)",
+  "description": "PR Fast and Integration were green on the reviewed head; the Merge Candidate tier never ran against it at all, because it does not run on an unlabelled pull request. Three substantive review findings were open against that same head and survived into main.",
+  "input": {
+    "repo": "perolyat/bartholomew-identity-system",
+    "pr_number": 108,
+    "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pr_commits": [
+      "1a1a1a1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "required_checks": [
+      {
+        "workflow": "CI",
+        "job": "Quality (format, lint, packaging contract)"
+      },
+      {
+        "workflow": "CI",
+        "job": "PR Fast tests (Ubuntu, py3.11, parallel)"
+      },
+      {
+        "workflow": "CI",
+        "job": "Windows fast (packaging, lifecycle, actuation suites)"
+      },
+      {
+        "workflow": "CI",
+        "job": "smoke"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Tests + coverage (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Windows lifecycle + compatibility (py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Quality (format, lint, packaging contract)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.10)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.10)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Windows full default suite + actuation (py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "smoke"
+      }
+    ],
+    "checks": [
+      {
+        "workflow": "CI",
+        "job": "Quality (format, lint, packaging contract)",
+        "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "PR Fast tests (Ubuntu, py3.11, parallel)",
+        "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "Windows fast (packaging, lifecycle, actuation suites)",
+        "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "smoke",
+        "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Tests + coverage (Ubuntu, py3.11)",
+        "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)",
+        "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Windows lifecycle + compatibility (py3.11)",
+        "head_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ],
+    "findings": [
+      {
+        "finding_id": "review_comment:1080",
+        "author": "codex-review",
+        "commit_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thread_resolved": false,
+        "excerpt": "Deliberation port is installed before the capability allowlist is read."
+      },
+      {
+        "finding_id": "review_comment:1081",
+        "author": "codex-review",
+        "commit_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thread_resolved": false,
+        "excerpt": "Inferred parameters bypass the device allowlist on the retry path."
+      },
+      {
+        "finding_id": "review_comment:1082",
+        "author": "codex-review",
+        "commit_sha": "2813c7baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thread_resolved": false,
+        "excerpt": "ActionReflection provenance is dropped when the model port raises."
+      }
+    ],
+    "dispositions": []
+  },
+  "expect": {
+    "verdict": "not_ready",
+    "reason_codes": {
+      "required_check_not_proven_green": 7,
+      "unresolved_substantive_finding": 3
+    },
+    "check_outcomes": {
+      "Merge Candidate / Quality (format, lint, packaging contract)": "missing",
+      "Merge Candidate / Tests + coverage (Ubuntu, py3.10)": "missing",
+      "Merge Candidate / Tests + coverage (Ubuntu, py3.11)": "missing",
+      "Merge Candidate / Critical integration + lifecycle (Ubuntu, py3.10)": "missing",
+      "Merge Candidate / Critical integration + lifecycle (Ubuntu, py3.11)": "missing",
+      "Merge Candidate / Windows full default suite + actuation (py3.11)": "missing",
+      "Merge Candidate / smoke": "missing"
+    },
+    "finding_classifications": {
+      "review_comment:1080": "unresolved_substantive",
+      "review_comment:1081": "unresolved_substantive",
+      "review_comment:1082": "unresolved_substantive"
+    }
+  }
+}
