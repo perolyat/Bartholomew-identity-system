@@ -3990,3 +3990,63 @@
     journey is *useful* is an evidence question for the deferred attended Windows testing.
     R-EXEC01-3 stands unchanged.
 - **Date:** 2026-09-19
+
+---
+
+## Decision: Merge qualification is computed from repository state, bound to an exact head, and fails closed
+
+- **Decision:** A pull request is **merge-qualified** only when a deterministic evaluator, reading
+  the forge's own record and the repository's own committed disposition records, can prove that
+  **the exact current head** is green on every required CI tier and carries no undispositioned
+  substantive review finding. Qualification **binds to one commit**: evidence generated for commit
+  A never authorises commit B, and a new commit requires regeneration. Anything that cannot be
+  established — an unreadable forge, a tier that never ran, a cancelled or skipped job, a finding
+  whose state is indeterminate — **refuses**. `unknown` is a blocking state, never a benign one.
+- **The authority rule:** where qualification affects merge authority, the authority is
+  **deterministic repository and workflow state** — head sha, workflow run results, review-thread
+  state, and explicit disposition records committed through review. A model may help a person
+  analyse or classify evidence; **model output is never the final authority that permits a merge**,
+  and no narrative claim in a report, comment or canonical document can substitute for the
+  computation.
+- **Alternatives considered:**
+  - *Keep the narrative qualification and write the checklist more carefully.* Rejected. The four
+    audited pull requests each had a careful person; carefulness is not a control, and the same
+    class of false positive recurred four times.
+  - *Trust GitHub's "Resolve conversation" as the disposition.* Rejected. PR #120's qualification
+    reported zero unresolved threads while a substantive finding was extant. Resolution is a click;
+    it is not evidence that the code changed. A knob exists
+    (`github_resolution_satisfies_disposition`) and this repository sets it **false**.
+  - *Block on every historical review thread until it is resolved on the forge.* Rejected as the
+    opposite failure. Genuinely stale or genuinely repaired findings must be **classified
+    truthfully**, not ignored and not made permanently blocking — hence the five explicit
+    classifications, of which two are blocking.
+  - *Let the gate merge, label or approve.* Deliberately **not** taken. It reports. The User
+    Approval Gate is unchanged and green CI is still not approval.
+  - *Relax a required tier so ordinary pull requests can qualify.* Rejected outright. The Merge
+    Candidate tier is required because PR #108 was merged without it and PR #101 was merged against
+    a red one. Making failing evidence disappear is the defect, not the repair.
+- **Why:** qualification had no deterministic authority and no binding to a commit, so the absence
+  of a failure read as a pass, and a judgement about a page read as a control. See
+  `docs/AUDIT_CTRL_1_MERGE_QUALIFICATION.md` for the full record and the four audited shapes.
+- **Consequences:**
+  - A pull request without the `ci:merge-candidate` label is **not** merge-qualified. This is
+    intended, and it is a real change to how work reaches `main`.
+  - A substantive finding must be **explicitly dispositioned in a committed file**, with a
+    rationale and a named recorder, before the head can qualify. A "resolved by a later commit"
+    claim is checked against this pull request's commit list, in order.
+  - The gate **reports**; it does not enforce at the forge. **Taylor approved a proving period on
+    2026-09-22** rather than immediate enforcement: the gate is **operationally mandatory and
+    technically advisory**. A NOT READY stops the workflow and is investigated before any merge; a
+    READY means only that the available evidence supports merge readiness and **does not authorise
+    a merge**; the **User Approval Gate remains the final merge authority**. Branch protection is
+    deliberately unchanged, because a control that has not yet been observed against reality should
+    not be given enforcement power over it. The residual risk during the period is that a human
+    ignores an accurate NOT READY, and that is accepted knowingly. The period watches for
+    false-positive READY results, false blocks, stale-head mistakes, missed substantive findings,
+    excessive CI/qualification delay, confusing classifications, and disagreement between the
+    qualification result and actual repository state. Promoting it to a required status check is a
+    **separate decision** to be taken after several real pull requests have exercised it —
+    `docs/AUDIT_CTRL_1_MERGE_QUALIFICATION.md` §4a.
+  - Nothing in Bartholomew's runtime, governance, Parking Brake or user-facing behaviour changes.
+    This is project control, not system control.
+- **Date:** 2026-09-21

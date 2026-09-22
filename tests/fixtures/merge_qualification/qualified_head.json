@@ -1,0 +1,229 @@
+{
+  "name": "qualified_head",
+  "derived_from": "the positive case the gate must still allow",
+  "description": "Every required job green against the exact head; one finding repaired by a later commit in this same pull request; one finding against a superseded head; one finding recorded as never substantive. All three are classified truthfully, and the head qualifies.",
+  "input": {
+    "repo": "perolyat/bartholomew-identity-system",
+    "pr_number": 203,
+    "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "pr_commits": [
+      "0e1f75dfffffffffffffffffffffffffffffffff",
+      "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    ],
+    "required_checks": [
+      {
+        "workflow": "CI",
+        "job": "Quality (format, lint, packaging contract)"
+      },
+      {
+        "workflow": "CI",
+        "job": "PR Fast tests (Ubuntu, py3.11, parallel)"
+      },
+      {
+        "workflow": "CI",
+        "job": "Windows fast (packaging, lifecycle, actuation suites)"
+      },
+      {
+        "workflow": "CI",
+        "job": "smoke"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Tests + coverage (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Windows lifecycle + compatibility (py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Quality (format, lint, packaging contract)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.10)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.10)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Windows full default suite + actuation (py3.11)"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "smoke"
+      }
+    ],
+    "checks": [
+      {
+        "workflow": "CI",
+        "job": "Quality (format, lint, packaging contract)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "PR Fast tests (Ubuntu, py3.11, parallel)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "Windows fast (packaging, lifecycle, actuation suites)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "CI",
+        "job": "smoke",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Tests + coverage (Ubuntu, py3.11)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Integration",
+        "job": "Windows lifecycle + compatibility (py3.11)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Quality (format, lint, packaging contract)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.10)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Tests + coverage (Ubuntu, py3.11)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.10)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Critical integration + lifecycle (Ubuntu, py3.11)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "Windows full default suite + actuation (py3.11)",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "workflow": "Merge Candidate",
+        "job": "smoke",
+        "head_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ],
+    "findings": [
+      {
+        "finding_id": "review_comment:3001",
+        "author": "codex-review",
+        "commit_sha": "0e1f75dfffffffffffffffffffffffffffffffff",
+        "thread_resolved": false,
+        "excerpt": "The probe caches a transient failure as a conclusive absence."
+      },
+      {
+        "finding_id": "review_comment:3002",
+        "author": "codex-review",
+        "commit_sha": "0e1f75dfffffffffffffffffffffffffffffffff",
+        "thread_resolved": false,
+        "excerpt": "This paragraph describes the pre-repair behaviour."
+      },
+      {
+        "finding_id": "review_comment:3003",
+        "author": "friendly-human",
+        "commit_sha": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "thread_resolved": false,
+        "excerpt": "Nice comment on this one."
+      }
+    ],
+    "dispositions": [
+      {
+        "finding_id": "review_comment:3001",
+        "classification": "resolved_by_later_commit",
+        "rationale": "The cache now stores only conclusive outcomes.",
+        "recorded_by": "taylor",
+        "resolved_by_commit": "4e8799ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      {
+        "finding_id": "review_comment:3002",
+        "classification": "stale_superseded_head",
+        "rationale": "The paragraph it points at was rewritten before this head.",
+        "recorded_by": "taylor"
+      },
+      {
+        "finding_id": "review_comment:3003",
+        "classification": "non_substantive",
+        "rationale": "An acknowledgement, not a defect report.",
+        "recorded_by": "taylor"
+      }
+    ]
+  },
+  "expect": {
+    "verdict": "ready",
+    "reason_codes": {},
+    "check_outcomes": {
+      "Merge Candidate / Windows full default suite + actuation (py3.11)": "green",
+      "CI / smoke": "green"
+    },
+    "finding_classifications": {
+      "review_comment:3001": "resolved_by_later_commit",
+      "review_comment:3002": "stale_superseded_head",
+      "review_comment:3003": "non_substantive"
+    }
+  }
+}

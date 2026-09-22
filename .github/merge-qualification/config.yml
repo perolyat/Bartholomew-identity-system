@@ -1,0 +1,52 @@
+# Required CI tiers for merge qualification (AUDIT-CTRL-1).
+#
+# Every job listed here must be COMPLETED with conclusion `success` against
+# the EXACT head being qualified. Missing, queued, cancelled, skipped or
+# green-only-for-an-older-head all refuse. There is no "assumed green".
+#
+# Jobs are named by (workflow, job) on purpose. Three workflows in this
+# repository publish a job called `smoke`, and two publish
+# `Quality (format, lint, packaging contract)` and
+# `Tests + coverage (Ubuntu, py3.11)`. A bare job name cannot tell the PR
+# Fast tier from the Merge Candidate tier, and PR #108 was merged believing
+# a tier had run that never ran at all.
+#
+# Changing this file changes what "merge-qualified" means, so it changes
+# only through a reviewed commit.
+schema_version: 1
+
+# Forge-side "Resolve conversation" is recorded in the evidence but does NOT
+# on its own dispose of a finding. PR #120's qualification reported zero
+# unresolved threads while a substantive finding was extant; resolution state
+# is a click, not evidence that the code changed. An explicit disposition
+# record is required instead.
+github_resolution_satisfies_disposition: false
+
+required_tiers:
+  - workflow: CI
+    jobs:
+      - Quality (format, lint, packaging contract)
+      - PR Fast tests (Ubuntu, py3.11, parallel)
+      - Windows fast (packaging, lifecycle, actuation suites)
+      - smoke
+
+  - workflow: Integration
+    jobs:
+      - Tests + coverage (Ubuntu, py3.11)
+      - Critical integration + lifecycle (Ubuntu, py3.11)
+      - Windows lifecycle + compatibility (py3.11)
+
+  # The tier that never ran on PR #108 and failed on PR #101's merged head.
+  # It does not run on an ordinary pull request: it needs the
+  # `ci:merge-candidate` label. Until that label is applied and the tier is
+  # green on the exact head, qualification refuses — which is the correct
+  # answer, not a tooling gap.
+  - workflow: Merge Candidate
+    jobs:
+      - Quality (format, lint, packaging contract)
+      - Tests + coverage (Ubuntu, py3.10)
+      - Tests + coverage (Ubuntu, py3.11)
+      - Critical integration + lifecycle (Ubuntu, py3.10)
+      - Critical integration + lifecycle (Ubuntu, py3.11)
+      - Windows full default suite + actuation (py3.11)
+      - smoke
