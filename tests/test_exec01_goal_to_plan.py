@@ -512,9 +512,9 @@ class TestThePromptBoundary:
         """
         from bartholomew.executive.deliberation import MAX_COGNITION_RESPONSE_CHARS
 
-        assert MAX_COGNITION_RESPONSE_CHARS == 20000, (
-            "the bound moved; change this test deliberately"
-        )
+        assert (
+            MAX_COGNITION_RESPONSE_CHARS == 20000
+        ), "the bound moved; change this test deliberately"
 
         # The object sits beyond the bound, so it survives only if the
         # truncation did not happen. Non-whitespace filler on purpose:

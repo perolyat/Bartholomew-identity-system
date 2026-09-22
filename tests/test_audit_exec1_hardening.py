@@ -451,7 +451,11 @@ def _selection(*, autonomous=False, approval=ApprovalRequirement.REQUIRED_AUTONO
 
 
 def _step(
-    index, status, *, autonomous=False, approval=ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE,
+    index,
+    status,
+    *,
+    autonomous=False,
+    approval=ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE,
 ):
     return PlanStep(
         index=index,
