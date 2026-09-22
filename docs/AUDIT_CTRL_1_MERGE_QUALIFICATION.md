@@ -146,10 +146,41 @@ like any other change. Nothing a model asserts can reach `READY`.
 - It does **not** change any CI tier, threshold, timeout or test.
 - It does **not** define any finding away, and it weakens nothing: every state it added is a state
   that **refuses**.
-- It is **not** a branch-protection configuration. Making this gate a required status check on
-  `main` is a repository-settings change that is Taylor's to make, and it is deliberately left
-  outside this package. Until it is, the gate is an authoritative *report*, and the residual risk
-  is that a human ignores it.
+- It is **not** a branch-protection configuration. See §4a: Taylor approved a proving period
+  instead, so the gate is deliberately not enforced by GitHub yet.
+
+## 4a. The proving period (approved by Taylor, 2026-09-22)
+
+**The gate is operationally mandatory and technically advisory.** GitHub branch protection is
+**not** changed, and `Merge Qualification` is **not** a required status check. That is a deliberate
+decision, not an unfinished step.
+
+| | |
+|---|---|
+| **NOT READY** | The workflow **stops**. The reason is investigated before any merge. |
+| **READY** | Only that the available evidence supports merge readiness. **It does not authorise a merge.** |
+| **Final merge authority** | **Taylor's explicit User Approval Gate**, unchanged. |
+
+The reasoning is the same one that governs everything else in this package: a control that has not
+yet been observed against reality should not be given enforcement power over it. The gate is new.
+It should prove itself over several real pull requests first — and it has already been wrong twice
+about its own (see §3.2), which is the argument for the proving period rather than against it.
+
+**What we are watching for during the period**, and what each would mean:
+
+| Signal | What it would show |
+|---|---|
+| A **false-positive READY** | The gate approved a head the evidence did not support. The one failure it exists to prevent, and the one that would end the period immediately. |
+| A **false block** | It refused a head that was genuinely qualified. Erodes trust and invites routing around it. |
+| A **stale-head mistake** | Evidence for one commit read as applying to another, in either direction. |
+| A **missed substantive finding** | A real review finding not seen, or classified as non-blocking when it was not. |
+| **Excessive CI / qualification delay** | The gate's wait making the workflow impractical rather than careful. |
+| A **confusing classification** | A verdict a person cannot act on is not usable as a control, whatever its logic. |
+| **Disagreement with actual repository state** | The gate's picture of the forge diverging from the forge. |
+
+**Promotion is a separate decision.** After several real pull requests have exercised the gate, the
+project decides whether to make `Merge Qualification` a required GitHub status check. Nothing in
+this package makes that happen automatically, and this document is not authority to make it.
 
 ## 5. Files
 

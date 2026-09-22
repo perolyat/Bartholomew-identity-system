@@ -4034,9 +4034,19 @@
   - A substantive finding must be **explicitly dispositioned in a committed file**, with a
     rationale and a named recorder, before the head can qualify. A "resolved by a later commit"
     claim is checked against this pull request's commit list, in order.
-  - The gate **reports**; it does not enforce at the forge. Making it a required status check on
-    `main` is a repository-settings change reserved to Taylor, and until it is made the residual
-    risk is that a human ignores an accurate NOT READY.
+  - The gate **reports**; it does not enforce at the forge. **Taylor approved a proving period on
+    2026-09-22** rather than immediate enforcement: the gate is **operationally mandatory and
+    technically advisory**. A NOT READY stops the workflow and is investigated before any merge; a
+    READY means only that the available evidence supports merge readiness and **does not authorise
+    a merge**; the **User Approval Gate remains the final merge authority**. Branch protection is
+    deliberately unchanged, because a control that has not yet been observed against reality should
+    not be given enforcement power over it. The residual risk during the period is that a human
+    ignores an accurate NOT READY, and that is accepted knowingly. The period watches for
+    false-positive READY results, false blocks, stale-head mistakes, missed substantive findings,
+    excessive CI/qualification delay, confusing classifications, and disagreement between the
+    qualification result and actual repository state. Promoting it to a required status check is a
+    **separate decision** to be taken after several real pull requests have exercised it —
+    `docs/AUDIT_CTRL_1_MERGE_QUALIFICATION.md` §4a.
   - Nothing in Bartholomew's runtime, governance, Parking Brake or user-facing behaviour changes.
     This is project control, not system control.
 - **Date:** 2026-09-21

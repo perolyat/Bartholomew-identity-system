@@ -70,6 +70,11 @@ Mark each as **PASS** or **BLOCKED**.
       **A new commit invalidates it** — re-qualify the new head. Added by AUDIT-CTRL-1 after four
       pull requests (#108, #101, #91, #120) were reported merge-ready on evidence that did not
       support it; `docs/AUDIT_CTRL_1_MERGE_QUALIFICATION.md` is the record.
+      **During the proving period (approved 2026-09-22) the gate is operationally mandatory and
+      technically advisory:** GitHub does not enforce it, so **NOT READY stops the workflow by
+      your decision, not the forge's** — investigate before merging. **READY authorises nothing**;
+      it says only that the evidence supports the question. The User Approval Gate below remains
+      the final merge authority. See `docs/AUDIT_CTRL_1_MERGE_QUALIFICATION.md` §4a.
 - [ ] No new undeclared runtime dependency (`tests/smoke/test_packaging_contract.py` enforces this)
 - [ ] Docs updated (canonical docs if behavior/interface changed)
 - [ ] Rollback note included for risky changes
