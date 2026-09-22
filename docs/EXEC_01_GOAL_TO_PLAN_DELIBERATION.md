@@ -188,10 +188,22 @@ there is no value of it that permits anything.
 > implementation had *heard of* made it careful. `"very low"`, `"uncertain"`,
 > `"not sure"` and an empty string each bought a proposal more authority than
 > the word `"low"` did. It is now an allowlist: `SUFFICIENT_CONFIDENCE` names
-> the two values that let a proposal through, an absent claim is neither a
-> caution nor a licence, and everything else --- unrecognised, malformed,
-> ambiguous or empty --- becomes a question. The model's own word is kept
-> verbatim for the audit trail rather than rewritten.
+> the two values that satisfy the gate and everything else --- unrecognised,
+> malformed, ambiguous, empty, **and the field not being there at all** ---
+> becomes a question. The model's own word is kept verbatim for the audit trail
+> rather than rewritten.
+>
+> **Corrected 2026-09-22 by the pre-merge independent review.** The first cut of
+> this repair let an absent or `null` confidence proceed, on the reasoning that
+> saying nothing is not a claim of uncertainty. The review reproduced the
+> consequence: with the field simply omitted, deliberation produced a governed
+> `windows.launch_app` step, so omission was a bypass around the allowlist
+> available to any model that left the field out. `build_prompt` asks for
+> `confidence` explicitly, so an answer without it has not followed the
+> contract. `UNSTATED` survives as a distinct *classification* --- "said
+> nothing" and "said something unusable" are different facts and get different
+> questions --- but only `SUFFICIENT` satisfies the gate, and the condition is
+> written as *"is not `SUFFICIENT`"* so a state added later fails it by default.
 
 Every model-authored string that can reach durable state satisfies one
 storable-text contract, bounded, whitespace-collapsed and UTF-8-encodable.
@@ -204,6 +216,21 @@ storable-text contract, bounded, whitespace-collapsed and UTF-8-encodable.
 > Identifiers now pass through `_identifier_field` on a tighter bound, and the
 > contract is stated as a predicate (`is_storable_text`) so it can be asserted
 > over a whole persisted structure rather than trusted field by field.
+>
+> **Corrected 2026-09-22 by the pre-merge independent review: making an
+> identifier storable must not make it *mean* something.** Sanitising before
+> the vocabulary check created a second, worse gap than the one it closed ---
+> `"windows.\ud800launch_app"` is a string no capability vocabulary contains,
+> and removing the lone surrogate that makes it unstorable produces exactly
+> `"windows.launch_app"`, which the vocabulary does contain. The review
+> reproduced it end to end, with a device that genuinely declares the
+> capability and valid parameters: malformed model output became a governed
+> step. Storage safety and semantic validity are now separate concerns.
+> `DeliberatedStep.capability_repaired` records whether making the identifier
+> storable changed it, and `_validate_step` refuses a repaired identifier
+> **before it consults `CapabilityKind` at all**, so the repair can never
+> supply the meaning. The durable representation is unchanged and still
+> storable; what it no longer is, is evidence of what was asked for.
 
 ### Inference is held to a stricter standard than instruction
 
@@ -286,7 +313,19 @@ Unchanged from W03-B, and now proved for the deliberated path too:
 > only "is this kind in the trusted set", so such a selection would have been
 > described as running unattended. The explanation layer checks the descriptor
 > too, which makes the claim derive from the capability's own governance facts
-> rather than from one device object's honesty. **No governance decision changed:**
+> rather than from one device object's honesty.
+>
+> **Corrected 2026-09-22 by the pre-merge independent review.** That check was
+> first written as `approval_requirement != "always"`, which is an exclusion
+> and not the allowlist it needed to be. `ApprovalRequirement` has three
+> values, and only `REQUIRED_AUTONOMY_ELIGIBLE` is one an enrolment may be
+> granted autonomy over; `REQUIRED` means "an approval is required, and this
+> build offers no autonomy path for it". The exclusion missed `REQUIRED`
+> entirely, so a step whose capability has no autonomy path at all was
+> described to the person as running unattended --- reproduced on the PR head.
+> The test is now `== REQUIRED_AUTONOMY_ELIGIBLE`, which also means a value
+> added to the enum later is ineligible by default rather than admitted by
+> silence. **No governance decision changed:**
 > whether an approval is required is still decided by the envelope at dispatch,
 > and this package still never acts on the answer.
 

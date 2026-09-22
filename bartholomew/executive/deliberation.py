@@ -256,9 +256,12 @@ class ConfidenceState(str, Enum):
     """
 
     #: The model said nothing about its confidence: the key was absent, or
-    #: `null`. Saying nothing is not a claim of uncertainty, and it is not a
-    #: claim of certainty either --- it is simply not a claim, and it neither
-    #: stops a proposal nor advances one. Every other gate still applies.
+    #: `null`. It is not a claim of uncertainty and not a claim of certainty ---
+    #: it is simply not a claim, and **it does not satisfy the confidence gate**.
+    #: The state is kept distinct from `CAUTIOUS` because an audit reading
+    #: "the model said nothing" is a different fact from "the model said
+    #: something I could not use", and the two want different questions put to
+    #: the person. Neither produces a proposal.
     UNSTATED = "unstated"
     #: An explicitly recognised confident value from `SUFFICIENT_CONFIDENCE`.
     SUFFICIENT = "sufficient"
@@ -281,11 +284,20 @@ def classify_confidence(value: Any) -> ConfidenceState:
     invents a confidence vocabulary cannot talk its way past the caution by
     inventing a word that sounds assured.
 
-    `None` is the single exception, and it is not a bypass: it means the key
-    was absent or `null`, the model made no claim at all, and `UNSTATED`
-    carries no more authority than `CAUTIOUS` does --- it merely declines to
-    add a caution the model never asked for. A *present* value that normalises
-    to nothing (`""`, `"   "`) is malformed rather than absent, and is cautious.
+    `None` --- the key absent, or `null` --- is `UNSTATED`, which is a
+    *classification*, not a permission: `UNSTATED` does not satisfy the
+    confidence gate either, so the only way through it is an explicitly
+    recognised confident value. A *present* value that normalises to nothing
+    (`""`, `"   "`) is malformed rather than absent, and is cautious.
+
+    **Amended by the AUDIT-EXEC-1 pre-merge review.** The first cut let
+    `UNSTATED` proceed, on the reasoning that saying nothing is not a claim of
+    uncertainty. That reasoning was right about what silence *means* and wrong
+    about what it should *buy*: `build_prompt` asks for the field explicitly, so
+    an answer without it is an answer that did not follow the contract, and
+    letting omission through made the field optional --- which is a bypass
+    around the allowlist available to any model that simply leaves it out. The
+    allowlist is only a control if the absence of a value fails it too.
     """
     if value is None:
         return ConfidenceState.UNSTATED
@@ -426,10 +438,22 @@ class DeliberationPort(Protocol):
 class DeliberatedStep:
     """One step a model proposed, before any validation has been done to it."""
 
+    #: The capability identifier **in its storable form** --- what
+    #: `_identifier_field` produced. Safe to persist, print and audit. It is
+    #: *not* on its own evidence of what the model meant: see
+    #: `capability_repaired`.
     capability: str
     parameters: dict[str, Any]
     purpose: str = ""
     necessary_because: str = ""
+    #: Whether making the identifier storable **changed it**. Storage safety and
+    #: semantic validity are separate concerns, and conflating them is a way in:
+    #: `"windows.\ud800launch_app"` is not a capability anybody named, but
+    #: stripping the unencodable character to make it storable turns it into the
+    #: exact text of one. `_validate_step` refuses a repaired identifier before
+    #: it consults the vocabulary at all, so a cleaned string cannot become
+    #: authority by resembling a real capability.
+    capability_repaired: bool = False
 
 
 @dataclass(frozen=True)
@@ -485,6 +509,11 @@ class Deliberation:
                     # failure this defends against, `capability` having been the
                     # field that did not remember.
                     "capability": _identifier_field(s.capability),
+                    # Provenance for the refusal: an auditor asking "why was a
+                    # step naming a real capability refused?" answers it here.
+                    # The verbatim identifier is deliberately **not** recorded ---
+                    # it is the unstorable thing this whole contract exists for.
+                    "capability_repaired": s.capability_repaired,
                     "parameter_names": sorted(
                         _text_field(str(k), maximum=100) for k in s.parameters
                     ),
@@ -668,12 +697,18 @@ def parse_deliberation(raw: Any) -> Deliberation | None:
             parameters = entry.get("parameters", {})
             if not isinstance(capability, str) or not isinstance(parameters, dict):
                 return None
+            # Sanitised here, at the boundary where model text becomes a value
+            # this package carries around, rather than at each of the places
+            # that later persists it. The *comparison* is kept alongside it:
+            # exact equality is what says the model actually wrote a
+            # well-formed identifier, and anything short of that is a repair
+            # rather than a reading. See `_identifier_field` and
+            # `DeliberatedStep.capability_repaired`.
+            storable_capability = _identifier_field(capability)
             steps.append(
                 DeliberatedStep(
-                    # Sanitised here, at the boundary where model text becomes a
-                    # value this package carries around, rather than at each of
-                    # the places that later persists it. See `_identifier_field`.
-                    capability=_identifier_field(capability),
+                    capability=storable_capability,
+                    capability_repaired=storable_capability != capability,
                     parameters=dict(parameters),
                     purpose=_text_field(entry.get("purpose")),
                     necessary_because=_text_field(entry.get("necessary_because")),
@@ -861,19 +896,30 @@ def intent_from_deliberation(
             ),
         )
 
-    # Fail-cautious by construction: the condition is "not an explicitly
-    # recognised confident state", so an unrecognised, malformed, ambiguous or
-    # empty confidence lands here alongside `"low"` rather than sailing past a
-    # list that had never heard of it.
-    if deliberation.confidence_state is ConfidenceState.CAUTIOUS:
+    # Fail-cautious by construction, and stated as the *positive* condition it
+    # actually is: only an explicitly recognised confident state gets through.
+    # Everything else --- unrecognised, malformed, ambiguous, empty, non-string,
+    # and the field not being there at all --- lands here. Writing it as "is not
+    # SUFFICIENT" rather than "is CAUTIOUS" is the whole point: a third state
+    # added to `ConfidenceState` tomorrow fails this gate by default instead of
+    # silently passing it, which is how the omission bypass got in.
+    if deliberation.confidence_state is not ConfidenceState.SUFFICIENT:
+        unstated = deliberation.confidence_state is ConfidenceState.UNSTATED
         return TaskIntent(
             instruction=instruction,
             ambiguities=(
                 Ambiguity(
                     code=AMBIGUITY_MULTIPLE_READINGS,
                     question=(
-                        "I am not confident enough about what you want here to propose "
-                        "anything. Tell me a little more precisely and I will."
+                        # Two questions, because "I could not tell how sure it
+                        # was" and "it never said" are different facts and the
+                        # person is owed the true one. Neither proposes anything.
+                        "I worked out a reading of this, but not one I can say I am "
+                        "confident in, so I am not proposing it. Tell me a little more "
+                        "precisely and I will."
+                        if unstated
+                        else "I am not confident enough about what you want here to "
+                        "propose anything. Tell me a little more precisely and I will."
                     ),
                     # The model's own word, kept out of the question the person
                     # reads --- it is in the Reflection --- but the subject is
@@ -968,6 +1014,23 @@ def _validate_step(
     device: Any,
 ) -> tuple[IntentStep | None, str | None]:
     """One step, or the reason there is no step. Never a step and a reason."""
+    # **Before the vocabulary is consulted.** Making a model-authored identifier
+    # safe to store must never make it mean something, and the order here is the
+    # whole of that guarantee: an identifier that had to be altered is refused
+    # whether or not the altered text happens to spell a real capability. The
+    # reproduction is exact --- `"windows.\ud800launch_app"` is a string no
+    # capability vocabulary contains, and stripping the lone surrogate that
+    # makes it unstorable produces `"windows.launch_app"`, which the vocabulary
+    # does contain. Checking storability first and meaning second would let the
+    # repair supply the meaning.
+    if proposed.capability_repaired:
+        return None, (
+            f"the capability identifier in that step was not well-formed. {proposed.capability!r} "
+            "is what is left of it after removing what could not be stored, and a repaired "
+            "identifier is not evidence of what was asked for --- so I will not act on it, even "
+            "though the remainder reads like something I can do."
+        )
+
     try:
         kind = CapabilityKind(proposed.capability)
     except ValueError:

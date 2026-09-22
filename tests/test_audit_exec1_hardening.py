@@ -47,7 +47,11 @@ from bartholomew.executive.deliberation import (
     is_storable_text,
     parse_deliberation,
 )
-from bartholomew.executive.explanation import explain_task, explanation_details
+from bartholomew.executive.explanation import (
+    _runs_without_further_approval,  # noqa: PLC2701 - the predicate under test
+    explain_task,
+    explanation_details,
+)
 from bartholomew.executive.plan import Plan, PlanStep, StepStatus, TaskStatus
 from bartholomew.executive.selection import CapabilitySelection
 
@@ -282,19 +286,111 @@ class TestC06CapabilityIdentifiersAreStorableText:
         for text in _every_string(record.as_dict()):
             assert is_storable_text(text, maximum=500), repr(text)
 
-    def test_sanitisation_is_not_a_way_in(self):
-        """Forbidden state: cleaning an identifier must never make it *acceptable*.
+    def test_sanitisation_cannot_manufacture_a_valid_capability(self):
+        """The forbidden state, **isolated** so only the property can explain it.
 
-        The one risk of sanitising rather than refusing outright is that some
-        junk cleans up into a real capability name. It cannot: the strip removes
-        characters and collapses whitespace, so anything that becomes a valid
-        `CapabilityKind` was a valid one with noise around it --- and the
-        vocabulary check, the device's enrolment, the parameter validator and
-        `INFERABLE_CAPABILITIES` all still run afterwards. Here the device
-        declares nothing, and a cosmetically perfect identifier is still refused.
+        This is the AUDIT-EXEC-1 pre-merge review's Finding 3, and the previous
+        version of this test did not prove it: it used a device that declared
+        no capabilities, so the refusal it observed came from enrolment and
+        would have been identical had the bypass been wide open.
+
+        Here every unrelated gate is satisfied on purpose --- the device
+        declares `windows.launch_app`, the parameters are the real allowlisted
+        ones, `launch_app` is in `INFERABLE_CAPABILITIES`, and the plan is one
+        step --- so the *only* thing that can refuse this is the property under
+        test. The model's identifier is `"windows.\ud800launch_app"`, which no
+        vocabulary contains; removing the lone surrogate to make it storable
+        produces exactly `"windows.launch_app"`, which the vocabulary does
+        contain. Reproduced on head `8f17c07`: it proposed a governed
+        `windows.launch_app` step.
         """
-        intent = _deliberated(_answer([LAUNCH]), device=_device(capabilities=()))
-        assert _asked(intent)
+        injected = dict(LAUNCH)
+        injected["capability"] = f"windows.{SURROGATE}launch_app"
+        intent = _deliberated(_answer([injected]))
+
+        assert _asked(intent), "a repaired identifier must not become an action"
+        assert not intent.steps
+
+    def test_the_control_proves_every_other_gate_would_have_passed(self):
+        """Non-vacuity for the isolation itself.
+
+        The only difference between this and the test above is the surrogate.
+        If this one did not produce a step, the test above would prove nothing,
+        because some unrelated condition would be doing the refusing.
+        """
+        intent = _deliberated(_answer([dict(LAUNCH)]))
+        assert intent.actionable
+        assert [s.capability for s in intent.steps] == ["windows.launch_app"]
+
+    @pytest.mark.parametrize(
+        "identifier",
+        [
+            f"windows.launch_app{SURROGATE}",
+            f"{SURROGATE}windows.launch_app",
+            "windows.launch_app ",
+            " windows.launch_app",
+            "windows.launch\r\n_app",
+            "windows.launch_app" + "x" * 5000,
+        ],
+    )
+    def test_no_repaired_identifier_is_actionable_however_it_cleans_up(self, identifier):
+        """The property over shapes, not one string: repair is refused, full stop.
+
+        Truncation counts too --- an identifier bounded down to something valid
+        was still not what the model wrote.
+        """
+        injected = dict(LAUNCH)
+        injected["capability"] = identifier
+        assert _asked(_deliberated(_answer([injected])))
+
+    def test_a_repaired_identifier_is_refused_before_the_vocabulary_is_consulted(self):
+        """The ordering, which is where the guarantee actually lives.
+
+        Storability is decided first and meaning second, so the repair can
+        never supply the meaning. Asserted on the parse result rather than on
+        the refusal text: `capability_repaired` is the fact, and it is set for
+        an identifier that cleans into a real capability exactly as it is for
+        one that cleans into nonsense.
+        """
+        parsed = parse_deliberation(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "capability": f"windows.{SURROGATE}launch_app",
+                            "parameters": {"app_id": "notepad"},
+                        },
+                    ],
+                },
+            ),
+        )
+        assert parsed is not None
+        step = parsed.steps[0]
+        # Storable, and it now reads as a real capability --- which is precisely
+        # why the flag, and not the text, has to be what decides.
+        assert step.capability == "windows.launch_app"
+        assert step.capability in {k.value for k in CapabilityKind}
+        assert step.capability_repaired is True
+
+    def test_the_repair_flag_reaches_the_audit_record(self):
+        """Provenance: an auditor can see why a step naming a real capability was refused."""
+        parsed = parse_deliberation(
+            json.dumps(
+                {"steps": [{"capability": f"windows.{SURROGATE}launch_app", "parameters": {}}]},
+            ),
+        )
+        assert parsed is not None
+        rendered = parsed.as_dict()
+        assert rendered["steps"][0]["capability_repaired"] is True
+        # Still storable at every depth --- the C06 guarantee is not weakened.
+        for text in _every_string(rendered):
+            assert is_storable_text(text, maximum=500), repr(text)
+
+    def test_a_clean_identifier_is_not_flagged_as_repaired(self):
+        """Non-vacuity: the flag must mean something, not be always-on."""
+        parsed = parse_deliberation(json.dumps({"steps": [LAUNCH]}))
+        assert parsed is not None
+        assert parsed.steps[0].capability_repaired is False
 
     def test_non_vacuity_a_clean_identifier_is_untouched(self):
         parsed = parse_deliberation(json.dumps({"steps": [LAUNCH]}))
@@ -361,7 +457,8 @@ class TestC07UnknownConfidenceFailsCautious:
         assert classify_confidence(value.upper()) is ConfidenceState.SUFFICIENT
         assert classify_confidence(f"  {value} ") is ConfidenceState.SUFFICIENT
 
-    def test_absent_is_neither_a_caution_nor_a_licence(self):
+    def test_absent_is_classified_as_unstated_and_is_not_a_licence(self):
+        """`UNSTATED` is a classification, not a permission. See the gate tests."""
         assert classify_confidence(None) is ConfidenceState.UNSTATED
         parsed = parse_deliberation(json.dumps({"steps": []}))
         assert parsed is not None
@@ -386,15 +483,62 @@ class TestC07UnknownConfidenceFailsCautious:
         assert intent.actionable
         assert [s.capability for s in intent.steps] == ["windows.launch_app"]
 
-    def test_an_omitted_confidence_proposes_normally(self):
+    def test_an_omitted_confidence_proposes_nothing(self):
+        """Forbidden state: omission must not be a way round the allowlist.
+
+        **Amended by the AUDIT-EXEC-1 pre-merge review**, which found this
+        asserting the opposite. An allowlist that a model can skip by leaving
+        the field out is not an allowlist; `build_prompt` asks for `confidence`
+        explicitly, so an answer without it did not follow the contract, and
+        the contract is the only reason the recognised values mean anything.
+        Reproduced on head `8f17c07`: this produced a governed proposal with a
+        real `windows.launch_app` step.
+        """
         payload = json.loads(_answer([LAUNCH]))
         del payload["confidence"]
         intent = _deliberated(json.dumps(payload))
-        assert intent.actionable
+        assert _asked(intent)
+        assert not intent.steps
 
-    def test_an_explicit_null_confidence_proposes_normally(self):
+    def test_an_explicit_null_confidence_proposes_nothing(self):
+        """The JSON spelling of the same omission, and the same forbidden state."""
         intent = _deliberated(_answer([LAUNCH], confidence=None))
-        assert intent.actionable
+        assert _asked(intent)
+        assert not intent.steps
+
+    def test_only_a_recognised_sufficient_value_satisfies_the_gate(self):
+        """The invariant as one statement over every state the classifier has.
+
+        Written against `ConfidenceState` itself rather than a list of inputs,
+        so a fourth state added tomorrow has to be classified deliberately
+        instead of inheriting a pass. This is the test that fails if the gate
+        is ever rewritten back into an exclusion.
+        """
+        proceeds = {state: state is ConfidenceState.SUFFICIENT for state in ConfidenceState}
+        assert proceeds == {
+            ConfidenceState.SUFFICIENT: True,
+            ConfidenceState.UNSTATED: False,
+            ConfidenceState.CAUTIOUS: False,
+        }
+        # And end to end, one representative input per state.
+        omitted = json.loads(_answer([LAUNCH]))
+        del omitted["confidence"]
+        assert _deliberated(json.dumps(omitted)).actionable is False
+        assert _deliberated(_answer([LAUNCH], confidence="zorp")).actionable is False
+        assert _deliberated(_answer([LAUNCH], confidence="high")).actionable is True
+
+    def test_unstated_is_still_told_apart_from_cautious_in_the_question(self):
+        """`UNSTATED` stays a distinct audit classification; it just buys nothing.
+
+        Both refuse. The person is told the true reason rather than a single
+        flattened one, which is the same truthfulness rule C08 is about.
+        """
+        omitted = json.loads(_answer([LAUNCH]))
+        del omitted["confidence"]
+        silent = _deliberated(json.dumps(omitted))
+        spoke = _deliberated(_answer([LAUNCH], confidence="low"))
+        assert _asked(silent) and _asked(spoke)
+        assert silent.ambiguities[0].question != spoke.ambiguities[0].question
 
     def test_no_unrecognised_value_outranks_a_recognised_cautious_one(self):
         """The forbidden state, stated as the ordering it violates.
@@ -570,28 +714,87 @@ class TestC08ApprovalTextFollowsGovernanceState:
         assert "action act-2" in text
         assert "Waiting on you: action act-2." in text
 
-    def test_a_genuine_approval_requirement_is_never_concealed(self):
-        """The other direction, and the reason `device_autonomous` is not enough.
+    @pytest.mark.parametrize(
+        "approval",
+        [ApprovalRequirement.ALWAYS, ApprovalRequirement.REQUIRED],
+    )
+    def test_a_genuine_approval_requirement_is_never_concealed(self, approval):
+        """Both ineligible requirements, and the reason it is an allowlist.
 
-        `ApprovalRequirement.ALWAYS` is "never eligible for trusted autonomy, at
-        any configuration". `EnrolledDevice.__post_init__` enforces that, so a
-        real enrolled device cannot produce this selection --- but
-        `select_capability` accepts "anything with the same `declares` /
+        `ApprovalRequirement` has three values and exactly one of them,
+        `REQUIRED_AUTONOMY_ELIGIBLE`, is a kind an enrolment may be granted
+        autonomy over. `ALWAYS` is "never eligible at any configuration";
+        `REQUIRED` is "an approval is required, and this build offers no
+        autonomy path for it".
+
+        **Amended by the AUDIT-EXEC-1 pre-merge review**, which found the
+        predicate written as `!= ALWAYS`. That is not the same test: it missed
+        `REQUIRED` entirely, so a step whose capability has no autonomy path in
+        this build at all was described to the person as running unattended.
+        Reproduced on head `8f17c07` for `REQUIRED`. An exclusion would also
+        silently admit whatever value is added to the enum next.
+
+        `EnrolledDevice.__post_init__` refuses ineligible trusted autonomy at
+        construction, so a real enrolled device cannot produce this selection ---
+        but `select_capability` accepts "anything with the same `declares` /
         `declared_version` / `autonomous_for` surface", and `autonomous_for`
-        alone does not consult the descriptor. A selection carrying both must
-        not be described as running unattended, whatever produced it.
+        alone does not consult the descriptor. The claim must not be made
+        whatever produced the selection.
         """
         step = _step(
             0,
             StepStatus.AWAITING_AUTHORIZATION,
             autonomous=True,
-            approval=ApprovalRequirement.ALWAYS,
+            approval=approval,
         )
+        assert _runs_without_further_approval(step) is False
+
         text = explain_task(_deliberated_plan([step]))
         assert "without asking you again" not in text
         assert "eligible to run without a further approval" not in text
+        assert "trusted autonomy" not in text
+        # And the requirement is stated, not merely left unmentioned.
         assert "still needs your approval" in text
         assert "Waiting on you: action act-0" in text
+
+    def test_the_only_eligible_requirement_is_described_as_autonomous(self):
+        """Non-vacuity for the allowlist: the one eligible value still reads as eligible."""
+        step = _step(
+            0,
+            StepStatus.AWAITING_AUTHORIZATION,
+            autonomous=True,
+            approval=ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE,
+        )
+        assert _runs_without_further_approval(step) is True
+        text = explain_task(_deliberated_plan([step]))
+        assert "trusted autonomy" in text
+        assert "without asking you again" in text
+        assert "Waiting on you" not in text
+
+    def test_autonomy_requires_the_device_grant_as_well_as_eligibility(self):
+        """The other half of the conjunction: eligibility alone is not autonomy."""
+        step = _step(
+            0,
+            StepStatus.AWAITING_AUTHORIZATION,
+            autonomous=False,
+            approval=ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE,
+        )
+        assert _runs_without_further_approval(step) is False
+        assert "still needs your approval" in explain_task(_deliberated_plan([step]))
+
+    def test_every_approval_requirement_is_classified_deliberately(self):
+        """No value of the enum inherits an autonomy claim by not being excluded."""
+        eligible = {
+            approval: _runs_without_further_approval(
+                _step(0, StepStatus.AWAITING_AUTHORIZATION, autonomous=True, approval=approval),
+            )
+            for approval in ApprovalRequirement
+        }
+        assert eligible == {
+            ApprovalRequirement.ALWAYS: False,
+            ApprovalRequirement.REQUIRED: False,
+            ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE: True,
+        }
 
     @pytest.mark.parametrize(
         "status",

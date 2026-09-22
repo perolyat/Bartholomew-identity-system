@@ -32,6 +32,7 @@ import json
 import sqlite3
 from typing import Any
 
+from bartholomew.actuation.capabilities import ApprovalRequirement
 from bartholomew.kernel.db_ctx import wal_db
 from bartholomew.kernel.redaction_engine import redact_pii
 from bartholomew.kernel.reflection import REFLECTION_KIND
@@ -68,23 +69,30 @@ _TASK_PHRASES = {
 }
 
 
-#: The one approval requirement that no enrolment can waive --- "never eligible
-#: for trusted autonomy, at any configuration".
+#: The **only** approval requirement that trusted autonomy can apply to.
 #:
-#: `EnrolledDevice.__post_init__` enforces this at construction, so a real
-#: enrolled device cannot reach here carrying both. But `select_capability`
-#: takes "an `EnrolledDevice` (or anything with the same `declares` /
-#: `declared_version` / `autonomous_for` surface)", and `autonomous_for` on its
-#: own answers only "is this kind in the trusted set". A device source that is
-#: not `EnrolledDevice` --- a future one, a test double --- would therefore have
-#: the account tell the person an `always` step is eligible to run unattended,
-#: when the envelope will still stop it for an approval: a true approval
-#: requirement, concealed, by a sentence nobody would think to re-check.
+#: `ApprovalRequirement` has three values and exactly one of them is eligible:
+#: `ALWAYS` is "never eligible for trusted autonomy, at any configuration", and
+#: `REQUIRED` is "an approval is required, and this build offers no autonomy
+#: path for it". Only `REQUIRED_AUTONOMY_ELIGIBLE` is a kind an enrolment may
+#: be granted autonomy over.
 #:
-#: Asking both questions costs one comparison and means the claim is derived
-#: from the capability's own governance facts rather than from one device
-#: object's honesty.
-_APPROVAL_NEVER_WAIVABLE = "always"
+#: Named as the allowlist it is, rather than written as `!= ALWAYS`. Those are
+#: not the same test, and the difference is a false claim: an exclusion misses
+#: `REQUIRED` entirely, so a step whose capability has **no autonomy path in
+#: this build at all** would be described to the person as running unattended.
+#: The AUDIT-EXEC-1 pre-merge review found exactly that. An exclusion also
+#: silently admits whatever value is added to the enum next, which is the same
+#: default-open shape the three findings share.
+#:
+#: `EnrolledDevice.__post_init__` refuses ineligible trusted autonomy at
+#: construction, so a real enrolled device cannot reach here carrying both. But
+#: `select_capability` takes "an `EnrolledDevice` (or anything with the same
+#: `declares` / `declared_version` / `autonomous_for` surface)", and
+#: `autonomous_for` on its own answers only "is this kind in the trusted set".
+#: The explanation layer therefore derives the claim from the capability's own
+#: governance facts rather than from one device object's honesty.
+_AUTONOMY_ELIGIBLE_APPROVAL = ApprovalRequirement.REQUIRED_AUTONOMY_ELIGIBLE.value
 
 
 def _runs_without_further_approval(step: PlanStep) -> bool:
@@ -92,11 +100,17 @@ def _runs_without_further_approval(step: PlanStep) -> bool:
 
     Two conditions, and both are governance state rather than wording: this
     device's enrolment grants trusted autonomy for the capability, **and** the
-    capability's own descriptor admits autonomy at all.
+    capability's own approval requirement is *exactly* the one autonomy may
+    apply to. Neither alone is enough, and the second is an allowlist test
+    rather than an exclusion --- see `_AUTONOMY_ELIGIBLE_APPROVAL`.
+
+    This decides **wording only.** Whether an approval is actually required is
+    decided by the envelope at dispatch; nothing in this module is consulted
+    there, and no value of this function permits anything.
     """
     return bool(
         step.selection.device_autonomous
-        and step.selection.approval_requirement != _APPROVAL_NEVER_WAIVABLE,
+        and step.selection.approval_requirement == _AUTONOMY_ELIGIBLE_APPROVAL,
     )
 
 
