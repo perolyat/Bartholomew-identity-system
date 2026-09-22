@@ -24,8 +24,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import tempfile
-from pathlib import Path
+from contextlib import closing
 
 import pytest
 
@@ -227,7 +226,7 @@ class TestC06CapabilityIdentifiersAreStorableText:
         # And the whole thing really is encodable, which is what "storable" is for.
         json.dumps(rendered, ensure_ascii=False).encode("utf-8")
 
-    def test_the_audit_record_of_a_bad_identifier_reaches_the_database(self):
+    def test_the_audit_record_of_a_bad_identifier_reaches_the_database(self, tmp_path):
         """End to end, at the boundary that actually broke.
 
         The deliberation record is what `explanation_details` puts in the
@@ -256,18 +255,21 @@ class TestC06CapabilityIdentifiersAreStorableText:
         assert SURROGATE not in blob
         blob.encode("utf-8")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            db = str(Path(tmp) / "exec.db")
-            store.ensure_schema(db)
-            store.save_plan(db, plan)
-            with sqlite3.connect(db) as conn:
-                conn.execute("CREATE TABLE audit(details TEXT)")
-                # The shape `ActionReflection` writes: the details blob, as text.
-                conn.execute("INSERT INTO audit VALUES (?)", (blob,))
-                (stored,) = conn.execute(
-                    "SELECT clarification FROM executive_tasks WHERE task_id = ?",
-                    ("t-c06",),
-                ).fetchone()
+        db = str(tmp_path / "exec.db")
+        store.ensure_schema(db)
+        store.save_plan(db, plan)
+        # `closing`, not a bare `with`: a `with` on a sqlite3 connection commits
+        # the transaction and leaves the connection **open**. On Windows the
+        # surviving handle makes the database file undeletable, which is how
+        # this test first failed there while passing on Linux.
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute("CREATE TABLE audit(details TEXT)")
+            # The shape `ActionReflection` writes: the details blob, as text.
+            conn.execute("INSERT INTO audit VALUES (?)", (blob,))
+            (stored,) = conn.execute(
+                "SELECT clarification FROM executive_tasks WHERE task_id = ?",
+                ("t-c06",),
+            ).fetchone()
         assert stored
         assert SURROGATE not in stored
 
