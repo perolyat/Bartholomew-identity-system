@@ -12,6 +12,12 @@
 **Scope:** Executive cognition only. No governance, actuation, verification,
 recovery, memory, ECI, identity or consent system was redesigned.
 
+> **Hardened 2026-09-22 by AUDIT-EXEC-1**, a bounded repair of three surviving
+> findings against this capability: C06 (capability-identifier sanitisation),
+> C07 (unknown-confidence fail-cautiousness) and C08 (approval-explanation
+> truthfulness). Each is recorded inline below, at the section whose claim it
+> amends. No governance boundary was moved.
+
 ---
 
 ## 1. What the gap actually was
@@ -174,8 +180,30 @@ itself, not by a list of known-bad names. The steps that survive carry the
 validator's **canonical** parameters, so the envelope fingerprints and approves
 exactly the shape that was checked.
 
-Stated confidence may make the executive *more* cautious and never less: `low`
-becomes a question, and there is no value of it that permits anything.
+Stated confidence may make the executive *more* cautious and never less, and
+there is no value of it that permits anything.
+
+> **Amended by AUDIT-EXEC-1 (C07), 2026-09-22.** As shipped, this was read
+> through a blocklist of four cautious words, so only a confidence the
+> implementation had *heard of* made it careful. `"very low"`, `"uncertain"`,
+> `"not sure"` and an empty string each bought a proposal more authority than
+> the word `"low"` did. It is now an allowlist: `SUFFICIENT_CONFIDENCE` names
+> the two values that let a proposal through, an absent claim is neither a
+> caution nor a licence, and everything else --- unrecognised, malformed,
+> ambiguous or empty --- becomes a question. The model's own word is kept
+> verbatim for the audit trail rather than rewritten.
+
+Every model-authored string that can reach durable state satisfies one
+storable-text contract, bounded, whitespace-collapsed and UTF-8-encodable.
+
+> **Amended by AUDIT-EXEC-1 (C06), 2026-09-22.** The capability identifier was
+> the one field that never joined that convention: `parse_deliberation` copied
+> it verbatim out of the model's JSON, and `Deliberation.as_dict` carried it
+> unescaped into the `ActionReflection` that is this package's audit trail,
+> where a lone UTF-16 surrogate raises `UnicodeEncodeError` out of sqlite.
+> Identifiers now pass through `_identifier_field` on a tighter bound, and the
+> contract is stated as a predicate (`is_storable_text`) so it can be asserted
+> over a whole persisted structure rather than trusted field by field.
 
 ### Inference is held to a stricter standard than instruction
 
@@ -235,6 +263,33 @@ Unchanged from W03-B, and now proved for the deliberated path too:
 * a failure recovers by a defined decision, and a re-proposal carries a new
   fingerprint that the earlier approval cannot authorise.
 
+### What the person is told about approval
+
+> **Amended by AUDIT-EXEC-1 (C08), 2026-09-22.** The account of an inferred plan
+> ended with a constant: *"every one of them still needs your approval."* It was
+> the shape a safety sentence is supposed to have, and on a plan whose steps had
+> already run, or whose device holds configured trusted autonomy for them, it
+> was false --- while the per-step lines in the same account said the opposite.
+> An account that contradicts itself teaches the person to read neither half.
+>
+> Every approval-related sentence is now derived from the actual `PlanStep`
+> status and `CapabilitySelection` state, and it holds in both directions: it
+> never claims an approval is required where the governance state says it is
+> not, and it never omits one where the state says it is. The same applies to
+> the task-level line, which was the same constant one level up.
+>
+> The autonomy claim asks two questions rather than one. `EnrolledDevice`
+> refuses ineligible trusted autonomy at construction, so a real enrolled device
+> cannot carry both trusted autonomy and `ApprovalRequirement.ALWAYS` --- *"never
+> eligible for trusted autonomy, at any configuration"*. But `select_capability`
+> accepts any object with the same surface, and `.autonomous_for()` alone answers
+> only "is this kind in the trusted set", so such a selection would have been
+> described as running unattended. The explanation layer checks the descriptor
+> too, which makes the claim derive from the capability's own governance facts
+> rather than from one device object's honesty. **No governance decision changed:**
+> whether an approval is required is still decided by the envelope at dispatch,
+> and this package still never acts on the answer.
+
 ## 7. Evidence
 
 `tests/test_exec01_goal_to_plan.py` holds the before/after pair on the *same*
@@ -246,6 +301,17 @@ referents, and both prompt-injection surfaces.
 `tests/test_exec01_vertical_slice.py` walks one outcome-level goal through the
 real envelope, real Parking Brake, real approval, real verification and real
 recovery, and asserts the fourteen acceptance conditions in order.
+
+`tests/test_audit_exec1_hardening.py` (AUDIT-EXEC-1, 2026-09-22) covers the
+three findings above, each with the forbidden state alongside the required one:
+model-authored capability identifiers that are malformed, unbounded or carry
+unencodable characters, and the assertion that the whole persisted reading is
+storable at every depth; recognised, unrecognised, malformed, empty and
+non-string confidences, and the ordering property that nothing unrecognised is
+ever treated better than the most cautious recognised state; and the approval
+account across every step status, trusted autonomy, mixed plans, the
+never-waivable `always` requirement, and the contradiction between the summary
+sentence and the step lines.
 
 ## 8. What this does not do
 

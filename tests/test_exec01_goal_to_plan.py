@@ -40,6 +40,7 @@ from bartholomew.executive.capability_catalogue import (
     build_catalogue,
 )
 from bartholomew.executive.deliberation import (
+    ConfidenceState,
     DeliberationRecord,
     build_prompt,
     deliberate_task,
@@ -511,9 +512,9 @@ class TestThePromptBoundary:
         """
         from bartholomew.executive.deliberation import MAX_COGNITION_RESPONSE_CHARS
 
-        assert (
-            MAX_COGNITION_RESPONSE_CHARS == 20000
-        ), "the bound moved; change this test deliberately"
+        assert MAX_COGNITION_RESPONSE_CHARS == 20000, (
+            "the bound moved; change this test deliberately"
+        )
 
         # The object sits beyond the bound, so it survives only if the
         # truncation did not happen. Non-whitespace filler on purpose:
@@ -571,14 +572,23 @@ class TestParsingCognitionOutput:
         assert parse_deliberation(raw) is None
 
     @pytest.mark.parametrize("confidence", [0.01, 0, True, ["low"], {"level": "low"}])
-    def test_an_unreadable_confidence_is_read_as_low_not_as_nothing(self, confidence):
+    def test_an_unreadable_confidence_is_read_cautiously_not_as_nothing(self, confidence):
         """Regression, and it ran the wrong way.
 
         `_text_field` returned "" for a non-string, so `{"confidence": 0.01}`
         --- the shape a model is most likely to emit when it is *least* sure ---
         sailed past the check that stopped `{"confidence": "low"}`. Confidence
         may only ever make the executive more careful, so an unreadable value is
-        read as low.
+        read cautiously.
+
+        **Amended by AUDIT-EXEC-1 (C07).** This used to assert
+        `parsed.confidence == "low"`, which pinned the *mechanism* --- rewriting
+        the value to a word the model had not said --- rather than the property.
+        The property is that the value is cautious, and it is now decided by
+        `confidence_state`; `confidence` keeps what the model actually wrote, so
+        an audit row no longer records a claim nobody made. See
+        `tests/test_audit_exec1_hardening.py` for the widened case, where the
+        same caution now also covers every *string* nobody enumerated.
         """
         parsed = parse_deliberation(
             json.dumps(
@@ -591,13 +601,15 @@ class TestParsingCognitionOutput:
             ),
         )
         assert parsed is not None
-        assert parsed.confidence == "low"
+        assert parsed.confidence_state is ConfidenceState.CAUTIOUS
+        assert parsed.confidence != ""
 
     def test_an_absent_confidence_is_not_treated_as_a_claim_of_uncertainty(self):
         """Non-vacuity: saying nothing is not the same as saying "low"."""
         parsed = parse_deliberation(json.dumps({"steps": []}))
         assert parsed is not None
         assert parsed.confidence == ""
+        assert parsed.confidence_state is ConfidenceState.UNSTATED
 
     def test_a_fenced_object_is_still_read(self):
         """A formatting miss is not a different answer."""

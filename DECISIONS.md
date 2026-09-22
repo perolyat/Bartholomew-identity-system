@@ -4050,3 +4050,45 @@
   - Nothing in Bartholomew's runtime, governance, Parking Brake or user-facing behaviour changes.
     This is project control, not system control.
 - **Date:** 2026-09-21
+
+---
+
+## Decision: read a model's stated confidence through an allowlist of confident states
+
+- **Decision:** the Executive's goal-to-plan deliberation decides what a model's stated
+  `confidence` is worth by classifying it into exactly three states — `UNSTATED`, `SUFFICIENT`,
+  `CAUTIOUS` — where only the two values `SUFFICIENT_CONFIDENCE` names (`"high"`, `"medium"`, the
+  two the prompt asks for) let a proposal through. An absent or `null` claim is `UNSTATED` and
+  neither stops a proposal nor advances one. **Everything else** — a synonym nobody enumerated, a
+  sentence, an emoji, an empty or whitespace string, a number, a list, an object — is `CAUTIOUS`
+  and becomes a question to the person.
+- **Alternatives considered:**
+  - *Add the missing synonyms to `LOW_CONFIDENCE`.* Rejected. It is the same control with a longer
+    list, and it leaves the default pointing the wrong way: the next model to invent a way of
+    saying "I am not sure" is served by the same fail-open branch. The finding (AUDIT-EXEC-1 / C07)
+    was not that four words were too few, it was that an unrecognised value was treated exactly as
+    `"high"` was.
+  - *Parse numeric confidences against a threshold.* Rejected. It invents a comparability between
+    a model's `0.7` and its `"medium"` that no provider guarantees, and it is a second decision
+    surface to keep in agreement with the first.
+  - *Treat an absent confidence as cautious too.* Rejected, and the line is worth stating: saying
+    nothing is not a claim of uncertainty. Deliberation would otherwise refuse every model that
+    does not emit the field, which is a behaviour change to the deployed contract rather than a
+    repair, and `UNSTATED` carries no more authority than `CAUTIOUS` does in any case — every
+    other validation gate still runs.
+- **Why:** a blocklist has to have heard of a word before it can be careful about it. Confidence is
+  the one thing in this path that is *entirely* the model's own account of itself, so it is exactly
+  where an unrecognised token must not buy authority. Stated as the ordering the old code violated:
+  nothing unrecognised may ever be treated better than the most cautious recognised state.
+- **Consequences:**
+  - A model that states a confidence outside the two recognised values now produces a
+    clarification where it previously produced a governed proposal. This is intended, it is a real
+    behaviour change, and it fails in the direction of asking the person.
+  - Widening what counts as confident is a deliberate edit to `SUFFICIENT_CONFIDENCE` and nothing
+    infers membership from the shape of a string.
+  - The model's own word is kept verbatim on `Deliberation.confidence` for the audit trail, beside
+    the verdict in `confidence_state`. The previous code rewrote a non-string to the literal
+    `"low"`, recording a claim nobody had made.
+  - **No governance boundary moved.** Confidence still permits nothing, is still not consulted when
+    a step is validated, and can still only make the Executive more cautious.
+- **Date:** 2026-09-22
