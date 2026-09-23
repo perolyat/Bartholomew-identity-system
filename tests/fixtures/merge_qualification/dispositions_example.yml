@@ -1,0 +1,30 @@
+# A non-empty dispositions file that keeps the contract stated in
+# .github/merge-qualification/dispositions.yml: one record of each
+# classification a record may carry.
+#
+# tests/test_merge_qualification.py runs the check it makes on the committed
+# file over this one too, so that check stays a check of records rather than
+# of emptiness whatever the committed file happens to hold.
+schema_version: 1
+dispositions:
+  - finding_id: "review_comment:1001"
+    classification: resolved_by_later_commit
+    resolved_by_commit: 0123456789abcdef0123456789abcdef01234567
+    rationale: >-
+      Fixed by the named commit, which is later in the same pull request than
+      the commit the finding was written against.
+    recorded_by: an approver
+  - finding_id: "review_comment:1002"
+    classification: stale_superseded_head
+    rationale: >-
+      Written against a head the pull request has since moved past; the code
+      it points at no longer exists.
+    recorded_by: an approver
+  - finding_id: "review_comment:1003"
+    classification: unresolved_substantive
+    rationale: Open, and recorded as blocking so that the decision is explicit.
+    recorded_by: an approver
+  - finding_id: "review:1004"
+    classification: non_substantive
+    rationale: A review summary that carries no finding of its own.
+    recorded_by: an approver
