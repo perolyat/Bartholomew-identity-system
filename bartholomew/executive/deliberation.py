@@ -828,12 +828,26 @@ def _identifier_field(value: Any) -> str:
     identifier bounded at `MAX_IDENTIFIER_CHARS` is also the difference between
     a refusal a person can read and five thousand characters of noise.)
 
-    Sanitising rather than refusing outright is deliberate and costs nothing:
-    a cleaned identifier that is not a value of `CapabilityKind` --- and a
-    sanitised piece of junk never is --- is refused by the vocabulary check
-    immediately after, on the ordinary `no_capability` path. An empty result is
-    refused there too. The cautious outcome is unchanged; what changes is that
-    the refusal can now be written down.
+    What this produces is a *representation for persistence and audit*, and
+    nothing more. It is deliberately **not** a filter that decides what the
+    model meant, because sanitising can produce text that happens to equal a
+    real capability identifier: `"windows.\ud800launch_app"` is a string no
+    vocabulary contains, and stripping the lone surrogate that makes it
+    unstorable yields exactly `"windows.launch_app"`, which the vocabulary does
+    contain. The AUDIT-EXEC-1 pre-merge review reproduced that end to end. So
+    the cleaned text is *not* evidence that the model supplied that valid
+    identifier --- it is evidence only that the model's text could be written
+    down.
+
+    Semantic validity is decided elsewhere, and separately. `parse_deliberation`
+    records on `DeliberatedStep.capability_repaired` whether producing this
+    representation changed the model's text at all, and `_validate_step`
+    refuses any repaired identifier **before** it consults `CapabilityKind`.
+    That ordering is the guarantee: because storability is settled first and
+    meaning second, a storage repair can never supply the meaning, and a
+    cleaned string cannot become authority by resembling a real capability.
+    The cautious outcome for malformed output is therefore unchanged; what
+    this function adds is that the refusal can be written down.
     """
     return _text_field(value, maximum=MAX_IDENTIFIER_CHARS)
 
