@@ -298,7 +298,7 @@ class TestC06CapabilityIdentifiersAreStorableText:
         declares `windows.launch_app`, the parameters are the real allowlisted
         ones, `launch_app` is in `INFERABLE_CAPABILITIES`, and the plan is one
         step --- so the *only* thing that can refuse this is the property under
-        test. The model's identifier is `"windows.\ud800launch_app"`, which no
+        test. The model's identifier is `"windows.\\ud800launch_app"`, which no
         vocabulary contains; removing the lone surrogate to make it storable
         produces exactly `"windows.launch_app"`, which the vocabulary does
         contain. Reproduced on head `8f17c07`: it proposed a governed
@@ -691,7 +691,7 @@ class TestC08ApprovalTextFollowsGovernanceState:
         )
         assert BLANKET_CLAIM not in text
         assert "still needs your approval" not in text
-        assert "without asking you again" in text
+        assert "eligible to run without a further approval" in text
         assert "Waiting on you" not in text
 
     def test_a_mixed_plan_tells_the_truth_about_each_part(self):
@@ -707,7 +707,7 @@ class TestC08ApprovalTextFollowsGovernanceState:
         )
         assert BLANKET_CLAIM not in text
         assert "one of them still needs your approval" in text
-        assert "without asking you again" in text
+        assert "eligible to run without a further approval" in text
         assert "already been sent to your computer" in text
         assert "never proposed at all" in text
         # And the one genuinely pending action, and only it, is named.
@@ -768,7 +768,7 @@ class TestC08ApprovalTextFollowsGovernanceState:
         assert _runs_without_further_approval(step) is True
         text = explain_task(_deliberated_plan([step]))
         assert "trusted autonomy" in text
-        assert "without asking you again" in text
+        assert "eligible to run without a further approval" in text
         assert "Waiting on you" not in text
 
     def test_autonomy_requires_the_device_grant_as_well_as_eligibility(self):
@@ -885,4 +885,4 @@ class TestC08AgainstARealDeliberatedPlan:
             pytest.skip("launch_app is not autonomy-eligible in this build")
         text = explain_task(self._plan(autonomy=autonomy))
         assert BLANKET_CLAIM not in text
-        assert "without asking you again" in text
+        assert "eligible to run without a further approval" in text

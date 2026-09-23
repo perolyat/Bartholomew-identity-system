@@ -340,9 +340,10 @@ def _inferred_step_approval_sentence(plan: Plan) -> str:
             _clause(
                 len(autonomous),
                 total,
-                "will run",
-                "will run",
-                "without asking you again --- this device is enrolled with trusted autonomy for it",
+                "is eligible",
+                "are eligible",
+                "to run without a further approval --- this device is enrolled with "
+                "trusted autonomy for it",
             ),
             _clause(
                 len(finished),

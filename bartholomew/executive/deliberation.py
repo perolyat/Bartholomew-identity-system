@@ -831,7 +831,7 @@ def _identifier_field(value: Any) -> str:
     What this produces is a *representation for persistence and audit*, and
     nothing more. It is deliberately **not** a filter that decides what the
     model meant, because sanitising can produce text that happens to equal a
-    real capability identifier: `"windows.\ud800launch_app"` is a string no
+    real capability identifier: `"windows.\\ud800launch_app"` is a string no
     vocabulary contains, and stripping the lone surrogate that makes it
     unstorable yields exactly `"windows.launch_app"`, which the vocabulary does
     contain. The AUDIT-EXEC-1 pre-merge review reproduced that end to end. So
