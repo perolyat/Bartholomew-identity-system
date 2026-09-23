@@ -25,4 +25,58 @@
 # Every record needs a rationale and a recorded_by. finding_id is the id the
 # gate prints: `review_comment:<id>` or `review:<id>`.
 schema_version: 1
-dispositions: []
+dispositions:
+  # ---------------------------------------------------------------------
+  # PR #122 (AUDIT-EXEC-1). Three Codex findings posted when the PR was
+  # marked ready for review, all written against cb4bb618a8a51dd6a2b20a90f309597312561d92.
+  # Records authorised by Taylor on 2026-09-23 with exactly these
+  # classifications; Merge Qualification run 35836910079 named all three.
+  # ---------------------------------------------------------------------
+  - finding_id: "review_comment:4080275882"
+    classification: resolved_by_later_commit
+    resolved_by_commit: 0bbb9ca0cd7d226e1f9ba934967ebb72317f40b9
+    rationale: >-
+      Codex P0 against cb4bb618: a lone UTF-16 surrogate escape inside a non-raw
+      docstring was interpreted at compile time, so _identifier_field.__doc__ held a
+      live surrogate at runtime and could not be encoded to UTF-8; the same escape
+      was live in the docstring of tests/test_audit_exec1_hardening.py::
+      test_sanitisation_cannot_manufacture_a_valid_capability (the pre-merge
+      review's Finding 3 reproduction). The
+      finding's severity claim (that bartholomew.executive fails to compile or
+      import) was verified false on cb4bb618 - py_compile, import and the Merge
+      Candidate tier all passed - but the live surrogate was real. Fixed in
+      0bbb9ca0 by escaping the backslash in both docstrings; verified by walking
+      every compiled string constant in the affected files, leaving live
+      surrogates only in the two intentional test inputs. Thread reply:
+      discussion_r4080291946.
+    recorded_by: >-
+      perolyat (Taylor), who authorised this record on 2026-09-23; written by
+      Claude Code session_01JVq1Q296LhKnbUutEwexd6.
+  - finding_id: "review_comment:4080275895"
+    classification: resolved_by_later_commit
+    resolved_by_commit: 0bbb9ca0cd7d226e1f9ba934967ebb72317f40b9
+    rationale: >-
+      Codex P2 against cb4bb618: the deliberation account's summary clause said an
+      autonomous step "will run without asking you again", which promises
+      execution where trusted autonomy only removes the approval requirement (the
+      action can still expire, be stopped by another gate, never be leased, or
+      fail). Accepted as a C08 truthfulness point. Fixed in 0bbb9ca0: the clause
+      now reads "is/are eligible to run without a further approval", matching the
+      per-step line, with number agreement kept; the four tests that pinned the
+      old phrase now pin the new one and the negative tests for ineligible
+      approval requirements are unchanged. Thread reply: discussion_r4080292429.
+    recorded_by: >-
+      perolyat (Taylor), who authorised this record on 2026-09-23; written by
+      Claude Code session_01JVq1Q296LhKnbUutEwexd6.
+  - finding_id: "review:5288378344"
+    classification: non_substantive
+    rationale: >-
+      Codex's top-level review summary shell (its body is the heading 'Codex
+      Review', the line 'Here are some automated review suggestions for this pull
+      request.', the reviewed-commit line, and the about-Codex boilerplate). It carries
+      no finding of its own; the two substantive findings it introduced are the
+      review_comment threads 4080275882 and 4080275895, each dispositioned
+      separately above. Collected as a finding only because its body is non-empty.
+    recorded_by: >-
+      perolyat (Taylor), who authorised this record on 2026-09-23; written by
+      Claude Code session_01JVq1Q296LhKnbUutEwexd6.
