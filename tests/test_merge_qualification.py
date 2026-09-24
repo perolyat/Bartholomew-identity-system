@@ -17,6 +17,7 @@ wrong reason fails here.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,7 @@ from scripts.ci.merge_qualification.model import (
     RequiredCheck,
     ReviewFinding,
     Verdict,
+    is_full_sha,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -648,8 +650,351 @@ def test_the_gate_is_not_its_own_evidence():
         assert check.workflow != gate_workflow
 
 
-def test_the_committed_dispositions_file_parses():
-    assert load_dispositions(DISPOSITIONS_FILE) == ()
+#: The finding ids the gate prints (`collect.py`), which is what the
+#: dispositions file says a record is keyed by. A record keyed any other way
+#: matches no finding: it disposes of nothing while reading as though it did.
+_PRINTED_FINDING_ID = re.compile(r"(?:review_comment|review):[0-9]+")
+
+
+def _dispositions_contract_violations(path: Path) -> list[str]:
+    """Everything wrong with a dispositions file, judged by its own contract.
+
+    The loader refuses what cannot be a decision at all — no rationale, no
+    recorder, an invented or `unknown` classification — and a refusal is
+    reported here as a violation, so nothing the loader rejects can pass. It
+    deliberately leaves `resolved_by_commit` to the evaluator, which can check
+    it against the pull request's commit list. That split is right for
+    qualification, but it means a record with an unusable resolving commit
+    parses cleanly and surfaces only when some later head trips over it. The
+    structural half of that check is made here, on every push.
+
+    Only `resolved_by_later_commit` carries a resolving commit. Every other
+    classification — including one added later, until someone decides
+    otherwise — must not: a commit attached to a decision that never reads it
+    is a claim nothing verifies.
+    """
+    try:
+        records = load_dispositions(path)
+    except ControlStateError as error:
+        return [str(error)]
+
+    violations: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if not _PRINTED_FINDING_ID.fullmatch(record.finding_id):
+            violations.append(f"{record.finding_id!r} is not a finding id the gate prints")
+        if record.finding_id in seen:
+            violations.append(f"{record.finding_id} is dispositioned more than once")
+        seen.add(record.finding_id)
+        if record.classification is FindingClassification.RESOLVED_BY_LATER_COMMIT:
+            if not is_full_sha(record.resolved_by_commit):
+                violations.append(
+                    f"{record.finding_id} is resolved_by_later_commit but names no full "
+                    f"commit id ({record.resolved_by_commit!r})",
+                )
+        elif record.resolved_by_commit is not None:
+            violations.append(
+                f"{record.finding_id} is {record.classification.value} but carries "
+                f"resolved_by_commit {record.resolved_by_commit!r}",
+            )
+    return violations
+
+
+def _dispositions_file(tmp_path: Path, *records: dict) -> Path:
+    path = tmp_path / "dispositions.yml"
+    path.write_text(
+        yaml.safe_dump({"schema_version": 1, "dispositions": list(records)}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _record(**fields) -> dict:
+    record = {
+        "finding_id": "review_comment:1",
+        "classification": "non_substantive",
+        "rationale": "A bare acknowledgement.",
+        "recorded_by": "taylor",
+    }
+    record.update(fields)
+    return record
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param(DISPOSITIONS_FILE, id="committed"),
+        pytest.param(SCENARIO_DIR / "dispositions_example.yml", id="non-empty-example"),
+    ],
+)
+def test_the_committed_dispositions_file_parses(path: Path):
+    """The committed records load, and every one keeps the file's contract.
+
+    This used to assert that the file was *empty*. That held from the commit
+    that created the file until the first pull request that needed a
+    disposition, whose authorised, well-formed records it then refused
+    (PR #122) — a false block, observed on the real gate. The file is empty
+    only "until something needs one"; emptiness was never the invariant.
+
+    The same check runs over a non-empty example, so it cannot drift back
+    into an emptiness check while the committed file happens to be empty.
+    """
+    assert path.is_file(), f"{path} does not exist, so nothing here is checked"
+    assert _dispositions_contract_violations(path) == []
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        pytest.param((), id="empty"),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit=HEAD),),
+            id="resolved_by_later_commit",
+        ),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit=HEAD.upper()),),
+            id="resolved_by_later_commit-uppercase-sha",
+        ),
+        pytest.param(
+            (_record(classification="stale_superseded_head"),),
+            id="stale_superseded_head",
+        ),
+        pytest.param((_record(classification="non_substantive"),), id="non_substantive"),
+        pytest.param(
+            (_record(classification="unresolved_substantive"),),
+            id="unresolved_substantive",
+        ),
+        pytest.param((_record(resolved_by_commit=None),), id="explicit-null-commit"),
+        pytest.param(
+            (
+                _record(
+                    finding_id="review_comment:1",
+                    classification="resolved_by_later_commit",
+                    resolved_by_commit=HEAD,
+                ),
+                _record(finding_id="review_comment:2", classification="stale_superseded_head"),
+                _record(finding_id="review_comment:3", classification="unresolved_substantive"),
+                _record(finding_id="review:4", classification="non_substantive"),
+            ),
+            id="one-of-each",
+        ),
+    ],
+)
+def test_a_dispositions_file_that_keeps_its_contract_is_accepted(records, tmp_path):
+    """A non-empty dispositions file is an ordinary state, not a failure."""
+    path = _dispositions_file(tmp_path, *records)
+    assert _dispositions_contract_violations(path) == []
+    assert len(load_dispositions(path)) == len(records)
+
+
+@pytest.mark.parametrize(
+    ("records", "fragment"),
+    [
+        pytest.param(
+            (_record(classification="resolved_by_later_commit"),),
+            "names no full commit id (None)",
+            id="resolved-without-a-commit",
+        ),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit=""),),
+            "names no full commit id (None)",
+            id="resolved-with-an-empty-commit",
+        ),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit="abc1234"),),
+            "names no full commit id ('abc1234')",
+            id="resolved-with-an-abbreviated-sha",
+        ),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit=HEAD[:-1]),),
+            "names no full commit id",
+            id="resolved-with-a-39-character-sha",
+        ),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit="g" * 40),),
+            "names no full commit id",
+            id="resolved-with-a-non-hex-sha",
+        ),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit=HEAD + "0"),),
+            "names no full commit id",
+            id="resolved-with-a-41-character-sha",
+        ),
+        pytest.param(
+            (_record(classification="resolved_by_later_commit", resolved_by_commit=f" {HEAD} "),),
+            "names no full commit id",
+            id="resolved-with-a-padded-sha",
+        ),
+        pytest.param(
+            (_record(classification="non_substantive", resolved_by_commit=HEAD),),
+            "is non_substantive but carries resolved_by_commit",
+            id="non_substantive-with-a-commit",
+        ),
+        pytest.param(
+            (_record(classification="stale_superseded_head", resolved_by_commit=HEAD),),
+            "is stale_superseded_head but carries resolved_by_commit",
+            id="stale_superseded_head-with-a-commit",
+        ),
+        pytest.param(
+            (_record(classification="unresolved_substantive", resolved_by_commit=HEAD),),
+            "is unresolved_substantive but carries resolved_by_commit",
+            id="unresolved_substantive-with-a-commit",
+        ),
+        pytest.param(
+            (_record(finding_id="123456789"),),
+            "is not a finding id the gate prints",
+            id="finding-id-without-its-kind",
+        ),
+        pytest.param(
+            (_record(finding_id="review:"),),
+            "is not a finding id the gate prints",
+            id="finding-id-without-a-number",
+        ),
+        pytest.param(
+            (_record(finding_id="review_comment:1a"),),
+            "is not a finding id the gate prints",
+            id="finding-id-with-trailing-text",
+        ),
+        pytest.param(
+            (_record(finding_id="xreview:1"),),
+            "is not a finding id the gate prints",
+            id="finding-id-with-leading-text",
+        ),
+        pytest.param(
+            (_record(finding_id="issue_comment:1"),),
+            "is not a finding id the gate prints",
+            id="finding-id-of-a-kind-the-gate-never-prints",
+        ),
+        pytest.param(
+            (_record(finding_id="review_comment: 1"),),
+            "is not a finding id the gate prints",
+            id="finding-id-with-an-inner-space",
+        ),
+        pytest.param(
+            (
+                _record(),
+                _record(finding_id=" review_comment:1 ", classification="unresolved_substantive"),
+            ),
+            "dispositioned more than once",
+            id="one-finding-twice-under-two-spellings",
+        ),
+        pytest.param(
+            (
+                _record(),
+                _record(
+                    finding_id="review_comment:2",
+                    classification="resolved_by_later_commit",
+                    resolved_by_commit="abc1234",
+                ),
+            ),
+            "review_comment:2 is resolved_by_later_commit but names no full commit id",
+            id="only-the-second-record-is-wrong",
+        ),
+        # What the loader already refuses stays refused here.
+        pytest.param(
+            ({key: value for key, value in _record().items() if key != "rationale"},),
+            "carries no rationale",
+            id="loader-refusal-no-rationale",
+        ),
+        pytest.param(
+            (_record(classification="unknown"),),
+            "dispositioned as 'unknown'",
+            id="loader-refusal-unknown",
+        ),
+    ],
+)
+def test_a_record_that_breaks_the_contract_is_refused(records, fragment, tmp_path):
+    """The other half: relaxing the emptiness check must not let anything through."""
+    violations = _dispositions_contract_violations(_dispositions_file(tmp_path, *records))
+    assert len(violations) == 1, violations
+    assert fragment in violations[0]
+
+
+@pytest.mark.parametrize("graphql_reachable", [True, False], ids=["graphql", "rest-fallback"])
+def test_every_finding_id_the_collector_prints_is_one_a_record_may_use(graphql_reachable):
+    """`_PRINTED_FINDING_ID` is a copy of `collect.py`'s formats, so it is tied back to them.
+
+    Otherwise a finding kind added to the collector later would fail the
+    committed-file check on its first authorised record — the same shape of
+    false block as the emptiness assertion. The stub forge answers every read
+    it is asked for, so a new kind collected through it surfaces here, in the
+    change that adds it.
+    """
+    from scripts.ci.merge_qualification import collect
+
+    item = {
+        "id": 22,
+        "body": "A substantive review body, long enough to be collected.",
+        "user": {"login": "reviewer"},
+        "state": "COMMENTED",
+        "commit_id": HEAD,
+        "original_commit_id": HEAD,
+    }
+    thread = {
+        "isResolved": False,
+        "comments": {
+            "nodes": [
+                {
+                    "databaseId": 11,
+                    "body": "A finding.",
+                    "author": {"login": "reviewer"},
+                    "originalCommit": {"oid": HEAD},
+                },
+            ],
+        },
+    }
+
+    class _Forge:
+        def graphql(self, query, variables):
+            if not graphql_reachable:
+                raise collect.CollectionError("GraphQL returned 403")
+            threads = {"nodes": [thread], "pageInfo": {"hasNextPage": False}}
+            return {"repository": {"pullRequest": {"reviewThreads": threads}}}
+
+        def rest_paged(self, path, key=None):
+            return [dict(item)]
+
+    findings = collect._collect_findings(_Forge(), "owner", "name", 1)
+    assert {finding.finding_id.partition(":")[0] for finding in findings} == {
+        "review_comment",
+        "review",
+    }
+    for finding in findings:
+        assert _PRINTED_FINDING_ID.fullmatch(finding.finding_id), finding.finding_id
+
+
+def test_a_committed_record_is_still_verified_by_the_evaluator(tmp_path):
+    """Keeping the file's contract is necessary for a record to count, not sufficient.
+
+    Loaded from a file exactly as the gate loads it: a true record disposes of
+    the finding it names, and the same record naming a commit from outside
+    this pull request — structurally perfect — still refuses.
+    """
+    findings = [_finding(commit_sha=OLDER), _finding(finding_id="review:2", commit_sha=OLDER)]
+    summary_shell = _record(finding_id="review:2", classification="non_substantive")
+
+    path = _dispositions_file(
+        tmp_path,
+        _record(classification="resolved_by_later_commit", resolved_by_commit=HEAD),
+        summary_shell,
+    )
+    assert _dispositions_contract_violations(path) == []
+    report = evaluate(_green_with_findings(findings, load_dispositions(path)))
+    assert [result.classification for result in report.findings] == [
+        FindingClassification.RESOLVED_BY_LATER_COMMIT,
+        FindingClassification.NON_SUBSTANTIVE,
+    ]
+    assert report.ready
+
+    path = _dispositions_file(
+        tmp_path,
+        _record(classification="resolved_by_later_commit", resolved_by_commit="d" * 40),
+        summary_shell,
+    )
+    assert _dispositions_contract_violations(path) == []
+    report = evaluate(_green_with_findings(findings, load_dispositions(path)))
+    assert report.findings[0].classification is FindingClassification.UNKNOWN
+    assert report.reason_codes == (ReasonCode.INVALID_DISPOSITION,)
 
 
 @pytest.mark.parametrize(

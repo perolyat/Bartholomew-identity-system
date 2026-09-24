@@ -107,7 +107,9 @@ Every finding is placed in exactly one of five states:
 Dispositions live in `.github/merge-qualification/dispositions.yml`. They are repository state, so
 they arrive through a reviewed commit, and every one carries a rationale and a `recorded_by`.
 `unknown` is not a permitted disposition: it is the state the evaluator assigns when it cannot
-tell, and writing it down would be recording a decision nobody took.
+tell, and writing it down would be recording a decision nobody took. Only a
+`resolved_by_later_commit` record carries a `resolved_by_commit`; the gate's self-test refuses the
+committed file if any other record does, or if a `finding_id` is not in the form the gate prints.
 
 **Forge-side "Resolve conversation" does not, on its own, dispose of a finding**
 (`github_resolution_satisfies_disposition: false`). It is recorded in the evidence, and it leaves
@@ -177,6 +179,29 @@ about its own (see §3.2), which is the argument for the proving period rather t
 | **Excessive CI / qualification delay** | The gate's wait making the workflow impractical rather than careful. |
 | A **confusing classification** | A verdict a person cannot act on is not usable as a control, whatever its logic. |
 | **Disagreement with actual repository state** | The gate's picture of the forge diverging from the forge. |
+
+**Observations.** An entry records one of the signals above as it was seen on a real pull request,
+and what it turned out to be.
+
+- **2026-09-23 — false block, PR #122 at head `0f229c1`.** That head added the repository's first
+  disposition records, authorised as written. The gate's own regression suite refused them:
+  `test_the_committed_dispositions_file_parses` asserted that the committed dispositions file was
+  **empty**, which had held since the file was created and so could only fail on the first real
+  disposition. It was identified before the push, and the records were pushed deliberately so the
+  block would be seen on the real gate rather than routed around. `gate-self-test` failed and
+  `qualify`, which needs it, was skipped, so no verdict was computed. The default test suite
+  collects the same test, so it also failed five required jobs: CI's `PR Fast`, Integration's and
+  both of Merge Candidate's `Tests + coverage`, and Merge Candidate's Windows full suite. It failed
+  **closed**: nothing reported READY. What this shows is the self-test refusing well-formed,
+  authorised records — not the evaluator's judgement of them, and not that `0f229c1` would
+  otherwise have qualified: no verdict was computed, and Merge Candidate's py3.10 job also failed an
+  unrelated event-loop timing test that would have refused it on its own. The defect was in the
+  self-test; the evaluator, the loader and the qualification semantics did not change. Repaired
+  alongside this entry: the test now checks the committed file, and a non-empty example, against
+  the file's own contract (every record loads; its `finding_id` has the form the gate prints; no
+  finding is dispositioned twice; `resolved_by_later_commit` names a full 40-character sha and no
+  other classification carries one — whether that commit resolves the finding is still the
+  evaluator's check), with tests that accept non-empty files and refuse records that break it.
 
 **Promotion is a separate decision.** After several real pull requests have exercised the gate, the
 project decides whether to make `Merge Qualification` a required GitHub status check. Nothing in
