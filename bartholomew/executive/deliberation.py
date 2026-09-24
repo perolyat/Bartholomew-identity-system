@@ -105,10 +105,31 @@ the second against a port that actually reads the prompt and obeys it.
 Confidence, and what it is not
 -------------------------------
 A model's stated confidence may make the executive *more* cautious and never
-less: `low` becomes a clarification. There is no value of it that makes anything
-permitted, and it is not consulted when a step is validated. It runs in the same
-direction as `evidence.py`'s rule about recalled memory, and for the same
-reason.
+less. There is no value of it that makes anything permitted, and it is not
+consulted when a step is validated. It runs in the same direction as
+`evidence.py`'s rule about recalled memory, and for the same reason.
+
+The direction it is read in is an **allowlist of confident states**, not a
+blocklist of cautious ones, and that is load-bearing rather than stylistic. A
+blocklist has to have heard of a word before it can be careful about it, so
+every confidence a model could invent --- `"very low"`, `"uncertain"`, `"not
+sure"`, an emoji, an empty string --- bought a proposal more authority than the
+word `"low"` did, which is the opposite of what a cautious reading means. See
+`classify_confidence`: only `SUFFICIENT_CONFIDENCE` proceeds, an absent claim is
+neither a caution nor a licence, and everything else is cautious.
+
+Storable text, and why identifiers are text too
+------------------------------------------------
+Everything a model authors that can reach durable state passes through
+`_text_field`, which bounds it, collapses its whitespace and strips what cannot
+be encoded as UTF-8. That contract is stated as a predicate in
+`is_storable_text` so it can be asserted over a whole structure rather than
+trusted field by field --- because the way it failed was not a missing check but
+a field that never joined the convention. The capability identifier was copied
+verbatim out of the model's JSON, and carried a lone surrogate into
+`store.save_plan`'s `TEXT` column by way of a refusal message. Identifiers go
+through `_identifier_field` now, on a tighter bound, and `Deliberation.as_dict`
+re-applies the contract at the point where a reading becomes durable.
 """
 
 from __future__ import annotations
@@ -117,6 +138,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from bartholomew.actuation.capabilities import CapabilityKind, UnsupportedCapabilityError
@@ -197,7 +219,99 @@ MAX_INSTRUCTION_CHARS = 4000
 
 #: Confidence values that become a question rather than a proposal. Confidence
 #: only ever makes the executive more careful; see the module docstring.
+#:
+#: **This set is no longer the decision.** It is kept because it names the
+#: cautious vocabulary the prompt and the audit trail both use, and because it
+#: is exported; the decision is `classify_confidence`, which is an allowlist of
+#: *confident* states rather than a blocklist of cautious ones. The distinction
+#: is the whole of C07: a blocklist has to have heard of a word to be careful
+#: about it, so `"very low"`, `"uncertain"`, `"not sure"` and `"\N{SHRUG}"`
+#: --- none of them in any list anyone would write --- each bought more
+#: authority than the word `"low"` did.
 LOW_CONFIDENCE = frozenset({"low", "none", "guess", "unsure"})
+
+#: The **only** stated confidences that let a proposal through. Everything else
+#: a model can say --- a synonym nobody enumerated, a sentence, an emoji, an
+#: empty string, a number, a list --- is cautious, because the executive cannot
+#: tell an unrecognised claim of certainty from an unrecognised claim of doubt
+#: and must not resolve that ambiguity in favour of acting.
+#:
+#: These are exactly the two confident values `build_prompt` asks for. Adding a
+#: word here is a deliberate widening of what counts as confident, and it is
+#: the only way to widen it: nothing infers membership from the shape of a
+#: string.
+SUFFICIENT_CONFIDENCE = frozenset({"high", "medium"})
+
+
+class ConfidenceState(str, Enum):
+    """What a model's stated confidence is worth to the executive. Three values.
+
+    Deliberately not a spectrum and deliberately not the model's own word: the
+    executive needs one question answered --- *may this proposal proceed on the
+    strength of what the model said about itself?* --- and the honest answers
+    are "the model claimed nothing", "it made a claim I recognise as confident"
+    and "anything else". The third is the one that matters, and it is a single
+    state rather than a list precisely so that it cannot be escaped by saying
+    something nobody anticipated.
+    """
+
+    #: The model said nothing about its confidence: the key was absent, or
+    #: `null`. It is not a claim of uncertainty and not a claim of certainty ---
+    #: it is simply not a claim, and **it does not satisfy the confidence gate**.
+    #: The state is kept distinct from `CAUTIOUS` because an audit reading
+    #: "the model said nothing" is a different fact from "the model said
+    #: something I could not use", and the two want different questions put to
+    #: the person. Neither produces a proposal.
+    UNSTATED = "unstated"
+    #: An explicitly recognised confident value from `SUFFICIENT_CONFIDENCE`.
+    SUFFICIENT = "sufficient"
+    #: Recognised low confidence, **or** anything unrecognised, malformed,
+    #: ambiguous or empty. These are one state on purpose: the executive's
+    #: response to "I am not sure" and to "I cannot tell what you said about
+    #: being sure" is the same response, and collapsing them is what makes the
+    #: behaviour impossible to bypass with unusual output.
+    CAUTIOUS = "cautious"
+
+
+def classify_confidence(value: Any) -> ConfidenceState:
+    """What a raw `confidence` value from a model is worth. Total, and fail-cautious.
+
+    The ordering is the safety property. Only a string that is *in*
+    `SUFFICIENT_CONFIDENCE` after normalisation reaches `SUFFICIENT`; every
+    other input --- of every type, of every shape --- falls through to
+    `CAUTIOUS`. There is no branch that returns `SUFFICIENT` by default and no
+    branch that returns it for an unrecognised token, so a future model that
+    invents a confidence vocabulary cannot talk its way past the caution by
+    inventing a word that sounds assured.
+
+    `None` --- the key absent, or `null` --- is `UNSTATED`, which is a
+    *classification*, not a permission: `UNSTATED` does not satisfy the
+    confidence gate either, so the only way through it is an explicitly
+    recognised confident value. A *present* value that normalises to nothing
+    (`""`, `"   "`) is malformed rather than absent, and is cautious.
+
+    **Amended by the AUDIT-EXEC-1 pre-merge review.** The first cut let
+    `UNSTATED` proceed, on the reasoning that saying nothing is not a claim of
+    uncertainty. That reasoning was right about what silence *means* and wrong
+    about what it should *buy*: `build_prompt` asks for the field explicitly, so
+    an answer without it is an answer that did not follow the contract, and
+    letting omission through made the field optional --- which is a bypass
+    around the allowlist available to any model that simply leaves it out. The
+    allowlist is only a control if the absence of a value fails it too.
+    """
+    if value is None:
+        return ConfidenceState.UNSTATED
+    if not isinstance(value, str):
+        # A number, a bool, a list, an object. The one shape a model is most
+        # likely to produce when it is least sure --- `{"confidence": 0.01}` ---
+        # lives here, and so does every other non-string; none of them is a
+        # recognised confident state, so none of them proceeds.
+        return ConfidenceState.CAUTIOUS
+    normalised = _text_field(value).lower()
+    if normalised in SUFFICIENT_CONFIDENCE:
+        return ConfidenceState.SUFFICIENT
+    return ConfidenceState.CAUTIOUS
+
 
 _JSON_OBJECT = re.compile(r"\{.*\}", re.S)
 
@@ -324,10 +438,22 @@ class DeliberationPort(Protocol):
 class DeliberatedStep:
     """One step a model proposed, before any validation has been done to it."""
 
+    #: The capability identifier **in its storable form** --- what
+    #: `_identifier_field` produced. Safe to persist, print and audit. It is
+    #: *not* on its own evidence of what the model meant: see
+    #: `capability_repaired`.
     capability: str
     parameters: dict[str, Any]
     purpose: str = ""
     necessary_because: str = ""
+    #: Whether making the identifier storable **changed it**. Storage safety and
+    #: semantic validity are separate concerns, and conflating them is a way in:
+    #: `"windows.\ud800launch_app"` is not a capability anybody named, but
+    #: stripping the unencodable character to make it storable turns it into the
+    #: exact text of one. `_validate_step` refuses a repaired identifier before
+    #: it consults the vocabulary at all, so a cleaned string cannot become
+    #: authority by resembling a real capability.
+    capability_repaired: bool = False
 
 
 @dataclass(frozen=True)
@@ -345,7 +471,13 @@ class Deliberation:
     steps: tuple[DeliberatedStep, ...] = ()
     clarification: str | None = None
     refusal: str | None = None
+    #: The model's own word for its confidence, normalised and kept for the
+    #: audit trail. **Not** the decision: `confidence_state` is.
     confidence: str = ""
+    #: What that word is worth. Defaults to `UNSTATED` so a `Deliberation`
+    #: constructed in a test with no confidence behaves as a model that said
+    #: nothing, which is what the field's absence means everywhere else.
+    confidence_state: ConfidenceState = ConfidenceState.UNSTATED
     raw: str = ""
 
     def as_dict(self) -> dict[str, Any]:
@@ -371,18 +503,32 @@ class Deliberation:
             "sub_goals": list(self.sub_goals),
             "steps": [
                 {
-                    "capability": s.capability,
+                    # Re-applied rather than assumed. Every string leaving this
+                    # method is storable because this method made it so, not
+                    # because each field remembered to be --- which is the
+                    # failure this defends against, `capability` having been the
+                    # field that did not remember.
+                    "capability": _identifier_field(s.capability),
+                    # Provenance for the refusal: an auditor asking "why was a
+                    # step naming a real capability refused?" answers it here.
+                    # The verbatim identifier is deliberately **not** recorded ---
+                    # it is the unstorable thing this whole contract exists for.
+                    "capability_repaired": s.capability_repaired,
                     "parameter_names": sorted(
                         _text_field(str(k), maximum=100) for k in s.parameters
                     ),
-                    "purpose": s.purpose,
-                    "necessary_because": s.necessary_because,
+                    "purpose": _text_field(s.purpose),
+                    "necessary_because": _text_field(s.necessary_because),
                 }
                 for s in self.steps
             ],
-            "clarification": self.clarification,
-            "refusal": self.refusal,
-            "confidence": self.confidence,
+            "clarification": _optional_text(self.clarification),
+            "refusal": _optional_text(self.refusal),
+            "confidence": _text_field(self.confidence),
+            # The classification, alongside the model's own word, because an
+            # auditor asking "why was this turned into a question?" needs the
+            # verdict and not only the input to it.
+            "confidence_state": self.confidence_state.value,
         }
 
 
@@ -551,9 +697,18 @@ def parse_deliberation(raw: Any) -> Deliberation | None:
             parameters = entry.get("parameters", {})
             if not isinstance(capability, str) or not isinstance(parameters, dict):
                 return None
+            # Sanitised here, at the boundary where model text becomes a value
+            # this package carries around, rather than at each of the places
+            # that later persists it. The *comparison* is kept alongside it:
+            # exact equality is what says the model actually wrote a
+            # well-formed identifier, and anything short of that is a repair
+            # rather than a reading. See `_identifier_field` and
+            # `DeliberatedStep.capability_repaired`.
+            storable_capability = _identifier_field(capability)
             steps.append(
                 DeliberatedStep(
-                    capability=capability,
+                    capability=storable_capability,
+                    capability_repaired=storable_capability != capability,
                     parameters=dict(parameters),
                     purpose=_text_field(entry.get("purpose")),
                     necessary_because=_text_field(entry.get("necessary_because")),
@@ -567,6 +722,12 @@ def parse_deliberation(raw: Any) -> Deliberation | None:
     if isinstance(sub_goals, list):
         goals = tuple(_text_field(g) for g in sub_goals if _text_field(g))
 
+    # Read once. `"confidence" in payload` is not the same question as
+    # `payload.get("confidence") is None`, and only the latter --- the model
+    # made no claim --- is the unstated case; an explicit `null` is read as
+    # unstated too, being the JSON spelling of the same thing.
+    raw_confidence = payload.get("confidence")
+
     return Deliberation(
         objective=_text_field(payload.get("objective")),
         situation=_text_field(payload.get("situation")),
@@ -574,26 +735,26 @@ def parse_deliberation(raw: Any) -> Deliberation | None:
         steps=tuple(steps),
         clarification=_optional_text(payload.get("clarification")),
         refusal=_optional_text(payload.get("refusal")),
-        confidence=_confidence(payload.get("confidence")),
+        confidence=_confidence_word(raw_confidence),
+        confidence_state=classify_confidence(raw_confidence),
         raw=text,
     )
 
 
-def _confidence(value: Any) -> str:
-    """The model's stated confidence, read in the cautious direction.
+def _confidence_word(value: Any) -> str:
+    """What the model actually said about its confidence, for the audit trail only.
 
-    A value that is present but not a string --- `0.01`, `true`, a list --- is
-    read as `low` rather than as nothing. Reading it as nothing is what an
-    earlier cut did, and it meant `{"confidence": 0.01}` sailed past the check
-    that `{"confidence": "low"}` was stopped by: the one shape a model is most
-    likely to produce when it is *least* sure was the one shape that bypassed
-    the caution. Absent entirely is still absent --- the model said nothing, and
-    saying nothing is not a claim of uncertainty.
+    Faithful rather than interpreted: a non-string is rendered bounded and
+    storable rather than rewritten as `"low"`, because a record saying `"low"`
+    where the model wrote `0.01` describes a claim nobody made. The caution that
+    `0.01` earns is applied by `classify_confidence`, and applying it here as
+    well would be the same decision taken twice in two places --- the shape that
+    let the two drift apart in the first place.
     """
     if value is None:
         return ""
     if not isinstance(value, str):
-        return "low"
+        return _text_field(str(value), maximum=MAX_IDENTIFIER_CHARS)
     return _text_field(value).lower()
 
 
@@ -606,6 +767,14 @@ def _confidence(value: Any) -> str:
 _SURROGATES = re.compile(r"[\ud800-\udfff]")
 
 
+#: Bound on a model-authored *identifier*. Identifiers are not prose: every
+#: value the closed `CapabilityKind` vocabulary contains is a short token, so a
+#: proposal longer than this is refused on its length alone and a nine-hundred
+#: character "capability" never reaches a refusal string, an audit row or a
+#: database column.
+MAX_IDENTIFIER_CHARS = 64
+
+
 def _text_field(value: Any, *, maximum: int = 500) -> str:
     """One bounded, whitespace-collapsed, storable string from a model.
 
@@ -614,11 +783,73 @@ def _text_field(value: Any, *, maximum: int = 500) -> str:
     that cannot be encoded as UTF-8 is dropped rather than escaped: the value is
     prose for a person to read, and a mangled escape sequence in an audit row is
     worth less than the character being absent.
+
+    This is **the** storable-text contract for model output, and
+    `is_storable_text` is its statement in predicate form. The pairing matters:
+    C06 was not a missing check, it was a field that never joined the
+    convention, and a convention no test can interrogate is one the next field
+    will miss in the same way.
     """
     if not isinstance(value, str):
         return ""
     cleaned = _SURROGATES.sub("", value)
     return re.sub(r"\s+", " ", cleaned).strip()[:maximum]
+
+
+def is_storable_text(value: Any, *, maximum: int = 500) -> bool:
+    """Whether `value` already satisfies the contract `_text_field` enforces.
+
+    The point of having this is that the invariant can be *asserted over a whole
+    structure* rather than trusted field by field: `Deliberation.as_dict` is the
+    boundary at which a reading becomes durable state, and a test can sweep
+    every string that comes out of it through this predicate and fail on the one
+    that slipped. The capability identifier was exactly that one.
+    """
+    return isinstance(value, str) and value == _text_field(value, maximum=maximum)
+
+
+def _identifier_field(value: Any) -> str:
+    """One bounded, storable *identifier* from a model.
+
+    Identifiers reached durable state without ever passing through the
+    storable-text contract: `parse_deliberation` copied `entry["capability"]`
+    verbatim, and that raw string was then carried, unescaped, by
+    `Deliberation.as_dict` and by `DeliberationRecord.rejected_steps` into the
+    plan's `deliberation` record, through `explanation.explanation_details` and
+    into the `ActionReflection` that is this package's audit trail. A lone UTF-16
+    surrogate there raises `UnicodeEncodeError` out of sqlite --- which is the
+    precise crash `_SURROGATES` was introduced to stop, returning by the one
+    door it was not fitted to, and doing so on the *audit* path, where the
+    failure costs the record of why the executive refused.
+
+    (The refusal message a person reads escaped it by luck rather than by
+    design: `_validate_step` interpolates the identifier with `!r`, and `repr`
+    renders a surrogate as an ASCII escape. Luck is not the contract, and an
+    identifier bounded at `MAX_IDENTIFIER_CHARS` is also the difference between
+    a refusal a person can read and five thousand characters of noise.)
+
+    What this produces is a *representation for persistence and audit*, and
+    nothing more. It is deliberately **not** a filter that decides what the
+    model meant, because sanitising can produce text that happens to equal a
+    real capability identifier: `"windows.\\ud800launch_app"` is a string no
+    vocabulary contains, and stripping the lone surrogate that makes it
+    unstorable yields exactly `"windows.launch_app"`, which the vocabulary does
+    contain. The AUDIT-EXEC-1 pre-merge review reproduced that end to end. So
+    the cleaned text is *not* evidence that the model supplied that valid
+    identifier --- it is evidence only that the model's text could be written
+    down.
+
+    Semantic validity is decided elsewhere, and separately. `parse_deliberation`
+    records on `DeliberatedStep.capability_repaired` whether producing this
+    representation changed the model's text at all, and `_validate_step`
+    refuses any repaired identifier **before** it consults `CapabilityKind`.
+    That ordering is the guarantee: because storability is settled first and
+    meaning second, a storage repair can never supply the meaning, and a
+    cleaned string cannot become authority by resembling a real capability.
+    The cautious outcome for malformed output is therefore unchanged; what
+    this function adds is that the refusal can be written down.
+    """
+    return _text_field(value, maximum=MAX_IDENTIFIER_CHARS)
 
 
 def _optional_text(value: Any) -> str | None:
@@ -679,16 +910,34 @@ def intent_from_deliberation(
             ),
         )
 
-    if deliberation.confidence in LOW_CONFIDENCE:
+    # Fail-cautious by construction, and stated as the *positive* condition it
+    # actually is: only an explicitly recognised confident state gets through.
+    # Everything else --- unrecognised, malformed, ambiguous, empty, non-string,
+    # and the field not being there at all --- lands here. Writing it as "is not
+    # SUFFICIENT" rather than "is CAUTIOUS" is the whole point: a third state
+    # added to `ConfidenceState` tomorrow fails this gate by default instead of
+    # silently passing it, which is how the omission bypass got in.
+    if deliberation.confidence_state is not ConfidenceState.SUFFICIENT:
+        unstated = deliberation.confidence_state is ConfidenceState.UNSTATED
         return TaskIntent(
             instruction=instruction,
             ambiguities=(
                 Ambiguity(
                     code=AMBIGUITY_MULTIPLE_READINGS,
                     question=(
-                        "I am not confident enough about what you want here to propose "
-                        "anything. Tell me a little more precisely and I will."
+                        # Two questions, because "I could not tell how sure it
+                        # was" and "it never said" are different facts and the
+                        # person is owed the true one. Neither proposes anything.
+                        "I worked out a reading of this, but not one I can say I am "
+                        "confident in, so I am not proposing it. Tell me a little more "
+                        "precisely and I will."
+                        if unstated
+                        else "I am not confident enough about what you want here to "
+                        "propose anything. Tell me a little more precisely and I will."
                     ),
+                    # The model's own word, kept out of the question the person
+                    # reads --- it is in the Reflection --- but the subject is
+                    # unchanged, so the account still says what was being read.
                     subject=deliberation.objective or None,
                 ),
             ),
@@ -779,6 +1028,23 @@ def _validate_step(
     device: Any,
 ) -> tuple[IntentStep | None, str | None]:
     """One step, or the reason there is no step. Never a step and a reason."""
+    # **Before the vocabulary is consulted.** Making a model-authored identifier
+    # safe to store must never make it mean something, and the order here is the
+    # whole of that guarantee: an identifier that had to be altered is refused
+    # whether or not the altered text happens to spell a real capability. The
+    # reproduction is exact --- `"windows.\ud800launch_app"` is a string no
+    # capability vocabulary contains, and stripping the lone surrogate that
+    # makes it unstorable produces `"windows.launch_app"`, which the vocabulary
+    # does contain. Checking storability first and meaning second would let the
+    # repair supply the meaning.
+    if proposed.capability_repaired:
+        return None, (
+            f"the capability identifier in that step was not well-formed. {proposed.capability!r} "
+            "is what is left of it after removing what could not be stored, and a repaired "
+            "identifier is not evidence of what was asked for --- so I will not act on it, even "
+            "though the remainder reads like something I can do."
+        )
+
     try:
         kind = CapabilityKind(proposed.capability)
     except ValueError:
@@ -1069,14 +1335,19 @@ __all__ = [
     "INFERABLE_CAPABILITIES",
     "LOW_CONFIDENCE",
     "MAX_COGNITION_RESPONSE_CHARS",
+    "MAX_IDENTIFIER_CHARS",
     "MAX_INSTRUCTION_CHARS",
+    "SUFFICIENT_CONFIDENCE",
+    "ConfidenceState",
     "Deliberation",
     "DeliberationPort",
     "DeliberationRecord",
     "DeliberatedStep",
     "build_prompt",
+    "classify_confidence",
     "deliberate_task",
     "intent_from_deliberation",
+    "is_storable_text",
     "names_no_referent",
     "parse_deliberation",
 ]

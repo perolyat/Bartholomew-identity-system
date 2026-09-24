@@ -4050,3 +4050,66 @@
   - Nothing in Bartholomew's runtime, governance, Parking Brake or user-facing behaviour changes.
     This is project control, not system control.
 - **Date:** 2026-09-21
+
+---
+
+## Decision: read a model's stated confidence through an allowlist of confident states
+
+- **Decision:** the Executive's goal-to-plan deliberation decides what a model's stated
+  `confidence` is worth by classifying it into exactly three states — `UNSTATED`, `SUFFICIENT`,
+  `CAUTIOUS` — where **only** the two values `SUFFICIENT_CONFIDENCE` names (`"high"`, `"medium"`,
+  the two the prompt asks for) satisfy the confidence gate. `UNSTATED` (the field absent, or
+  `null`) and `CAUTIOUS` (a synonym nobody enumerated, a sentence, an emoji, an empty or whitespace
+  string, a number, a list, an object) both become a question to the person. The gate is written as
+  *"is not `SUFFICIENT`"* rather than *"is `CAUTIOUS`"*, so a fourth state added to the enum fails
+  it by default instead of silently passing it.
+
+  > **Amended 2026-09-22 by the AUDIT-EXEC-1 pre-merge independent review — this reverses part of
+  > the decision as first recorded.** The original entry (below, under *Alternatives considered*)
+  > rejected treating an absent confidence as cautious, and let `UNSTATED` proceed. That was
+  > wrong, and the review reproduced it: with the field simply omitted, deliberation produced a
+  > governed `windows.launch_app` step. The reasoning was right about what silence *means* and
+  > wrong about what it should *buy*. `build_prompt` asks for `confidence` explicitly, so an
+  > answer without it has not followed the contract — and an allowlist a model can skip by leaving
+  > the field out is not an allowlist at all, it is an optional field. `UNSTATED` is kept as a
+  > distinct *classification*, because "the model said nothing" and "the model said something I
+  > could not use" are different facts that deserve different questions, but it confers nothing.
+- **Alternatives considered:**
+  - *Add the missing synonyms to `LOW_CONFIDENCE`.* Rejected. It is the same control with a longer
+    list, and it leaves the default pointing the wrong way: the next model to invent a way of
+    saying "I am not sure" is served by the same fail-open branch. The finding (AUDIT-EXEC-1 / C07)
+    was not that four words were too few, it was that an unrecognised value was treated exactly as
+    `"high"` was.
+  - *Parse numeric confidences against a threshold.* Rejected. It invents a comparability between
+    a model's `0.7` and its `"medium"` that no provider guarantees, and it is a second decision
+    surface to keep in agreement with the first.
+  - *Treat an absent confidence as cautious too.* **Originally rejected; that rejection was
+    overturned on 2026-09-22 — see the amendment above.** The original reasoning was that saying
+    nothing is not a claim of uncertainty, and that refusing every model which does not emit the
+    field is a behaviour change to the deployed contract rather than a repair. The first half is
+    true and irrelevant: the question is not what silence means but what it buys, and an allowlist
+    with an omission bypass is not a control. The second half was the real cost, and it is
+    accepted deliberately — a model that does not answer the `confidence` field the prompt asks
+    for now gets a clarification instead of a proposal. That is the fail-cautious direction, and
+    it is the whole point of C07.
+  - *Keep `UNSTATED` but make it fail the gate.* **Taken.** It preserves the audit distinction
+    between silence and unusable output — the two produce different questions to the person —
+    without letting either produce an action.
+- **Why:** a blocklist has to have heard of a word before it can be careful about it. Confidence is
+  the one thing in this path that is *entirely* the model's own account of itself, so it is exactly
+  where an unrecognised token must not buy authority. Stated as the ordering the old code violated:
+  nothing unrecognised may ever be treated better than the most cautious recognised state.
+- **Consequences:**
+  - A model that states a confidence outside the two recognised values, **or that omits the field
+    entirely**, now produces a clarification where it previously produced a governed proposal.
+    This is intended, it is a real behaviour change, and it fails in the direction of asking the
+    person. A deployment whose model does not emit `confidence` will see deliberation decline to
+    propose until it does; `build_prompt` already asks for the field.
+  - Widening what counts as confident is a deliberate edit to `SUFFICIENT_CONFIDENCE` and nothing
+    infers membership from the shape of a string.
+  - The model's own word is kept verbatim on `Deliberation.confidence` for the audit trail, beside
+    the verdict in `confidence_state`. The previous code rewrote a non-string to the literal
+    `"low"`, recording a claim nobody had made.
+  - **No governance boundary moved.** Confidence still permits nothing, is still not consulted when
+    a step is validated, and can still only make the Executive more cautious.
+- **Date:** 2026-09-22
