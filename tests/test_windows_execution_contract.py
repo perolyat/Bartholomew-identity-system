@@ -1155,3 +1155,402 @@ def test_failures_are_annotated_so_they_survive_the_log_tail(tmp_path, capsys, m
     for line in printed.splitlines():
         if line.startswith("::error"):
             assert "%0A" not in line or "\n" not in line
+
+
+# ---------------------------------------------------------------------------
+# Clause W15: a per-test timeout leaves evidence that survives the kill.
+#
+# pytest-timeout ends a worker with os._exit(1) and prints its stack dump to
+# the worker's terminal, which xdist discards; the trace's own stall dumps are
+# armed per phase at BARTHO_EXEC_STALL_WARN_S (180 s in CI) and so can never
+# fire before a 120 s kill. Merge Candidate 35971892908 lost gw0 and gw2 that
+# way with nothing to show for either. The thread method is forced here
+# because it is the one Windows uses.
+# ---------------------------------------------------------------------------
+
+
+def _run_with_timeout(pytester, trace_dir, monkeypatch, timeout_s: str, *args: str):
+    monkeypatch.setenv("BARTHO_EXEC_TRACE", "1")
+    monkeypatch.setenv("BARTHO_EXEC_TRACE_DIR", str(trace_dir))
+    monkeypatch.setenv("BARTHO_EXEC_STALL_ABORT_S", "0")
+    return _run_traced(
+        pytester,
+        trace_dir,
+        "-n",
+        "1",
+        "--dist",
+        "loadfile",
+        "--timeout",
+        timeout_s,
+        "-o",
+        "timeout_method=thread",
+        *args,
+    )
+
+
+def _summary(trace_dir, capsys) -> str:
+    from scripts.ci.summarise_trace import summarise
+
+    capsys.readouterr()
+    summarise(trace_dir)
+    return capsys.readouterr().out
+
+
+def test_a_timeout_killed_worker_leaves_its_stacks_phase_and_elapsed_time(
+    pytester,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    trace_dir = tmp_path / "trace"
+    pytester.makepyfile(
+        test_setup_hangs="""
+        import time
+        import pytest
+
+        @pytest.fixture
+        def a_setup_that_never_finishes():
+            time.sleep(60)
+
+        def test_waits_in_setup(a_setup_that_never_finishes):
+            pass
+        """,
+    )
+
+    result = _run_with_timeout(pytester, trace_dir, monkeypatch, "4")
+
+    # The timeout still does exactly what it did: the worker is lost, the
+    # test fails, the run fails. Nothing here prevents, delays or retries it.
+    assert result.ret != 0
+    controller = _trace_events(trace_dir / "controller.jsonl")
+    assert any(e["event"] == "node_down" and e["crashed"] for e in controller)
+
+    worker = _trace_events(trace_dir / "gw0.jsonl")
+    (imminent,) = [e for e in worker if e["event"] == "timeout_imminent"]
+    assert imminent["nodeid"].endswith("test_waits_in_setup")
+    assert imminent["phase"] == "setup"
+    assert imminent["timeout_s"] == 4.0
+    assert 3.0 <= imminent["elapsed_s"] < 4.0
+    assert "MainThread" in imminent["threads"]
+
+    stacks = (trace_dir / "gw0.timeout.txt").read_text(encoding="utf-8")
+    assert "per-test timeout imminent" in stacks
+    assert "a_setup_that_never_finishes" in stacks, "the stack does not show where it waited"
+
+    out = _summary(trace_dir, capsys)
+    assert "per-test timeout (4s) expired in setup" in out
+    assert "a_setup_that_never_finishes" in out, "the pre-kill stacks were not put in the log"
+
+
+def test_the_evidence_spans_setup_and_call_as_the_timeout_does(pytester, tmp_path, monkeypatch):
+    """gw0's shape: a slow setup, then a call that takes the rest of the budget.
+    Neither phase alone reaches the timeout; together they do."""
+    trace_dir = tmp_path / "trace"
+    pytester.makepyfile(
+        test_split="""
+        import time
+        import pytest
+
+        @pytest.fixture
+        def a_slow_setup():
+            time.sleep(2.5)
+
+        def test_then_a_call_that_hangs(a_slow_setup):
+            time.sleep(60)
+        """,
+    )
+
+    _run_with_timeout(pytester, trace_dir, monkeypatch, "5")
+
+    worker = _trace_events(trace_dir / "gw0.jsonl")
+    (imminent,) = [e for e in worker if e["event"] == "timeout_imminent"]
+    assert imminent["phase"] == "call"
+    assert imminent["elapsed_s"] >= 4.0, "the evidence clock restarted at the phase boundary"
+    assert imminent["phase_elapsed_s"] < imminent["elapsed_s"]
+    stacks = (trace_dir / "gw0.timeout.txt").read_text(encoding="utf-8")
+    assert "test_then_a_call_that_hangs" in stacks
+
+
+def test_a_test_that_finishes_leaves_no_timeout_evidence(pytester, tmp_path, monkeypatch):
+    trace_dir = tmp_path / "trace"
+    pytester.makepyfile(
+        test_fine="""
+        import time
+        def test_quick(): pass
+        def test_slow_but_inside_its_budget(): time.sleep(1.5)
+        def test_quick_again(): pass
+        """,
+    )
+
+    result = _run_with_timeout(pytester, trace_dir, monkeypatch, "4")
+
+    assert result.ret == 0
+    worker = _trace_events(trace_dir / "gw0.jsonl")
+    assert not [e for e in worker if e["event"] == "timeout_imminent"]
+    assert not (trace_dir / "gw0.timeout.txt").exists()
+    # One evidence thread for the whole worker, not one per test.
+    live = [e["live_threads"] for e in worker if e["event"] == "phase"]
+    assert max(live) == min(live)
+
+
+def test_a_worker_lost_without_a_timeout_is_not_called_a_timeout(
+    pytester,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    trace_dir = tmp_path / "trace"
+    pytester.makepyfile(
+        test_dies="""
+        import os
+        def test_dies(): os._exit(1)
+        """,
+    )
+
+    _run_with_timeout(pytester, trace_dir, monkeypatch, "30")
+
+    out = _summary(trace_dir, capsys)
+    assert "WORKER LOST" in out
+    assert "no per-test-timeout evidence for this test" in out
+    assert "per-test timeout (" not in out
+
+
+# ---------------------------------------------------------------------------
+# Clause W16: a `database is locked` failure can be set against the slow
+# SQLite operations in flight on the same worker -- as correlation only.
+# ---------------------------------------------------------------------------
+
+
+def test_a_locked_failure_is_listed_with_overlapping_slow_sqlite_operations(
+    pytester,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    trace_dir = tmp_path / "trace"
+    # Every commit and close counts as "slow", so the overlap is deterministic.
+    monkeypatch.setenv("BARTHO_EXEC_SLOW_SQLITE_S", "0")
+    pytester.makepyfile(
+        test_locked="""
+        import sqlite3
+
+        def test_refused(tmp_path):
+            conn = sqlite3.connect(str(tmp_path / "held.db"))
+            conn.execute("CREATE TABLE t(x)")
+            conn.commit()
+            conn.close()
+            raise sqlite3.OperationalError("database is locked")
+        """,
+    )
+
+    _run_with_timeout(pytester, trace_dir, monkeypatch, "30")
+
+    worker = _trace_events(trace_dir / "gw0.jsonl")
+    (failure,) = [e for e in worker if e["event"] == "sqlite_locked_failure"]
+    assert failure["nodeid"].endswith("test_refused") and failure["when"] == "call"
+    slow = [e for e in worker if e["event"] == "sqlite_slow"]
+    assert {e["op"] for e in slow} >= {"commit", "close"}
+    assert all(e["database"].endswith("held.db") for e in slow)
+
+    out = _summary(trace_dir, capsys)
+    assert "test_refused" in out
+    assert "held.db" in out
+    assert "correlation, not proof" in out
+
+
+def test_ordinary_operations_are_not_reported_as_slow(pytester, tmp_path, monkeypatch):
+    trace_dir = tmp_path / "trace"
+    pytester.makepyfile(
+        test_quick_db="""
+        import sqlite3
+
+        def test_quick(tmp_path):
+            conn = sqlite3.connect(str(tmp_path / "q.db"))
+            conn.execute("CREATE TABLE t(x)")
+            conn.commit()
+            conn.close()
+        """,
+    )
+
+    result = _run_with_timeout(pytester, trace_dir, monkeypatch, "30")
+
+    assert result.ret == 0
+    worker = _trace_events(trace_dir / "gw0.jsonl")
+    assert not [e for e in worker if e["event"] in ("sqlite_slow", "sqlite_locked_failure")]
+
+
+# ---------------------------------------------------------------------------
+# Clause W13, enforced: a run that needed a re-drive is not clean evidence.
+#
+# The contract always said so ("completed over a defect and does not read as
+# green"); the implementation only printed a yellow banner, the job concluded
+# `success`, and Merge Qualification -- which reads job conclusions -- could
+# count it. Merge Candidate 35971892908 attempt 1 was re-driven three times.
+# ---------------------------------------------------------------------------
+
+_W13_CONFTEST = """
+import sys
+sys.path.insert(0, {root!r})
+
+def pytest_xdist_make_scheduler(config, log):
+    from scripts.ci.xdist_contract import make_safe_scheduler
+    return make_safe_scheduler(config, log)
+
+def pytest_configure(config):
+    from scripts.ci import xdist_contract
+    xdist_contract.install(config)
+"""
+
+
+def _run_with_contract_report(pytester, report, *files: tuple[str, str]):
+    pytester.makeconftest(_W13_CONFTEST.format(root=str(Path(__file__).resolve().parents[1])))
+    pytester.makepyfile(**dict(files))
+    return pytester.runpytest_subprocess(
+        "-n",
+        "1",
+        "--dist",
+        "loadfile",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:randomly",
+    )
+
+
+def test_a_clean_run_satisfies_the_w13_check(pytester, tmp_path, monkeypatch):
+    from scripts.ci.xdist_contract import check_contract_report
+
+    report = tmp_path / "xdist-contract.json"
+    monkeypatch.setenv("BARTHO_XDIST_CONTRACT_REPORT", str(report))
+    result = _run_with_contract_report(
+        pytester,
+        report,
+        ("test_one", "def test_a(): pass\n"),
+        ("test_two", "def test_b(): pass\n"),
+    )
+
+    assert result.ret == 0
+    assert json.loads(report.read_text(encoding="utf-8"))["redrives"] == 0
+    ok, message = check_contract_report(report)
+    assert ok, message
+
+
+def test_a_redriven_run_still_recovers_but_cannot_satisfy_the_w13_check(
+    pytester,
+    tmp_path,
+    monkeypatch,
+):
+    """The re-drive is not disabled to make this pass: it fires, it recovers
+    the run, every test passes -- and the run is still not clean evidence."""
+    from scripts.ci.xdist_contract import check_contract_report, main
+
+    report = tmp_path / "xdist-contract.json"
+    monkeypatch.setenv("BARTHO_XDIST_CONTRACT_REPORT", str(report))
+    monkeypatch.setenv("BARTHO_XDIST_REDRIVE_IDLE_S", "1")
+    result = _run_with_contract_report(
+        pytester,
+        report,
+        ("test_slow_one", "import time\ndef test_slow(): time.sleep(9)\n"),
+        ("test_two", "def test_a(): pass\n"),
+        ("test_three", "def test_b(): pass\n"),
+        ("test_four", "def test_c(): pass\n"),
+        ("test_five", "def test_d(): pass\n"),
+    )
+
+    # The mechanism is still there and still works...
+    assert result.ret == 0
+    result.assert_outcomes(passed=5)
+    assert "scheduler re-drive #1" in result.stdout.str() + result.stderr.str()
+    # ...and the run it rescued does not qualify as clean.
+    recorded = json.loads(report.read_text(encoding="utf-8"))
+    assert recorded["redrives"] >= 1
+    ok, message = check_contract_report(report)
+    assert not ok
+    assert "W13" in message and "not clean evidence" in message
+    assert main(["xdist_contract", "check", str(report)]) == 1
+
+
+def test_the_w13_check_fails_closed(tmp_path, pytester, monkeypatch):
+    from scripts.ci.xdist_contract import check_contract_report
+
+    ok, message = check_contract_report(tmp_path / "never-written.json")
+    assert not ok and "cannot count as clean" in message
+
+    garbled = tmp_path / "garbled.json"
+    garbled.write_text("{not json", encoding="utf-8")
+    assert check_contract_report(garbled)[0] is False
+
+    # Switching the contract off does not produce clean evidence either.
+    report = tmp_path / "disabled.json"
+    monkeypatch.setenv("BARTHO_XDIST_CONTRACT_REPORT", str(report))
+    monkeypatch.setenv("BARTHO_XDIST_CONTRACT", "0")
+    result = _run_with_contract_report(pytester, report, ("test_one", "def test_a(): pass\n"))
+    assert result.ret == 0
+    assert check_contract_report(report)[0] is False
+
+
+def _required_xdist_jobs() -> list[tuple[str, str, dict]]:
+    """Every (workflow, job) Merge Qualification requires that runs the suite
+    under xdist, with the job's definition. Matrix names are expanded the way
+    the forge renders them."""
+    import itertools
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    config = yaml.safe_load(
+        (root / ".github" / "merge-qualification" / "config.yml").read_text(encoding="utf-8"),
+    )
+    required = {(t["workflow"], job) for t in config["required_tiers"] for job in t["jobs"]}
+
+    found = []
+    for workflow_file in sorted((root / ".github" / "workflows").glob("*.yml")):
+        workflow = yaml.safe_load(workflow_file.read_text(encoding="utf-8"))
+        for job in (workflow.get("jobs") or {}).values():
+            matrix = (job.get("strategy") or {}).get("matrix") or {}
+            axes = {k: v for k, v in matrix.items() if isinstance(v, list)}
+            combos = [
+                dict(zip(axes, values, strict=True)) for values in itertools.product(*axes.values())
+            ]
+            for combo in combos or [{}]:
+                name = job.get("name", "")
+                for key, value in combo.items():
+                    name = name.replace(f"${{{{ matrix.{key} }}}}", str(value))
+                runs_xdist = any(
+                    "pytest" in str(step.get("run", "")) and " -n " in f" {step.get('run', '')} "
+                    for step in job.get("steps", [])
+                )
+                if (workflow["name"], name) in required and runs_xdist:
+                    found.append((workflow["name"], name, job))
+    return found
+
+
+def test_every_required_xdist_job_enforces_w13():
+    jobs = _required_xdist_jobs()
+    # Not vacuous: PR Fast, Integration coverage, both Merge Candidate
+    # coverage legs and the Windows full suite.
+    assert len(jobs) >= 5, [f"{w} / {j}" for w, j, _ in jobs]
+    for workflow, name, job in jobs:
+        steps = job["steps"]
+        xdist_at = [
+            i
+            for i, step in enumerate(steps)
+            if "pytest" in str(step.get("run", "")) and " -n " in f" {step.get('run', '')} "
+        ]
+        check_at = [
+            i
+            for i, step in enumerate(steps)
+            if "scripts.ci.xdist_contract check xdist-contract.json" in str(step.get("run", ""))
+        ]
+        where = f"{workflow} / {name}"
+        for i in xdist_at:
+            env = steps[i].get("env") or {}
+            assert (
+                env.get("BARTHO_XDIST_CONTRACT_REPORT") == "xdist-contract.json"
+            ), f"{where}: the xdist step does not ask for a W13 report"
+        assert check_at and min(check_at) > max(
+            xdist_at,
+        ), f"{where}: no W13 clean-run check after its xdist test step"
+        assert (
+            "if" not in steps[min(check_at)]
+        ), f"{where}: the W13 check must run on the default success() condition only"

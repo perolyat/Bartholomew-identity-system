@@ -619,6 +619,13 @@ class rather than the instance.
   an overloaded run. Not attributable to this package (no product or storage code is touched)
   and not attributable to the repaired writer-lock class either without a second observation.
   Gate 8 stays unclaimed until a clean run settles it.
+  **Second observation, 2026-09-25:** Merge Candidate 35971892908 attempt 1 on `main`, same
+  file, same `_seed_candidate` → `MemoryStore.init()` → `executescript(SCHEMA)` stack. It is
+  *not* the writer-lock class: the failing statements need only a read lock, and the reproduced
+  mechanism is a new connection's first lock acquisition waiting out another connection's
+  last-close checkpoint on a 5 s setup budget. Repaired as far as the evidence reaches in
+  `docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md`; **gate 8 remains unclaimed** until that
+  record's acceptance runs exist.
 * **Repeated completion on one head — superseded by section 11, and still not met.** Every
   Windows run since has completed, and run 35188201289 was fully green, but run 35189705193 on
   the *identical* commit crashed a worker. Gate 1 is met; **gate 2 is not**, and section 11 gives
