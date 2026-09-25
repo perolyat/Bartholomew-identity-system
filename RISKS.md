@@ -2,7 +2,21 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-20 — **R-RETRIEVAL-1 repaired; one new risk it exposed.** Two changes.
+> **Last updated:** 2026-09-25 — **Windows full-suite reliability incident (Merge Candidate
+> 35971892908 attempt 1, `main` at `7b21a00`): repair implemented, incident still OPEN.** One new
+> tech-debt entry records the incident with verified, repaired, observable-only and unresolved
+> parts kept apart (full record: `docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md`), and **four
+> further new entries** track findings deliberately deferred out of that package. Three existing
+> entries are **amended, not duplicated**: the 2026-08-22 effective-lock-timeout entry (**its
+> "30-second parameter is dead" claim was wrong** for a connection's setup statements, measured),
+> the 2026-09-09 Windows Merge Candidate entry (a second observation of the gate-8
+> `database is locked` signature), and **R4**. **This pass accompanies production code changes**
+> — `bartholomew/kernel/memory_store.py` and `bartholomew/kernel/db_ctx.py` (the MemoryStore
+> connection contract) — plus test, CI-harness and workflow changes, on branch
+> `claude/windows-ci-reliability-incident-mc59cm`, **unmerged at the time of writing**. No risk is
+> removed and no resolved risk is revived.
+>
+> **Previously (2026-09-20, R-RETRIEVAL-1 repaired; one new risk it exposed).** Two changes.
 > **(1)** **R-RETRIEVAL-1 is amended, not duplicated,** with a resolution block recording the root
 > cause, the repair, the evidence and the pre-fix control that proves the regression cases failed
 > before it. Its substance as recorded on 2026-09-19 is **unchanged and still correct** — the
@@ -398,6 +412,11 @@
   sandbox* (Linux-only), so local runs remain no evidence for Windows either way. The underlying
   risk — Windows-specific flakiness being written off rather than diagnosed — is now detectable,
   not eliminated.
+  **Updated 2026-09-25:** a Windows run that passed on re-run is still a failure to be explained:
+  Merge Candidate 35971892908 attempt 1 is recorded as an open incident (tech-debt watchlist,
+  2026-09-25), not superseded by its green attempt 2. A per-test timeout kill now leaves stacks
+  (`<worker>.timeout.txt`), and a run that needed a W13 scheduler re-drive can no longer count as
+  a clean pass.
 
 ### R5 — Encryption envelope round-trip bugs
 - **Category:** Security, Reliability
@@ -1116,6 +1135,22 @@
   behaviour change requiring its own decision — it is the natural companion to the startup-window
   defect below. **Risk category:** reliability/configuration.
 
+  > **Corrected 2026-09-25 — the 30 s is live during connection setup, measured.**
+  > `connect(timeout=30)` installs a 30 s busy handler, and `set_wal_pragmas()` runs its
+  > lock-needing setup statements (`journal_mode`, `synchronous`) under it before
+  > `busy_timeout = 5000` replaces it. So a shared-authority connection has **two** live budgets:
+  > up to 30 s to get through setup, then 5 s for everything the caller does. Measured on `main`:
+  > a `db_ctx.wal_db()` connection's setup waits out an 8 s exclusive hold (8.04 s); a bare
+  > connection gives up at 5.01 s. The retained *operational* 5 s is unchanged. This matters
+  > because setup is where a connection first takes its read lock — the one acquisition a
+  > concurrent last-close checkpoint can block — and it is where Merge Candidate 35971892908's
+  > `database is locked` was raised, on a `MemoryStore` connection that had only 5 s at setup.
+  > **Taylor decided 2026-09-25 (D1(b))** that `MemoryStore` connections follow the shared
+  > authority's actual lifecycle: 30 s for setup, then the operational 5 s. Implemented in the
+  > Windows reliability incident package; see the 2026-09-25 incident entry below. **The
+  > operational 5 s remains the retained decision; the timeout half of the startup-window entry
+  > below stays as open as that entry says it is.**
+
 - **(2026-08-22) Startup-window governed actions can fail with a raw `database is locked`.**
   During the scheduler's startup write burst (every drive immediately due), a user-facing governed
   action's own state write can exhaust the effective 5s busy timeout. Measured during WP-A2 against
@@ -1414,6 +1449,14 @@
   > same worker kill, this is a real change. Band 0 asks for *repeatably* all-green Windows
   > completion: three runs is a reasonable basis for that judgement, not a proof of it, and the
   > call is Taylor's at the reassessment rather than this package's to declare.
+  >
+  > **Amendment (2026-09-25) — a second observation, on `main`.** Merge Candidate 35971892908
+  > attempt 1 (`7b21a00`, the PR #123 merge) failed the Windows job: two workers lost to the
+  > 120 s timeout, and the **second** observation of the gate-8 `database is locked` signature,
+  > through the identical `_seed_candidate` → `MemoryStore.init()` → `executescript(SCHEMA)`
+  > stack as #147's. The one re-run passed; that does not invalidate attempt 1. Recorded and
+  > repaired as far as current evidence allows in the 2026-09-25 incident entry below. **Gate 8
+  > stays unclaimed** until the acceptance runs that entry requires exist.
 
 - **(2026-09-18) Time-budget assertions on per-operation SQLite paths, in tests this package did
   not adopt the connection scope for.** `tests/test_device_consent_channel.py::
@@ -1566,6 +1609,100 @@
   those surfaces. The **skill**, **awaiting_response**, and **scheduler** surfaces are *not* a gap:
   each has its own authoritative durable record, and their Reflection stream is additive by design.
   **Risk category:** auditability/provenance.
+
+- **(2026-09-25) Windows full-suite reliability incident on `main` — repair implemented, incident
+  OPEN.** Merge Candidate 35971892908 attempt 1 (`7b21a00`), job 107543292415: workers `gw2` and
+  `gw0` lost to the 120 s per-test timeout, and `database is locked` in
+  `tests/test_learning_control_centre_api.py::test_a_correction_supersedes_and_a_stale_one_conflicts`.
+  The one re-run (job 107552466911) passed; **it established that `main` can pass and neither
+  repaired nor invalidated attempt 1.** Full record, with evidence:
+  `docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md`. Airtable row `recmtR5E4IOkvPjxo`.
+  - **Verified.** Both worker losses were pytest-timeout kills (`os._exit(1)`), and were
+    undiagnosable by construction: pytest-timeout's stack dump goes to a worker terminal xdist
+    discards, and the trace's dumps were armed per phase at 180 s against a 120 s budget that
+    spans all three phases. `MemoryStore`'s operational connections ran `synchronous=FULL` and
+    `foreign_keys=OFF` against the NORMAL/ON its SCHEMA and the shared authority declare, and had
+    5 s — not the authority's 30 s — at setup, the one point a concurrent last-close checkpoint
+    can block (mechanism reproduced). The seed helpers re-ran `MemoryStore.init()` and
+    `objective_store.ensure_schema()` against the live app's database 28 and 14 times per module.
+    A W13-re-driven run concluded `success` and could be counted by Merge Qualification.
+  - **Repaired.** (A1) One `MemoryStore` connection seam following the shared authority's
+    lifecycle — 30 s setup budget, `synchronous=NORMAL` and `foreign_keys=ON` under it, then
+    `busy_timeout=5000` (Taylor, D1(b)); ownership and explicit close unchanged; no pool, no
+    permanent connection. (A2) Seeds work through the app's established state, enforced by a
+    guard. (A3) W13 enforced at the job conclusion of the four required xdist jobs, failing
+    closed; the re-drive and pytest's exit status unchanged.
+  - **Observable, not claimed fixed.** (B1) Pre-kill evidence on pytest-timeout's own timer hooks:
+    test, phase, elapsed time, threads, SQLite counters, stacks. (B2) Slow commits/closes set
+    against a `database is locked` failure on the same worker — correlation, not ownership.
+  - **Unresolved.** Why two light tests exceeded 120 s (leading hypothesis: a transient
+    runner-wide stall, medium-low; a hang or starvation not excluded). Which connection held the
+    lock, and for how long beyond 5 s. Whether the two share a cause. The unexplained 5,659th
+    outcome (needs artifact 10797093743, expiring 2026-10-24).
+  - **What would close it:** the acceptance sequence in the record's §7 — normal CI, Merge
+    Candidate on the exact head, then three consecutive Windows full-suite executions on that
+    unchanged head, every attempt kept. If the lock mechanism is gone but the stall cause is
+    still unknown, the closure must say exactly that.
+  - **Acceptance (2026-09-25): passed on `a55c8f9`.** Merge Candidate 36120642805 plus three
+    consecutive dispatched runs (36122898029, 36126510276, 36129492255): all jobs green, W13 clean,
+    no worker lost, no `database is locked`. One earlier failed attempt on `4be5b44` (this
+    package's own over-tight test) is kept in the record.
+  - **Risk category:** reliability / CI evidence integrity. **Status:** OPEN pending Taylor's
+    closure decision and merge. The lock, seed and W13 defects are repaired and accepted; **the
+    worker-loss stall cause is not established**, and heavy-test headroom (entry below) is the
+    likeliest route to a recurrence.
+
+- **(2026-09-25) Orphaned msedge and Notepad processes outlive the Windows actuation step and run
+  through the whole default suite — deferred, not repaired.** Both attempts of Merge Candidate
+  35971892908 ended with `Terminate orphan process: msedge ×2, notepad`, so processes started by
+  `tests/integration/test_windows_action_real.py` (`open_url` launches the default browser; a
+  Notepad instance survives despite the fixture's `taskkill`) share the runner with the Windows
+  default suite for its entire run. **Not causal on current evidence:** the passing attempt had
+  them too. Previously recorded as Low in `docs/WINDOWS_MERGE_CANDIDATE_REPAIR.md` §6; raised to
+  its own entry because it is a resource-lifecycle defect in the job whose reliability is in
+  question. **What would close it:** the actuation tests account for every process they start
+  (including a URL handler's), and the job log shows no orphan termination. **Risk category:**
+  test resource lifecycle. **Status:** open, its own bounded package.
+
+- **(2026-09-25) Heavy-test headroom against the 120 s per-test timeout — re-measure after the
+  connection contract, deferred.** In the passing attempt the heaviest tests still took 71.7 s
+  (`test_queued_outcome_is_independent_of_inbox_size`), 57.6 s and 49.5 s — up to 60 % of the
+  budget, their cost dominated by per-operation commit and close. The MemoryStore connection
+  contract removes `synchronous=FULL`'s per-commit syncs on those connections (locally 109 → 9
+  `fdatasync` calls per 50 commits), so the Windows figures must be re-read from the acceptance
+  runs before anything else is concluded. **Not to be answered by raising the timeout.** **Risk
+  category:** reliability. **Status:** open, pending measurement.
+
+  > **Measured 2026-09-25 — not improved, and closer to the limit than recorded.** Across four
+  > Windows full-suite runs on `a55c8f9` (the connection contract in place) the same test took
+  > **75.0, 94.9, 57.6 and 92.1 s** (Merge Candidate 36120642805, 36122898029, 36126510276,
+  > 36129492255). Close dominated every time (34–58 s), then commit (20–33 s): the per-operation
+  > last-close checkpoint, which the 2026-09-17 "scoped reuse, never a process-wide pool" decision
+  > leaves in place outside the scopes that adopted `db_session()`. `synchronous=NORMAL` did not
+  > measurably move it. At 94.9 s (79 %) a transient slowdown of about a quarter reaches the
+  > timeout, which makes this the likeliest route to the next Windows worker loss; W15 will now
+  > leave stacks if it happens. **What would close it** is unchanged in kind: a bounded
+  > `db_session()` scope for this test's write path (as PR #113 did for the containment bursts),
+  > decided as its own package — not a longer timeout. **Status:** open, measured, own package.
+
+- **(2026-09-25) Existing databases may hold orphan child rows written while MemoryStore
+  connections ran with foreign keys off — no audit exists, deferred.** Until the 2026-09-25
+  connection contract, `memory_consent` / `memory_chunks` inserts on most `MemoryStore`
+  connections were not checked against `memories(id)`. Both memory-delete paths already enforced
+  cascades and ids are `AUTOINCREMENT`, so orphans could only come from a child insert racing a
+  parent delete — unlikely, not impossible. Enforcement is not retroactive (tested): such a file
+  still opens and works, and `PRAGMA foreign_key_check` reports the rows. **What would close it:**
+  an operator-runnable check (and, if it finds anything, a governed cleanup decision), e.g. in
+  `docs/E_TRUST_OPERATOR_RUNBOOK.md`. **Risk category:** data integrity. **Status:** open, small,
+  separate.
+
+- **(2026-09-25) A per-test timeout kill on the Linux xdist jobs is still undiagnosable —
+  deferred.** The pre-kill evidence added on 2026-09-25 lives in the execution trace, which only
+  the Merge Candidate Windows job enables. CI "PR Fast tests", Integration "Tests + coverage" and
+  the Merge Candidate coverage legs run under xdist without it, so a worker lost there still leaves
+  only "Not properly terminated". **What would close it:** a decision to enable the trace on those
+  jobs (cost: artifact volume, a little wall time), or to move the timeout evidence into the
+  always-on contract with its own output path. **Risk category:** diagnosability. **Status:** open.
 
 ## Red-team focus areas
 

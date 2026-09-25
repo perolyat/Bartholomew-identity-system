@@ -30,6 +30,20 @@ What it records, per process, as JSON lines:
 * ``stall`` events from a watchdog in every process, carrying a full
   all-thread traceback (worker) or the scheduler's queue and per-node
   outstanding work (controller).
+* ``timeout_imminent`` (worker) shortly before pytest-timeout's per-test
+  deadline: the test, the phase it is in, how long it has run, the live
+  threads and the phase's SQLite counters -- with every thread's stack in
+  ``<worker>.timeout.txt``. pytest-timeout ends a worker with ``os._exit(1)``
+  and writes its own stack dump to the worker's terminal, which xdist
+  discards, so without this a timeout-killed worker leaves only
+  "Not properly terminated" (Merge Candidate 35971892908). It observes the
+  deadline; it never changes, prevents or delays it.
+* ``sqlite_slow`` (worker) for any single commit or close that took at least
+  ``BARTHO_EXEC_SLOW_SQLITE_S``, with its database file, thread and wall
+  time; and ``sqlite_locked_failure`` when a test phase fails with
+  ``database is locked``. The summary lists slow operations that overlap a
+  locked failure on the same worker. That is correlation, not proof of which
+  connection held the lock.
 
 The watchdogs also give the run an ending it can be read from. A run that
 is cancelled from outside at the job cap produces no junit and no summary,
@@ -49,6 +63,8 @@ Environment:
                              stack dump (default 180).
 ``BARTHO_EXEC_STALL_ABORT_S`` seconds of no progress before the controller ends
                              the run itself (default 900; 0 disables).
+``BARTHO_EXEC_SLOW_SQLITE_S`` a single commit or close at least this long is
+                             recorded as a ``sqlite_slow`` event (default 1.0).
 """
 
 from __future__ import annotations
@@ -84,6 +100,17 @@ _DEFAULT_ABORT_S = 900.0
 #: Bound on stack dumps per stalled phase, so a genuinely wedged worker
 #: cannot fill the runner's disk while nobody is watching.
 _MAX_DUMPS_PER_STALL = 8
+_DEFAULT_SLOW_SQLITE_S = 1.0
+#: How far ahead of pytest-timeout's deadline the evidence is taken: ten
+#: seconds, or a tenth of a short timeout. Early enough that the capture is
+#: complete before `os._exit`, late enough that a test that was merely slow
+#: has almost certainly finished and disarmed it.
+_TIMEOUT_EVIDENCE_LEAD_S = 10.0
+_TIMEOUT_EVIDENCE_LEAD_FRACTION = 0.1
+
+
+def timeout_evidence_lead(timeout_s: float) -> float:
+    return min(_TIMEOUT_EVIDENCE_LEAD_S, timeout_s * _TIMEOUT_EVIDENCE_LEAD_FRACTION)
 
 
 def enabled() -> bool:
@@ -110,7 +137,7 @@ class _SqliteCounter:
     than per suite.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_slow: Any = None, slow_s: float = _DEFAULT_SLOW_SQLITE_S) -> None:
         self.count = 0
         self.seconds = 0.0
         self.commits = 0
@@ -119,6 +146,21 @@ class _SqliteCounter:
         self._lock = threading.Lock()
         self._original = sqlite3.connect
         self._factories: dict[type, type] = {}
+        #: Called as ``on_slow(op, database, seconds, started_t)`` for one
+        #: commit or close that took at least ``slow_s``. A last close runs
+        #: the whole WAL checkpoint and unlinks -wal/-shm while holding the
+        #: database's exclusive lock, so a slow one is exactly the window in
+        #: which another connection's first statement is refused.
+        self._on_slow = on_slow
+        self._slow_s = slow_s
+
+    def _note_slow(self, op: str, conn: Any, elapsed: float, started_t: float) -> None:
+        if self._on_slow is None or elapsed < self._slow_s:
+            return
+        try:
+            self._on_slow(op, getattr(conn, "_exec_trace_database", "?"), elapsed, started_t)
+        except Exception:  # pragma: no cover - an instrument may not break a commit
+            pass
 
     def _timed_factory(self, base: type) -> type:
         """A Connection subclass that times the two calls that can block.
@@ -136,6 +178,7 @@ class _SqliteCounter:
 
         class TimedConnection(base):  # type: ignore[valid-type, misc]
             def commit(self, *args: Any, **kwargs: Any) -> Any:
+                started_t = _wall_clock()
                 started = _monotonic()
                 try:
                     return super().commit(*args, **kwargs)
@@ -144,8 +187,10 @@ class _SqliteCounter:
                     with counter._lock:
                         counter.commits += 1
                         counter.commit_seconds += elapsed
+                    counter._note_slow("commit", self, elapsed, started_t)
 
             def close(self, *args: Any, **kwargs: Any) -> Any:
+                started_t = _wall_clock()
                 started = _monotonic()
                 try:
                     return super().close(*args, **kwargs)
@@ -153,6 +198,7 @@ class _SqliteCounter:
                     elapsed = _monotonic() - started
                     with counter._lock:
                         counter.close_seconds += elapsed
+                    counter._note_slow("close", self, elapsed, started_t)
 
         self._factories[base] = TimedConnection
         return TimedConnection
@@ -178,7 +224,11 @@ class _SqliteCounter:
                         kwargs["factory"] = base
             started = _monotonic()
             try:
-                return original(*args, **kwargs)
+                conn = original(*args, **kwargs)
+                with contextlib.suppress(Exception):
+                    database = args[0] if args else kwargs.get("database", "?")
+                    conn._exec_trace_database = os.fspath(database)
+                return conn
             finally:
                 elapsed = _monotonic() - started
                 with self._lock:
@@ -290,6 +340,78 @@ class _Watchdog:
                     print(f"exec-trace: stall handler failed: {exc!r}", file=sys.stderr)
 
 
+class _TimeoutEvidence:
+    """One thread per worker that takes evidence just before a per-test timeout.
+
+    Armed and disarmed through pytest-timeout's own ``pytest_timeout_set_timer``
+    / ``pytest_timeout_cancel_timer`` hooks, so its clock starts where the
+    timeout's does and spans setup, call and teardown together -- the span
+    pytest-timeout enforces. The trace's stall dumps are re-armed at every
+    phase boundary at ``BARTHO_EXEC_STALL_WARN_S`` (180 s in CI), so a test
+    killed at 120 s -- one phase or split across several, as gw0's 31 s setup
+    plus 89 s call was -- could never produce one.
+
+    It needs the GIL to fire. So does pytest-timeout's thread-method kill:
+    whenever the kill can happen, this could have happened first. A thread
+    that never releases the GIL is the GIL-free faulthandler dump's case.
+
+    One long-lived thread rather than a timer per test, so it does not move
+    the per-phase ``live_threads`` count.
+    """
+
+    def __init__(self, on_fire: Any) -> None:
+        self._on_fire = on_fire
+        self._cond = threading.Condition()
+        self._armed: tuple[str, float, float, float] | None = None
+        self._stopped = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="exec-trace-timeout-evidence",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def arm(self, nodeid: str, timeout_s: float) -> None:
+        started = _monotonic()
+        fire_at = started + timeout_s - timeout_evidence_lead(timeout_s)
+        with self._cond:
+            self._armed = (nodeid, started, fire_at, timeout_s)
+            self._cond.notify()
+
+    def disarm(self, nodeid: str) -> None:
+        with self._cond:
+            if self._armed is not None and self._armed[0] == nodeid:
+                self._armed = None
+                self._cond.notify()
+
+    def stop(self) -> None:
+        with self._cond:
+            self._stopped = True
+            self._armed = None
+            self._cond.notify()
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                if self._stopped:
+                    return
+                if self._armed is None:
+                    self._cond.wait()
+                    continue
+                remaining = self._armed[2] - _monotonic()
+                if remaining > 0:
+                    self._cond.wait(remaining)
+                    continue
+                nodeid, started, _fire_at, timeout_s = self._armed
+                self._armed = None
+            try:
+                self._on_fire(nodeid, _monotonic() - started, timeout_s)
+            except Exception as exc:  # pragma: no cover - diagnostics must not raise
+                print(f"exec-trace: timeout evidence failed: {exc!r}", file=sys.stderr)
+
+
 class _BaseTrace:
     role = "process"
 
@@ -336,13 +458,19 @@ class WorkerTrace(_BaseTrace):
     def __init__(self, config: pytest.Config, trace_dir: Path, workerid: str) -> None:
         super().__init__(config, trace_dir, workerid)
         self.workerid = workerid
-        self.sqlite = _SqliteCounter()
+        self.sqlite = _SqliteCounter(
+            on_slow=self._on_slow_sqlite,
+            slow_s=_float_env("BARTHO_EXEC_SLOW_SQLITE_S", _DEFAULT_SLOW_SQLITE_S),
+        )
         self.sqlite.install()
         self._phase_start = _monotonic()
+        self._phase_start_t = _wall_clock()
         self._phase_sqlite = self.sqlite.snapshot()
         self._phase_writes = self.sqlite.write_snapshot()
         self._current = "<none>"
+        self._active_phase = "startup"
         self._gil_free_dump: Any = None
+        self._timeout_evidence = _TimeoutEvidence(self._on_timeout_imminent)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -365,6 +493,7 @@ class WorkerTrace(_BaseTrace):
         )
         self.watchdog.start()
         self._arm_gil_free_dump()
+        self._timeout_evidence.start()
         atexit.register(self._note_exit)
 
     def _arm_gil_free_dump(self) -> None:
@@ -405,6 +534,7 @@ class WorkerTrace(_BaseTrace):
             self._gil_free_dump = None
 
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+        self._timeout_evidence.stop()
         if self.watchdog is not None:
             self.watchdog.beat("session_finish")
         if self._gil_free_dump is not None:
@@ -422,10 +552,84 @@ class WorkerTrace(_BaseTrace):
 
     def pytest_runtest_logstart(self, nodeid: str, location: Any) -> None:
         self._current = nodeid
+        self._active_phase = "setup"
         self._begin_phase(f"{nodeid}::setup")
         self.writer.write("logstart", nodeid=nodeid)
 
+    # -- pytest-timeout ----------------------------------------------------
+    #
+    # Observers only: both return None, so pytest-timeout's own (trylast)
+    # implementation still arms and cancels the real timer, unchanged.
+    # `optionalhook` because the hooks are pytest-timeout's, not pytest's.
+
+    @pytest.hookimpl(optionalhook=True, tryfirst=True)
+    def pytest_timeout_set_timer(self, item: pytest.Item, settings: Any) -> None:
+        timeout_s = getattr(settings, "timeout", None)
+        if timeout_s and timeout_s > 0:
+            self._timeout_evidence.arm(item.nodeid, float(timeout_s))
+
+    @pytest.hookimpl(optionalhook=True, tryfirst=True)
+    def pytest_timeout_cancel_timer(self, item: pytest.Item) -> None:
+        self._timeout_evidence.disarm(item.nodeid)
+
+    def _on_timeout_imminent(self, nodeid: str, elapsed: float, timeout_s: float) -> None:
+        count, seconds = self.sqlite.snapshot()
+        commits, commit_s, close_s = self.sqlite.write_snapshot()
+        phase = self._active_phase if nodeid == self._current else "unknown"
+        self.writer.write(
+            "timeout_imminent",
+            nodeid=nodeid,
+            phase=phase,
+            elapsed_s=round(elapsed, 2),
+            timeout_s=timeout_s,
+            phase_elapsed_s=round(_monotonic() - self._phase_start, 2),
+            phase_sqlite_connections=count - self._phase_sqlite[0],
+            phase_sqlite_connect_s=round(seconds - self._phase_sqlite[1], 3),
+            phase_sqlite_commits=commits - self._phase_writes[0],
+            phase_sqlite_commit_s=round(commit_s - self._phase_writes[1], 3),
+            phase_sqlite_close_s=round(close_s - self._phase_writes[2], 3),
+            threads=[t.name for t in threading.enumerate()],
+        )
+        dump_path = self.writer.path.with_suffix(".timeout.txt")
+        try:
+            with dump_path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    f"\n===== {self.role}: per-test timeout imminent -- {nodeid} "
+                    f"in {phase}, {elapsed:.1f}s of {timeout_s:.0f}s =====\n",
+                )
+                fh.flush()
+                faulthandler.dump_traceback(file=fh, all_threads=True)
+        except Exception as exc:  # pragma: no cover - diagnostics must not raise
+            self.writer.write("timeout_dump_failed", error=repr(exc))
+        print(
+            f"exec-trace: {self.workerid} {nodeid} has run {elapsed:.0f}s of its "
+            f"{timeout_s:.0f}s timeout, in {phase}; stacks in {dump_path.name}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    # -- SQLite lock evidence ----------------------------------------------
+
+    def _on_slow_sqlite(self, op: str, database: str, seconds: float, started_t: float) -> None:
+        self.writer.write(
+            "sqlite_slow",
+            op=op,
+            database=database,
+            seconds=round(seconds, 3),
+            started_t=round(started_t, 4),
+            thread=threading.current_thread().name,
+            nodeid=self._current,
+            phase=self._active_phase,
+        )
+
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        if report.failed and "database is locked" in str(report.longrepr):
+            self.writer.write(
+                "sqlite_locked_failure",
+                nodeid=report.nodeid,
+                when=report.when,
+                phase_started_t=round(self._phase_start_t, 4),
+            )
         count, seconds = self.sqlite.snapshot()
         opened = count - self._phase_sqlite[0]
         connect_s = seconds - self._phase_sqlite[1]
@@ -452,10 +656,12 @@ class WorkerTrace(_BaseTrace):
             # crashed trying to sort a list against an int.
             live_threads=threading.active_count(),
         )
+        self._active_phase = {"setup": "call", "call": "teardown"}.get(report.when, "between")
         self._begin_phase(f"{report.nodeid}::after-{report.when}")
 
     def _begin_phase(self, label: str) -> None:
         self._phase_start = _monotonic()
+        self._phase_start_t = _wall_clock()
         self._phase_sqlite = self.sqlite.snapshot()
         self._phase_writes = self.sqlite.write_snapshot()
         if self.watchdog is not None:

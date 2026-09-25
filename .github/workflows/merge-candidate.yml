@@ -120,6 +120,8 @@ jobs:
         run: python -m pip check
 
       - name: "Default test suite with coverage (gate: line >= 70%)"
+        env:
+          BARTHO_XDIST_CONTRACT_REPORT: xdist-contract.json
         run: >-
           python -m pytest -p no:cacheprovider
           -n auto --dist loadfile
@@ -131,6 +133,15 @@ jobs:
           --cov-report=xml
           --cov-fail-under=70
           --junitxml=junit-merge-candidate-py${{ matrix.python-version }}.xml
+
+      # Clause W13 (docs/WINDOWS_TEST_EXECUTION_CONTRACT.md): a run that needed a
+      # scheduler re-drive completed over a pytest-xdist defect and is not clean
+      # evidence. The re-drive still recovers the run and the tests' own result
+      # is unchanged; this step is what keeps Merge Qualification, which reads
+      # this job's conclusion, from counting such a run as green. Fails closed
+      # when the controller left no report.
+      - name: W13 clean-run contract (no scheduler re-drive)
+        run: python -m scripts.ci.xdist_contract check xdist-contract.json
 
       - name: Upload coverage.xml and junit
         if: always()
@@ -298,7 +309,17 @@ jobs:
           BARTHO_EXEC_TRACE_DIR: exec-trace
           BARTHO_EXEC_STALL_WARN_S: "180"
           BARTHO_EXEC_STALL_ABORT_S: "600"
+          BARTHO_XDIST_CONTRACT_REPORT: xdist-contract.json
         run: python -m pytest -p no:cacheprovider -vv -n auto --dist loadfile --junitxml=junit-windows-full.xml
+
+      # Clause W13 (docs/WINDOWS_TEST_EXECUTION_CONTRACT.md): a run that needed a
+      # scheduler re-drive completed over a pytest-xdist defect and is not clean
+      # evidence. The re-drive still recovers the run and the tests' own result
+      # is unchanged; this step is what keeps Merge Qualification, which reads
+      # this job's conclusion, from counting such a run as green. Fails closed
+      # when the controller left no report.
+      - name: W13 clean-run contract (no scheduler re-drive)
+        run: python -m scripts.ci.xdist_contract check xdist-contract.json
 
       - name: Upload junit and execution trace
         if: always()
@@ -308,6 +329,7 @@ jobs:
           path: |
             junit-windows-full.xml
             exec-trace/
+            xdist-contract.json
           if-no-files-found: ignore
           retention-days: 30
 

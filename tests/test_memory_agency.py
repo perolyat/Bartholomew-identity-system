@@ -34,6 +34,7 @@ _DB_PATH = str(_db_dir / "test.db")
 os.environ["BARTH_DB_PATH"] = _DB_PATH
 
 from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: E402
+from tests.helpers.live_app_db import forbid_schema_work_from_the_test_thread  # noqa: E402
 
 UI_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -49,7 +50,7 @@ def client():
     # See tests/test_self_state_api.py's client fixture for why this is
     # re-asserted immediately before the app starts.
     os.environ["BARTH_DB_PATH"] = _DB_PATH
-    with TestClient(app_module.app) as c:
+    with TestClient(app_module.app) as c, forbid_schema_work_from_the_test_thread(_DB_PATH):
         yield c
 
 
@@ -64,6 +65,10 @@ def _seed_memory(kind: str, key: str, value: str) -> None:
     deadlocks rather than failing. A separate connection to the same file is
     how the seeding scripts already do it, and SQLite's busy timeout covers
     the overlap with the running daemon.
+
+    No `init()`: the app created the schema on this file at startup, and a
+    second lifecycle re-running it against a live kernel is exactly what
+    tests/helpers/live_app_db.py forbids.
     """
     import asyncio
     from datetime import datetime, timezone
@@ -72,7 +77,6 @@ def _seed_memory(kind: str, key: str, value: str) -> None:
 
     async def _run():
         store = MemoryStore(_DB_PATH)
-        await store.init()
         try:
             # W03-D: forgetting a memory now leaves a revocation tombstone, so
             # the identity cannot be silently recreated by a later capture,

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import sqlite3
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -9,6 +12,7 @@ from typing import Any
 import aiosqlite
 import numpy as np
 
+from bartholomew.kernel import db_ctx as _db_ctx
 from bartholomew.kernel import encryption_engine as _encryption_module
 from bartholomew.kernel.chunking_engine import get_chunking_engine
 from bartholomew.kernel.fts_client import reindex_memory_fts_async, remove_memory_fts_async
@@ -32,6 +36,60 @@ from bartholomew.kernel.redaction_engine import (
 from bartholomew.kernel.summarization_engine import _summarization_engine
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# The one door to this store's database.
+#
+# `synchronous`, `foreign_keys` and `busy_timeout` are connection-local: the
+# `PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON` in SCHEMA below applies
+# to the init() connection and to nothing after it. Every operational
+# connection used to be a bare `aiosqlite.connect(self.db_path)` and so ran on
+# SQLite's defaults -- synchronous=FULL, foreign_keys=OFF, a 5 s lock budget
+# from its very first statement -- contrary to the policy SCHEMA declares and
+# the shared authority (db_ctx.set_wal_pragmas) applies everywhere else.
+#
+# These two context managers give every MemoryStore connection that shared
+# policy, in the authority's order and with its two lock budgets:
+#
+#   1. open with the 30 s setup budget (db_ctx.SETUP_LOCK_TIMEOUT_S);
+#   2. run the connection-local setup pragmas under it -- `synchronous` needs
+#      a database lock, so it is the connection's first contending statement,
+#      the only one a concurrent last-close checkpoint can block;
+#   3. only once setup has succeeded, drop to the operational 5 s budget;
+#   4. hand the connection to the caller, and close it on the way out.
+#
+# `journal_mode` is persistent in the file and init() sets it, so it is not
+# re-issued here. Ownership is unchanged: one connection per unit of work,
+# closed when it ends. tests/test_memory_store_connection_contract.py holds
+# this module to having no other connection path.
+# ---------------------------------------------------------------------------
+
+
+@contextlib.asynccontextmanager
+async def open_memory_db(db_path: str) -> AsyncIterator[aiosqlite.Connection]:
+    """An aiosqlite connection configured to the shared connection policy."""
+    db = await aiosqlite.connect(db_path, timeout=_db_ctx.SETUP_LOCK_TIMEOUT_S)
+    try:
+        for pragma in _db_ctx.CONNECTION_SETUP_PRAGMAS:
+            await db.execute(pragma)
+        await db.execute(_db_ctx.OPERATIONAL_BUSY_TIMEOUT_PRAGMA)
+        yield db
+    finally:
+        await db.close()
+
+
+@contextlib.contextmanager
+def open_memory_db_sync(db_path: str) -> Iterator[sqlite3.Connection]:
+    """The same policy for the two off-loop synchronous call sites."""
+    conn = sqlite3.connect(db_path, timeout=_db_ctx.SETUP_LOCK_TIMEOUT_S)
+    try:
+        for pragma in _db_ctx.CONNECTION_SETUP_PRAGMAS:
+            conn.execute(pragma)
+        conn.execute(_db_ctx.OPERATIONAL_BUSY_TIMEOUT_PRAGMA)
+        yield conn
+    finally:
+        conn.close()
 
 
 def _load_fts_index_mode() -> str:
@@ -592,7 +650,7 @@ class MemoryStore:
         self._blocking_executor = blocking_executor
 
     async def init(self) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             await db.executescript(SCHEMA)
 
             # Phase 2c: Migrate existing databases to add summary column
@@ -707,7 +765,7 @@ class MemoryStore:
         # FTS-schema-init error handling directly above -- a healing
         # failure must never block startup.
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with open_memory_db(self.db_path) as db:
                 await self._heal_unindexed_memories(db)
         except Exception as e:
             logger.warning(f"Failed to self-heal FTS index: {e}")
@@ -1162,7 +1220,7 @@ class MemoryStore:
         # Prepare result object
         result = StoreResult()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             if expected_memory_id is not None:
                 # BEGIN IMMEDIATE takes the write lock now, so the identity
                 # check below and the write that follows are one atomic step
@@ -1429,7 +1487,7 @@ class MemoryStore:
                 return
 
             # Record consent for embeddings
-            async with aiosqlite.connect(self.db_path) as db:
+            async with open_memory_db(self.db_path) as db:
                 await db.execute(
                     "INSERT OR IGNORE INTO memory_consent (memory_id, source) VALUES (?, ?)",
                     (result.memory_id, "upsert_memory"),
@@ -1513,46 +1571,38 @@ class MemoryStore:
         # Store chunks (synchronously, to avoid Windows locking issues --
         # off the event loop since Phase B stage B2; see
         # docs/B2_EVENT_LOOP_ISOLATION.md).
-        import sqlite3
-
         from .blocking_executor import run_off_loop
 
         def _store_chunks() -> None:
-            conn = None
             try:
-                conn = sqlite3.connect(self.db_path)
-                conn.execute("PRAGMA foreign_keys = ON")
-
-                # Delete existing chunks for this memory (upsert semantics)
-                conn.execute(
-                    "DELETE FROM memory_chunks WHERE memory_id = ?",
-                    (result.memory_id,),
-                )
-
-                # Insert new chunks (triggers will update chunk_fts)
-                for chunk in chunks:
+                with open_memory_db_sync(self.db_path) as conn:
+                    # Delete existing chunks for this memory (upsert semantics)
                     conn.execute(
-                        "INSERT INTO memory_chunks "
-                        "(memory_id, seq, token_start, token_end, text) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (
-                            result.memory_id,
-                            chunk.seq,
-                            chunk.token_start,
-                            chunk.token_end,
-                            chunk.text,
-                        ),
+                        "DELETE FROM memory_chunks WHERE memory_id = ?",
+                        (result.memory_id,),
                     )
 
-                conn.commit()
-                logger.info(
-                    f"Stored {len(chunks)} chunks for memory {result.memory_id}",
-                )
+                    # Insert new chunks (triggers will update chunk_fts)
+                    for chunk in chunks:
+                        conn.execute(
+                            "INSERT INTO memory_chunks "
+                            "(memory_id, seq, token_start, token_end, text) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (
+                                result.memory_id,
+                                chunk.seq,
+                                chunk.token_start,
+                                chunk.token_end,
+                                chunk.text,
+                            ),
+                        )
+
+                    conn.commit()
+                    logger.info(
+                        f"Stored {len(chunks)} chunks for memory {result.memory_id}",
+                    )
             except Exception as e:
                 logger.error(f"Failed to store chunks: {e}")
-            finally:
-                if conn:
-                    conn.close()
 
         await run_off_loop(_store_chunks, executor=self._blocking_executor)
 
@@ -1711,7 +1761,7 @@ class MemoryStore:
         identity returns 0, because there was nothing left to do.
         """
         resolved_at = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             try:
                 cursor = await db.execute(
                     "UPDATE pending_sensitive_writes "
@@ -1771,7 +1821,7 @@ class MemoryStore:
         value_to_store = self._protect_consent_payload(value, kind, key, ts)
 
         requested_at = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cursor = await db.execute(
                 "INSERT INTO pending_sensitive_writes "
                 "(kind, key, value, ts, requested_at, reason, privacy_class) "
@@ -1813,7 +1863,7 @@ class MemoryStore:
         decrypted here for review; non-envelope values pass through
         unchanged.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT id, kind, key, value, ts, requested_at, status, reason, privacy_class "
@@ -1915,8 +1965,7 @@ class MemoryStore:
         """
         if memory_id is None:
             return
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA foreign_keys = ON")
+        async with open_memory_db(self.db_path) as db:
             await remove_memory_fts_async(db, memory_id)
             await db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             await db.commit()
@@ -1941,7 +1990,7 @@ class MemoryStore:
         tombstone). Handing that row back to `pending` would put an empty,
         approvable request into the inbox -- the withdrawal wins instead.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             await db.execute(
                 "UPDATE pending_sensitive_writes "
                 "SET status = 'pending', resolved_at = NULL "
@@ -1970,7 +2019,7 @@ class MemoryStore:
         """
         await self._refuse_consent_resolution_if_braked("approve")
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT kind, key, value, ts, status, reason "
@@ -2040,7 +2089,7 @@ class MemoryStore:
             await self._release_approval_claim(pending_id)
             return result
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             # Scrub and record in the same statement as the resolution: once
             # the governed write has succeeded, the raw pre-redaction payload
             # is no longer necessary retention, and approval must not leave a
@@ -2083,7 +2132,7 @@ class MemoryStore:
             )
             return StoreResult(stored=False, outcome="refused_revoked")
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             if row["reason"] == "rule_consent" and result.memory_id is not None:
                 # Upsert, not INSERT OR IGNORE: upsert_memory()'s own
                 # embedding flow may have already inserted a memory_consent
@@ -2117,7 +2166,7 @@ class MemoryStore:
         await self._refuse_consent_resolution_if_braked("deny")
 
         resolved_at = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cursor = await db.execute(
                 "UPDATE pending_sensitive_writes "
                 "SET status = 'denied', resolved_at = ?, value = '' "
@@ -2151,7 +2200,7 @@ class MemoryStore:
         Values encrypted at rest are decrypted here, matching
         `list_pending_sensitive_writes()`.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT id, kind, key, value, summary, ts, source, source_type, "
@@ -2197,7 +2246,7 @@ class MemoryStore:
             return []
 
         placeholders = ",".join("?" for _ in memory_ids)
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 f"SELECT id, kind, key, value, summary, ts, source, source_type, "  # noqa: S608 - placeholders are generated, not interpolated user input
@@ -2340,7 +2389,7 @@ class MemoryStore:
             "ORDER BY m.ts DESC, m.id DESC LIMIT ? OFFSET ?"
         )
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             count_cursor = await db.execute(
                 f"SELECT COUNT(*) AS n FROM memories m {clause}",  # noqa: S608 - as above
@@ -2403,7 +2452,7 @@ class MemoryStore:
 
     async def list_memory_kinds(self) -> list[dict[str, Any]]:
         """Distinct memory kinds with their counts, for a filter control."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT kind, COUNT(*) AS n FROM memories GROUP BY kind ORDER BY n DESC",
@@ -2525,7 +2574,7 @@ class MemoryStore:
             "is halted. Release the brake and try again.",
         )
         forgotten_at = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             await db.execute(
                 "INSERT INTO memory_revocations(kind,key,revoked_at,revoked_by,reason) "
                 "VALUES(?,?,?,?,?) "
@@ -2576,7 +2625,7 @@ class MemoryStore:
         proceed as if it were not.
         """
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with open_memory_db(self.db_path) as db:
                 cursor = await db.execute(
                     "SELECT 1 FROM memory_revocations WHERE kind = ? AND key = ?",
                     (kind, key),
@@ -2590,7 +2639,7 @@ class MemoryStore:
     async def list_revocations(self, limit: int = 200) -> list[dict[str, Any]]:
         """Every revocation tombstone in force, most recent first. Read-only."""
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with open_memory_db(self.db_path) as db:
                 db.row_factory = aiosqlite.Row
                 cursor = await db.execute(
                     "SELECT kind, key, revoked_at, revoked_by, reason "
@@ -2647,7 +2696,7 @@ class MemoryStore:
         revoked_at = datetime.now(timezone.utc).isoformat()
         outcome = RevocationOutcome(kind=kind, key=key, revoked_at=revoked_at)
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             await db.execute(
                 "INSERT INTO memory_revocations(kind,key,revoked_at,revoked_by,reason) "
@@ -2728,7 +2777,7 @@ class MemoryStore:
             )
 
         outcome = RevocationOutcome(kind=kind, key=key)
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             await db.execute("BEGIN IMMEDIATE")
             cursor = await db.execute(
                 "DELETE FROM memory_revocations WHERE kind=? AND key=?",
@@ -2756,7 +2805,7 @@ class MemoryStore:
         # gating rather than being pushed back into FTS verbatim.
         if outcome.was_present:
             try:
-                async with aiosqlite.connect(self.db_path) as db:
+                async with open_memory_db(self.db_path) as db:
                     await self._heal_unindexed_memories(db)
             except Exception:
                 logger.warning(
@@ -2792,7 +2841,7 @@ class MemoryStore:
         anybody had ever corrected it.
         """
         prefix = f"{kind}/{key}@r"
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cursor = await db.execute(
                 "SELECT COUNT(*) FROM memories WHERE kind=? AND key LIKE ? ESCAPE '\\'",
                 (
@@ -2924,7 +2973,7 @@ class MemoryStore:
         # -- the archived row's closed `valid_to` already keeps it out of
         # retrieval on its own.
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with open_memory_db(self.db_path) as db:
                 await db.execute(
                     "UPDATE memories SET superseded_by=? WHERE kind=? AND key=?",
                     (result.memory_id, MEMORY_REVISION_KIND, archived_key),
@@ -2970,7 +3019,7 @@ class MemoryStore:
             return []
 
         placeholders = ",".join("?" for _ in kinds)
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 f"SELECT id, kind, key, value, summary, ts, source, source_type, "  # noqa: S608 - placeholders are generated, not interpolated user input
@@ -3005,11 +3054,11 @@ class MemoryStore:
         Returns:
             True if deleted, False if not found
         """
-        async with aiosqlite.connect(self.db_path) as db:
-            # foreign_keys is a per-connection setting, not persistent in the
-            # DB file -- without it the memory_chunks ON DELETE CASCADE (and
-            # any other FK cascade) silently never fires on this connection.
-            await db.execute("PRAGMA foreign_keys = ON")
+        # foreign_keys is a per-connection setting, not persistent in the DB
+        # file -- without it the memory_chunks ON DELETE CASCADE (and any
+        # other FK cascade) silently never fires. open_memory_db() enables it
+        # on every connection, this one included.
+        async with open_memory_db(self.db_path) as db:
 
             # Look up memory_id
             cursor = await db.execute("SELECT id FROM memories WHERE kind=? AND key=?", (kind, key))
@@ -3047,7 +3096,7 @@ class MemoryStore:
     ) -> int:
         """Create a new nudge and return its ID."""
         actions_json = json.dumps(actions)
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cur = await db.execute(
                 "INSERT INTO nudges(kind, message, actions, reason, "
                 "created_ts, status) VALUES(?,?,?,?,?,'pending')",
@@ -3063,7 +3112,7 @@ class MemoryStore:
         acted_ts: str | None = None,
     ) -> None:
         """Update nudge status to acked or dismissed."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             await db.execute(
                 "UPDATE nudges SET status=?, acted_ts=? WHERE id=?",
                 (status, acted_ts, nudge_id),
@@ -3072,7 +3121,7 @@ class MemoryStore:
 
     async def list_pending_nudges(self, limit: int = 50) -> list[dict]:
         """Get pending nudges."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cur = await db.execute(
                 "SELECT id, kind, message, actions, reason, created_ts "
                 "FROM nudges WHERE status='pending' "
@@ -3094,7 +3143,7 @@ class MemoryStore:
 
     async def nudges_sent_today_count(self, kind: str, start_utc_iso: str, end_utc_iso: str) -> int:
         """Count nudges of a given kind sent today."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cur = await db.execute(
                 "SELECT COUNT(*) FROM nudges WHERE kind=? AND created_ts BETWEEN ? AND ?",
                 (kind, start_utc_iso, end_utc_iso),
@@ -3104,7 +3153,7 @@ class MemoryStore:
 
     async def last_nudge_ts(self, kind: str) -> str | None:
         """Get the timestamp of the most recent nudge of a kind."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cur = await db.execute(
                 "SELECT created_ts FROM nudges WHERE kind=? ORDER BY created_ts DESC LIMIT 1",
                 (kind,),
@@ -3122,7 +3171,7 @@ class MemoryStore:
     ) -> int:
         """Insert a reflection entry and return its ID."""
         meta_json = json.dumps(meta) if meta else None
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cur = await db.execute(
                 "INSERT INTO reflections(kind, content, meta, ts, pinned) VALUES(?,?,?,?,?)",
                 (kind, content, meta_json, ts, 1 if pinned else 0),
@@ -3132,7 +3181,7 @@ class MemoryStore:
 
     async def latest_reflection(self, kind: str) -> dict | None:
         """Get the most recent reflection of a given kind."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cur = await db.execute(
                 "SELECT id, kind, content, meta, ts, pinned "
                 "FROM reflections WHERE kind=? ORDER BY ts DESC LIMIT 1",
@@ -3182,7 +3231,7 @@ class MemoryStore:
             return 0
 
         # Load memory
-        async with aiosqlite.connect(self.db_path) as db:
+        async with open_memory_db(self.db_path) as db:
             cursor = await db.execute(
                 "SELECT kind, key, value, summary FROM memories WHERE id=?",
                 (memory_id,),
@@ -3256,7 +3305,7 @@ class MemoryStore:
             provider, model, embedder_kind = embed_engine.storage_identity
 
             # Phase 2d+: Record consent for embeddings
-            async with aiosqlite.connect(self.db_path) as db:
+            async with open_memory_db(self.db_path) as db:
                 await db.execute(
                     "INSERT OR IGNORE INTO memory_consent (memory_id, source) VALUES (?, ?)",
                     (memory_id, "persist_embeddings_for"),
@@ -3308,11 +3357,9 @@ class MemoryStore:
         # Runs off the event loop since Phase B stage B2; see
         # docs/B2_EVENT_LOOP_ISOLATION.md.
         if sources is None:
-            import sqlite3
 
             def _existing_sources() -> list[str] | None:
-                with sqlite3.connect(self.db_path) as conn:
-                    conn.execute("PRAGMA foreign_keys = ON")
+                with open_memory_db_sync(self.db_path) as conn:
                     cursor = conn.execute(
                         "SELECT DISTINCT source FROM memory_embeddings WHERE memory_id=?",
                         (memory_id,),

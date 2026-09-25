@@ -13,6 +13,11 @@ answer on its own:
 3. What was outstanding when the run stalled, and on which worker?
 4. Which tests cost the most SQLite connections, and how long did opening
    them take?
+5. Was a lost worker killed by the per-test timeout, in which phase, and
+   what were its threads doing just before?
+6. Did a ``database is locked`` failure coincide with a slow commit or close
+   on the same worker? (Correlation only -- the trace cannot name the
+   connection that held the lock.)
 """
 
 from __future__ import annotations
@@ -63,6 +68,7 @@ def _print_stacks(trace_dir: Path) -> None:
         ("controller.stacks.txt", _CONTROLLER_STACK_LINES, "controller"),
         ("gw*.stacks.txt", _WORKER_STACK_LINES, "worker"),
         ("gw*.gil.txt", _WORKER_STACK_LINES, "worker (GIL-free dump)"),
+        ("gw*.timeout.txt", _WORKER_STACK_LINES, "worker (just before its per-test timeout)"),
     ):
         for path in sorted(trace_dir.glob(pattern)):
             try:
@@ -273,6 +279,35 @@ def summarise(trace_dir: Path) -> int:
     else:
         print("none recorded")
 
+    # 5b. Lock failures against slow SQLite operations on the same worker.
+    print("\n-- database is locked: overlapping slow SQLite operations ----")
+    locked_any = False
+    for name, events in workers.items():
+        slow = [e for e in events if e["event"] == "sqlite_slow"]
+        for failure in (e for e in events if e["event"] == "sqlite_locked_failure"):
+            locked_any = True
+            window = (failure.get("phase_started_t", failure["t"]), failure["t"])
+            overlapping = [
+                e
+                for e in slow
+                if e["started_t"] <= window[1] and e["started_t"] + e["seconds"] >= window[0]
+            ]
+            print(f"  {name}/{failure['when']}  {failure['nodeid']}")
+            if not overlapping:
+                print("      no commit or close on this worker was slow during that phase")
+            for e in overlapping:
+                print(
+                    f"      {e['op']:<6} {e['seconds']:7.2f}s  {e['database']}  "
+                    f"thread={e['thread']}  during {e['nodeid']} ({e['phase']})",
+                )
+    if locked_any:
+        print(
+            "  Overlap is correlation, not proof: it says which slow operations were\n"
+            "  in flight, not which connection the refused statement was waiting on.",
+        )
+    else:
+        print("none")
+
     # 6. What actually failed -- printed LAST, on purpose.
     #
     # A CI log is read from the end, and log APIs return the tail. This
@@ -307,12 +342,33 @@ def summarise(trace_dir: Path) -> int:
         # stops existing has its in-flight test reported as failed with no
         # message, and that row says nothing about the test itself.
         last = "<unknown>"
+        imminent = None
         for event in workers.get(gateway["gateway"], []):
             if event["event"] in ("phase", "logstart"):
                 last = event["nodeid"]
+            if event["event"] == "timeout_imminent":
+                imminent = event
         print(f"  WORKER LOST  {gateway['gateway']}  died on {last}")
         print(f"               {gateway.get('error') or ''}")
-        annotate(f"worker {gateway['gateway']} was lost while running {last}")
+        cause = ""
+        if imminent is not None and imminent["nodeid"] == last:
+            # The evidence proves the deadline was near, not that it was
+            # reached: the kill is `os._exit` and leaves no record of its own,
+            # so a different death in the remaining seconds looks identical.
+            remaining = imminent["timeout_s"] - imminent["elapsed_s"]
+            cause = (
+                f"per-test timeout ({imminent['timeout_s']:.0f}s) imminent in "
+                f"{imminent['phase']}; evidence taken at {imminent['elapsed_s']:.1f}s, "
+                f"stacks in {gateway['gateway']}.timeout.txt; the kill leaves no record, "
+                f"so a different death in the last {remaining:.1f}s is not excluded"
+            )
+        else:
+            cause = (
+                "no per-test-timeout evidence for this test: not a timeout kill, or "
+                "the worker died before the evidence could be taken"
+            )
+        print(f"               {cause}")
+        annotate(f"worker {gateway['gateway']} was lost while running {last}: {cause}")
     for nodeid, where in sorted(failures.items()):
         print(f"  {', '.join(where):<24}  {nodeid}")
         annotate(f"{nodeid} reported {', '.join(where)}")
