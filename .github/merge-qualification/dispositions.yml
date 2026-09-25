@@ -25,4 +25,24 @@
 # Every record needs a rationale and a recorded_by. finding_id is the id the
 # gate prints: `review_comment:<id>` or `review:<id>`.
 schema_version: 1
-dispositions: []
+dispositions:
+  # PR #124 (Windows reliability incident). Codex, on 6125598: the W15 summary
+  # said a per-test timeout "expired" when its evidence proves only that the
+  # deadline was imminent.
+  - finding_id: review_comment:4105531182
+    classification: resolved_by_later_commit
+    resolved_by_commit: bfc207bab3160e4dcd2d836d98233c5938992d19
+    rationale: >-
+      Valid. The kill is os._exit and leaves no record, so a different death
+      between the evidence and the deadline looked identical. The summary now
+      says "imminent", gives the seconds remaining and says a different death
+      in that window is not excluded; a new test covers exactly that case and
+      fails with the old wording restored.
+    recorded_by: "Claude Code (PR #124 author session), for Taylor's review"
+  - finding_id: review:5318898511
+    classification: non_substantive
+    rationale: >-
+      The review body is Codex's header and product boilerplate only. Its one
+      finding is the inline comment review_comment:4105531182, dispositioned
+      above as resolved by a later commit.
+    recorded_by: "Claude Code (PR #124 author session), for Taylor's review"
