@@ -1238,7 +1238,8 @@ def test_a_timeout_killed_worker_leaves_its_stacks_phase_and_elapsed_time(
     assert "a_setup_that_never_finishes" in stacks, "the stack does not show where it waited"
 
     out = _summary(trace_dir, capsys)
-    assert "per-test timeout (4s) expired in setup" in out
+    assert "per-test timeout (4s) imminent in setup" in out
+    assert "is not excluded" in out
     assert "a_setup_that_never_finishes" in out, "the pre-kill stacks were not put in the log"
 
 
@@ -1313,6 +1314,43 @@ def test_a_worker_lost_without_a_timeout_is_not_called_a_timeout(
     assert "WORKER LOST" in out
     assert "no per-test-timeout evidence for this test" in out
     assert "per-test timeout (" not in out
+
+
+def test_evidence_of_an_imminent_timeout_is_not_reported_as_an_expired_one(
+    pytester,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """The evidence proves the deadline was near, not that it was reached. A
+    worker that dies for another reason after the evidence and before the
+    deadline must not be reported as killed by the timeout."""
+    trace_dir = tmp_path / "trace"
+    pytester.makepyfile(
+        test_dies_late="""
+        import os
+        import pathlib
+        import time
+
+        def test_dies_after_the_evidence_but_before_the_deadline():
+            dump = pathlib.Path(os.environ["BARTHO_EXEC_TRACE_DIR"]) / "gw0.timeout.txt"
+            while not (dump.exists() and dump.stat().st_size):
+                time.sleep(0.02)
+            os._exit(1)
+        """,
+    )
+
+    # Evidence at 9 s, deadline at 10 s: the worker dies a second early.
+    _run_with_timeout(pytester, trace_dir, monkeypatch, "10")
+
+    worker = _trace_events(trace_dir / "gw0.jsonl")
+    (imminent,) = [e for e in worker if e["event"] == "timeout_imminent"]
+    assert imminent["elapsed_s"] < imminent["timeout_s"]
+    out = _summary(trace_dir, capsys)
+    assert "WORKER LOST" in out
+    assert "per-test timeout (10s) imminent in call" in out
+    assert "a different death in the last" in out
+    assert "timeout (10s) expired" not in out, "an imminent timeout was reported as one that fired"
 
 
 # ---------------------------------------------------------------------------

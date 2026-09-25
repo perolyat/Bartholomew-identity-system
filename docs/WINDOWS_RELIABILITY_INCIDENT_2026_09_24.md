@@ -160,8 +160,11 @@ pytest-timeout's own `pytest_timeout_set_timer` / `_cancel_timer` hooks arms one
 per worker to fire shortly before the deadline (10 s, or a tenth of a short timeout), across
 setup, call and teardown together. It writes `timeout_imminent` (test, phase, elapsed, phase
 elapsed, live threads, SQLite counters) and every thread's stack to `<worker>.timeout.txt`, and
-`summarise_trace` reports a lost worker as "per-test timeout (120s) expired in `<phase>`" with the
-stacks — or says there was no timeout evidence. It never changes, prevents or delays the timeout.
+`summarise_trace` reports a lost worker as "per-test timeout (120s) imminent in `<phase>`" with the
+stacks — or says there was no timeout evidence. It says "imminent", not "expired", and that a
+different death in the remaining seconds is not excluded: the evidence proves the deadline was near,
+and the kill (`os._exit`) leaves no record of its own. (Corrected before merge after a review
+finding on PR #124; the first wording overclaimed.) It never changes, prevents or delays the timeout.
 
 **B2 — lock correlation** (clause W16). Any single commit or close taking at least
 `BARTHO_EXEC_SLOW_SQLITE_S` (default 1 s) becomes a `sqlite_slow` event with its file, thread and

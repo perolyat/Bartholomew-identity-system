@@ -352,10 +352,15 @@ def summarise(trace_dir: Path) -> int:
         print(f"               {gateway.get('error') or ''}")
         cause = ""
         if imminent is not None and imminent["nodeid"] == last:
+            # The evidence proves the deadline was near, not that it was
+            # reached: the kill is `os._exit` and leaves no record of its own,
+            # so a different death in the remaining seconds looks identical.
+            remaining = imminent["timeout_s"] - imminent["elapsed_s"]
             cause = (
-                f"per-test timeout ({imminent['timeout_s']:.0f}s) expired in "
+                f"per-test timeout ({imminent['timeout_s']:.0f}s) imminent in "
                 f"{imminent['phase']}; evidence taken at {imminent['elapsed_s']:.1f}s, "
-                f"stacks in {gateway['gateway']}.timeout.txt"
+                f"stacks in {gateway['gateway']}.timeout.txt; the kill leaves no record, "
+                f"so a different death in the last {remaining:.1f}s is not excluded"
             )
         else:
             cause = (

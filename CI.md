@@ -365,8 +365,10 @@ controller; what was queued and outstanding at a stall; and what the storage-hea
 into connect, commit and close. A worker that stops existing has its in-flight test reported as
 failed with no message, so **that row names the test the worker died on, not a test that failed.**
 Since 2026-09-25 a worker killed by the per-test timeout also leaves `gwN.timeout.txt` — every
-thread's stack taken just before the kill — and the summary says "per-test timeout (120s) expired
-in `<phase>`" for it, or that there was no timeout evidence. A `database is locked` failure is
+thread's stack taken just before the kill — and the summary says "per-test timeout (120s) imminent
+in `<phase>`" for it, or that there was no timeout evidence. "Imminent", not "expired": the kill
+leaves no record of its own, so the evidence proves the deadline was about 10 s away, and the
+summary says a different death in that window is not excluded. A `database is locked` failure is
 listed against any slow commit or close on the same worker at the time; that is correlation, not
 proof of which connection held the lock.
 
