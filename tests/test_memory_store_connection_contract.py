@@ -43,8 +43,12 @@ from bartholomew.kernel.memory_store import MemoryStore, open_memory_db, open_me
 
 MEMORY_STORE_SOURCE = pathlib.Path(memory_store_module.__file__)
 
-#: Longer than the operational budget, well inside the setup budget.
-HOLD_BEYOND_OPERATIONAL_S = 6.5
+#: Longer than the operational budget, well inside the setup budget. The
+#: margin over 5 s is deliberate: SQLite's busy handler budgets its *intended*
+#: sleeps, not wall time, so on a loaded Windows runner a 5 s handler was seen
+#: to give up at 6.3 s (Merge Candidate 36118579395). 9 s keeps a bare
+#: connection's failure well before the release.
+HOLD_BEYOND_OPERATIONAL_S = 9.0
 
 SETUP_STATEMENTS = [*db_ctx.CONNECTION_SETUP_PRAGMAS, db_ctx.OPERATIONAL_BUSY_TIMEOUT_PRAGMA]
 
@@ -150,7 +154,6 @@ def test_a_default_connection_would_have_failed_under_the_same_hold(db_path):
     gives up at 5 s under the identical hold. Without this, a hold that never
     engaged would let the setup-budget test pass for the wrong reason."""
     release = _hold_exclusive(db_path, HOLD_BEYOND_OPERATIONAL_S)
-    started = time.monotonic()
     try:
 
         async def _open_bare():
@@ -159,10 +162,13 @@ def test_a_default_connection_would_have_failed_under_the_same_hold(db_path):
 
         with pytest.raises(sqlite3.OperationalError, match="locked"):
             asyncio.run(_open_bare())
-        gave_up_after = time.monotonic() - started
+        # Causal, not a stopwatch: the bare connection gave up while the hold
+        # was still in force. (A wall-clock ceiling here failed on a loaded
+        # Windows runner whose 5 s busy handler ran to 6.3 s.)
+        hold_still_in_force = release.is_alive()
     finally:
         release.join()
-    assert gave_up_after < HOLD_BEYOND_OPERATIONAL_S - 0.5
+    assert hold_still_in_force, "the hold was released before the bare connection gave up"
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +201,11 @@ def test_after_setup_the_connection_runs_on_the_operational_budget(db_path):
         other_writer.close()
 
     assert reported == db_ctx.OPERATIONAL_BUSY_TIMEOUT_MS == 5000
-    assert 4.0 <= waited < 10.0, f"an operational statement waited {waited:.2f}s"
+    # Tells the 5 s operational budget from the 30 s setup one, with room for a
+    # loaded runner's busy-handler overshoot on either side of the midpoint.
+    assert (
+        4.0 <= waited < db_ctx.SETUP_LOCK_TIMEOUT_S / 2
+    ), f"an operational statement waited {waited:.2f}s"
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +383,7 @@ def test_a_connection_whose_setup_fails_is_closed_and_the_error_raised(
     """Setup has a bound: past it the caller gets the error, and the half-set-up
     connection does not linger holding a handle."""
     monkeypatch.setattr(db_ctx, "SETUP_LOCK_TIMEOUT_S", 0.2)
-    release = _hold_exclusive(db_path, 1.5)
+    release = _hold_exclusive(db_path, 3.0)
     try:
 
         async def _open():

@@ -201,7 +201,7 @@ below as they happen.
 
 | # | Run / job | Head | Result | Notes |
 |---|---|---|---|---|
-| — | — | — | — | not yet run |
+| pre-acceptance | Merge Candidate 36118579395 / job 108018401102 (Windows full) | `4be5b44` | **failed** — 1 failed, 5588 passed, 103 skipped | The one failure was this package's own new control test (`test_a_default_connection_would_have_failed_under_the_same_hold`) asserting a wall-clock ceiling: the bare connection *did* fail with `database is locked` as intended, but SQLite's 5 s busy handler ran to 6.3 s of wall time on the loaded runner, past the test's 6.0 s ceiling. The same time-budget-assertion class `RISKS.md` records. Fixed at the next head by asserting causally (the hold was still in force when it gave up) and widening the hold to 9 s. Otherwise: no worker lost, no stall, no re-drive banner; the heaviest test ran 57.1 s (71.7 s in attempt 2 of the incident run), its commit time 19.3 s (36.9 s). Not an acceptance run: the sequence starts once ordinary checks are green on an unchanged head. |
 
 ## 8. Forbidden-state tests
 
