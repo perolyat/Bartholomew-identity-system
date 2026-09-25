@@ -164,7 +164,13 @@ elapsed, live threads, SQLite counters) and every thread's stack to `<worker>.ti
 stacks — or says there was no timeout evidence. It says "imminent", not "expired", and that a
 different death in the remaining seconds is not excluded: the evidence proves the deadline was near,
 and the kill (`os._exit`) leaves no record of its own. (Corrected before merge after a review
-finding on PR #124; the first wording overclaimed.) It never changes, prevents or delays the timeout.
+finding on PR #124; the first wording overclaimed.)
+
+*Limitation, observed.* The evidence and the kill race: they are two threads, and the evidence
+gets a head start of 10 s at the production 120 s timeout (a tenth of a shorter one). If the
+evidence thread is delayed by more than that -- as a runner-wide stall could delay it -- the kill
+can land before the stacks are written, or between the event and the stack file. With a 0.5 s
+head start that happened once in CI (§7, `dd0a680`). It never changes, prevents or delays the timeout.
 
 **B2 — lock correlation** (clause W16). Any single commit or close taking at least
 `BARTHO_EXEC_SLOW_SQLITE_S` (default 1 s) becomes a `sqlite_slow` event with its file, thread and
@@ -212,6 +218,7 @@ below as they happen.
 | **1** | Merge Candidate 36122898029 / job 108032322449 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test **94.9 s** (close 58.1 s, commit 33.2 s) — 79 % of the budget. |
 | **2** | Merge Candidate 36126510276 / job 108043755393 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test 57.6 s (close 34.3 s, commit 19.6 s). |
 | **3** | Merge Candidate 36129492255 / job 108053221935 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test **92.1 s** (close 56.8 s, commit 31.8 s). **Observation, unexplained:** worker `gw0` wrote `session_finish` but not `process_exit`; the controller recorded it as finished, not crashed, and every one of its tests reported. Not a worker loss under W3; recorded rather than dismissed. |
+| post-acceptance | Merge Candidate 36149262520 / job 108118576298 (PR-triggered) | `dd0a680` | **failed** — 1 failed, 5589 passed, 103 skipped | The failure was this package's own W15 test, `test_the_evidence_spans_setup_and_call_as_the_timeout_does`: its inner run's `timeout_imminent` event was written (phase `call`, elapsed ≥ 4 s), but `gw0.timeout.txt` never was. With a 5 s inner timeout the evidence had 0.5 s before the kill, and on the loaded runner the kill landed in between. Not reproduced on Linux (8x CPU oversubscription, 3 of 3 passed). Fixed at the next head: the killed-test cases use a 20 s inner timeout (a 2 s head start; production has 10 s), the inner run no longer re-runs the killed test on four replacement workers (which kept each test at about 20 s), and a missing stack file now says whether the kill pre-empted the write or the write failed. Otherwise: no worker lost, no stall, no `database is locked`, W13 clean. Heaviest test 79.6 s (close 49.9 s, commit 27.4 s). |
 
 **Result.** Three consecutive clean Windows full-suite executions on one unchanged head, preceded by
 a clean Merge Candidate and green ordinary CI and Merge Qualification on that head. The one failed

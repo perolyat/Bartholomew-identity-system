@@ -1166,6 +1166,13 @@ def test_failures_are_annotated_so_they_survive_the_log_tail(tmp_path, capsys, m
 # fire before a 120 s kill. Merge Candidate 35971892908 lost gw0 and gw2 that
 # way with nothing to show for either. The thread method is forced here
 # because it is the one Windows uses.
+#
+# The evidence fires min(10 s, a tenth of the timeout) before the kill. A
+# killed test here uses a 20 s timeout, so that lead is 2 s: a 4-5 s timeout
+# left it 0.4-0.5 s, and on a loaded Windows runner (Merge Candidate
+# 36149262520) the kill landed between the `timeout_imminent` event and the
+# stack file. Production's lead is 10 s. The inner run allows no worker
+# restart, so the killed test runs once, not once per replacement worker.
 # ---------------------------------------------------------------------------
 
 
@@ -1182,10 +1189,35 @@ def _run_with_timeout(pytester, trace_dir, monkeypatch, timeout_s: str, *args: s
         "loadfile",
         "--timeout",
         timeout_s,
+        "--max-worker-restart",
+        "0",
         "-o",
         "timeout_method=thread",
         *args,
     )
+
+
+def _stacks(trace_dir) -> str:
+    """The pre-kill stack file -- or, if there is none, why not.
+
+    Its absence has two explanations the trace can tell apart: the kill landed
+    between the `timeout_imminent` event and the file (no later event), or the
+    file could not be written (`timeout_dump_failed`)."""
+    path = trace_dir / "gw0.timeout.txt"
+    if not path.exists():
+        worker = _trace_events(trace_dir / "gw0.jsonl")
+        tail = [
+            {k: e.get(k) for k in ("t", "event", "phase", "elapsed_s", "error")}
+            for e in worker
+            if e["event"] in ("timeout_imminent", "timeout_dump_failed")
+        ]
+        down = [
+            e.get("t")
+            for e in _trace_events(trace_dir / "controller.jsonl")
+            if e["event"] == "node_down"
+        ]
+        pytest.fail(f"no {path.name}; evidence events {tail}; controller node_down at {down}")
+    return path.read_text(encoding="utf-8")
 
 
 def _summary(trace_dir, capsys) -> str:
@@ -1217,7 +1249,7 @@ def test_a_timeout_killed_worker_leaves_its_stacks_phase_and_elapsed_time(
         """,
     )
 
-    result = _run_with_timeout(pytester, trace_dir, monkeypatch, "4")
+    result = _run_with_timeout(pytester, trace_dir, monkeypatch, "20")
 
     # The timeout still does exactly what it did: the worker is lost, the
     # test fails, the run fails. Nothing here prevents, delays or retries it.
@@ -1229,16 +1261,16 @@ def test_a_timeout_killed_worker_leaves_its_stacks_phase_and_elapsed_time(
     (imminent,) = [e for e in worker if e["event"] == "timeout_imminent"]
     assert imminent["nodeid"].endswith("test_waits_in_setup")
     assert imminent["phase"] == "setup"
-    assert imminent["timeout_s"] == 4.0
-    assert 3.0 <= imminent["elapsed_s"] < 4.0
+    assert imminent["timeout_s"] == 20.0
+    assert 17.0 <= imminent["elapsed_s"] < 20.0
     assert "MainThread" in imminent["threads"]
 
-    stacks = (trace_dir / "gw0.timeout.txt").read_text(encoding="utf-8")
+    stacks = _stacks(trace_dir)
     assert "per-test timeout imminent" in stacks
     assert "a_setup_that_never_finishes" in stacks, "the stack does not show where it waited"
 
     out = _summary(trace_dir, capsys)
-    assert "per-test timeout (4s) imminent in setup" in out
+    assert "per-test timeout (20s) imminent in setup" in out
     assert "is not excluded" in out
     assert "a_setup_that_never_finishes" in out, "the pre-kill stacks were not put in the log"
 
@@ -1254,21 +1286,23 @@ def test_the_evidence_spans_setup_and_call_as_the_timeout_does(pytester, tmp_pat
 
         @pytest.fixture
         def a_slow_setup():
-            time.sleep(2.5)
+            time.sleep(10)
 
         def test_then_a_call_that_hangs(a_slow_setup):
             time.sleep(60)
         """,
     )
 
-    _run_with_timeout(pytester, trace_dir, monkeypatch, "5")
+    _run_with_timeout(pytester, trace_dir, monkeypatch, "20")
 
     worker = _trace_events(trace_dir / "gw0.jsonl")
     (imminent,) = [e for e in worker if e["event"] == "timeout_imminent"]
     assert imminent["phase"] == "call"
-    assert imminent["elapsed_s"] >= 4.0, "the evidence clock restarted at the phase boundary"
+    # Had the clock restarted at the call, it would have fired 28 s in -- after
+    # the kill -- and there would be no event at all.
+    assert imminent["elapsed_s"] >= 17.0, "the evidence clock restarted at the phase boundary"
     assert imminent["phase_elapsed_s"] < imminent["elapsed_s"]
-    stacks = (trace_dir / "gw0.timeout.txt").read_text(encoding="utf-8")
+    stacks = _stacks(trace_dir)
     assert "test_then_a_call_that_hangs" in stacks
 
 
@@ -1340,17 +1374,17 @@ def test_evidence_of_an_imminent_timeout_is_not_reported_as_an_expired_one(
         """,
     )
 
-    # Evidence at 9 s, deadline at 10 s: the worker dies a second early.
-    _run_with_timeout(pytester, trace_dir, monkeypatch, "10")
+    # Evidence at 18 s, deadline at 20 s: the worker dies up to 2 s early.
+    _run_with_timeout(pytester, trace_dir, monkeypatch, "20")
 
     worker = _trace_events(trace_dir / "gw0.jsonl")
     (imminent,) = [e for e in worker if e["event"] == "timeout_imminent"]
     assert imminent["elapsed_s"] < imminent["timeout_s"]
     out = _summary(trace_dir, capsys)
     assert "WORKER LOST" in out
-    assert "per-test timeout (10s) imminent in call" in out
+    assert "per-test timeout (20s) imminent in call" in out
     assert "a different death in the last" in out
-    assert "timeout (10s) expired" not in out, "an imminent timeout was reported as one that fired"
+    assert "timeout (20s) expired" not in out, "an imminent timeout was reported as one that fired"
 
 
 # ---------------------------------------------------------------------------
