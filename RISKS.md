@@ -1643,7 +1643,14 @@
     Candidate on the exact head, then three consecutive Windows full-suite executions on that
     unchanged head, every attempt kept. If the lock mechanism is gone but the stall cause is
     still unknown, the closure must say exactly that.
-  - **Risk category:** reliability / CI evidence integrity. **Status:** OPEN.
+  - **Acceptance (2026-09-25): passed on `a55c8f9`.** Merge Candidate 36120642805 plus three
+    consecutive dispatched runs (36122898029, 36126510276, 36129492255): all jobs green, W13 clean,
+    no worker lost, no `database is locked`. One earlier failed attempt on `4be5b44` (this
+    package's own over-tight test) is kept in the record.
+  - **Risk category:** reliability / CI evidence integrity. **Status:** OPEN pending Taylor's
+    closure decision and merge. The lock, seed and W13 defects are repaired and accepted; **the
+    worker-loss stall cause is not established**, and heavy-test headroom (entry below) is the
+    likeliest route to a recurrence.
 
 - **(2026-09-25) Orphaned msedge and Notepad processes outlive the Windows actuation step and run
   through the whole default suite — deferred, not repaired.** Both attempts of Merge Candidate
@@ -1665,6 +1672,18 @@
   `fdatasync` calls per 50 commits), so the Windows figures must be re-read from the acceptance
   runs before anything else is concluded. **Not to be answered by raising the timeout.** **Risk
   category:** reliability. **Status:** open, pending measurement.
+
+  > **Measured 2026-09-25 — not improved, and closer to the limit than recorded.** Across four
+  > Windows full-suite runs on `a55c8f9` (the connection contract in place) the same test took
+  > **75.0, 94.9, 57.6 and 92.1 s** (Merge Candidate 36120642805, 36122898029, 36126510276,
+  > 36129492255). Close dominated every time (34–58 s), then commit (20–33 s): the per-operation
+  > last-close checkpoint, which the 2026-09-17 "scoped reuse, never a process-wide pool" decision
+  > leaves in place outside the scopes that adopted `db_session()`. `synchronous=NORMAL` did not
+  > measurably move it. At 94.9 s (79 %) a transient slowdown of about a quarter reaches the
+  > timeout, which makes this the likeliest route to the next Windows worker loss; W15 will now
+  > leave stacks if it happens. **What would close it** is unchanged in kind: a bounded
+  > `db_session()` scope for this test's write path (as PR #113 did for the containment bursts),
+  > decided as its own package — not a longer timeout. **Status:** open, measured, own package.
 
 - **(2026-09-25) Existing databases may hold orphan child rows written while MemoryStore
   connections ran with foreign keys off — no audit exists, deferred.** Until the 2026-09-25

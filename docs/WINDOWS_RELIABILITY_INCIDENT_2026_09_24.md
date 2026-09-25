@@ -6,8 +6,10 @@ merge). Job 107543292415, "Windows full default suite + actuation (py3.11)", fai
 **Airtable:** Risks and Open Questions row `recmtR5E4IOkvPjxo` (a working index; this file and
 `RISKS.md` are the durable authority).
 **Package branch:** `claude/windows-ci-reliability-incident-mc59cm`.
-**Status:** repair implemented; **the incident is OPEN** until the acceptance evidence in §7
-exists. Nothing here closes it.
+**Status (2026-09-25):** repair implemented, and the §7 acceptance sequence **passed** on the
+unchanged head `a55c8f9` (three consecutive clean Windows full-suite executions, preceded by a
+clean Merge Candidate and green ordinary CI). **Not closed:** that is Taylor's decision, and the
+worker-loss stall cause is still unresolved (§5, §7 "What this does not establish"). Not merged.
 
 This record keeps four kinds of statement apart, and labels each: **verified** (demonstrated by
 a log, a runtime measurement or a reproduction), **repaired** (a verified defect this package
@@ -183,7 +185,8 @@ ownership.**
 ## 6. Deferred, each tracked in `RISKS.md` and Airtable
 
 - Orphaned msedge / Notepad processes from the actuation step, present in both attempts.
-- Heavy-test headroom (71.7 s of 120 s in attempt 2) — re-measure on Windows after A1.
+- Heavy-test headroom — re-measured on Windows after A1 (§7): the heaviest test ran 57.6–94.9 s
+  of its 120 s budget across four runs on `a55c8f9`, dominated by close. **Not improved by A1.**
 - No audit of existing field databases for orphan child rows written while operational
   connections ran with foreign keys off.
 - The Linux xdist jobs run without the execution trace, so a timeout kill there stays
@@ -202,6 +205,33 @@ below as they happen.
 | # | Run / job | Head | Result | Notes |
 |---|---|---|---|---|
 | pre-acceptance | Merge Candidate 36118579395 / job 108018401102 (Windows full) | `4be5b44` | **failed** — 1 failed, 5588 passed, 103 skipped | The one failure was this package's own new control test (`test_a_default_connection_would_have_failed_under_the_same_hold`) asserting a wall-clock ceiling: the bare connection *did* fail with `database is locked` as intended, but SQLite's 5 s busy handler ran to 6.3 s of wall time on the loaded runner, past the test's 6.0 s ceiling. The same time-budget-assertion class `RISKS.md` records. Fixed at the next head by asserting causally (the hold was still in force when it gave up) and widening the hold to 9 s. Otherwise: no worker lost, no stall, no re-drive banner; the heaviest test ran 57.1 s (71.7 s in attempt 2 of the incident run), its commit time 19.3 s (36.9 s). Not an acceptance run: the sequence starts once ordinary checks are green on an unchanged head. |
+| — | Merge Candidate 36120642805 / job 108025063418 (PR-triggered) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | Ordinary checks on the candidate head: CI 36120642794, Integration 36120642907 and Merge Qualification 36120642877 also green. Windows: no worker lost, no stall, no `database is locked`. Heaviest test 75.0 s (close 47.0 s, commit 25.9 s). |
+| **1** | Merge Candidate 36122898029 / job 108032322449 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test **94.9 s** (close 58.1 s, commit 33.2 s) — 79 % of the budget. |
+| **2** | Merge Candidate 36126510276 / job 108043755393 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test 57.6 s (close 34.3 s, commit 19.6 s). |
+| **3** | Merge Candidate 36129492255 / job 108053221935 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test **92.1 s** (close 56.8 s, commit 31.8 s). **Observation, unexplained:** worker `gw0` wrote `session_finish` but not `process_exit`; the controller recorded it as finished, not crashed, and every one of its tests reported. Not a worker loss under W3; recorded rather than dismissed. |
+
+**Result.** Three consecutive clean Windows full-suite executions on one unchanged head, preceded by
+a clean Merge Candidate and green ordinary CI and Merge Qualification on that head. The one failed
+attempt in this record (above) was on an earlier head and is kept.
+
+**What this establishes.** On `a55c8f9`: no `database is locked` in four Windows full-suite runs
+(the seed path that raised it twice no longer re-initialises a live database, and every
+`MemoryStore` connection now has the 30 s setup budget); no W13 re-drive in any of them, with the
+re-drive now unable to pass as clean; no worker lost.
+
+**What this does not establish.**
+- **The worker-loss stall cause is unresolved.** No worker was lost in these runs, so the new
+  pre-kill evidence (W15) has not yet had anything to capture. Four clean runs are not evidence
+  that the transient stall behind gw0/gw2 cannot recur.
+- **Heavy-test headroom is live, and A1 did not improve it.** The heaviest test,
+  `tests/test_memory_agency_review_fixes.py::test_queued_outcome_is_independent_of_inbox_size`,
+  took 75.0, 94.9, 57.6 and 92.1 s across the four runs (57.1 s on `4be5b44`; 71.7 s in attempt 2
+  of the incident run). Its cost is dominated by connection close (34–58 s): the per-operation
+  last-close checkpoint the 2026-09-17 decision leaves in place. `synchronous=NORMAL` did not
+  measurably move it. At 94.9 s a transient slowdown of about a quarter would reach the timeout,
+  so this is the likeliest route to the next worker loss — and W15 will now say so if it happens.
+- The heaviest-test figures vary by 1.6x between runs on one head, so no single run's figure is
+  a measurement of the fix.
 
 ## 8. Forbidden-state tests
 
