@@ -37,6 +37,7 @@ import yaml
 from bartholomew.kernel import candidate_learning, learning_authorization, learning_policy
 from bartholomew.kernel import objective_store as os_mod
 from bartholomew.kernel.competency import COMPETENCY_KINDS
+from bartholomew.kernel.db_ctx import hold_wal_open
 from bartholomew.kernel.memory.privacy_guard import set_consent_handler
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.objective_store import ObjectiveStore
@@ -735,13 +736,14 @@ async def test_b6d_the_material_field_vocabulary_is_enforced_not_documented(ctx)
         "competency_id",
     }
 
-    # Nine propose-and-edit rounds are one unit of work. Every store involved
+    # Nine propose-and-edit rounds are one declared burst. Every store involved
     # (objectives, memories, governance) still opens and closes its own
-    # connections through the real runtime contract; the scope only stops each
-    # of those ~300 closes from tearing the WAL down, the cost this test was
-    # killed in on Windows (Merge Candidate 36153552522, gw0;
-    # docs/SQLITE_WAL_HEADROOM_REPAIR.md).
-    async with ctx.mem.unit_of_work(label="material-field rounds"):
+    # connections through the real runtime contract; the hold only stops each
+    # of those ~300 closes from tearing the WAL down -- the cost gw0 was inside
+    # when it was killed on Windows (Merge Candidate 36153552522), on a runner
+    # slow enough that the same test took 25 s on another worker
+    # (docs/SQLITE_WAL_HEADROOM_REPAIR.md).
+    async with hold_wal_open(ctx.mem.db_path, label="material-field rounds"):
         for field_name, value in editable_material.items():
             lesson = await _propose(
                 ctx,

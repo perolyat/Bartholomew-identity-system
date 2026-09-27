@@ -9,16 +9,19 @@ delay to allow Windows to release file handles.
 This is a kernel-local copy to avoid coupling to the API layer.
 """
 
+import asyncio
 import gc
 import logging
 import os
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable, Iterator
+import weakref
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 
 _checkpoint_log = logging.getLogger("bartholomew.kernel.db_ctx.checkpoint")
+_hold_log = logging.getLogger("bartholomew.kernel.db_ctx.hold")
 _VALID_CHECKPOINT_MODES = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
 
 
@@ -478,8 +481,13 @@ def db_session(
       * Scopes nest: an inner `db_session()` for the same database on the same
         thread reuses the outer connection and does not close it. The
         outermost scope owns the close.
-      * The binding is thread-local. Another thread inside this scope is
-        unaffected and opens its own connections as usual.
+      * The binding is thread-local. Another thread inside this scope opens
+        its own connections as usual and never borrows this one. (It is not
+        entirely unaffected: while the session's connection is open, no
+        other close to the file is the last close, so other threads' -- and
+        other processes' -- connections skip the WAL teardown too. That is the
+        effect `hold_wal_open()` provides without lending anything; measured
+        in docs/SQLITE_WAL_HEADROOM_REPAIR.md.)
       * It is not a cache: leaving the scope and re-entering it opens a new
         connection.
 
@@ -642,3 +650,275 @@ def _checkpoint_on(
             row,
             conn.in_transaction,
         )
+
+
+# ---------------------------------------------------------------------------
+# Holding a WAL database open for a declared burst (hold_wal_open)
+# ---------------------------------------------------------------------------
+#
+# Windows SQLite headroom repair, 2026-09-27 (docs/SQLITE_WAL_HEADROOM_REPAIR.md).
+#
+# Most storage in this process does not go through `wal_db()`: MemoryStore
+# opens aiosqlite connections, ObjectiveStore and GovernanceStore call
+# `connect()` directly, FTSClient calls `sqlite3.connect`. Each operation owns
+# its connection, and between operations nothing holds the file open -- so
+# each close is SQLite's *last* close of the WAL database: a checkpoint (with
+# its fsyncs), then the unlinking of `-wal` and `-shm`, which the next
+# operation recreates. On the Windows Merge Candidate that teardown was 91-98 %
+# of the heaviest tests' wall time, reached through all three seams at once.
+#
+# `hold_wal_open()` is a different mechanism from `db_session()`, deliberately:
+# it lends nothing. For exactly the duration of its `with`/`async with` it
+# holds one idle connection -- opened on a thread of its own under the shared
+# connection policy, checked, attached to the WAL with fully consumed reads,
+# then left alone. Every operation inside keeps its own connection,
+# transaction, rollback-on-close, cursors and pragmas. What changes is only
+# that no other close to the file is the last one while the hold lasts, so the
+# teardown is paid once, when it ends -- for every connection to the file, on
+# any thread and in any process, through any seam.
+#
+# Why a thread of its own, rather than an aiosqlite connection:
+#   * it is a daemon thread, so a hold that is never exited (its event loop
+#     closed, its task destroyed) cannot keep the process from exiting, and an
+#     abandoned hold is released when it is garbage-collected;
+#   * the release is decided synchronously, before the first `await`, and the
+#     exit then waits -- through any number of cancellations -- until the
+#     thread has closed its connection and gone, without depending on any
+#     aiosqlite version's close semantics;
+#   * it is a class, not a generator, so it can be exited from another task or
+#     event loop than the one that entered it.
+#
+# What it deliberately is NOT: a pool (nothing discoverable can lend or reuse
+# the connection; re-entering opens a new one), a process-lifetime connection
+# (it exists for one `with`), or implicit (the caller declares the burst; no
+# store opens one by itself).
+
+_HOLD_JOURNAL_SQL = "PRAGMA journal_mode"
+_HOLD_ATTACH_SQL = "SELECT count(*) FROM sqlite_master"
+_HOLD_POLL_MAX_S = 0.05
+
+
+def _hold_file_open(
+    db_path: str,
+    ready: threading.Event,
+    release: threading.Event,
+    refusal: list[BaseException],
+) -> None:
+    """The body of a hold's thread: open, check, attach, stay idle, close.
+
+    A plain function over its arguments rather than a method, so the running
+    thread does not keep its `WalHold` alive: an abandoned hold can still be
+    collected, and its finalizer then releases this thread.
+    """
+    conn = None
+    try:
+        # SETUP_LOCK_TIMEOUT_S is read here, at call time, like the other seams.
+        conn = connect(db_path, timeout=SETUP_LOCK_TIMEOUT_S)
+        for pragma in CONNECTION_SETUP_PRAGMAS:
+            conn.execute(pragma)
+        conn.execute(OPERATIONAL_BUSY_TIMEOUT_PRAGMA)
+        ((journal_mode,),) = conn.execute(_HOLD_JOURNAL_SQL).fetchall()
+        if str(journal_mode).lower() != "wal":
+            raise RuntimeError(
+                f"hold_wal_open: {db_path!r} is in {journal_mode!r} mode, not WAL; an idle "
+                "connection holds nothing open there, so the hold would do nothing",
+            )
+        # Attach: a connection that has read nothing holds nothing open. The
+        # result is consumed, so no statement stays active and no snapshot is
+        # pinned afterwards.
+        conn.execute(_HOLD_ATTACH_SQL).fetchall()
+    except BaseException as exc:
+        refusal.append(exc)
+        close_quietly(conn)
+        ready.set()
+        return
+    ready.set()
+    try:
+        release.wait()
+    finally:
+        # The hold's close: the last close, so the one WAL teardown happens here.
+        close_quietly(conn)
+
+
+async def _poll(done: Callable[[], bool]) -> None:
+    delay = 0.001
+    while not done():
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, _HOLD_POLL_MAX_S)
+
+
+async def _poll_despite_cancellation(done: Callable[[], bool]) -> bool:
+    """Wait for `done()` however often this task is cancelled meanwhile.
+
+    Returns whether a cancellation arrived, so the caller can deliver it once
+    the wait is over.
+    """
+    cancelled = False
+    delay = 0.001
+    while not done():
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            cancelled = True
+        delay = min(delay * 2, _HOLD_POLL_MAX_S)
+    return cancelled
+
+
+class WalHold:
+    """One declared hold on a WAL database file. Obtain it via `hold_wal_open()`."""
+
+    def __init__(self, db_path: str, *, label: str = "") -> None:
+        self.db_path = db_path
+        self.label = label
+        self._ready = threading.Event()
+        self._release = threading.Event()
+        self._refusal: list[BaseException] = []
+        self._thread: threading.Thread | None = None
+        self._entered_at = 0.0
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def _start(self) -> threading.Thread:
+        if self._thread is not None:
+            raise RuntimeError("hold_wal_open: a hold is entered once; declare a new one")
+        if not os.path.exists(self.db_path):
+            raise FileNotFoundError(
+                f"hold_wal_open: {self.db_path!r} does not exist; initialise the database "
+                "before holding it open (a hold must not create the file)",
+            )
+        thread = threading.Thread(
+            target=_hold_file_open,
+            args=(self.db_path, self._ready, self._release, self._refusal),
+            name=f"wal-hold:{os.path.basename(self.db_path)}",
+            daemon=True,
+        )
+        # An abandoned hold (never exited) is released when it is collected.
+        weakref.finalize(self, self._release.set)
+        self._thread = thread
+        self._entered_at = time.monotonic()
+        thread.start()
+        return thread
+
+    def _gone(self) -> bool:
+        return self._thread is None or not self._thread.is_alive()
+
+    def _log_release(self) -> None:
+        _hold_log.debug(
+            "hold_wal_open db=%s label=%s held_s=%.3f",
+            self.db_path,
+            self.label,
+            time.monotonic() - self._entered_at,
+        )
+
+    # -- synchronous form ---------------------------------------------------
+
+    def __enter__(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            # Entering waits for the hold's setup, which may wait on a lock for
+            # the whole setup budget: never on an event-loop thread (DECISIONS.md,
+            # 2026-09-14). Async code uses `async with`.
+            raise RuntimeError("hold_wal_open: use `async with` on an event-loop thread")
+        thread = self._start()
+        self._ready.wait()
+        if self._refusal:
+            thread.join()
+            raise self._refusal[0]
+
+    def __exit__(self, *exc_info: object) -> bool:
+        self._release.set()
+        if self._thread is not None:
+            self._thread.join()
+        self._log_release()
+        return False
+
+    # -- asynchronous form --------------------------------------------------
+
+    async def __aenter__(self) -> None:
+        self._start()
+        try:
+            await _poll(self._ready.is_set)
+        except BaseException:
+            # Interrupted while the connection was still being set up: it may
+            # yet open. Release it and let it go before the interruption does.
+            self._release.set()
+            await _poll_despite_cancellation(self._gone)
+            raise
+        if self._refusal:
+            await _poll_despite_cancellation(self._gone)
+            raise self._refusal[0]
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        # Decided before the first await: whatever happens to this task now,
+        # the hold's thread closes its connection.
+        self._release.set()
+        cancelled = await _poll_despite_cancellation(self._gone)
+        self._log_release()
+        if cancelled and exc_type is None:
+            raise asyncio.CancelledError
+        return False
+
+
+def hold_wal_open(db_path: str, *, label: str = "") -> WalHold:
+    """Hold a WAL database file open for one declared burst; lend nothing.
+
+    Use it around a burst of operations on one database -- a seeding loop, a
+    batch of related writes -- where the per-operation WAL teardown is the
+    dominant cost. Every operation inside runs exactly as it does outside;
+    only the WAL's lifetime changes, from per operation to per hold. Works as
+    `async with` (any event loop; the hold's setup and close never run on the
+    loop) and as `with` (never on an event-loop thread).
+
+    Contract:
+      * The database must already exist and be in WAL mode; otherwise entry
+        raises and nothing is held (it never creates the file, and it never
+        silently does nothing).
+      * One connection, on a daemon thread of its own, opened with the setup
+        budget and the shared setup pragmas, then the operational budget;
+        attached with fully consumed reads; otherwise idle -- no transaction,
+        no read snapshot. It blocks no reader, writer, `BEGIN IMMEDIATE` or
+        TRUNCATE checkpoint.
+      * Closed when the hold ends -- on success, on an exception and on
+        cancellation. The exit waits until the thread has closed the
+        connection and gone, through any number of cancellations, then
+        re-raises one only if the body had completed normally. A cancellation
+        that arrives during entry is held back the same way. That close is the
+        last close: it checkpoints the WAL into the database file and removes
+        `-wal`/`-shm`.
+      * Yields nothing: the connection is not available to anyone.
+      * Holds may nest; each holds its own idle connection.
+
+    What a hold changes, stated so it is not a surprise:
+      * Durability. `synchronous=NORMAL` is unchanged, and so is durability
+        across an application crash. Without a hold, an operation that was the
+        last connection also checkpointed and fsynced on close -- stronger than
+        NORMAL promises, obtained by accident. Inside a hold committed work
+        stays in the WAL until an automatic checkpoint or the hold's end:
+        exactly NORMAL's documented guarantee (the latest transactions may roll
+        back on power loss or an OS crash). The database file alone is not a
+        complete copy until the hold ends. (`db_session()` has always had the
+        same effect on other threads' connections while it is open.)
+      * Exclusive access fails while held: changing `journal_mode`,
+        `locking_mode=EXCLUSIVE`, and on Windows deleting or renaming the file.
+      * POSIX locks (Linux, macOS). The effect is file-wide -- another process's
+        SQLite connections are covered too. What defeats it is forking, or a
+        non-SQLite `open()`/`close()` of the file in the holding process, which
+        drops the process's `fcntl` locks; combined with another process's
+        close that can lose writes committed inside the hold. None belong
+        inside a hold. SQLite may keep closed connections' descriptors until
+        the hold ends; they are released with it.
+      * Timing. A cancellation is delivered only once the hold's connection is
+        closed: on entry that can take up to the setup budget, on exit the
+        close's own I/O time. On Python 3.10 a KeyboardInterrupt during the
+        exit is not a cancellation and abandons the wait; the release has
+        already been decided, so the thread closes the connection shortly
+        after.
+
+    Holding it for an unbounded period (a process, a daemon's lifetime) would
+    be a defect -- on Windows an open handle stops the file from being deleted.
+    No production code holds one; adopting it is its own reviewed decision.
+    """
+    return WalHold(db_path, label=label)

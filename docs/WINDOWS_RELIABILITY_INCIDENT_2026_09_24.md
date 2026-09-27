@@ -191,6 +191,18 @@ ownership.**
   attempt-1 artifact (10797093743, expires 2026-10-24), which this session's sandbox could not
   download.
 
+> *Amendment, 2026-09-27 (recorded by the headroom repair package, `docs/SQLITE_WAL_HEADROOM_REPAIR.md`
+> §1–§2).* **The slowdown class recurred on `1adf251`** (Merge Candidate 36153552522, §7).
+> - Setup phases took 55.6 s and 58.1 s.
+> - `test_b6d_the_material_field_vocabulary_is_enforced_not_documented` ran a 25.4 s call on gw1 but
+>   more than 110 s on gw0.
+> - `test_two_matching_tasks_produce_a_question_and_no_change` took 83.3 s. It has 75 connections, and
+>   the teardown model predicts about 15 s for it.
+>
+> W15 caught where the killed threads *were* (inside SQLite closes). It did not catch *why* the runner
+> was slow. The cause remains unresolved. The headroom package removes the per-operation teardown
+> that the slowdown multiplies; it does not address the slowdown.
+
 ## 6. Deferred, each tracked in `RISKS.md` and Airtable
 
 - Orphaned msedge / Notepad processes from the actuation step, present in both attempts.
@@ -223,7 +235,7 @@ below as they happen.
 | **2** | Merge Candidate 36126510276 / job 108043755393 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test 57.6 s (close 34.3 s, commit 19.6 s). |
 | **3** | Merge Candidate 36129492255 / job 108053221935 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test **92.1 s** (close 56.8 s, commit 31.8 s). **Observation, unexplained:** worker `gw0` wrote `session_finish` but not `process_exit`; the controller recorded it as finished, not crashed, and every one of its tests reported. Not a worker loss under W3; recorded rather than dismissed. |
 | post-acceptance | Merge Candidate 36149262520 / job 108118576298 (PR-triggered) | `dd0a680` | **failed** — 1 failed, 5589 passed, 103 skipped | The failure was this package's own W15 test, `test_the_evidence_spans_setup_and_call_as_the_timeout_does`: its inner run's `timeout_imminent` event was written (phase `call`, elapsed ≥ 4 s), but `gw0.timeout.txt` never was. With a 5 s inner timeout the evidence had 0.5 s before the kill, and on the loaded runner the kill landed in between. Not reproduced on Linux (8x CPU oversubscription, 3 of 3 passed). Fixed at the next head: the killed-test cases use a 20 s inner timeout (a 2 s head start; production has 10 s), the inner run no longer re-runs the killed test on four replacement workers (which kept each test at about 20 s), and a missing stack file now says whether the kill pre-empted the write or the write failed. Otherwise: no worker lost, no stall, no `database is locked`, W13 clean. Heaviest test 79.6 s (close 49.9 s, commit 27.4 s). |
-| post-acceptance | Merge Candidate 36153552522 / job 108132502235 (PR-triggered) | `1adf251` | **cancelled at the 40-minute job cap** — no pytest summary; W13 step skipped | *Recorded 2026-09-27 by the headroom repair package (`docs/SQLITE_WAL_HEADROOM_REPAIR.md` §1), from the job log.* Three workers lost to the 120 s per-test timeout, each with W15 evidence taken at 110.0 s and the test's thread inside a SQLite close: gw0 `test_b6d_the_material_field_vocabulary_is_enforced_not_documented` (`ObjectiveStore._set_status`), gw2 `test_queued_outcome_is_independent_of_inbox_size` (aiosqlite close), gw3 `test_vector_quality_maintained_when_fts_unavailable` (`VectorStore.upsert` → `wal_db`; 576 opens, commit 40.6 s, close 77.1 s, wall 120.0 s). 22 W13 re-drives followed the losses. Two setup phases took 55.6 s and 58.1 s, so the runner was degraded. The first evidence W15 has produced: it names the per-operation last-close teardown as where the budget went. Heavy-test headroom is answered by its own package, stacked on this branch. |
+| post-acceptance | Merge Candidate 36153552522 / job 108132502235 (PR-triggered) | `1adf251` | **cancelled at the 40-minute job cap** — no pytest summary; W13 step skipped | *Recorded 2026-09-27 by the headroom repair package (`docs/SQLITE_WAL_HEADROOM_REPAIR.md` §1), from the job log.* Three workers lost to the 120 s per-test timeout, each with W15 evidence taken at 110.0 s and the test's thread inside a SQLite close: gw0 `test_b6d_the_material_field_vocabulary_is_enforced_not_documented` (`ObjectiveStore._set_status`), gw2 `test_queued_outcome_is_independent_of_inbox_size` (aiosqlite close), gw3 `test_vector_quality_maintained_when_fts_unavailable` (`VectorStore.upsert` → `wal_db`; 576 opens, commit 40.6 s, close 77.1 s, wall 120.0 s). 22 W13 re-drives followed the losses. **The runner was degraded:** two setup phases took 55.6 s and 58.1 s; `test_b6d` took a 25.4 s call on gw1 but more than 110 s on gw0; a light test took 83.3 s. W15's first evidence places all three threads inside a close. For gw3 the cost table shows the per-operation last-close teardown was where the budget went; for gw2 that is inferred from earlier runs; for gw0 the slowdown dominated. Heavy-test headroom is answered by its own package, stacked on this branch; the slowdown is not. |
 
 **Result.** Three consecutive clean Windows full-suite executions on one unchanged head, preceded by
 a clean Merge Candidate and green ordinary CI and Merge Qualification on that head. The one failed

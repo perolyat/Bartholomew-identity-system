@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging
-import os
 import sqlite3
-import time
-from collections.abc import AsyncIterator, Awaitable, Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -63,11 +60,11 @@ logger = logging.getLogger(__name__)
 #   4. hand the connection to the caller, and close it on the way out.
 #
 # `journal_mode` is persistent in the file and init() sets it, so it is not
-# re-issued here. Ownership is unchanged: one connection per operation, closed
-# when the operation ends -- including inside a `memory_unit_of_work()` scope,
-# which never lends its own connection to anyone (see below).
-# tests/test_memory_store_connection_contract.py holds this module to having no
-# other connection path.
+# re-issued here. Ownership is unchanged: one connection per unit of work,
+# closed when it ends -- including inside a `db_ctx.hold_wal_open()` scope,
+# which holds the file open but lends its own connection to nobody.
+# tests/test_memory_store_connection_contract.py holds this module to having
+# no other connection path.
 # ---------------------------------------------------------------------------
 
 
@@ -95,159 +92,6 @@ def open_memory_db_sync(db_path: str) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# A bounded unit of work that holds the database open (Windows SQLite headroom
-# repair, 2026-09-27; docs/SQLITE_WAL_HEADROOM_REPAIR.md).
-#
-# Every operation above owns its connection, and between operations nothing
-# holds the file open -- so every close is SQLite's *last* close of a WAL
-# database, which checkpoints the WAL (with its fsyncs) and unlinks `-wal` and
-# `-shm`, and the next operation recreates them and commits into a fresh WAL.
-# That teardown, not the work, is what the heaviest Windows tests spend their
-# 120 s on (Merge Candidate 36153552522: connect + commit + close were 91-98 %
-# of every heavy test's wall time).
-#
-# `memory_unit_of_work()` lets a caller that is about to do many operations as
-# one unit of work declare it. For exactly the duration of the `async with` it
-# holds ONE connection, opened through `open_memory_db()` like any other, that
-# has read the file and then does nothing: it is never lent, runs no statement
-# for anyone, and holds no transaction and no read snapshot. Because SQLite
-# tracks a file's connections per process, that one open connection means no
-# other connection's close is the last one, so the teardown is paid once, when
-# the scope ends -- for every connection to the file in the process, on any
-# thread, through any seam (this module's, `db_ctx.wal_db()`, and the stores
-# that call `db_ctx.connect()` directly).
-#
-# What it deliberately is NOT:
-#   * not borrowing -- every operation inside the scope still opens,
-#     configures, uses and closes its own connection, so transactions,
-#     rollback-on-close, cursors, `row_factory`, foreign keys, `synchronous`
-#     and both lock budgets are exactly what they are outside it;
-#   * not a pool -- nothing is registered at the Python level (no module
-#     state, no context variable, no attribute on the store), so nothing can
-#     find it, reuse it or outlive the `async with`;
-#   * not implicit -- a caller declares where its unit of work begins and ends
-#     (DECISIONS.md, 2026-09-18). No MemoryStore method opens one.
-# ---------------------------------------------------------------------------
-
-#: Read before attaching: the scope only works on a WAL database. On a
-#: rollback-journal file an idle connection holds no lock at all, so it would
-#: silently do nothing -- the scope refuses instead.
-_UNIT_OF_WORK_JOURNAL_SQL = "PRAGMA journal_mode"
-
-#: The read that attaches the held connection to the database. A connection
-#: that has read nothing holds nothing open and would not prevent the teardown;
-#: `execute_fetchall` consumes the result, so no statement stays active and no
-#: read snapshot is pinned afterwards.
-_UNIT_OF_WORK_ATTACH_SQL = "SELECT count(*) FROM sqlite_master"
-
-
-@contextlib.asynccontextmanager
-async def memory_unit_of_work(db_path: str, *, label: str = "") -> AsyncIterator[None]:
-    """Hold `db_path` open for one bounded unit of work; lend nothing.
-
-    Use it around a burst of operations that belong together -- a seeding
-    loop, a batch of related writes -- where the per-operation WAL teardown is
-    the dominant cost. Every operation inside runs exactly as it does
-    outside; what changes is the file's WAL lifetime, from per operation to
-    per scope.
-
-    Contract:
-      * The database must already exist and be in WAL mode (an initialised
-        store); otherwise this raises before holding anything, rather than
-        creating the file or silently doing nothing.
-      * One connection, opened through `open_memory_db()` (the shared policy,
-        the 30 s setup budget), attached with fully consumed reads, and
-        otherwise idle: no transaction, no read snapshot. It does not block
-        readers, writers, `BEGIN IMMEDIATE` or a TRUNCATE checkpoint.
-      * Closed when the scope ends -- on success, on an exception and on
-        cancellation. A cancellation that arrives while the connection is
-        being closed is held back until the close has finished, then
-        re-raised, so the scope never ends with its handle still open. That
-        final close is the last close: it checkpoints the WAL into the
-        database file and removes `-wal`/`-shm`.
-      * Yields nothing: the connection is not available to the caller.
-      * Scopes may nest; each holds its own idle connection.
-
-    What a scope changes, stated so it is not a surprise:
-      * Durability. `synchronous=NORMAL` is unchanged, and so is durability
-        across an application crash. Without a scope, each operation's last
-        close also checkpointed and fsynced -- a stronger guarantee than NORMAL
-        promises, obtained by accident. Inside a scope committed work sits in
-        the WAL until an automatic checkpoint or the scope's end, which is
-        exactly NORMAL's documented guarantee: the most recent transactions
-        may roll back on power loss or an OS crash. The database file alone
-        is not a complete copy until the scope ends.
-      * Exclusive access. Anything that needs the file to itself -- changing
-        `journal_mode`, `locking_mode=EXCLUSIVE`, and on Windows deleting or
-        renaming the file -- fails while a scope holds it.
-      * POSIX locks. On Linux and macOS the held connection's lock is a
-        process-wide `fcntl` lock. Forking, a second process on the same file,
-        or a non-SQLite `open()`/`close()` of the file inside a scope can drop
-        or bypass it, as it can for any open SQLite connection -- but for the
-        whole scope instead of one operation. None of these belong inside a
-        scope. Closed connections' file descriptors may also be kept by SQLite
-        until the scope ends; they are released with it.
-
-    Holding it for an unbounded period (a whole process, a daemon's lifetime)
-    would be a defect: on Windows an open handle stops the file from being
-    deleted. It is for bounded bursts only. No production caller adopts it
-    yet; doing so is its own reviewed decision.
-    """
-    if not os.path.exists(db_path):
-        raise FileNotFoundError(
-            f"memory_unit_of_work: {db_path!r} does not exist; initialise the store "
-            "(MemoryStore.init()) before declaring a unit of work on it",
-        )
-    started = time.monotonic()
-    held = contextlib.AsyncExitStack()
-    db = await held.enter_async_context(open_memory_db(db_path))
-    try:
-        ((journal_mode,),) = await db.execute_fetchall(_UNIT_OF_WORK_JOURNAL_SQL)
-        if str(journal_mode).lower() != "wal":
-            raise RuntimeError(
-                f"memory_unit_of_work: {db_path!r} is in {journal_mode!r} mode, not WAL; "
-                "an idle connection holds nothing open there, so the scope would do nothing",
-            )
-        await db.execute_fetchall(_UNIT_OF_WORK_ATTACH_SQL)
-        yield
-    finally:
-        await _finish_despite_cancellation(held.aclose())
-        logger.debug(
-            "memory_unit_of_work db=%s label=%s held_s=%.3f",
-            db_path,
-            label,
-            time.monotonic() - started,
-        )
-
-
-async def _finish_despite_cancellation(release: Awaitable[Any]) -> None:
-    """Await `release` to completion even if this task is cancelled meanwhile.
-
-    aiosqlite runs a queued close on its worker thread whether or not anyone
-    is still waiting for it, so abandoning the wait would not stop the close
-    -- it would only let the scope end while the handle is still open. The
-    release is therefore shielded, waited for again if a cancellation lands,
-    and the cancellation is re-raised once it is done.
-    """
-    task = asyncio.ensure_future(release)
-    cancelled = False
-    while True:
-        try:
-            await asyncio.shield(task)
-            break
-        except asyncio.CancelledError:
-            if task.cancelled():
-                # The release itself was cancelled (the event loop is being
-                # torn down); there is nothing left to wait for.
-                raise
-            cancelled = True
-            if task.done():
-                break
-    if cancelled:
-        raise asyncio.CancelledError
 
 
 def _load_fts_index_mode() -> str:
@@ -806,18 +650,6 @@ class MemoryStore:
         # see run_off_loop()'s docstring. Fully optional, matching this
         # codebase's existing pattern for other injected resources.
         self._blocking_executor = blocking_executor
-
-    def unit_of_work(self, label: str = "") -> contextlib.AbstractAsyncContextManager[None]:
-        """Declare a bounded unit of work on this store's database.
-
-        `async with store.unit_of_work(label="..."):` around a burst of
-        operations holds the database file open for the burst, so the WAL is
-        torn down once when the scope ends instead of after every operation.
-        Operations inside are unchanged -- each still owns its connection. See
-        `memory_unit_of_work()` for the contract; the store itself never opens
-        one, and keeps no reference to it.
-        """
-        return memory_unit_of_work(self.db_path, label=label)
 
     async def init(self) -> None:
         async with open_memory_db(self.db_path) as db:

@@ -19,6 +19,7 @@ import pathlib
 
 import pytest
 
+from bartholomew.kernel.db_ctx import hold_wal_open
 from bartholomew.kernel.memory_store import MemoryStore
 
 
@@ -398,12 +399,12 @@ def test_queued_outcome_is_independent_of_inbox_size(db_path: str):
     async def run():
         store = await _store(db_path)
         ts = _now()
-        # One unit of work: 520 governed writes and what follows them. Every
+        # One declared burst: 520 governed writes and what follows them. Every
         # operation still owns its connection and runs the full governed path;
-        # the scope only stops each of their closes from tearing the WAL down
+        # the hold only stops each of their closes from tearing the WAL down
         # (docs/SQLITE_WAL_HEADROOM_REPAIR.md) -- the cost that took this test
         # to 57-95 s of its 120 s on Windows.
-        async with store.unit_of_work(label="inbox-size burst"):
+        async with hold_wal_open(db_path, label="inbox-size burst"):
             for i in range(520):
                 await store.upsert_memory("fact", f"q{i:04d}", f"my password is p{i}", ts)
 

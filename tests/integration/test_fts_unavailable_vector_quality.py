@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from bartholomew.kernel.db_ctx import db_session
+from bartholomew.kernel.db_ctx import db_session, hold_wal_open
 from bartholomew.kernel.fts_client import FTS5ProbeResult, FTS5Status
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.retrieval import get_retriever, reset_fts5_cache
@@ -137,13 +137,13 @@ async def test_vector_quality_maintained_when_fts_unavailable():
         store = MemoryStore(db_path)
         await store.init()
 
-        # Ingest memories. Each seeding burst below is declared as one unit of
-        # work, so the WAL is torn down once per burst rather than after every
-        # operation -- the per-operation teardown took this test to 120 s on
-        # Windows (Merge Candidate 36153552522; docs/SQLITE_WAL_HEADROOM_REPAIR.md).
-        # Every operation is unchanged and still owns its own connection.
+        # Ingest memories. Each seeding burst below is declared, so the WAL is
+        # torn down once per burst rather than after every operation -- the
+        # per-operation teardown took this test to 120 s on Windows (Merge
+        # Candidate 36153552522; docs/SQLITE_WAL_HEADROOM_REPAIR.md). Every
+        # operation is unchanged and still owns its own connection.
         memory_map = {}  # (group_id, variant_idx) -> memory_id
-        async with store.unit_of_work(label="quality corpus ingestion"):
+        async with hold_wal_open(db_path, label="quality corpus ingestion"):
             for item in corpus:
                 result = await store.upsert_memory(
                     kind=item["kind"],

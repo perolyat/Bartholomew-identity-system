@@ -64,6 +64,23 @@ def db_path(tmp_path) -> str:
     return path
 
 
+class _CloseRecordingConnection(sqlite3.Connection):
+    """Records its own close.
+
+    Added 2026-09-27 (docs/SQLITE_WAL_HEADROOM_REPAIR.md §8): `_is_closed()`
+    used to probe with `execute`, but aiosqlite's connections belong to its
+    worker thread, so from the test's thread that raised the same
+    ProgrammingError for an open connection as for a closed one -- every
+    aiosqlite connection read as closed.
+    """
+
+    closed = False
+
+    def close(self, *args, **kwargs):
+        super().close(*args, **kwargs)
+        self.closed = True
+
+
 @pytest.fixture
 def recorded_connections(monkeypatch):
     """Every sqlite3 connection opened while the test runs, and every statement
@@ -78,6 +95,7 @@ def recorded_connections(monkeypatch):
     opened: list[dict] = []
 
     def recording_connect(database, *args, **kwargs):
+        kwargs.setdefault("factory", _CloseRecordingConnection)
         conn = original(database, *args, **kwargs)
         entry = {
             "database": str(database),
@@ -335,11 +353,8 @@ def test_memory_store_has_no_connection_path_outside_the_seam():
 
 
 def _is_closed(conn: sqlite3.Connection) -> bool:
-    try:
-        conn.execute("SELECT 1")
-    except sqlite3.ProgrammingError:
-        return True
-    return False
+    assert isinstance(conn, _CloseRecordingConnection), "not opened under recorded_connections"
+    return conn.closed
 
 
 def _open_handles_to(path: str) -> list[str]:
