@@ -2,7 +2,18 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-25 — **Windows full-suite reliability incident (Merge Candidate
+> **Last updated:** 2026-09-27 — **Windows SQLite headroom repair (stacked on PR #124,
+> unmerged).** One existing entry is **amended, not duplicated**: "Heavy-test headroom against the
+> 120 s per-test timeout". The failure it predicted happened on `1adf251`: Merge Candidate
+> 36153552522 lost three workers, each inside a SQLite last-close teardown. The root cause is
+> verified across three connection seams, and a bounded repair is implemented and verified locally
+> (full record: `docs/SQLITE_WAL_HEADROOM_REPAIR.md`). **The entry stays open** until a Windows
+> Merge Candidate shows the repair. The incident entry is not closed. This pass accompanies
+> production code (`bartholomew/kernel/memory_store.py`: `memory_unit_of_work()` /
+> `MemoryStore.unit_of_work()`), adopted by tests only, on branch
+> `claude/windows-sqlite-headroom-repair-ywxir4`. No risk is removed and no resolved risk is revived.
+>
+> **Previously (2026-09-25)** — **Windows full-suite reliability incident (Merge Candidate
 > 35971892908 attempt 1, `main` at `7b21a00`): repair implemented, incident still OPEN.** One new
 > tech-debt entry records the incident with verified, repaired, observable-only and unresolved
 > parts kept apart (full record: `docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md`), and **four
@@ -1684,6 +1695,44 @@
   > leave stacks if it happens. **What would close it** is unchanged in kind: a bounded
   > `db_session()` scope for this test's write path (as PR #113 did for the containment bursts),
   > decided as its own package — not a longer timeout. **Status:** open, measured, own package.
+
+  > **Amended 2026-09-27 — the predicted failure happened; root cause verified; repair implemented,
+  > Windows verification pending.** Record: `docs/SQLITE_WAL_HEADROOM_REPAIR.md`.
+  > - **Observed (verified, job log).** Merge Candidate 36153552522 (`1adf251`) was cancelled at the
+  >   40-minute cap after W15 caught three workers at 110 s, each with the test's thread inside a
+  >   SQLite close, through three different seams:
+  >   - this test, via aiosqlite;
+  >   - `test_vector_quality_maintained_when_fts_unavailable` (120.0 s, close 77.1 s), via
+  >     `VectorStore.upsert` → `wal_db`;
+  >   - `test_b6d_the_material_field_vocabulary_is_enforced_not_documented`, via
+  >     `ObjectiveStore._set_status` → `db_ctx.connect`.
+  >
+  >   Connect + commit + close were 91–98 % of every heavy test's wall time.
+  > - **Root cause (verified).** Every operation owns its connection, and nothing holds the file
+  >   open between operations, so every close is SQLite's last close: a checkpoint with fsyncs,
+  >   then unlinking `-wal`/`-shm`. In the Linux census of the whole suite, 41,855 of 50,436 closes
+  >   did this, including every close in the three killed tests.
+  >
+  >   **The wording above needed correcting:** a `db_session()` scope could not have covered this
+  >   test. MemoryStore is aiosqlite, and `db_session()` is borrowed only by `wal_db()` on one thread.
+  > - **Repair (implemented, tests only).** `MemoryStore.unit_of_work()` holds one idle,
+  >   policy-configured connection for a declared burst and lends it to nobody. Every operation keeps
+  >   its own connection. The teardown is paid once per scope, for every seam and thread.
+  >   - Adopted by the three killed tests' bursts; no assertion, workload or timeout was changed.
+  >   - Linux mechanism evidence: the WAL was torn down after 0 of N operations in a scope, against N
+  >     of N without one; commit + close fell about 8–10×.
+  >   - Durability: inside a scope, power-loss durability is SQLite's documented
+  >     `synchronous=NORMAL` guarantee instead of the per-operation checkpoint's accidental extra
+  >     fsyncs. The policy is not changed; this is recorded as the reason production adoption is its
+  >     own decision.
+  > - **Not established.** Any Windows effect, until the Merge Candidate is read. The same-shape
+  >   integration tests at 33–69 s are still unscoped (listed in the record). No production caller
+  >   adopts the scope. The stall cause behind the runner's degradation is unresolved.
+  > - **Found along the way, recorded for PR #124 (not changed here).**
+  >   `test_memory_store_connection_contract.py`'s `_is_closed()` cannot distinguish an open aiosqlite
+  >   connection from a closed one: from another thread both raise the same `ProgrammingError`. Those
+  >   tests' handle and file-removal checks still hold.
+  > - **Status:** open — repair implemented, awaiting Windows evidence and Taylor's User Approval Gate.
 
 - **(2026-09-25) Existing databases may hold orphan child rows written while MemoryStore
   connections ran with foreign keys off — no audit exists, deferred.** Until the 2026-09-25

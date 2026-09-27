@@ -398,16 +398,22 @@ def test_queued_outcome_is_independent_of_inbox_size(db_path: str):
     async def run():
         store = await _store(db_path)
         ts = _now()
-        for i in range(520):
-            await store.upsert_memory("fact", f"q{i:04d}", f"my password is p{i}", ts)
+        # One unit of work: 520 governed writes and what follows them. Every
+        # operation still owns its connection and runs the full governed path;
+        # the scope only stops each of their closes from tearing the WAL down
+        # (docs/SQLITE_WAL_HEADROOM_REPAIR.md) -- the cost that took this test
+        # to 57-95 s of its 120 s on Windows.
+        async with store.unit_of_work(label="inbox-size burst"):
+            for i in range(520):
+                await store.upsert_memory("fact", f"q{i:04d}", f"my password is p{i}", ts)
 
-        pending = await store.list_pending_sensitive_writes(limit=1000)
-        assert len(pending) > 500, "inbox must exceed the old 500-row scan window"
+            pending = await store.list_pending_sensitive_writes(limit=1000)
+            assert len(pending) > 500, "inbox must exceed the old 500-row scan window"
 
-        await store.upsert_memory("fact", "target", "harmless original", ts)
-        outcome = await store.correct_memory("fact", "target", "my password is hunter2")
-        assert outcome.stored is False
-        assert outcome.queued_for_consent is True, "must not degrade to 'refused'"
+            await store.upsert_memory("fact", "target", "harmless original", ts)
+            outcome = await store.correct_memory("fact", "target", "my password is hunter2")
+            assert outcome.stored is False
+            assert outcome.queued_for_consent is True, "must not degrade to 'refused'"
         await store.close(checkpoint=False)
 
     asyncio.run(run())

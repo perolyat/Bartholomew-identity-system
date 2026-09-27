@@ -735,34 +735,41 @@ async def test_b6d_the_material_field_vocabulary_is_enforced_not_documented(ctx)
         "competency_id",
     }
 
-    for field_name, value in editable_material.items():
-        lesson = await _propose(
-            ctx,
-            _run_the_experience(ctx, title=f"Objective for {field_name}"),
-        )
-        before = learning_authorization.fingerprint_for(lesson)
-        result = await run_candidate_edit_through_runtime_contract(
+    # Nine propose-and-edit rounds are one unit of work. Every store involved
+    # (objectives, memories, governance) still opens and closes its own
+    # connections through the real runtime contract; the scope only stops each
+    # of those ~300 closes from tearing the WAL down, the cost this test was
+    # killed in on Windows (Merge Candidate 36153552522, gw0;
+    # docs/SQLITE_WAL_HEADROOM_REPAIR.md).
+    async with ctx.mem.unit_of_work(label="material-field rounds"):
+        for field_name, value in editable_material.items():
+            lesson = await _propose(
+                ctx,
+                _run_the_experience(ctx, title=f"Objective for {field_name}"),
+            )
+            before = learning_authorization.fingerprint_for(lesson)
+            result = await run_candidate_edit_through_runtime_contract(
+                ctx,
+                competency_id=COMPETENCY_ID,
+                slug=lesson.slug,
+                editor=EDITOR,
+                expected_revision=lesson.revision,
+                **{field_name: value},
+            )
+            assert result.material_change is True, f"{field_name} must be material"
+            assert result.fingerprint_after != before
+
+        assert ADMINISTRATIVE_CANDIDATE_FIELDS == {"display_state"}
+        lesson = await _propose(ctx, _run_the_experience(ctx, title="Objective for display state"))
+        admin = await run_candidate_edit_through_runtime_contract(
             ctx,
             competency_id=COMPETENCY_ID,
             slug=lesson.slug,
             editor=EDITOR,
             expected_revision=lesson.revision,
-            **{field_name: value},
+            display_state=candidate_learning.DISPLAY_PINNED,
         )
-        assert result.material_change is True, f"{field_name} must be material"
-        assert result.fingerprint_after != before
-
-    assert ADMINISTRATIVE_CANDIDATE_FIELDS == {"display_state"}
-    lesson = await _propose(ctx, _run_the_experience(ctx, title="Objective for display state"))
-    admin = await run_candidate_edit_through_runtime_contract(
-        ctx,
-        competency_id=COMPETENCY_ID,
-        slug=lesson.slug,
-        editor=EDITOR,
-        expected_revision=lesson.revision,
-        display_state=candidate_learning.DISPLAY_PINNED,
-    )
-    assert admin.material_change is False
+        assert admin.material_change is False
 
 
 async def test_b6_the_prior_revision_is_preserved(ctx):
