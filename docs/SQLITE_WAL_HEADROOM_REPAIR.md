@@ -9,9 +9,12 @@ targets `claude/windows-ci-reliability-incident-mc59cm` and not `main` (merge or
 record deferred, and appends what it found.
 **Risk entries:** `RISKS.md`, "(2026-09-25) Heavy-test headroom against the 120 s per-test timeout"
 (amended), and a new entry for the product's per-operation teardown (§8).
-**Status (2026-09-27):** implemented, adversarially reviewed and verified locally. The Windows result
-goes in §7 against criteria registered there *before* the run. **Not merged. Taylor's User Approval
-Gate is mandatory. The incident is not closed. Heavy-test headroom is not resolved.**
+**Status (2026-09-27):** implemented, adversarially reviewed and verified locally. **The one Windows
+qualification run passed every criterion registered before it** (Merge Candidate 36313600744, head
+`006ccb8`; §7). Every required tier was green on that head, and Merge Qualification returned
+**READY** for it. The head that records this is docs-only and not itself qualified. **Not merged. Taylor's User Approval Gate
+is mandatory. The incident is not closed. Heavy-test headroom is narrowed, not resolved:** one run is
+not repeatability, and same-shape tests remain undeclared.
 
 Statements are labelled **verified** (a log line, a measurement or a reproduction), **inference**
 (reasoned from verified facts, not demonstrated) or **proposal**.
@@ -323,9 +326,28 @@ implementation replaced, before this matrix was run.
 | an incomplete database file when the hold ends | `test_when_the_hold_ends_the_database_file_alone_holds_every_committed_row` |
 | the adoption removed or not entered | `test_each_burst_killed_on_windows_is_declared` (structural) |
 
-## 6. Tests run locally (Linux, Python 3.11.15, SQLite 3.45.1, aiosqlite 0.22.1)
+## 6. Tests run (Linux locally: Python 3.11.15, SQLite 3.45.1, aiosqlite 0.22.1)
 
-*(Filled in at commit time — see §4a.)*
+All runs are against the code of head `006ccb8`.
+
+- `tests/test_wal_hold.py`: **32 passed**. The mutation matrix is in §4.
+- The three adopted tests: **passed**.
+- SQLite / MemoryStore / scheduler regression suites: **391 passed across 31 files**. They cover:
+  - the connection contract, including its corrected closure probe;
+  - `db_session` lifecycle, vector-store handle lifetime, and the root WAL cleanup test;
+  - `test_sqlite_*` (WAL, concurrent processes, event-loop convoy);
+  - `test_memory_store*`, `test_memory_agency*`, `test_fts_*` and `test_scheduler_*`;
+  - seed ownership, clean start, daemon lifecycle, the objective store, and the FTS integration test.
+- **Full default suite: 5,723 passed, 2 skipped, 0 failed** (9:06, `-n 4 --dist loadfile`).
+  - An earlier full run, on the first implementation, reported 2 failures. Both were
+    `inspect.getsource` tests reading `memory_store.py` while it was being edited mid-run. Both pass
+    on the committed tree; they are not attributable to the change.
+- pre-commit (black, ruff, hygiene): clean.
+- **CI on `006ccb8`:** smoke, Quality, PR Fast tests (Ubuntu, parallel), Windows fast and the
+  qualification self-test all green.
+- **Integration**, dispatched once because draft PRs skip it (run 36315022494, on `006ccb8`): Tests +
+  coverage (W13 clean), Critical integration + lifecycle, and Windows lifecycle + compatibility, all
+  green.
 
 ## 7. Windows qualification — criteria registered before the run
 
@@ -371,6 +393,69 @@ separate runner variance from the fix; that is desirable, not required. The `RIS
 stays open whatever the result, because same-shape tests remain undeclared (§8).
 
 *Result: pending the run.*
+
+### Result, appended 2026-09-27 after the run (the criteria above are unchanged)
+
+**Merge Candidate 36313600744, head `006ccb8`, Windows job 108604037039: PASS on Q1, Q2 and Q3.**
+All 7 Merge Candidate jobs succeeded. The figures below are verbatim from the job's trace summary.
+
+- **Q1 — met.** `5622 passed, 103 skipped, 166 warnings in 1325.14s (0:22:05)`, inside the 40-minute
+  cap. W13: "no scheduler re-drive was needed".
+- **Q2 — met.** 4 workers were created and all 4 `finished`, each with
+  `session_finish=yes process_exit=yes`. Stalls: none. "what failed: nothing: no worker crashed and no
+  phase reported a bad outcome".
+- **Q3 — met for all three adopted tests.** Their rows in the SQLite cost table:
+
+  ```
+     opens  connect  commits  commit   close    wall  nodeid
+      1063     0.2s      529    0.4s    1.1s    3.7s  …::test_queued_outcome_is_independent_of_inbox_size
+       488     0.1s      367    1.3s    3.1s    8.3s  …::test_vector_quality_maintained_when_fts_unavailable
+       313     0.0s      122    0.1s    1.1s    3.0s  …::test_b6d_the_material_field_vocabulary_is_enforced_not_documented
+  ```
+
+  | Test | commit + close | Limit | Pre-fix | Wall |
+  |---|---|---|---|---|
+  | heavy test | **1.5 s** | ≤ 10.8 s | 53.9–91.3 s | **3.7 s** |
+  | FTS test | **4.4 s** | ≤ 23.5 s | 117.7 s | **8.3 s** |
+  | b6d | **1.2 s** | ≤ 5.4 s | 27.0 s | **3.0 s** |
+
+  Every wall time is ≤ 60 s. Opens are essentially the pre-fix counts, so the per-operation costs the
+  hold keeps — the question §2.3 left open — are small on Windows too.
+- **A same-run control.** The same-shape tests that are *not* declared still spent 92–96 % of their
+  wall time in commit + close:
+
+  | Undeclared test | commit + close of wall |
+  |---|---|
+  | `test_lexical_beats_vector_on_exact_rare_tokens` | 54.2 of 57.6 s |
+  | `test_hybrid_beats_single_channel` | 37.6 of 39.6 s |
+  | `test_recency_boost_flips_rankings_rrf` | 34.5 of 37.0 s |
+  | `test_recency_boost_flips_rankings_weighted` | 34.0 of 36.8 s |
+  | `test_privacy_gates_upheld` | 29.6 of 31.2 s |
+
+  On one runner, in one run, the declared tests left that profile and the undeclared ones did not.
+- **Integration**, the other required tier, green on the same head (run 36315022494, §6).
+- **Merge Qualification on `006ccb8` (run 36316432508): READY** — `merge-qualified at
+  006ccb889a0c54afe9120a39ee0ec1fc7d3546a9`. Every required tier is proven green on that exact head,
+  with no undispositioned finding. Two caveats:
+  - Under the 2026-09-21 decision a READY verdict authorises nothing. Taylor's User Approval Gate
+    remains the merge authority.
+  - The commit that records this result changes the head. It changes docs only, but qualification
+    binds to one commit, so that head is not itself qualified.
+
+**How this reads under the pre-registered rules.** Q1–Q3 are all met, which is **a material reduction
+shown on one run**. Per §7, work stops here and is reported to Taylor.
+
+**What it does not establish:**
+- **Repeatability.** The three-run acceptance sequence above has not been started; that is Taylor's
+  decision.
+- **Anything about the undeclared tests.** They still pay the teardown; `test_lexical_beats_vector` ran
+  at 57.6 s.
+- **The slowdown factor.** It was present in milder form: light tests' setup phases took 30.0 s,
+  22.9 s and 21.4 s. Its cause is unresolved.
+- **The orphaned msedge/notepad processes** were terminated at job end again. This is a known, deferred
+  item.
+
+The `RISKS.md` headroom entry stays **open, narrowed**.
 
 ## 8. Remaining risks and unresolved observations (recorded, not repaired)
 

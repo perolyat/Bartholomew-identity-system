@@ -1745,8 +1745,20 @@
   >     (record §7).
   >   - Seven same-shape integration tests at 33–69 s remain undeclared (record §8).
   >   - The slowdown cause.
-  > - **Status:** open. The repair is implemented, and awaits Windows evidence and Taylor's User
-  >   Approval Gate. It stays open, narrowed, whatever that one run shows.
+  > - **Windows qualification, 2026-09-27: passed (one run).** Merge Candidate 36313600744 on
+  >   `006ccb8` passed every pre-registered criterion (record §7):
+  >   - no worker lost, W13 clean, 5,622 passed in 22:05;
+  >   - the three declared tests' commit + close fell from 53.9–91.3 s to **1.5 s**, from 117.7 s to
+  >     **4.4 s**, and from 27.0 s to **1.2 s**, with walls of 3.7 s, 8.3 s and 3.0 s;
+  >   - the undeclared same-shape tests in the same run still spent 92–96 % of their wall time in
+  >     commit + close.
+  > - **Status:** open, **narrowed**. The mechanism is repaired where it is declared, and shown on
+  >   Windows on one run. Not resolved:
+  >   - there is no repeatability evidence (a three-run sequence is Taylor's decision);
+  >   - seven same-shape tests are still undeclared;
+  >   - the slowdown is unexplained.
+  >
+  >   Awaiting Taylor's User Approval Gate.
 
 - **(2026-09-27) The product pays the per-operation WAL teardown on every storage operation that
   runs with no other connection open — recorded, not repaired.**
