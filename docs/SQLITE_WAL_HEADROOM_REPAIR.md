@@ -21,7 +21,8 @@ not repeatability, and same-shape tests remain undeclared.
   onto `main` and requalified on its resulting exact head (§9).
 - **Acceptance sequence.** The three-run sequence is to be prepared, not yet started (§7).
 - **Follow-ups.** Three costs stay explicit, unresolved follow-up work outside this package (§8.1).
-- **Proposed decision.** §10 is a proposal. It is not approved until Taylor explicitly approves it.
+- **Decision.** Taylor approved §10 as written on 2026-09-28. It is recorded in `DECISIONS.md` as
+  "a declared burst may hold its SQLite database open, lending the held connection to nobody".
 
 Statements are labelled **verified** (a log line, a measurement or a reproduction), **inference**
 (reasoned from verified facts, not demonstrated) or **proposal**.
@@ -163,6 +164,7 @@ exactly the connection lifecycle it has today.
 - It does **not** implement the 2026-09-18 ownership model. There, operations borrow the unit of work's
   connection; here nothing borrows.
 - It is therefore proposed as its own decision (§10), not presented as an extension of either.
+  Taylor approved it as written on 2026-09-28, and it is recorded in `DECISIONS.md`.
 
 ### 3.1 Code (`bartholomew/kernel/db_ctx.py`)
 
@@ -625,7 +627,12 @@ independently requalified on its resulting exact head."
 - The acceptance sequence (§7) runs one Merge Candidate at a time on one unchanged head. Its order
   under this decision is reported to Taylor, and confirmed, before any run starts.
 
-## 10. Proposed decision (for Taylor's User Approval Gate — not written into `DECISIONS.md` unless approved)
+## 10. Proposed decision — approved as written by Taylor, 2026-09-28
+
+**Approved** at the User Approval Gate on 2026-09-28 ("I approve §10 as written"). It is recorded in
+`DECISIONS.md` as "a declared burst may hold its SQLite database open, lending the held connection to
+nobody". The text below is the approved text, unchanged. It was proposed for the gate and was not to
+be written into `DECISIONS.md` unless approved.
 
 > *Proposal.* A caller about to perform a burst of operations on one SQLite database may declare it
 > with `db_ctx.hold_wal_open()`.
