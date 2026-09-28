@@ -4108,17 +4108,22 @@
     An idle connection that lends nothing covers every seam, thread and process at once. It changes
     nothing about how any operation owns its connection.
   - **Windows evidence (verified).** Merge Candidate 36313600744 on `006ccb8`, the one qualification
-    run, met every criterion registered before it:
-    - no worker lost, and W13 clean;
-    - the three declared tests' commit + close fell from 53.9–91.3 s to 1.5 s, from 117.7 s to
-      4.4 s, and from 27.0 s to 1.2 s;
-    - in the same run, the undeclared same-shape tests still spent most of their wall time in
-      commit + close.
+    run, met every criterion registered before it (record §7):
+    - **Q1:** the run finished inside its 40-minute cap, and W13 was clean.
+    - **Q2:** no adopted test lost a worker; all 4 workers finished.
+    - **Q3:** the three declared tests' commit + close fell from 53.9–91.3 s to 1.5 s, from 117.7 s
+      to 4.4 s, and from 27.0 s to 1.2 s. Each is within its 20 % limit, and each wall time
+      (3.7 s, 8.3 s, 3.0 s) is at most 60 s.
+
+    A same-run control, which is not a criterion: the undeclared same-shape tests still spent most
+    of their wall time in commit + close.
 
     One run is not repeatability.
     - The three-run acceptance sequence is defined in the record's §7 and has not been started.
-    - Under §9 it runs on PR #125's own retargeted head, and the qualification on `006ccb8` does not
-      carry over.
+    - Taylor directed on 2026-09-28 that it run one Merge Candidate at a time on PR #125's own
+      retargeted, frozen head.
+    - Under §9, nothing proven on a pre-retarget head carries over to that head, including the
+      qualification on `006ccb8`.
 - **Alternatives considered:**
   - *Borrowing an aiosqlite connection*, a literal async `db_session()`. Rejected on verified
     hazards:

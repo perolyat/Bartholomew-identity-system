@@ -627,6 +627,31 @@ independently requalified on its resulting exact head."
 - The acceptance sequence (§7) runs one Merge Candidate at a time on one unchanged head. Its order
   under this decision is reported to Taylor, and confirmed, before any run starts.
 
+**Order confirmed by Taylor (recorded 2026-09-28).** Taylor approved §10, and directed the sequence
+"exactly as described", in this order:
+1. Add §10 to `DECISIONS.md`, and complete that commit's checks and reviews before the acceptance
+   head is frozen.
+2. PR #124 qualifies and merges at its own gate. Its acceptance evidence is neither altered nor
+   reused here.
+3. Retarget this PR to `main`, then merge `main` into this branch: a merge commit, no rebase, no
+   force-push.
+4. Re-run the required tests on the retargeted branch, "including pytest -m ci, the three adopted
+   Windows tests, and the full suite".
+5. Mark this PR ready for review before the sequence begins.
+6. Get ordinary CI plus Integration green on the frozen acceptance head.
+7. Run the three acceptance runs one at a time on that exact, unchanged head. Any failure or
+   cancellation breaks the sequence: stop, investigate and report. Do not rerun until the cause is
+   understood and addressed.
+8. After the third successful run, dispatch Merge Qualification on that same head.
+9. Record the results only after the sequence. Any resulting docs-only commit gets its own Merge
+   Qualification and is not counted as a fourth acceptance run. This is #124's precedent.
+
+Two procedural points were put to Taylor on 2026-09-28 and are settled before the head is frozen:
+- how run 1 is triggered, given the 2026-09-21 rule that a pull request without `ci:merge-candidate`
+  is not merge-qualified;
+- the test selection behind "`pytest -m ci`". No `ci` marker is registered, so that command
+  collects no tests.
+
 ## 10. Proposed decision — approved as written by Taylor, 2026-09-28
 
 **Approved** at the User Approval Gate on 2026-09-28 ("I approve §10 as written"). It is recorded in
