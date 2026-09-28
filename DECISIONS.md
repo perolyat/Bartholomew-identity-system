@@ -4064,6 +4064,8 @@
     pool").
   - It does not amend the 2026-09-18 decision ("a SQLite connection is owned by a bounded unit of
     work, not by a single statement").
+  - Reading the approved text below: its "§3.3" is `docs/SQLITE_WAL_HEADROOM_REPAIR.md` §3.3, and
+    "this package" is PR #125. This note is not part of the approved text.
 - **Decision** (the approved text, verbatim):
 
   > *Proposal.* A caller about to perform a burst of operations on one SQLite database may declare it
@@ -4079,9 +4081,8 @@
   >   killed on Windows. Product adoption is a separate decision that must weigh §3.3; an exact-allowlist
   >   test enforces this.
 
-  It decides nothing about the deferred hybrid pooling model. It introduces no pooling, no reuse of a
-  connection by anyone, and no connection that outlives its declaration. (§3.3 is
-  `docs/SQLITE_WAL_HEADROOM_REPAIR.md` §3.3.)
+  It decides nothing about the deferred hybrid pooling model, and introduces no pooling, no reuse of a
+  connection by anyone, and no connection that outlives its declaration.
 - **Why:**
   - **The failure.** Merge Candidate 36153552522 (PR #124's head `1adf251`) was cancelled at its
     40-minute cap. Three workers had been killed by the 120 s per-test timeout, each with the test's
@@ -4093,10 +4094,19 @@
     between operations. So every close is SQLite's *last* close of a WAL database: a checkpoint with
     its fsyncs, then unlinking `-wal`/`-shm`, which the next operation recreates. A Linux census of the
     default suite counted 41,855 such closes out of 50,436.
-  - **Why `db_session()` could not answer it.** The 2026-09-18 `db_session()` lends its connection
-    only to `wal_db()` on its own thread, so it could not cover the aiosqlite or direct-connect seams.
-    An idle connection that holds the file open covers every seam, thread and process at once, and
-    changes nothing about how any operation owns its connection.
+  - **Two factors, not one.** The mechanism is not established as the sole cause. The kills were the
+    product of this teardown and a degraded runner whose cause is unresolved (FU-3, the incident's).
+    `test_b6d` took 25.4 s on gw1 but more than 110 s on gw0 in the same run. A hold removes the first
+    factor where it is declared: **necessary for headroom, not sufficient for reliability**.
+  - **Why borrowing through `db_session()` could not answer it.**
+    - The 2026-09-18 `db_session()` lends its connection only to `wal_db()` on its own thread, so its
+      borrowing cannot reach the aiosqlite or direct-connect seams.
+    - Its open connection does have the file-wide effect: once the database is initialised, 0 of 520
+      teardowns in the heavy test (record §2.3, §8).
+    - It was rejected as the anchor for the reasons under Alternatives.
+
+    An idle connection that lends nothing covers every seam, thread and process at once. It changes
+    nothing about how any operation owns its connection.
   - **Windows evidence (verified).** Merge Candidate 36313600744 on `006ccb8`, the one qualification
     run, met every criterion registered before it:
     - no worker lost, and W13 clean;
@@ -4105,7 +4115,10 @@
     - in the same run, the undeclared same-shape tests still spent most of their wall time in
       commit + close.
 
-    One run is not repeatability. The three-run acceptance sequence is recorded in the record's §7.
+    One run is not repeatability.
+    - The three-run acceptance sequence is defined in the record's §7 and has not been started.
+    - Under §9 it runs on PR #125's own retargeted head, and the qualification on `006ccb8` does not
+      carry over.
 - **Alternatives considered:**
   - *Borrowing an aiosqlite connection*, a literal async `db_session()`. Rejected on verified
     hazards:
@@ -4141,14 +4154,30 @@
     - The database file alone is not a complete copy until the hold ends.
   - **Exclusive access fails while a hold is open:** changing `journal_mode`,
     `locking_mode=EXCLUSIVE`, and on Windows deleting or renaming the file.
-  - **POSIX locks.** Forking, or a raw `open()`/`close()` of the file in the holding process, can drop
-    the process's `fcntl` locks. A hold widens that window from one operation to the burst.
+  - **POSIX locks (Linux/macOS).**
+    - Forking, or a non-SQLite `open()`/`close()` of the file in the holding process, drops the
+      process's `fcntl` locks.
+    - Combined with another process's close, that can lose writes committed inside the hold
+      (reproduced).
+    - SQLite documents this hazard for any open connection. A hold widens its window from one
+      operation to the burst.
   - **Cancellation** is delivered only after the held connection has closed. A missing or non-WAL
     database is refused.
   - **No product code holds one.** `tests/test_wal_hold.py` pins that with an exact, empty
-    allowlist, so product adoption edits that test on purpose. Each adopting caller is its own
-    decision and must weigh the consequences above. Candidates are a request, an event-processing
-    pass and the embeddings rebuild loop; see `RISKS.md` (FU-1).
+    allowlist, so product adoption edits that test on purpose.
+    - **What an adopter must weigh.** Each adopting caller is its own decision and must weigh §3.3 of
+      the record, summarised above. It must also weigh the further items that `RISKS.md` (FU-1) and
+      record §8 list:
+      - several processes (daemon, CLI, API bridge) sharing one database;
+      - bursts that await external actors. `request_permission_to_store` can await an arbitrary
+        consent handler inside `upsert_memory`, so a hold spanning it would be unbounded.
+    - **Candidates** (inference, record §8), none of them adopted:
+      - one `correct_memory`/`supersede_memory`;
+      - a request handler;
+      - an event-processing pass;
+      - the embeddings rebuild loop.
+    - **Tracking.** The product's teardown is in `RISKS.md`, "(2026-09-27) The product pays the
+      per-operation WAL teardown…" (FU-1 in record §8.1).
   - **Nothing is decided about the deferred hybrid pooling model**, which is not recorded in the
     repository, and nothing pre-empts it.
   - **Open follow-ups, outside this decision** (`docs/SQLITE_WAL_HEADROOM_REPAIR.md` §8.1):
