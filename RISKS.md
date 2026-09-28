@@ -2,7 +2,13 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-27 — **Windows SQLite headroom repair (PR #125, stacked on PR #124;
+> **Last updated:** 2026-09-28 — **Windows SQLite headroom repair (PR #125): Taylor's direction
+> recorded.** The headroom entry gains a dated note: the merge order is #124 first, then #125
+> retargeted and requalified on its own head. A new entry makes the seven undeclared same-shape tests
+> an explicit follow-up outside PR #125. The product-teardown entry and the incident's slowdown item
+> stay open, unchanged. Nothing is closed.
+>
+> **Previously (2026-09-27)** — **Windows SQLite headroom repair (PR #125, stacked on PR #124;
 > unmerged).**
 >
 > - **One existing entry is amended, not duplicated:** "Heavy-test headroom against the 120 s per-test
@@ -1760,6 +1766,18 @@
   >
   >   Awaiting Taylor's User Approval Gate.
 
+  > **Recorded 2026-09-28 — Taylor's direction.**
+  > - **Merge order.** #124 merges first. #125 is then retargeted onto `main` and requalified on its
+  >   own resulting head.
+  > - **Acceptance.** The three-run sequence is to be prepared, not yet started.
+  > - **Three residual costs are explicit follow-up work outside PR #125** (record §8.1):
+  >   - the product's per-operation teardown (its own entry, below);
+  >   - the seven same-shape tests (their own entry, below);
+  >   - the runner slowdown (the incident's entry, above).
+  >
+  >   None of them is closed by #125's acceptance.
+  > - **Status unchanged:** open, narrowed.
+
 - **(2026-09-27) The product pays the per-operation WAL teardown on every storage operation that
   runs with no other connection open — recorded, not repaired.**
   - **What happens.** MemoryStore, ObjectiveStore, GovernanceStore and VectorStore each own one
@@ -1783,6 +1801,33 @@
     A test pins "no production hold" as an exact allowlist, so that decision cannot be taken silently.
   - **Owner:** to be assigned by Taylor. The proposal is a bounded package per adopting caller.
   - **Risk category:** performance / reliability.
+  - **Status:** open.
+
+- **(2026-09-28) Seven same-shape integration tests still pay the per-operation WAL teardown on
+  Windows — explicit follow-up, outside PR #125.**
+  - **Which tests.** Each seeds through its own ingestion loop, with no hold:
+    - `test_lexical_beats_vector_on_exact_rare_tokens`;
+    - `test_privacy_gates_upheld`;
+    - `test_recency_boost_flips_rankings_weighted` and `…_rrf`;
+    - `test_hybrid_beats_single_channel`;
+    - `test_lexical_top_k_coverage_on_rare_tokens`;
+    - `test_recency_disabled_no_flip`.
+  - **Evidence (verified, Windows job logs).**
+    - Pre-fix, Merge Candidate 36153552522 on `1adf251`: wall times of 32.7–69.2 s.
+    - Repaired head, Merge Candidate 36313600744 on `006ccb8`: wall times of 9.1–57.6 s. Commit + close
+      was 82–95 % of each wall, against 40–53 % for the three tests that declare a hold.
+    - The worst, `test_lexical_beats_vector_on_exact_rare_tokens`, is at 48 % of the 120 s budget.
+      At that level, a slowdown of about 2.1× would reach the timeout.
+  - **Why it matters (inference).** The kills are the per-operation teardown multiplied by a runner
+    slowdown that is still unexplained. These tests carry the first factor undiminished.
+  - **Why it is not in PR #125.** Taylor directed that it stay explicit follow-up work, not be absorbed
+    into that package.
+  - **What would close it.** Each test's seeding burst is declared as in record §3.4, with the
+    structural pin extended to it, or is shown not to need one. Then Windows evidence. It must not be
+    closed by a longer timeout, a smaller corpus or a marker. Record: `docs/SQLITE_WAL_HEADROOM_REPAIR.md`
+    §8.1 (FU-2).
+  - **Owner:** to be assigned by Taylor.
+  - **Risk category:** reliability / CI headroom.
   - **Status:** open.
 
 - **(2026-09-27) `BARTHO_EMBED_ENABLED` is parsed inconsistently — recorded, not repaired.**

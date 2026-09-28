@@ -8,13 +8,20 @@ targets `claude/windows-ci-reliability-incident-mc59cm` and not `main` (merge or
 **Not improved by A1**") and §7. This package does not rewrite that record. It answers the item that
 record deferred, and appends what it found.
 **Risk entries:** `RISKS.md`, "(2026-09-25) Heavy-test headroom against the 120 s per-test timeout"
-(amended), and a new entry for the product's per-operation teardown (§8).
+(amended), a new entry for the product's per-operation teardown (§8), and a new entry for the seven
+undeclared same-shape tests (§8.1).
 **Status (2026-09-27):** implemented, adversarially reviewed and verified locally. **The one Windows
 qualification run passed every criterion registered before it** (Merge Candidate 36313600744, head
 `006ccb8`; §7). Every required tier was green on that head, and Merge Qualification returned
 **READY** for it. The head that records this is docs-only and not itself qualified. **Not merged. Taylor's User Approval Gate
 is mandatory. The incident is not closed. Heavy-test headroom is narrowed, not resolved:** one run is
 not repeatability, and same-shape tests remain undeclared.
+**Taylor's direction (recorded 2026-09-28):**
+- **Merge order.** #124 and #125 stay separate packages. #124 merges first. #125 is then retargeted
+  onto `main` and requalified on its resulting exact head (§9).
+- **Acceptance sequence.** The three-run sequence is to be prepared, not yet started (§7).
+- **Follow-ups.** Three costs stay explicit, unresolved follow-up work outside this package (§8.1).
+- **Proposed decision.** §10 is a proposal. It is not approved until Taylor explicitly approves it.
 
 Statements are labelled **verified** (a log line, a measurement or a reproduction), **inference**
 (reasoned from verified facts, not demonstrated) or **proposal**.
@@ -517,6 +524,78 @@ The `RISKS.md` headroom entry stays **open, narrowed**.
 - **The deferred hybrid pooling model is not recorded in the repository.** This package does not record
   or pre-empt it. The exact-allowlist guard in §5 keeps it from being pre-empted in code.
 
+### 8.1 Unresolved follow-up work, kept outside this package (Taylor's direction)
+
+Taylor directed that three costs be kept as **explicit, unresolved follow-up work**, not absorbed into
+this package:
+- none of them is repaired here;
+- this package's acceptance sequence (§7) cannot close any of them;
+- a green run does not narrow them.
+
+Each needs its own bounded package, and Taylor assigns the owner. Figures are verified from the
+Windows job logs: Merge Candidate 36153552522 on `1adf251` (pre-fix) and 36313600744 on `006ccb8`
+(this repair).
+
+**FU-1 — the product's per-operation WAL/connection teardown.**
+- **What.** An operation whose close is the file's last close pays three costs:
+  - a checkpoint with its fsyncs;
+  - removing and recreating `-wal`/`-shm`;
+  - a last-close EXCLUSIVE window.
+- **How often (§2).** In a Linux census of the suite, 41,855 of 50,436 closes did this.
+- **Why it is not repaired here.** No product code declares a hold, and the exact-allowlist test (§5)
+  pins that.
+- **Tracked in.** `RISKS.md`, "(2026-09-27) The product pays the per-operation WAL teardown…".
+- **What would close it.** A design decision per adopting caller that weighs §3.3 (power-loss
+  durability, POSIX locks, several processes on one file, bursts that await external actors). Each
+  adoption is its own package and edits the allowlist on purpose. Not a pool, and not a permanent
+  connection.
+
+**FU-2 — seven same-shape integration tests still pay the teardown on Windows.** Each seeds through
+its own ingestion loop with no hold. Wall time, with the `006ccb8` commit + close in brackets:
+
+| Test | `1adf251` wall | `006ccb8` wall (commit + close) |
+|---|---|---|
+| `test_lexical_beats_vector_on_exact_rare_tokens` | 69.2 s | 57.6 s (54.2 s) |
+| `test_privacy_gates_upheld` | 61.6 s | 31.2 s (29.6 s) |
+| `test_recency_boost_flips_rankings_weighted` | 58.3 s | 36.8 s (34.0 s) |
+| `test_recency_boost_flips_rankings_rrf` | 55.4 s | 37.0 s (34.5 s) |
+| `test_hybrid_beats_single_channel` | 50.6 s | 39.6 s (37.6 s) |
+| `test_lexical_top_k_coverage_on_rare_tokens` | 38.8 s | 9.1 s (7.5 s) |
+| `test_recency_disabled_no_flip` | 32.7 s | 20.4 s (18.8 s) |
+
+- **The pattern.** On `006ccb8`, commit + close was 82–95 % of each test's wall. For the adopted tests
+  in the same run it was 40–53 %.
+- **How close to the budget.** The worst is at 48 % of the 120 s budget on `006ccb8`, and was at 58 %
+  on `1adf251`.
+  - At 48 %, a slowdown of about 2.1× reaches the timeout.
+  - On `1adf251`, `test_b6d` ran more than 4× slower on one worker than on another in the same run.
+
+  That this puts FU-2 at risk is an inference from the two-factor model (§2.1).
+- **Tracked in.** `RISKS.md`, "(2026-09-28) Seven same-shape integration tests still pay the
+  per-operation WAL teardown on Windows".
+- **What would close it.** Each test's seeding burst is declared as in §3.4, with the structural pin
+  extended to it, or it is shown not to need one. Then Windows evidence. Not a longer timeout, not a
+  smaller corpus, not a marker.
+
+**FU-3 — the unexplained runner setup slowdown.**
+- **On `1adf251`:**
+  - setup phases took 55.6 s and 58.1 s;
+  - `test_b6d` ran 25.4 s on gw1 but more than 110 s on gw0;
+  - a light test's call took 83.3 s.
+- **On `006ccb8`**, light tests' setup phases took:
+  - 30.0 s, gw0, `test_conversational_task_control.py::TestAcceptanceBar::test_a_plain_sentence_actually_creates_a_task`;
+  - 22.9 s, gw2, `test_windows_action_governance.py::test_the_full_governed_path_works_end_to_end`;
+  - 21.4 s, gw1, `test_learning_memory_control_centre.py::test_a1_candidate_exposes_its_supporting_experience_and_provenance`.
+- **What W15 does and does not show.** It records where a killed thread was, not why the runner was
+  slow. The cause is unresolved.
+- **Tracked in.** It belongs to the incident package, PR #124, not to this one:
+  - incident record §5, amended 2026-09-27;
+  - its `RISKS.md` entry ("the worker-loss stall cause is not established").
+
+  This package cross-references it and does not take it over.
+- **What would close it.** A cause identified from evidence, for example setup-phase tracing on the
+  Windows job, or a finding that it is runner-external.
+
 ## 9. Package boundary and merge order
 
 - This package depends on PR #124: `open_memory_db()` and the A1 connection contract exist only on
@@ -533,6 +612,18 @@ The `RISKS.md` headroom entry stays **open, narrowed**.
 
   Shape 2 is the folding Taylor rejected for #112 on 2026-09-17, which is why the review recommends
   shape 1.
+
+**Decided by Taylor (recorded 2026-09-28): shape 1.** In Taylor's words: "Preserve PR #124 and PR #125
+as separate packages. The intended merge order is #124 first, followed by #125 retargeted onto main and
+independently requalified on its resulting exact head."
+- This PR is not merged into #124's branch.
+- **Nothing proven here carries over to the retargeted head.** That covers the qualification on
+  `006ccb8` (§7) and any acceptance run on a pre-retarget head, because qualification binds to one
+  commit. The retargeted head is qualified on its own.
+- The retargeted head is made by merging `main`, once it contains #124, into this branch: a merge
+  commit, no rebase and no force-push.
+- The acceptance sequence (§7) runs one Merge Candidate at a time on one unchanged head. Its order
+  under this decision is reported to Taylor, and confirmed, before any run starts.
 
 ## 10. Proposed decision (for Taylor's User Approval Gate — not written into `DECISIONS.md` unless approved)
 
