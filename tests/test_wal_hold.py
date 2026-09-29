@@ -117,9 +117,10 @@ def recorded_connections(monkeypatch):
 
 
 def _uri_path(uri: str) -> str:
-    """The path SQLite reads from a `file:` URI the hold wrote: an empty
+    """The path SQLite reads from a `file:` URI the hold wrote, as
+    sqlite3ParseUri reads it: everything from a raw `#` ignored, an empty
     authority dropped, the query dropped, `%HH` escapes decoded."""
-    rest = uri[len("file:") :]
+    rest = uri[len("file:") :].split("#", 1)[0]
     if rest.startswith("//"):
         rest = rest[2:]
     return urllib.parse.unquote(rest.split("?", 1)[0])
@@ -470,6 +471,7 @@ def test_the_hold_uri_never_names_a_host_and_carries_the_path_verbatim(given):
     what SQLite reads back must be the caller's path, unnormalised."""
     uri = db_ctx._hold_open_uri(given)
     assert uri.startswith("file:") and uri.endswith("?mode=rw")
+    assert "#" not in uri, "SQLite ignores everything from a raw '#', mode=rw included"
     after_scheme = uri[len("file:") :]
     if after_scheme.startswith("//"):
         authority = after_scheme[2:].split("/", 1)[0]
