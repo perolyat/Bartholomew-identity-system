@@ -2,7 +2,31 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-25 — **Windows full-suite reliability incident (Merge Candidate
+> **Last updated:** 2026-09-28 — **Windows SQLite headroom repair (PR #125): Taylor's direction
+> recorded.** The headroom entry gains a dated note: the merge order is #124 first, then #125
+> retargeted and requalified on its own head. A new entry makes the seven undeclared same-shape tests
+> an explicit follow-up outside PR #125. The product-teardown entry and the incident's slowdown item
+> stay open, unchanged. Nothing is closed.
+>
+> **Previously (2026-09-27)** — **Windows SQLite headroom repair (PR #125, stacked on PR #124;
+> unmerged).**
+>
+> - **One existing entry is amended, not duplicated:** "Heavy-test headroom against the 120 s per-test
+>   timeout". The failure it predicted happened on `1adf251`: Merge Candidate 36153552522 was
+>   cancelled after losing three workers, each inside a SQLite last-close teardown, on a degraded
+>   runner.
+>   - The per-operation teardown mechanism is **verified** across three connection seams.
+>   - The runner slowdown that multiplied it **recurred and is unresolved**.
+>   - A bounded repair, `db_ctx.hold_wal_open()`, is implemented and adopted by three test bursts
+>     only. It was adversarially reviewed and verified locally (record:
+>     `docs/SQLITE_WAL_HEADROOM_REPAIR.md`).
+>   - **The entry stays open.**
+> - **Two new entries record what the diagnosis found and this package does not repair:**
+>   - the product's own per-operation WAL teardown;
+>   - the inconsistent parsing of `BARTHO_EMBED_ENABLED`.
+> - The incident entry is not closed. No risk is removed and no resolved risk is revived.
+>
+> **Previously (2026-09-25)** — **Windows full-suite reliability incident (Merge Candidate
 > 35971892908 attempt 1, `main` at `7b21a00`): repair implemented, incident still OPEN.** One new
 > tech-debt entry records the incident with verified, repaired, observable-only and unresolved
 > parts kept apart (full record: `docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md`), and **four
@@ -1684,6 +1708,139 @@
   > leave stacks if it happens. **What would close it** is unchanged in kind: a bounded
   > `db_session()` scope for this test's write path (as PR #113 did for the containment bursts),
   > decided as its own package — not a longer timeout. **Status:** open, measured, own package.
+
+  > **Amended 2026-09-27 — the predicted failure happened. The mechanism is verified, and a repair is
+  > implemented and awaiting Windows evidence.** Record: `docs/SQLITE_WAL_HEADROOM_REPAIR.md`.
+  > - **Observed (verified, job log).** Merge Candidate 36153552522 (`1adf251`) was cancelled at the
+  >   40-minute cap. W15 caught three workers at 110 s, each with the test's thread inside a SQLite
+  >   close, through three different seams:
+  >   - this test, via aiosqlite;
+  >   - `test_vector_quality_maintained_when_fts_unavailable` (120.0 s, close 77.1 s), via
+  >     `VectorStore.upsert` → `wal_db`;
+  >   - `test_b6d_the_material_field_vocabulary_is_enforced_not_documented`, via
+  >     `ObjectiveStore._set_status` → `db_ctx.connect`.
+  >
+  >   Connect + commit + close were 91–98 % of every heavy test's wall time.
+  > - **Two factors, not one.**
+  >   - **The mechanism (verified).** Every operation owns its connection and nothing holds the file
+  >     open between operations, so every close is SQLite's last close: a checkpoint with fsyncs, then
+  >     unlinking `-wal`/`-shm`. In the Linux census of the suite, 41,855 of 50,436 closes did this,
+  >     including every close in the three killed tests.
+  >   - **The runner slowdown (unresolved).** It recurred. `test_b6d` took 25.4 s on gw1 but more
+  >     than 110 s on gw0 in the same run. A light test took 83.3 s.
+  >
+  >   The kills are the product of the two. The repair removes the first factor where it is
+  >   declared: **necessary, not sufficient**.
+  >
+  >   **Correcting the wording above:** a `db_session()` scope could not have covered this test.
+  >   MemoryStore is aiosqlite, and `db_session()` is borrowed only by `wal_db()` on one thread.
+  > - **Repair (implemented; adopted by tests only).** `db_ctx.hold_wal_open()` holds one idle,
+  >   policy-configured connection, on a daemon thread of its own, for a declared burst. It lends it to
+  >   nobody.
+  >   - Every operation keeps its own connection. The teardown is paid once per burst, for every seam,
+  >     thread and process on the file.
+  >   - It is a distinct mechanism within the 2026-09-17 charter, not the 2026-09-18 borrowing model.
+  >   - Adopted by the three killed tests' bursts. No assertion, workload or timeout changed.
+  >   - Linux mechanism evidence: the WAL was torn down after 0 of N operations while held, against N
+  >     of N without a hold, and commit + close fell about 8–10×.
+  >   - Durability: inside a hold, power-loss durability is SQLite's documented `synchronous=NORMAL`
+  >     guarantee rather than the accidental extra fsyncs of a per-operation last close. The policy is
+  >     unchanged. `db_session()` already has this effect in production scheduler ticks.
+  > - **Not established.**
+  >   - Any Windows effect: the one qualification run is read against criteria registered in advance
+  >     (record §7).
+  >   - Seven same-shape integration tests at 33–69 s remain undeclared (record §8).
+  >   - The slowdown cause.
+  > - **Windows qualification, 2026-09-27: passed (one run).** Merge Candidate 36313600744 on
+  >   `006ccb8` passed every pre-registered criterion (record §7):
+  >   - no worker lost, W13 clean, 5,622 passed in 22:05;
+  >   - the three declared tests' commit + close fell from 53.9–91.3 s to **1.5 s**, from 117.7 s to
+  >     **4.4 s**, and from 27.0 s to **1.2 s**, with walls of 3.7 s, 8.3 s and 3.0 s;
+  >   - the undeclared same-shape tests in the same run still spent 92–96 % of their wall time in
+  >     commit + close.
+  > - **Status:** open, **narrowed**. The mechanism is repaired where it is declared, and shown on
+  >   Windows on one run. Not resolved:
+  >   - there is no repeatability evidence (a three-run sequence is Taylor's decision);
+  >   - seven same-shape tests are still undeclared;
+  >   - the slowdown is unexplained.
+  >
+  >   Awaiting Taylor's User Approval Gate.
+
+  > **Recorded 2026-09-28 — Taylor's direction.**
+  > - **Merge order.** #124 merges first. #125 is then retargeted onto `main` and requalified on its
+  >   own resulting head.
+  > - **Acceptance.** The three-run sequence is to be prepared, not yet started.
+  > - **Three residual costs are explicit follow-up work outside PR #125** (record §8.1):
+  >   - the product's per-operation teardown (its own entry, below);
+  >   - the seven same-shape tests (their own entry, below);
+  >   - the runner slowdown (the incident's entry, above).
+  >
+  >   None of them is closed by #125's acceptance.
+  > - **Status unchanged:** open, narrowed.
+
+- **(2026-09-27) The product pays the per-operation WAL teardown on every storage operation that
+  runs with no other connection open — recorded, not repaired.**
+  - **What happens.** MemoryStore, ObjectiveStore, GovernanceStore and VectorStore each own one
+    connection per operation, so an operation whose close is the last one pays three things:
+    - **latency**: a checkpoint with its fsyncs, then unlinking and recreating `-wal`/`-shm`;
+    - **fsync amplification**: on Linux, 80 `fdatasync` per 20 vector upserts;
+    - **a last-close EXCLUSIVE window**: the lock the incident's `database is locked` mechanism waits
+      on. A1 lengthened the setup budget against it; it did not remove it.
+  - **Evidence.** Verified in the headroom repair's diagnosis (`docs/SQLITE_WAL_HEADROOM_REPAIR.md`
+    §2): in a Linux census of the test suite, 41,855 of 50,436 closes did this. In the daemon, a
+    scheduler tick's `db_session()` holds the shared file open while it runs; between ticks, nothing
+    does.
+  - **The repair exists, but adopting it is not a mechanical change.** `db_ctx.hold_wal_open()` would
+    remove this per declared burst. Adopting it in the product is a design decision per caller. Each
+    must weigh:
+    - power-loss durability, which reverts to NORMAL's documented guarantee inside a hold;
+    - POSIX-lock hazards, for fork and raw file I/O;
+    - several processes (daemon, CLI, API bridge) on one database;
+    - bursts that await external actors, such as the consent handler inside `upsert_memory`.
+
+    A test pins "no production hold" as an exact allowlist, so that decision cannot be taken silently.
+  - **Owner:** to be assigned by Taylor. The proposal is a bounded package per adopting caller.
+  - **Risk category:** performance / reliability.
+  - **Status:** open.
+
+- **(2026-09-28) Seven same-shape integration tests still pay the per-operation WAL teardown on
+  Windows — explicit follow-up, outside PR #125.**
+  - **Which tests.** Each seeds through its own ingestion loop, with no hold:
+    - `test_lexical_beats_vector_on_exact_rare_tokens`;
+    - `test_privacy_gates_upheld`;
+    - `test_recency_boost_flips_rankings_weighted` and `…_rrf`;
+    - `test_hybrid_beats_single_channel`;
+    - `test_lexical_top_k_coverage_on_rare_tokens`;
+    - `test_recency_disabled_no_flip`.
+  - **Evidence (verified, Windows job logs).**
+    - Pre-fix, Merge Candidate 36153552522 on `1adf251`: wall times of 32.7–69.2 s.
+    - Repaired head, Merge Candidate 36313600744 on `006ccb8`: wall times of 9.1–57.6 s. Commit + close
+      was 82–95 % of each wall, against 40–53 % for the three tests that declare a hold.
+    - The worst, `test_lexical_beats_vector_on_exact_rare_tokens`, is at 48 % of the 120 s budget.
+      At that level, a slowdown of about 2.1× would reach the timeout.
+  - **Why it matters (inference).** The kills are the per-operation teardown multiplied by a runner
+    slowdown that is still unexplained. These tests carry the first factor undiminished.
+  - **Why it is not in PR #125.** Taylor directed that it stay explicit follow-up work, not be absorbed
+    into that package.
+  - **What would close it.** Each test's seeding burst is declared as in record §3.4, with the
+    structural pin extended to it, or is shown not to need one. Then Windows evidence. It must not be
+    closed by a longer timeout, a smaller corpus or a marker. Record: `docs/SQLITE_WAL_HEADROOM_REPAIR.md`
+    §8.1 (FU-2).
+  - **Owner:** to be assigned by Taylor.
+  - **Risk category:** reliability / CI headroom.
+  - **Status:** open.
+
+- **(2026-09-27) `BARTHO_EMBED_ENABLED` is parsed inconsistently — recorded, not repaired.**
+  - `memory_store.py` and `embedding_engine.py:137` treat any non-empty value, including `"0"`, as
+    enabled. `memory_rules.py` and `embedding_engine.py:789` require `"1"`.
+  - A setting of `"0"` therefore turns embeddings **on** for the write path and off elsewhere.
+    `tests/integration/test_fts_unavailable_vector_quality.py` sets `"0"` and never resets it, so the
+    setting leaks into later tests on the same worker. It accounts for about 31 % of that test's
+    connections.
+  - This was already noted in `tests/test_competency_no_auto_promotion.py`. It is found again by the
+    headroom repair, which does not change it.
+  - **Risk category:** configuration correctness.
+  - **Status:** open, small, separate.
 
 - **(2026-09-25) Existing databases may hold orphan child rows written while MemoryStore
   connections ran with foreign keys off — no audit exists, deferred.** Until the 2026-09-25

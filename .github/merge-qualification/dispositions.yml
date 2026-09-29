@@ -46,3 +46,28 @@ dispositions:
       finding is the inline comment review_comment:4105531182, dispositioned
       above as resolved by a later commit.
     recorded_by: "Claude Code (PR #124 author session), for Taylor's review"
+  # PR #125 (Windows SQLite headroom repair). Codex, on 19014c1: hold_wal_open's
+  # entry check and its thread's open were two steps, so a database removed
+  # between them was recreated as a zero-byte file.
+  - finding_id: review_comment:4129475818
+    classification: resolved_by_later_commit
+    resolved_by_commit: d91b5170de6458445af14fbfa44d937c8be69377
+    rationale: >-
+      Valid, and reproduced deterministically. 35c6fc3 made the hold's own open
+      read-write without create (SQLite mode=rw), so a missing file is refused
+      by the open itself and nothing is created. An adversarial review of that
+      fix found three defects in how its URI was built (a symlink-then-".."
+      path collapsed textually; a Windows UNC or \\?\ path given a URI host;
+      the re-raise of a non-missing open failure untested). d91b517 passes the
+      path to SQLite verbatim, escaping only % ? #, and never writes an
+      authority. New tests cover the race, the symlink, URI-special characters,
+      the URI's shape and the re-raise. Each fails with its fix reverted, and
+      the original 18-mutant matrix still catches every mutant.
+    recorded_by: "Claude Code (PR #125 author session), for Taylor's review"
+  - finding_id: review:5347532995
+    classification: non_substantive
+    rationale: >-
+      The review body is Codex's header and product boilerplate only. Its one
+      finding is the inline comment review_comment:4129475818, dispositioned
+      above as resolved by a later commit.
+    recorded_by: "Claude Code (PR #125 author session), for Taylor's review"

@@ -37,6 +37,7 @@ import yaml
 from bartholomew.kernel import candidate_learning, learning_authorization, learning_policy
 from bartholomew.kernel import objective_store as os_mod
 from bartholomew.kernel.competency import COMPETENCY_KINDS
+from bartholomew.kernel.db_ctx import hold_wal_open
 from bartholomew.kernel.memory.privacy_guard import set_consent_handler
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.objective_store import ObjectiveStore
@@ -735,34 +736,42 @@ async def test_b6d_the_material_field_vocabulary_is_enforced_not_documented(ctx)
         "competency_id",
     }
 
-    for field_name, value in editable_material.items():
-        lesson = await _propose(
-            ctx,
-            _run_the_experience(ctx, title=f"Objective for {field_name}"),
-        )
-        before = learning_authorization.fingerprint_for(lesson)
-        result = await run_candidate_edit_through_runtime_contract(
+    # Nine propose-and-edit rounds are one declared burst. Every store involved
+    # (objectives, memories, governance) still opens and closes its own
+    # connections through the real runtime contract; the hold only stops each
+    # of those ~300 closes from tearing the WAL down -- the cost gw0 was inside
+    # when it was killed on Windows (Merge Candidate 36153552522), on a runner
+    # slow enough that the same test took 25 s on another worker
+    # (docs/SQLITE_WAL_HEADROOM_REPAIR.md).
+    async with hold_wal_open(ctx.mem.db_path, label="material-field rounds"):
+        for field_name, value in editable_material.items():
+            lesson = await _propose(
+                ctx,
+                _run_the_experience(ctx, title=f"Objective for {field_name}"),
+            )
+            before = learning_authorization.fingerprint_for(lesson)
+            result = await run_candidate_edit_through_runtime_contract(
+                ctx,
+                competency_id=COMPETENCY_ID,
+                slug=lesson.slug,
+                editor=EDITOR,
+                expected_revision=lesson.revision,
+                **{field_name: value},
+            )
+            assert result.material_change is True, f"{field_name} must be material"
+            assert result.fingerprint_after != before
+
+        assert ADMINISTRATIVE_CANDIDATE_FIELDS == {"display_state"}
+        lesson = await _propose(ctx, _run_the_experience(ctx, title="Objective for display state"))
+        admin = await run_candidate_edit_through_runtime_contract(
             ctx,
             competency_id=COMPETENCY_ID,
             slug=lesson.slug,
             editor=EDITOR,
             expected_revision=lesson.revision,
-            **{field_name: value},
+            display_state=candidate_learning.DISPLAY_PINNED,
         )
-        assert result.material_change is True, f"{field_name} must be material"
-        assert result.fingerprint_after != before
-
-    assert ADMINISTRATIVE_CANDIDATE_FIELDS == {"display_state"}
-    lesson = await _propose(ctx, _run_the_experience(ctx, title="Objective for display state"))
-    admin = await run_candidate_edit_through_runtime_contract(
-        ctx,
-        competency_id=COMPETENCY_ID,
-        slug=lesson.slug,
-        editor=EDITOR,
-        expected_revision=lesson.revision,
-        display_state=candidate_learning.DISPLAY_PINNED,
-    )
-    assert admin.material_change is False
+        assert admin.material_change is False
 
 
 async def test_b6_the_prior_revision_is_preserved(ctx):

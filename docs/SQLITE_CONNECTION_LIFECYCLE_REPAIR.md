@@ -123,6 +123,16 @@ Inside the scope, `wal_db()` borrows the session's connection. Outside it, nothi
   goes through, so `MemoryStore`, the vector store, the executive, actuation, ECI, inbound and
   event-processing stores all become scope-capable without touching their code.
 
+  > **Corrected 2026-09-27** (Windows SQLite headroom repair, `docs/SQLITE_WAL_HEADROOM_REPAIR.md`
+  > §2.2 and §8). `wal_db()` is not the choke point every store goes through. `MemoryStore` uses
+  > aiosqlite. `ObjectiveStore`, `GovernanceStore` and others call `db_ctx.connect()` directly, and
+  > `FTSClient` calls `sqlite3.connect`. None of these borrow a `db_session()`.
+  >
+  > What they do get from an open session, on any thread, is its *presence*: while any connection
+  > that has read the file stays open in the process, no other close is the last close, so the WAL
+  > teardown is not paid. That effect is measured and pinned in the headroom repair record. It is
+  > not borrowing.
+
 ## 4. Evidence
 
 - `tests/test_db_session_lifecycle.py` — 34 deterministic tests over eight properties: reuse

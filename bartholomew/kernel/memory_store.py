@@ -61,8 +61,10 @@ logger = logging.getLogger(__name__)
 #
 # `journal_mode` is persistent in the file and init() sets it, so it is not
 # re-issued here. Ownership is unchanged: one connection per unit of work,
-# closed when it ends. tests/test_memory_store_connection_contract.py holds
-# this module to having no other connection path.
+# closed when it ends -- including inside a `db_ctx.hold_wal_open()` scope,
+# which holds the file open but lends its own connection to nobody.
+# tests/test_memory_store_connection_contract.py holds this module to having
+# no other connection path.
 # ---------------------------------------------------------------------------
 
 

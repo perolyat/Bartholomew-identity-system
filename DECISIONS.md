@@ -4050,3 +4050,143 @@
   - Nothing in Bartholomew's runtime, governance, Parking Brake or user-facing behaviour changes.
     This is project control, not system control.
 - **Date:** 2026-09-21
+
+## Decision: a declared burst may hold its SQLite database open, lending the held connection to nobody
+
+- **Status:** approved by Taylor at the User Approval Gate on 2026-09-28 ("I approve §10 as
+  written"), as proposed in `docs/SQLITE_WAL_HEADROOM_REPAIR.md` §10. It is recorded on the Windows
+  SQLite headroom repair branch (`claude/windows-sqlite-headroom-repair-ywxir4`, PR #125). It enters
+  `main` only when that pull request is merged at the User Approval Gate.
+  - The approved merge order is PR #124 first. PR #125 is then retargeted onto `main` and requalified
+    on its own resulting head.
+  - It is a distinct mechanism within the class the 2026-09-17 charter allows ("SQLite
+    connection-lifetime repair is a separate package, scoped to reuse and never a process-wide
+    pool").
+  - It does not amend the 2026-09-18 decision ("a SQLite connection is owned by a bounded unit of
+    work, not by a single statement").
+  - Reading the approved text below: its "§3.3" is `docs/SQLITE_WAL_HEADROOM_REPAIR.md` §3.3, and
+    "this package" is PR #125. This note is not part of the approved text.
+- **Decision** (the approved text, verbatim):
+
+  > *Proposal.* A caller about to perform a burst of operations on one SQLite database may declare it
+  > with `db_ctx.hold_wal_open()`.
+  >
+  > - For the burst's duration this holds one idle connection, under the shared connection policy, on a
+  >   daemon thread of its own. It is never lent.
+  > - The WAL is therefore torn down once per burst instead of once per operation, for every connection
+  >   to the file. Every operation keeps its own connection.
+  > - This is a distinct mechanism within the 2026-09-17 charter ("a connection explicitly held across a
+  >   burst and explicitly closed"). It is not the 2026-09-18 borrowing model.
+  > - Adoption is explicit and per caller. In this package it is adopted only by the three test bursts
+  >   killed on Windows. Product adoption is a separate decision that must weigh §3.3; an exact-allowlist
+  >   test enforces this.
+
+  It decides nothing about the deferred hybrid pooling model, and introduces no pooling, no reuse of a
+  connection by anyone, and no connection that outlives its declaration.
+- **Why:**
+  - **The failure.** Merge Candidate 36153552522 (PR #124's head `1adf251`) was cancelled at its
+    40-minute cap. Three workers had been killed by the 120 s per-test timeout, each with the test's
+    thread inside a SQLite close, reached through three different connection seams:
+    - aiosqlite (`open_memory_db`);
+    - `db_ctx.wal_db`;
+    - a direct `db_ctx.connect`.
+  - **The mechanism (verified).** Every operation owns its connection and nothing holds the file open
+    between operations. So every close is SQLite's *last* close of a WAL database: a checkpoint with
+    its fsyncs, then unlinking `-wal`/`-shm`, which the next operation recreates. A Linux census of the
+    default suite counted 41,855 such closes out of 50,436.
+  - **Two factors, not one.** The mechanism is not established as the sole cause. The kills were the
+    product of this teardown and a degraded runner whose cause is unresolved (FU-3, the incident's).
+    `test_b6d` took 25.4 s on gw1 but more than 110 s on gw0 in the same run. A hold removes the first
+    factor where it is declared: **necessary for headroom, not sufficient for reliability**.
+  - **Why borrowing through `db_session()` could not answer it.**
+    - The 2026-09-18 `db_session()` lends its connection only to `wal_db()` on its own thread, so its
+      borrowing cannot reach the aiosqlite or direct-connect seams.
+    - Its open connection does have the file-wide effect: once the database is initialised, 0 of 520
+      teardowns in the heavy test (record §2.3, §8).
+    - It was rejected as the anchor for the reasons under Alternatives.
+
+    An idle connection that lends nothing covers every seam, thread and process at once. It changes
+    nothing about how any operation owns its connection.
+  - **Windows evidence (verified).** Merge Candidate 36313600744 on `006ccb8`, the one qualification
+    run, met every criterion registered before it (record §7):
+    - **Q1:** the run finished inside its 40-minute cap, and W13 was clean.
+    - **Q2:** no adopted test lost a worker; all 4 workers finished.
+    - **Q3:** the three declared tests' commit + close fell from 53.9–91.3 s to 1.5 s, from 117.7 s
+      to 4.4 s, and from 27.0 s to 1.2 s. Each is within its 20 % limit, and each wall time
+      (3.7 s, 8.3 s, 3.0 s) is at most 60 s.
+
+    A same-run control, which is not a criterion: the undeclared same-shape tests still spent most
+    of their wall time in commit + close.
+
+    One run is not repeatability.
+    - The three-run acceptance sequence is defined in the record's §7 and has not been started.
+    - Taylor directed that it run one Merge Candidate at a time on one frozen head of PR #125.
+      Record §9 holds the head discipline, including run 1's authorisation on 2026-09-29.
+    - Qualification binds to one commit, so nothing proven on another head carries over to it,
+      including the qualification on `006ccb8`.
+- **Alternatives considered:**
+  - *Borrowing an aiosqlite connection*, a literal async `db_session()`. Rejected on verified
+    hazards:
+    - lost writes across tasks;
+    - `SQLITE_BUSY_SNAPSHOT` from partly read cursors;
+    - inherited transactions and leaked `row_factory`;
+    - `executescript` commits;
+    - zombie handles.
+
+    It would also cover the aiosqlite seam only.
+  - *Holding an aiosqlite connection as the keeper* (the first implementation, `28d2a02`). Replaced
+    after adversarial review. It inherits aiosqlite's non-daemon worker, so a hold that is never
+    exited kept the process from exiting. Its close semantics also vary across the unpinned
+    `aiosqlite>=0.19` range. The keeper is a daemon thread of its own instead.
+  - *The sync `db_session()` as the anchor.* Rejected: entered before initialisation it silently does
+    nothing, and in async code it runs blocking SQLite setup on the event loop.
+  - *A pool or a process-lifetime connection.* Rejected by the 2026-09-17 charter and by
+    `tests/test_vector_store_handle_lifetime.py`.
+  - *Raising the 120 s timeout or the 40-minute cap, fewer xdist workers, or skipping, xfailing or
+    shrinking the tests.* Rejected: they remove the signal, not the cost.
+- **Consequences:**
+  - **Operations are unchanged.** Every operation inside a hold keeps its own connection,
+    transaction, rollback-on-close, cursors, `row_factory`, foreign keys, `synchronous=NORMAL` and
+    the 30 s setup / 5 s operational budgets. Governance is untouched.
+  - **The held connection is idle.** It holds no transaction and no read snapshot, and blocks no
+    reader, writer, `BEGIN IMMEDIATE` or TRUNCATE checkpoint. Its effect is file-wide: while it is
+    open, no close by any thread or process on that file is the last close. The hold's own close is
+    the one last close.
+  - **Durability.** Inside a hold, power-loss durability is exactly `synchronous=NORMAL`'s
+    documented guarantee: the latest transactions may roll back on power loss or an OS crash.
+    - The per-operation checkpoint's extra fsyncs were never a promise.
+    - Durability across an application crash is unchanged.
+    - The database file alone is not a complete copy until the hold ends.
+  - **Exclusive access fails while a hold is open:** changing `journal_mode`,
+    `locking_mode=EXCLUSIVE`, and on Windows deleting or renaming the file.
+  - **POSIX locks (Linux/macOS).**
+    - Forking, or a non-SQLite `open()`/`close()` of the file in the holding process, drops the
+      process's `fcntl` locks.
+    - Combined with another process's close, that can lose writes committed inside the hold
+      (reproduced).
+    - SQLite documents this hazard for any open connection. A hold widens its window from one
+      operation to the burst.
+  - **Cancellation** is delivered only after the held connection has closed. A missing or non-WAL
+    database is refused.
+  - **No product code holds one.** `tests/test_wal_hold.py` pins that with an exact, empty
+    allowlist, so product adoption edits that test on purpose.
+    - **What an adopter must weigh.** Each adopting caller is its own decision and must weigh §3.3 of
+      the record, summarised above. It must also weigh the further items that `RISKS.md` (FU-1) and
+      record §8 list:
+      - several processes (daemon, CLI, API bridge) sharing one database;
+      - bursts that await external actors. `request_permission_to_store` can await an arbitrary
+        consent handler inside `upsert_memory`, so a hold spanning it would be unbounded.
+    - **Candidates** (inference, record §8), none of them adopted:
+      - one `correct_memory`/`supersede_memory`;
+      - a request handler;
+      - an event-processing pass;
+      - the embeddings rebuild loop.
+    - **Tracking.** The product's teardown is in `RISKS.md`, "(2026-09-27) The product pays the
+      per-operation WAL teardown…" (FU-1 in record §8.1).
+  - **Nothing is decided about the deferred hybrid pooling model**, which is not recorded in the
+    repository, and nothing pre-empts it.
+  - **Open follow-ups, outside this decision** (`docs/SQLITE_WAL_HEADROOM_REPAIR.md` §8.1):
+    - FU-1: the product's per-operation teardown;
+    - FU-2: the seven undeclared same-shape integration tests;
+    - FU-3: the runner setup slowdown, which is the incident's.
+- **Date:** 2026-09-28

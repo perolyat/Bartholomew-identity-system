@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+from bartholomew.kernel.db_ctx import db_session, hold_wal_open
 from bartholomew.kernel.fts_client import FTS5ProbeResult, FTS5Status
 from bartholomew.kernel.memory_store import MemoryStore
 from bartholomew.kernel.retrieval import get_retriever, reset_fts5_cache
@@ -136,37 +137,44 @@ async def test_vector_quality_maintained_when_fts_unavailable():
         store = MemoryStore(db_path)
         await store.init()
 
-        # Ingest memories
+        # Ingest memories. Each seeding burst below is declared, so the WAL is
+        # torn down once per burst rather than after every operation -- the
+        # per-operation teardown took this test to 120 s on Windows (Merge
+        # Candidate 36153552522; docs/SQLITE_WAL_HEADROOM_REPAIR.md). Every
+        # operation is unchanged and still owns its own connection.
         memory_map = {}  # (group_id, variant_idx) -> memory_id
-        for item in corpus:
-            result = await store.upsert_memory(
-                kind=item["kind"],
-                key=item["key"],
-                value=item["text"],
-                ts=item["ts"],
-            )
-            memory_map[(item["group_id"], item["variant_idx"])] = result.memory_id
+        async with hold_wal_open(db_path, label="quality corpus ingestion"):
+            for item in corpus:
+                result = await store.upsert_memory(
+                    kind=item["kind"],
+                    key=item["key"],
+                    value=item["text"],
+                    ts=item["ts"],
+                )
+                memory_map[(item["group_id"], item["variant_idx"])] = result.memory_id
 
         await store.close()
 
-        # Add clustered embeddings (same group = similar vectors)
+        # Add clustered embeddings (same group = similar vectors). VectorStore
+        # writes through db_ctx.wal_db(), so the approved sync scope applies.
         vec_store = VectorStore(db_path)
-        for item in corpus:
-            key = (item["group_id"], item["variant_idx"])
-            memory_id = memory_map[key]
-            vec = create_synthetic_embeddings(
-                item["group_id"],
-                item["variant_idx"],
-                dim=384,
-                seed=42,
-            )
-            vec_store.upsert(
-                memory_id=memory_id,
-                vec=vec,
-                source="full",
-                provider="local-sbert",
-                model="BAAI/bge-small-en-v1.5",
-            )
+        with db_session(db_path, label="clustered embeddings"):
+            for item in corpus:
+                key = (item["group_id"], item["variant_idx"])
+                memory_id = memory_map[key]
+                vec = create_synthetic_embeddings(
+                    item["group_id"],
+                    item["variant_idx"],
+                    dim=384,
+                    seed=42,
+                )
+                vec_store.upsert(
+                    memory_id=memory_id,
+                    vec=vec,
+                    source="full",
+                    provider="local-sbert",
+                    model="BAAI/bge-small-en-v1.5",
+                )
 
         # Create test queries (use first variant of first 10 groups)
         queries = []
