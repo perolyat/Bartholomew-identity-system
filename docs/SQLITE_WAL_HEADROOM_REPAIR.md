@@ -173,7 +173,14 @@ event loop) and as `with` (refused on an event-loop thread).
 - **Entry.** It refuses a database that does not exist, and one that is not in WAL mode: on a
   rollback-journal file an idle connection holds no lock, so the hold would silently do nothing. It
   then starts **one daemon thread**, which opens **one connection** with the setup budget and the
-  shared setup pragmas, then drops it to the operational budget. The thread attaches the connection
+  shared setup pragmas, then drops it to the operational budget.
+  - **The open cannot create the file** (added 2026-09-29, Codex `review_comment:4129475818`).
+    It is read-write without create (SQLite `mode=rw`), so a file removed between the entry check
+    and the open is refused, not recreated.
+  - **The path reaches SQLite verbatim.** Only `%`, `?` and `#` are escaped, and the URI never
+    names a host. A symlink-then-`..` path resolves exactly as every other seam resolves it, and a
+    Windows UNC or `\\?\` path is not refused as a URI authority.
+  - Fix `35c6fc3`, corrected by `d91b517` after adversarial review. The thread attaches the connection
   with fully consumed reads (`PRAGMA journal_mode`, then `SELECT count(*) FROM sqlite_master`) and waits.
 - **Exit.** The release is decided synchronously, before any `await`. The exit then waits until the
   thread has closed its connection and gone, **through any number of cancellations**, and re-raises
@@ -290,7 +297,8 @@ is `1adf251` in a separate worktree; "after" is the final implementation.
   proportional effect should be larger, **but only the Windows run in §7 can say**.
 
 **Mutation check of the forbidden-state tests.** Each deliberately broken implementation of
-`hold_wal_open` was run against `tests/test_wal_hold.py`, and each was caught:
+`hold_wal_open` was run against `tests/test_wal_hold.py`, and each was caught. The matrix was re-run
+in full on 2026-09-29 against `d91b517`, with the Codex repair's own mutants added:
 
 | Mutant | Caught by |
 |---|---|
@@ -303,7 +311,14 @@ is `1adf251` in a separate worktree; "after" is the final implementation.
 | connection kept on the hold (lendable) | `nothing_anywhere_can_find_or_keep…` |
 | policy pragmas bypassed | the ownership test, the concurrency test |
 | a module-level registry | `nothing_anywhere_can_find_or_keep…` |
-| no existence check / no WAL check | the two refusal tests |
+| no existence check | `a_database_that_vanishes_after_the_entry_check…` |
+| no WAL check | `a_hold_on_a_non_wal_database_is_refused…` |
+| the open can create a missing file (a plain-path or `mode=rwc` open) — Codex `review_comment:4129475818` | `a_database_that_vanishes_after_the_entry_check…` |
+| a missing file reported as a raw `OperationalError` | `a_database_that_vanishes_after_the_entry_check…` |
+| every open failure reported as "does not exist" | `an_open_that_fails_on_an_existing_database_is_not_reported_as_missing` |
+| the path normalised before SQLite sees it (`abspath().as_uri()`) | `the_hold_opens_the_file_every_other_seam_opens_through_a_symlink`, `the_hold_uri_never_names_a_host…` |
+| a URI authority written (a UNC path read as a host) | `the_hold_uri_never_names_a_host…` |
+| `%` or `#` not escaped in the URI | `a_path_with_uri_special_characters_holds_that_file`; for `#`, also `the_hold_uri_never_names_a_host…` |
 | non-daemon thread | `a_hold_still_open_at_interpreter_exit_does_not_block_the_exit` |
 | entry cancellation not waited for | `a_cancellation_during_entry_waits…` |
 | the thread keeps its hold alive (the finalizer cannot fire) | `an_abandoned_hold_never_keeps_the_process_alive…` |
@@ -321,7 +336,8 @@ implementation replaced, before this matrix was run.
 | Would fail if the repair became… | Test |
 |---|---|
 | ineffective (the causal control) | `test_control_unheld_every_operation_tears_the_wal_down`, `test_while_held_no_operation_tears_the_wal_down`, `test_the_hold_covers_every_connection_seam_on_any_thread`, `test_the_synchronous_form_holds_the_file_for_sync_callers` |
-| silently ineffective on an uninitialised or non-WAL file, or created the file | `test_a_hold_on_a_database_that_does_not_exist_yet_is_refused`, `test_a_hold_on_a_non_wal_database_is_refused_and_released` |
+| silently ineffective on an uninitialised or non-WAL file, or created the file | `test_a_hold_on_a_database_that_does_not_exist_yet_is_refused`, `test_a_hold_on_a_non_wal_database_is_refused_and_released`, `test_a_database_that_vanishes_after_the_entry_check_is_refused_not_recreated` (the file removed between the check and the open) |
+| holding a different file from the one the path names, or misreporting an open failure | `test_the_hold_opens_the_file_every_other_seam_opens_through_a_symlink`, `test_a_path_with_uri_special_characters_holds_that_file`, `test_the_hold_uri_never_names_a_host_and_carries_the_path_verbatim`, `test_an_open_that_fails_on_an_existing_database_is_not_reported_as_missing` |
 | borrowing / cross-task, thread or loop sharing | `test_every_operation_inside_still_owns_its_own_connection` (exactly one extra connection, which ran only its setup and reads), `test_concurrent_tasks_threads_and_loops_while_held_use_their_own_connections` |
 | a configuration bypass | the same ownership test (every connection, held or not, starts with the policy statements under the 30 s budget), `test_an_operation_inside_the_hold_runs_under_the_shared_policy` |
 | a pool or registry | `test_nothing_anywhere_can_find_or_keep_the_held_connection` (module state, containers, plain objects' attributes, context variables, the hold and the store — during and after), `test_re_entering_opens_a_new_held_connection_rather_than_reusing_one`, `test_a_hold_cannot_be_entered_twice` |
@@ -340,6 +356,8 @@ implementation replaced, before this matrix was run.
 All runs are against the code of head `006ccb8`.
 
 - `tests/test_wal_hold.py`: **32 passed**. The mutation matrix is in §4.
+  - *2026-09-29, after the Codex repair:* **44 passed**. The matrix was re-run in full (§4). The
+    full approved local selection runs on the new candidate head before it is frozen (§9).
 - The three adopted tests: **passed**.
 - SQLite / MemoryStore / scheduler regression suites: **391 passed across 31 files**. They cover:
   - the connection contract, including its corrected closure probe;
