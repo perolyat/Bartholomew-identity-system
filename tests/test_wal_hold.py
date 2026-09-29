@@ -42,6 +42,8 @@ import textwrap
 import threading
 import time
 import types
+import urllib.parse
+import urllib.request
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
@@ -115,8 +117,17 @@ def recorded_connections(monkeypatch):
     return opened
 
 
+def _file_of(database: str) -> str:
+    """The file a connection was opened on. The hold opens by `file:` URI
+    (`mode=rw`, never create); every other seam opens by path."""
+    if database.startswith("file:"):
+        parts = urllib.parse.urlsplit(database)
+        database = urllib.request.url2pathname(parts.path)
+    return os.path.normcase(os.path.abspath(database))
+
+
 def _ours(recorded: list[dict], path: str) -> list[dict]:
-    return [c for c in recorded if c["database"] == path]
+    return [c for c in recorded if _file_of(c["database"]) == _file_of(path)]
 
 
 def _held(recorded: list[dict], path: str) -> list[dict]:
@@ -332,6 +343,44 @@ def test_a_hold_on_a_database_that_does_not_exist_yet_is_refused(tmp_path):
     with pytest.raises(FileNotFoundError):
         asyncio.run(_enter())
     assert not os.path.exists(path)
+
+
+def test_a_database_that_vanishes_after_the_entry_check_is_refused_not_recreated(
+    tmp_path,
+    monkeypatch,
+):
+    """The entry check and the hold's open are two steps. If the file is
+    removed between them -- by its owner's cleanup, say -- the open must not
+    create a new, empty database in its place: it opens read-write without
+    create, so the hold is refused and nothing is left behind (Codex
+    review_comment:4129475818)."""
+    path = str(tmp_path / "vanishing.db")
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (x)")
+    conn.commit()
+    conn.close()
+    real_exists = os.path.exists
+
+    def seen_then_removed(candidate):
+        present = real_exists(candidate)
+        if present and os.fspath(candidate) == path:
+            # The entry check sees the file; it is gone before the hold opens it.
+            for suffix in ("", "-wal", "-shm"):
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(path + suffix)
+        return present
+
+    monkeypatch.setattr(os.path, "exists", seen_then_removed)
+
+    async def _enter():
+        async with hold_wal_open(path):
+            pytest.fail("a hold whose file vanished must not open")
+
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(_enter())
+    assert not real_exists(path), "the hold created the database it was refused"
+    assert not _hold_threads()
 
 
 def test_a_hold_on_a_non_wal_database_is_refused_and_released(tmp_path, recorded_connections):
@@ -651,7 +700,9 @@ def test_repeated_cancellation_cannot_end_the_hold_before_its_connection_is_clos
     recording_connect = sqlite3.connect
 
     def slow_close_for_the_hold(database, *args, **kwargs):
-        if kwargs.get("timeout") == db_ctx.SETUP_LOCK_TIMEOUT_S and database == db_path:
+        if kwargs.get("timeout") == db_ctx.SETUP_LOCK_TIMEOUT_S and _file_of(
+            str(database),
+        ) == _file_of(db_path):
             kwargs["factory"] = _SlowToCloseConnection
         return recording_connect(database, *args, **kwargs)
 

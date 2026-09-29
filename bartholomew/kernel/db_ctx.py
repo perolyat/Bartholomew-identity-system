@@ -19,6 +19,7 @@ import time
 import weakref
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 _checkpoint_log = logging.getLogger("bartholomew.kernel.db_ctx.checkpoint")
 _hold_log = logging.getLogger("bartholomew.kernel.db_ctx.hold")
@@ -698,6 +699,22 @@ _HOLD_ATTACH_SQL = "SELECT count(*) FROM sqlite_master"
 _HOLD_POLL_MAX_S = 0.05
 
 
+def _hold_open_uri(db_path: str) -> str:
+    """The hold's own open: read-write, never create (`mode=rw`).
+
+    `Path.as_uri()` percent-encodes the path and gives `file:///C:/...` on
+    Windows, which is the form SQLite's URI parser expects.
+    """
+    return Path(os.path.abspath(db_path)).as_uri() + "?mode=rw"
+
+
+def _missing_database(db_path: str) -> FileNotFoundError:
+    return FileNotFoundError(
+        f"hold_wal_open: {db_path!r} does not exist; initialise the database "
+        "before holding it open (a hold must not create the file)",
+    )
+
+
 def _hold_file_open(
     db_path: str,
     ready: threading.Event,
@@ -713,7 +730,14 @@ def _hold_file_open(
     conn = None
     try:
         # SETUP_LOCK_TIMEOUT_S is read here, at call time, like the other seams.
-        conn = connect(db_path, timeout=SETUP_LOCK_TIMEOUT_S)
+        # `mode=rw`: the entry check and this open are not one step, so the
+        # open itself must refuse a missing file rather than create one.
+        try:
+            conn = connect(_hold_open_uri(db_path), uri=True, timeout=SETUP_LOCK_TIMEOUT_S)
+        except sqlite3.OperationalError as exc:
+            if os.path.exists(db_path):
+                raise
+            raise _missing_database(db_path) from exc
         for pragma in CONNECTION_SETUP_PRAGMAS:
             conn.execute(pragma)
         conn.execute(OPERATIONAL_BUSY_TIMEOUT_PRAGMA)
@@ -782,10 +806,7 @@ class WalHold:
         if self._thread is not None:
             raise RuntimeError("hold_wal_open: a hold is entered once; declare a new one")
         if not os.path.exists(self.db_path):
-            raise FileNotFoundError(
-                f"hold_wal_open: {self.db_path!r} does not exist; initialise the database "
-                "before holding it open (a hold must not create the file)",
-            )
+            raise _missing_database(self.db_path)
         thread = threading.Thread(
             target=_hold_file_open,
             args=(self.db_path, self._ready, self._release, self._refusal),
