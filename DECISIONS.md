@@ -4120,10 +4120,10 @@
 
     One run is not repeatability.
     - The three-run acceptance sequence is defined in the record's §7 and has not been started.
-    - Taylor directed on 2026-09-28 that it run one Merge Candidate at a time on PR #125's own
-      retargeted, frozen head.
-    - Under §9, nothing proven on a pre-retarget head carries over to that head, including the
-      qualification on `006ccb8`.
+    - Taylor directed that it run one Merge Candidate at a time on one frozen head of PR #125.
+      Record §9 holds the head discipline, including run 1's authorisation on 2026-09-29.
+    - Qualification binds to one commit, so nothing proven on another head carries over to it,
+      including the qualification on `006ccb8`.
 - **Alternatives considered:**
   - *Borrowing an aiosqlite connection*, a literal async `db_session()`. Rejected on verified
     hazards:

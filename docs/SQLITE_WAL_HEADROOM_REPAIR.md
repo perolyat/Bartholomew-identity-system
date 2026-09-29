@@ -652,6 +652,77 @@ Two procedural points were put to Taylor on 2026-09-28 and are settled before th
 - the test selection behind "`pytest -m ci`". No `ci` marker is registered, so that command
   collects no tests.
 
+**Settled by Taylor (recorded 2026-09-29).**
+- **The run-1 trigger is approved as a trigger mechanism only.**
+  - Run 1 is started by applying `ci:merge-candidate` to the frozen head, after confirming that the
+    pull request's merge ref has the same tree as the head.
+  - Runs 2 and 3 are dispatched on the branch (`workflow_dispatch` of `merge-candidate.yml`). The
+    label stays on.
+  - The acceptance semantics are unchanged: one frozen head; three consecutive Windows runs, one at a
+    time; any failure breaks the sequence and requires investigation before proceeding.
+- **The replacement for "`pytest -m ci`": items 1–6 are approved as the required selection.**
+  - **How it runs:** locally on Linux, py3.11, from the repo root on a clean tree, with CI's
+    workflow environment (`COLUMNS=200 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1`).
+  - **How it is judged:** each item by its own exit code. Counts and skips are pinned and re-derived
+    with `--collect-only` on the head. Any skip beyond the known ones is a failure.
+  1. **Default suite, with the coverage gate and W13.**
+     - Command: `pytest -n auto --dist loadfile --cov=bartholomew --cov=identity_interpreter
+       --cov=bartholomew_api_bridge_v0_1 --cov-branch --cov-fail-under=70 -rs`, with a fresh
+       `BARTHO_XDIST_CONTRACT_REPORT`.
+     - Then `python -m scripts.ci.xdist_contract check` on that report.
+     - pytest's exit code is judged on its own, because the W13 check does not read it.
+  2. **Critical tier:** `pytest -m "integration or slow" -rs`. Items 1 and 2 are disjoint, and
+     together they are the whole collection.
+  3. **CI's separately-run steps, each in its own process:**
+     - the packaging contract;
+     - the wave manifest;
+     - clean-start lifecycle;
+     - scheduler startup readiness;
+     - the parking-brake trio;
+     - the five Windows-action suites;
+     - `test_windows_action_real.py -m integration`;
+     - `-m smoke`;
+     - `test_merge_qualification.py`.
+  4. **The acceptance focus:** `tests/test_wal_hold.py`, and each adopted test by its full node ID,
+     each in its own process.
+  5. **Quality:**
+     - `pre-commit run --all-files --show-diff-on-failure`. Its first-run exit code is the result,
+       and the tree must stay clean.
+     - `pip check`.
+     - The Starlette ≥ 1.3.1 floor.
+  6. **The HTTP smoke:**
+     - `uvicorn app:app` on 127.0.0.1:5173, with `BARTH_DB_PATH` set to a scratch path.
+     - Then `/healthz` (status ok, version 0.1.0), `/api/health` and `/docs`.
+
+  Scope notes:
+  - **Item 7 is diagnostic only**, not part of the pass gate. It runs the default suite under
+    `BARTHO_EXEC_TRACE=1`.
+  - **No extra Windows nightly dispatch.** Windows evidence comes from the existing CI and the
+    acceptance sequence.
+  - **Not run on Windows by any merge tier:** the 339 critical-tier tests. They run on Windows only
+    in nightly. This is declared, not changed.
+
+  **Evidence on `16956bb` (2026-09-28).** Every item passed:
+  - default suite: 5,723 passed and 2 skipped (the consent-gate and metrics-fallback skips);
+    coverage 79.89 %; W13 clean;
+  - critical tier: 314 passed and 25 skipped, all of the skips Windows-only actuation.
+- **Head discipline for run 1 (Taylor, 2026-09-29).**
+  - This documentation-only commit is the candidate head. It is verified to be documentation-only,
+    the pinned counts are re-derived on it, and the tree is confirmed clean. Only then is the head
+    frozen.
+  - The local selection is not repeated for a documentation-only commit. The formal CI and
+    acceptance evidence applies to the exact frozen head.
+  - Run 1 is authorised once. Stop and report before any repair or any other run if:
+    - run 1 fails;
+    - the frozen head changes;
+    - CI on that head is not satisfactory;
+    - the counts change unexpectedly;
+    - or anything else invalidates the evidence chain.
+  - If run 1 passes, the evidence is preserved and reported before run 2.
+  - At this stage #124 is not merged, and this pull request is not retargeted or merged.
+  - Qualification binds to one commit. Evidence gathered on this head stays bound to it, and any
+    later commit is qualified on its own.
+
 ## 10. Proposed decision — approved as written by Taylor, 2026-09-28
 
 **Approved** at the User Approval Gate on 2026-09-28 ("I approve §10 as written"). It is recorded in
