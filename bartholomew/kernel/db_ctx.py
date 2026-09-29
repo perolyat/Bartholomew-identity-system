@@ -19,7 +19,6 @@ import time
 import weakref
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from pathlib import Path
 
 _checkpoint_log = logging.getLogger("bartholomew.kernel.db_ctx.checkpoint")
 _hold_log = logging.getLogger("bartholomew.kernel.db_ctx.hold")
@@ -702,10 +701,14 @@ _HOLD_POLL_MAX_S = 0.05
 def _hold_open_uri(db_path: str) -> str:
     """The hold's own open: read-write, never create (`mode=rw`).
 
-    `Path.as_uri()` percent-encodes the path and gives `file:///C:/...` on
-    Windows, which is the form SQLite's URI parser expects.
+    The path reaches SQLite exactly as the caller gave it, so it resolves the
+    same file every other seam opens: no normalisation (a symlink followed by
+    `..` must not be collapsed textually), only the URI's own specials escaped,
+    and never an authority -- a Windows UNC or extended-length path must not
+    read as a host, which SQLite refuses.
     """
-    return Path(os.path.abspath(db_path)).as_uri() + "?mode=rw"
+    path = os.fspath(db_path).replace("%", "%25").replace("?", "%3F").replace("#", "%23")
+    return ("file://" if path.startswith("/") else "file:") + path + "?mode=rw"
 
 
 def _missing_database(db_path: str) -> FileNotFoundError:

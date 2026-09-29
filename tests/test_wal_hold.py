@@ -43,7 +43,6 @@ import threading
 import time
 import types
 import urllib.parse
-import urllib.request
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
@@ -117,12 +116,20 @@ def recorded_connections(monkeypatch):
     return opened
 
 
+def _uri_path(uri: str) -> str:
+    """The path SQLite reads from a `file:` URI the hold wrote: an empty
+    authority dropped, the query dropped, `%HH` escapes decoded."""
+    rest = uri[len("file:") :]
+    if rest.startswith("//"):
+        rest = rest[2:]
+    return urllib.parse.unquote(rest.split("?", 1)[0])
+
+
 def _file_of(database: str) -> str:
     """The file a connection was opened on. The hold opens by `file:` URI
     (`mode=rw`, never create); every other seam opens by path."""
     if database.startswith("file:"):
-        parts = urllib.parse.urlsplit(database)
-        database = urllib.request.url2pathname(parts.path)
+        database = _uri_path(database)
     return os.path.normcase(os.path.abspath(database))
 
 
@@ -380,6 +387,118 @@ def test_a_database_that_vanishes_after_the_entry_check_is_refused_not_recreated
     with pytest.raises(FileNotFoundError):
         asyncio.run(_enter())
     assert not real_exists(path), "the hold created the database it was refused"
+    assert not _hold_threads()
+
+
+def _wal_database(path: str) -> None:
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (x)")
+    conn.commit()
+    conn.close()
+
+
+def _holds(hold_path: str, real_path: str) -> bool:
+    """Whether a hold declared on `hold_path` holds `real_path` open: a write
+    and close through `hold_path` inside it must leave the WAL of `real_path`
+    in place (not its last close)."""
+
+    async def _probe():
+        async with hold_wal_open(hold_path):
+            conn = sqlite3.connect(hold_path)
+            conn.execute("INSERT INTO t VALUES (1)")
+            conn.commit()
+            conn.close()
+            return os.path.exists(real_path + "-wal")
+
+    return asyncio.run(_probe())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink-then-'..' resolution")
+def test_the_hold_opens_the_file_every_other_seam_opens_through_a_symlink(tmp_path):
+    """The path must reach SQLite as given. `link/../app.db` names the file
+    beside the symlink's *target*; collapsing the `..` textually would hold a
+    different file -- here a decoy -- while the caller's database kept paying
+    its teardown on every close."""
+    (tmp_path / "elsewhere" / "sub").mkdir(parents=True)
+    (tmp_path / "data").mkdir()
+    try:
+        os.symlink(tmp_path / "elsewhere" / "sub", tmp_path / "data" / "link")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    real = str(tmp_path / "elsewhere" / "app.db")
+    decoy = str(tmp_path / "data" / "app.db")
+    _wal_database(real)
+    _wal_database(decoy)
+    via_link = str(tmp_path / "data" / "link" / ".." / "app.db")
+
+    assert _holds(via_link, real), "the hold did not hold the file the path names"
+    assert not os.path.exists(decoy + "-wal"), "the hold held a different file"
+    _assert_nothing_holds(real)
+
+
+def test_a_path_with_uri_special_characters_holds_that_file(tmp_path):
+    """The hold opens by URI, so `%`, `#` (and `?` where the OS allows it)
+    must name the file itself, not an escape, a fragment or a query."""
+    name = "a b%41#c é" + ("?" if sys.platform != "win32" else "") + ".db"
+    path = str(tmp_path / name)
+    _wal_database(path)
+    before = sorted(os.listdir(tmp_path))
+
+    assert _holds(path, path)
+    assert sorted(os.listdir(tmp_path)) == before, "the hold created another file"
+    _assert_nothing_holds(path)
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "/abs/dir/x.db",
+        "//server/share/x.db",
+        "rel/dir/x.db",
+        "C:\\dir\\x.db",
+        "C:/dir/x.db",
+        "\\\\server\\share\\x.db",
+        "\\\\?\\C:\\long\\x.db",
+        "/p/link/../a%b#c?d.db",
+    ],
+)
+def test_the_hold_uri_never_names_a_host_and_carries_the_path_verbatim(given):
+    """SQLite refuses a URI authority (`invalid uri authority`) unless built
+    with SQLITE_ALLOW_URI_AUTHORITY, which CPython's bundled SQLite is not; a
+    Windows UNC or `\\\\?\\` path must therefore never read as a host. And
+    what SQLite reads back must be the caller's path, unnormalised."""
+    uri = db_ctx._hold_open_uri(given)
+    assert uri.startswith("file:") and uri.endswith("?mode=rw")
+    after_scheme = uri[len("file:") :]
+    if after_scheme.startswith("//"):
+        authority = after_scheme[2:].split("/", 1)[0]
+        assert authority == "", f"{given!r} became a URI with host {authority!r}"
+    assert _uri_path(uri) == given
+
+
+def test_an_open_that_fails_on_an_existing_database_is_not_reported_as_missing(
+    tmp_path,
+    monkeypatch,
+):
+    """Only a missing file becomes the 'does not exist' refusal. Any other
+    failure to open an existing database -- an I/O or permission error -- is
+    raised as itself, and the hold ends with nothing running."""
+    path = str(tmp_path / "exists.db")
+    _wal_database(path)
+
+    def failing_connect(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(db_ctx, "connect", failing_connect)
+
+    async def _enter():
+        async with hold_wal_open(path):
+            pytest.fail("the open failed; the hold must not have entered")
+
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        asyncio.run(_enter())
+    assert os.path.exists(path)
     assert not _hold_threads()
 
 
