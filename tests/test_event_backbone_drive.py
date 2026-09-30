@@ -104,13 +104,20 @@ async def scheduler(tmp_path, monkeypatch):
     try:
         yield ctx
     finally:
+        # One cancel must stop the scheduler
+        # (docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md). Bounded, and not
+        # wait_for(task, 10): that cancels again on its timeout and would
+        # hide a lost cancel.
         task.cancel()
-        try:
-            await asyncio.wait_for(task, timeout=10)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
+        done, _ = await asyncio.wait({task}, timeout=10)
+        if not done:
+            task.cancel()
+            await asyncio.wait({task}, timeout=10)
         await scheduler_store.close()
         await mem.close()
+        assert done, "a single cancel did not stop run_scheduler"
+        if not task.cancelled():
+            task.result()
 
 
 async def _wait_for(predicate, *, timeout=WAIT_SECONDS, what="the expected state"):

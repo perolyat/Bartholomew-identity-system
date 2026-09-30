@@ -151,6 +151,25 @@ async def test_event_loop_heartbeat_continues_during_checkpoint_contention(tmp_p
 # -- 2. Fresh-DB scheduler startup cannot hang ---------------------------------
 
 
+async def _cancel_once_and_wait(task: asyncio.Task, *, timeout: float) -> bool:
+    """Cancel run_scheduler's task once and wait, bounded, for it to finish.
+
+    One cancel must stop the scheduler (docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md).
+    Returns False if it did not, after cancelling again so nothing is left
+    running: a lost cancel then fails the test instead of hanging it, and is
+    not hidden by a second cancel the way `wait_for(task, n)` would hide it.
+    Any exception the scheduler itself raised is re-raised."""
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=timeout)
+    if not done:
+        task.cancel()
+        await asyncio.wait({task}, timeout=timeout)
+        return False
+    if not task.cancelled():
+        task.result()
+    return True
+
+
 async def test_fresh_database_scheduler_startup_does_not_hang(mock_config_files):
     """Direct regression test for the CI failure: a fresh DB makes every
     registered drive immediately due (upsert_scheduled_tasks sets
@@ -161,16 +180,11 @@ async def test_fresh_database_scheduler_startup_does_not_hang(mock_config_files)
 
     daemon = KernelDaemon(**mock_config_files)
     task = asyncio.create_task(run_scheduler(daemon))
-
-    async def run_briefly_then_cancel():
-        await asyncio.sleep(2.0)  # let the immediate all-drives-due burst run
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    await asyncio.wait_for(run_briefly_then_cancel(), timeout=15.0)
+    await asyncio.sleep(2.0)  # let the immediate all-drives-due burst run
+    stopped = await _cancel_once_and_wait(task, timeout=15.0)
 
     drained = await daemon.scheduler_store.close()
+    assert stopped, "a single cancel did not stop run_scheduler"
     assert drained is True
 
 
@@ -199,10 +213,9 @@ async def test_startup_drives_are_paced_not_burst(mock_config_files):
         # Long enough for several paced drives to complete.
         await asyncio.sleep(4.0)
     finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        stopped = await _cancel_once_and_wait(task, timeout=10.0)
         await daemon.scheduler_store.close()
+    assert stopped, "a single cancel did not stop run_scheduler"
 
     conn = sqlite3.connect(mock_config_files["db_path"])
     try:

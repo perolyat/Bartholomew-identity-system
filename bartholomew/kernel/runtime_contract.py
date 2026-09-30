@@ -2115,6 +2115,112 @@ async def _record_drive_reflection(
     await record_action_reflection(getattr(ctx, "mem", None), reflection)
 
 
+# How long a cancelled drive may keep running before _cancel_and_settle()
+# logs that it is still waiting. Observability only: the wait continues, the
+# drive is never abandoned and never cancelled again on this timer.
+_DRIVE_SETTLE_WARN_S = 10.0
+
+
+async def _await_drive(aw: Awaitable[Any], timeout: float | None, task_id: str) -> Any:
+    """
+    `asyncio.wait_for(aw, timeout)` for the scheduler's drive seam, except that
+    a cancellation of the awaiting task always propagates, and the drive has
+    always finished by the time this returns or raises.
+
+    CPython 3.10/3.11's wait_for turns a cancellation into a normal return
+    when the inner future finished in the same loop iteration
+    (`except CancelledError: if fut.done(): return fut.result()`). On the
+    scheduler task that loses the one cancel run_scheduler() stops on: the
+    loop keeps running drives, and a caller that waits without a bound waits
+    forever (docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md). `asyncio.wait()`
+    on a task has no such branch on any supported Python -- the same
+    task-per-action shape SkillRegistry.execute_action() already uses.
+
+    Everything else matches wait_for: a result, the drive's own exception or
+    its own CancelledError is returned or raised as-is; a timeout cancels the
+    drive, waits for it and raises asyncio.TimeoutError, unless the drive
+    completed or raised while being cancelled, which is returned or raised
+    as-is; `timeout <= 0` never starts the drive. When the caller's
+    cancellation wins over a drive that had already completed, the drive's
+    result is discarded, as 3.12+ wait_for already does.
+    """
+    drive = asyncio.ensure_future(aw)
+    if isinstance(drive, asyncio.Task):
+        drive.set_name(f"scheduler-drive:{task_id}")
+    try:
+        if timeout is None or timeout > 0:
+            await asyncio.wait((drive,), timeout=timeout)
+    except asyncio.CancelledError:
+        try:
+            await _cancel_and_settle(drive, task_id)
+        finally:
+            _note_superseded_drive(drive, task_id)
+        raise
+    if drive.done():
+        return drive.result()
+    # Timed out (or timeout <= 0): cancel the drive and wait for it to end.
+    try:
+        await _cancel_and_settle(drive, task_id)
+    except asyncio.CancelledError:
+        _note_superseded_drive(drive, task_id)
+        raise
+    try:
+        return drive.result()
+    except asyncio.CancelledError as exc:
+        raise asyncio.TimeoutError() from exc
+
+
+async def _cancel_and_settle(drive: asyncio.Future[Any], task_id: str) -> None:
+    """
+    Cancel the drive and wait, without a bound, until it has finished, so the
+    scheduler task never ends while its drive is still running. A further
+    cancellation of the waiting task is passed on to the drive, never
+    swallowed, and re-raised once the drive has finished. A done drive is
+    never cancelled: Future.cancel() on a done future would stop asyncio
+    reporting an exception nobody retrieved.
+    """
+    interrupted: asyncio.CancelledError | None = None
+    if not drive.done():
+        drive.cancel()
+    while not drive.done():
+        try:
+            done, _pending = await asyncio.wait((drive,), timeout=_DRIVE_SETTLE_WARN_S)
+        except asyncio.CancelledError as exc:
+            interrupted = exc
+            if not drive.done():
+                drive.cancel()
+            continue
+        if not done:
+            logger.error(
+                "Drive %s has not finished %.0fs after it was cancelled; still waiting for it",
+                task_id,
+                _DRIVE_SETTLE_WARN_S,
+            )
+    if interrupted is not None:
+        raise interrupted
+
+
+def _note_superseded_drive(drive: asyncio.Future[Any], task_id: str) -> None:
+    """Log a drive outcome that the caller's cancellation superseded, and
+    retrieve its exception so asyncio does not report it as never retrieved."""
+    if not drive.done() or drive.cancelled():
+        return
+    exc = drive.exception()
+    if exc is not None:
+        logger.error(
+            "Drive %s raised while its caller was being cancelled; the cancellation "
+            "propagates and no reflection is recorded",
+            task_id,
+            exc_info=exc,
+        )
+    else:
+        logger.info(
+            "Drive %s completed while its caller was being cancelled; the cancellation "
+            "propagates and the result is discarded",
+            task_id,
+        )
+
+
 async def run_drive_through_runtime_contract(
     ctx: Any,
     task_id: str,
@@ -2213,9 +2319,10 @@ async def run_drive_through_runtime_contract(
             )
             return None, 0
 
-    # Stage 5+6: Capability + Execution
+    # Stage 5+6: Capability + Execution. _await_drive(), not asyncio.wait_for():
+    # on 3.10/3.11 wait_for can swallow the scheduler's cancellation.
     try:
-        result = await asyncio.wait_for(drive_fn(ctx), timeout=timeout)
+        result = await _await_drive(drive_fn(ctx), timeout, task_id)
         await _record_drive_reflection(ctx, candidate_action, outcome="completed")
         return result, 1
     except asyncio.TimeoutError:
