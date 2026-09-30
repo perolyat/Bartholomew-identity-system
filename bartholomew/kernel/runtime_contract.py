@@ -2115,9 +2115,9 @@ async def _record_drive_reflection(
     await record_action_reflection(getattr(ctx, "mem", None), reflection)
 
 
-# How long a cancelled drive may keep running before _cancel_and_settle()
-# logs that it is still waiting. Observability only: the wait continues, the
-# drive is never abandoned and never cancelled again on this timer.
+# How often _cancel_and_settle() logs that a cancelled drive is still
+# running. Observability only: the wait continues, the drive is never
+# abandoned and never cancelled again on this timer.
 _DRIVE_SETTLE_WARN_S = 10.0
 
 
@@ -2180,6 +2180,8 @@ async def _cancel_and_settle(drive: asyncio.Future[Any], task_id: str) -> None:
     reporting an exception nobody retrieved.
     """
     interrupted: asyncio.CancelledError | None = None
+    loop = asyncio.get_running_loop()
+    cancelled_at = loop.time()
     if not drive.done():
         drive.cancel()
     while not drive.done():
@@ -2192,9 +2194,9 @@ async def _cancel_and_settle(drive: asyncio.Future[Any], task_id: str) -> None:
             continue
         if not done:
             logger.error(
-                "Drive %s has not finished %.0fs after it was cancelled; still waiting for it",
+                "Drive %s has not finished %.1fs after it was cancelled; still waiting for it",
                 task_id,
-                _DRIVE_SETTLE_WARN_S,
+                loop.time() - cancelled_at,
             )
     if interrupted is not None:
         raise interrupted

@@ -6,16 +6,16 @@ the task running a drive through
 `runtime_contract.run_drive_through_runtime_contract()` propagates out of the
 seam, whatever instant it lands at -- including the instant the drive
 completes -- and the drive has finished by the time the seam returns or
-raises. So one `task.cancel()` stops `run_scheduler()`, and nothing is left
-running behind it.
+raises. So one `task.cancel()` stops `run_scheduler()`, and no drive
+coroutine is left running behind it.
 
 CPython 3.10/3.11's `asyncio.wait_for()` breaks that at one instant: when the
 inner future finished in the same loop iteration as the cancellation, it
 returns the inner result instead of raising (`except CancelledError: if
 fut.done(): return fut.result()`). The seam used wait_for, so on 3.10/3.11 a
-single cancel could be swallowed and the scheduler kept running -- in PR
-#125's acceptance run 2 that stranded an xdist worker until the 120 s
-per-test timeout killed it.
+single cancel could be swallowed and the scheduler kept running. By
+elimination, that is the most likely cause of the xdist worker killed at the
+120 s per-test timeout in PR #125's acceptance run 2 (the record's section 3).
 
 The race is forced deterministically: the drive requests the cancellation
 0-2 `call_soon` hops before it returns, which lands it in the iterations in
@@ -25,7 +25,8 @@ it), so the tests that follow cannot pass without exercising the race.
 
 Every wait on a task here is bounded (`asyncio.wait(..., timeout=...)` plus
 an assertion), never an unbounded await: a regression fails the test instead
-of hanging the worker.
+of hanging the worker. Orderings are forced by events, never by wall-clock
+windows, so a stalled runner cannot turn into a false failure.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ import random
 import sqlite3
 import sys
 import time
+import weakref
 
 import pytest
 
@@ -93,10 +95,41 @@ async def ctx(tmp_path):
     return _Ctx(_RecordingMem(db_path))
 
 
-def _seam(ctx, drive, *, timeout=BOUND_S, task_id="self_check"):
-    return asyncio.create_task(
-        rc.run_drive_through_runtime_contract(ctx, task_id, drive, timeout=timeout),
-    )
+def _seam(ctx, drive, *, timeout=BOUND_S, task_id="self_check", at_end=None):
+    """Run the seam as its own task. `at_end` is called at the instant the
+    seam returns or raises, inside the seam's task: a done-callback would run
+    an iteration later, after work the seam had already queued."""
+
+    async def run():
+        try:
+            return await rc.run_drive_through_runtime_contract(
+                ctx,
+                task_id,
+                drive,
+                timeout=timeout,
+            )
+        finally:
+            if at_end is not None:
+                at_end()
+
+    return asyncio.create_task(run())
+
+
+async def _reached(event, what):
+    """Bounded wait for an event the test depends on."""
+    try:
+        await asyncio.wait_for(event.wait(), BOUND_S)
+    except asyncio.TimeoutError:
+        pytest.fail(f"{what} never happened")
+
+
+async def _until(predicate, what):
+    """Bounded wait for a condition with no event of its own (a log record)."""
+    deadline = asyncio.get_running_loop().time() + BOUND_S
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            pytest.fail(f"{what} never happened")
+        await asyncio.sleep(0.01)
 
 
 # -- Causal control: the harness reaches the stdlib swallow ------------------
@@ -184,6 +217,7 @@ async def test_a_drive_that_raises_as_the_cancel_lands_is_logged_not_leaked(ctx,
     box = {}
 
     async def drive(_ctx):
+        box["drive"] = weakref.ref(asyncio.current_task())
         await asyncio.sleep(0)
         box["seam"].cancel()
         raise ValueError("drive failed at the last moment")
@@ -198,12 +232,19 @@ async def test_a_drive_that_raises_as_the_cancel_lands_is_logged_not_leaked(ctx,
     ]
     assert len(superseded) == 1 and superseded[0].exc_info is not None
 
+    # Drop every reference to the drive task, so collecting it is what would
+    # report an exception nobody retrieved.
+    drive_ref = box["drive"]
+    del seam, superseded
+    box.clear()
     gc.collect()
+    assert drive_ref() is None, "the drive task is still referenced; the check below proves nothing"
     assert "exception was never retrieved" not in caplog.text
 
 
 async def test_a_cancel_while_the_drive_runs_cancels_it_before_propagating(ctx):
     seen = []
+    box = {}
     started = asyncio.Event()
 
     async def drive(_ctx):
@@ -214,70 +255,92 @@ async def test_a_cancel_while_the_drive_runs_cancels_it_before_propagating(ctx):
             seen.append("drive saw the cancel")
             raise
 
-    seam = _seam(ctx, drive)
-    await asyncio.wait_for(started.wait(), BOUND_S)
+    seam = _seam(ctx, drive, at_end=lambda: box.setdefault("seen_at_seam_end", list(seen)))
+    await _reached(started, "the drive starting")
     seam.cancel()
     assert await _finish(seam)
     assert seam.cancelled()
-    assert seen == ["drive saw the cancel"]
+    assert box["seen_at_seam_end"] == ["drive saw the cancel"]
     assert ctx.mem.outcomes == []
 
 
-def _slow_cleanup_drive(seen, *, cleanup_s=0.3, started=None, on_cancel_return=None):
-    """A drive whose cancellation cleanup takes `cleanup_s`, catching further
-    cancellations so the cleanup completes. It re-raises CancelledError, or
+class _GatedCleanupDrive:
+    """A drive whose cancellation cleanup lasts until the test calls
+    release(), so the test decides every ordering. Further cancellations
+    during the cleanup are recorded and survived. It then re-raises, or
     returns `on_cancel_return` when that is set."""
 
-    async def drive(_ctx):
-        if started is not None:
-            started.set()
+    def __init__(self, *, on_cancel_return=None):
+        self.started = asyncio.Event()
+        self.in_cleanup = asyncio.Event()
+        self.further_cancel = asyncio.Event()
+        self.released = asyncio.Event()
+        self.seen = []
+        self.on_cancel_return = on_cancel_return
+
+    def release(self):
+        self.released.set()
+
+    async def __call__(self, _ctx):
+        self.started.set()
         try:
             await asyncio.sleep(30)
         except asyncio.CancelledError:
-            deadline = asyncio.get_running_loop().time() + cleanup_s
-            while asyncio.get_running_loop().time() < deadline:
+            self.in_cleanup.set()
+            while not self.released.is_set():
                 try:
-                    await asyncio.sleep(0.02)
+                    await self.released.wait()
                 except asyncio.CancelledError:
-                    seen.append("further cancel reached the drive")
-            seen.append("cleanup finished")
-            if on_cancel_return is not None:
-                return on_cancel_return
+                    self.seen.append("further cancel reached the drive")
+                    self.further_cancel.set()
+            self.seen.append("cleanup finished")
+            if self.on_cancel_return is not None:
+                return self.on_cancel_return
             raise
-
-    return drive
 
 
 async def test_a_second_cancel_during_cleanup_never_strands_the_drive(ctx):
     """Stdlib 3.10/3.11 wait_for raises at once on the second cancel and
     leaves the drive running; the scheduler task could then end with its
-    drive still writing."""
-    seen = []
-    started = asyncio.Event()
+    drive still running."""
+    drive = _GatedCleanupDrive()
     box = {}
-    seam = _seam(ctx, _slow_cleanup_drive(seen, started=started))
-    await asyncio.wait_for(started.wait(), BOUND_S)
-    seam.add_done_callback(lambda _t: box.setdefault("seen_at_seam_end", list(seen)))
+    seam = _seam(ctx, drive, at_end=lambda: box.setdefault("seen_at_seam_end", list(drive.seen)))
+    await _reached(drive.started, "the drive starting")
     seam.cancel()
-    await asyncio.sleep(0.1)
-    seam.cancel()
+    try:
+        await _reached(drive.in_cleanup, "the first cancel reaching the drive")
+        seam.cancel()
+        await _reached(drive.further_cancel, "the second cancel reaching the drive")
+        assert not seam.done(), "the seam ended while its drive was still cleaning up"
+    finally:
+        drive.release()
     assert await _finish(seam)
     assert seam.cancelled()
-    assert "further cancel reached the drive" in seen
-    assert box["seen_at_seam_end"][-1] == "cleanup finished"
+    assert box["seen_at_seam_end"] == ["further cancel reached the drive", "cleanup finished"]
     assert ctx.mem.outcomes == []
 
 
 async def test_a_cancel_during_the_timeout_settle_waits_for_the_drive(ctx):
-    seen = []
+    drive = _GatedCleanupDrive()
     box = {}
-    seam = _seam(ctx, _slow_cleanup_drive(seen), timeout=0.05)
-    seam.add_done_callback(lambda _t: box.setdefault("seen_at_seam_end", list(seen)))
-    await asyncio.sleep(0.15)  # the timeout has fired; the drive is cleaning up
-    seam.cancel()
+    seam = _seam(
+        ctx,
+        drive,
+        timeout=0.05,
+        at_end=lambda: box.setdefault("seen_at_seam_end", list(drive.seen)),
+    )
+    try:
+        # Only the timeout can cancel the drive before the test does.
+        await _reached(drive.in_cleanup, "the timeout cancelling the drive")
+        seam.cancel()
+        await _reached(drive.further_cancel, "the caller's cancel reaching the drive")
+        assert not seam.done(), "the seam ended while its drive was still cleaning up"
+    finally:
+        drive.release()
     assert await _finish(seam)
     assert seam.cancelled()
-    assert box["seen_at_seam_end"][-1] == "cleanup finished"
+    assert box["seen_at_seam_end"] == ["further cancel reached the drive", "cleanup finished"]
     assert ctx.mem.outcomes == []
 
 
@@ -309,18 +372,26 @@ async def test_a_drive_that_is_slow_to_settle_is_reported_and_still_awaited(
     monkeypatch,
 ):
     monkeypatch.setattr(rc, "_DRIVE_SETTLE_WARN_S", 0.05)
-    seen = []
-    started = asyncio.Event()
+    drive = _GatedCleanupDrive()
     box = {}
-    seam = _seam(ctx, _slow_cleanup_drive(seen, cleanup_s=0.4, started=started))
-    await asyncio.wait_for(started.wait(), BOUND_S)
-    seam.add_done_callback(lambda _t: box.setdefault("seen_at_seam_end", list(seen)))
+    seam = _seam(ctx, drive, at_end=lambda: box.setdefault("seen_at_seam_end", list(drive.seen)))
+
+    def settle_warnings():  # seconds since the cancel, as each warning reports it
+        return [r.args[1] for r in caplog.records if "has not finished" in r.getMessage()]
+
+    await _reached(drive.started, "the drive starting")
     seam.cancel()
+    try:
+        await _reached(drive.in_cleanup, "the cancel reaching the drive")
+        await _until(lambda: len(settle_warnings()) >= 2, "two settle warnings")
+        assert not seam.done(), "the seam abandoned its drive"
+    finally:
+        drive.release()
     assert await _finish(seam)
     assert seam.cancelled()
-    assert box["seen_at_seam_end"][-1] == "cleanup finished"  # never abandoned
-    assert "has not finished" in caplog.text
-    assert "further cancel reached the drive" not in seen  # the timer never re-cancels
+    assert box["seen_at_seam_end"] == ["cleanup finished"]  # never abandoned, never re-cancelled
+    elapsed = settle_warnings()
+    assert 0 < elapsed[0] < elapsed[1], elapsed  # time since the cancel, not the interval
 
 
 async def test_a_drive_that_ends_cancelled_on_its_own_still_propagates(ctx):
@@ -386,13 +457,9 @@ async def test_a_timeout_still_fails_the_drive_and_cancels_it(ctx, caplog):
 
 
 async def test_a_drive_that_completes_while_timing_out_keeps_its_result(ctx):
-    seen = []
-    result = await rc.run_drive_through_runtime_contract(
-        ctx,
-        "self_check",
-        _slow_cleanup_drive(seen, cleanup_s=0.05, on_cancel_return="late"),
-        timeout=0.05,
-    )
+    drive = _GatedCleanupDrive(on_cancel_return="late")
+    drive.release()
+    result = await rc.run_drive_through_runtime_contract(ctx, "self_check", drive, timeout=0.05)
     assert result == ("late", 1)  # asyncio.wait_for parity
     assert ctx.mem.outcomes == ["completed"]
 
@@ -433,7 +500,8 @@ async def test_a_non_positive_timeout_never_starts_the_drive(ctx, timeout):
 
 async def _random_model_scheduler(await_drive, rng):
     """run_scheduler's cancellation contract with random drive lengths and one
-    cancel of this task at a random call_soon hop. 'stopped' / 'ran-away'."""
+    cancel of this task at a random call_soon hop. Returns ('stopped' or
+    'ran-away', drives still running when it stopped)."""
     me = asyncio.current_task()
     drive_tasks = []
 
@@ -443,14 +511,17 @@ async def _random_model_scheduler(await_drive, rng):
             await asyncio.sleep(0)
         return "nudge"
 
+    def running():
+        return sum(1 for t in drive_tasks if not t.done())
+
     _after_hops(rng.randrange(40), me.cancel)
     for _ in range(200):
         try:
             await await_drive(drive(), BOUND_S)
             await asyncio.sleep(0)
         except asyncio.CancelledError:
-            return "stopped", drive_tasks
-    return "ran-away", drive_tasks
+            return "stopped", running()  # counted as the seam raises, not later
+    return "ran-away", running()
 
 
 async def _stress(await_drive, trials, seed):
@@ -459,8 +530,7 @@ async def _stress(await_drive, trials, seed):
     for _ in range(trials):
         task = asyncio.create_task(_random_model_scheduler(await_drive, rng))
         assert await _finish(task)
-        verdict, drive_tasks = task.result()
-        outcomes.append((verdict, sum(1 for t in drive_tasks if not t.done())))
+        outcomes.append(task.result())
     return outcomes
 
 
@@ -511,8 +581,8 @@ async def test_one_cancel_landing_as_a_drive_completes_stops_the_real_scheduler(
     monkeypatch,
     hops,
 ):
-    """The acceptance-run-2 hang, deterministically: before the repair this
-    scheduler kept running on 3.10/3.11 and wrote further ticks."""
+    """The acceptance-run-2 hang's mechanism, deterministically: before the
+    repair this scheduler kept running on 3.10/3.11 and wrote further ticks."""
     from bartholomew.kernel.daemon import KernelDaemon
 
     monkeypatch.setattr(loop_module, "DRIVE_PACE_S", 0.0)
@@ -588,23 +658,29 @@ async def test_daemon_stop_is_not_slowed_by_a_drive_completing_as_it_cancels(
     capsys,
 ):
     """stop() cancels the scheduler in the step right after
-    skill_registry.shutdown(); a drive completing in that step used to
-    swallow the cancel on 3.10/3.11, costing stop() its full 5 s bound and
-    running further drives after the skills were unloaded."""
+    skill_registry.shutdown(). A drive completing in that step used to
+    swallow the cancel on 3.10/3.11: the scheduler then ran the next due
+    drive with the skills unloaded, and stop() waited out its own 5 s bound
+    before cancelling again."""
     from bartholomew.kernel.daemon import KernelDaemon
 
     monkeypatch.setattr(loop_module, "DRIVE_PACE_S", 0.0)
     release = asyncio.Event()
     started = asyncio.Event()
-    runs = []
+    runs = {"aligned": 0, "other": 0}
 
     async def aligned(_ctx):
-        runs.append(time.monotonic())
-        if len(runs) == 1:
-            started.set()
-            await release.wait()
+        runs["aligned"] += 1
+        started.set()
+        await release.wait()
 
-    registry = {"aligned": {"fn": aligned, "cadence": "every:1"}}
+    async def other(_ctx):
+        runs["other"] += 1
+
+    registry = {
+        "aligned": {"fn": aligned, "cadence": "every:3600"},
+        "zz_other": {"fn": other, "cadence": "every:3600"},  # due next, same pass
+    }
     monkeypatch.setattr(drives_module, "resolve_registry", lambda _ctx: dict(registry))
 
     cfg = _write_config(tmp_path)
@@ -619,7 +695,7 @@ async def test_daemon_stop_is_not_slowed_by_a_drive_completing_as_it_cancels(
             release.set()
 
         daemon.skill_registry.shutdown = shutdown_then_release
-        await asyncio.wait_for(started.wait(), BOUND_S)
+        await _reached(started, "the aligned drive starting")
 
         t0 = time.monotonic()
         stopper = asyncio.create_task(daemon.stop())
@@ -631,7 +707,13 @@ async def test_daemon_stop_is_not_slowed_by_a_drive_completing_as_it_cancels(
                 await asyncio.wait_for(daemon.stop(), 15.0)
 
     assert stopper.exception() is None
-    assert elapsed < 4.0, f"stop() took {elapsed:.1f}s: the scheduler's cancel was lost"
-    assert len(runs) == 1, "a drive ran after stop() had cancelled the scheduler"
+    assert runs == {
+        "aligned": 1,
+        "other": 0,
+    }, "a drive ran after stop() had cancelled the scheduler"
     assert _ticks(cfg["db_path"]) == []
+    # stop()'s own bound is wait_for(task, 5.0): needing all of it means its
+    # first cancel was lost.
+    assert elapsed < 5.0, f"stop() took {elapsed:.1f}s: the scheduler's cancel was lost"
+    # A guard on the repaired path; this report could not see the old loss.
     assert "did not terminate within timeout" not in capsys.readouterr().out
