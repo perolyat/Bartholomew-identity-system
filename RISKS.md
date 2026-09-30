@@ -1570,23 +1570,29 @@
   - **Observed.** PR #125's acceptance run 2 (Merge Candidate 36566521591, Windows, 2026-09-29).
     `tests/test_scheduler_persistence_concurrency.py::test_startup_drives_are_paced_not_burst`
     cancelled the scheduler once and waited for it without a bound. Its xdist worker was killed at
-    the 120 s timeout, and 10 W13 re-drives followed from the lost worker.
+    the 120 s timeout, and 10 W13 re-drives followed from the lost worker. That this defect is what
+    held the test is inferred by elimination (see Confidence).
   - **Present on `main`, #124 and #125:** the code is identical.
-  - **Reproduced on 3.10 and 3.11** against the real code:
-    - forced alignment: every trial;
-    - natural race: 9 of 1000 loaded runs;
-    - `KernelDaemon.stop()` with an aligned drive: 5.1 s instead of 0.1 s.
+  - **Reproduced** against the real code:
+    - forced alignment: every trial, on 3.10 and 3.11;
+    - natural race: 9 of 1000 loaded runs of the run-2 test, on 3.11 (record §3 gives the
+      conditions);
+    - `KernelDaemon.stop()` with an aligned drive: 5.1 s instead of 0.1 s, on 3.11; with a second
+      due drive, that drive ran after the skills were unloaded, on 3.10 and 3.11.
   - **Not on 3.12/3.13**, whose `wait_for` runs the drive inline.
   - **Confidence.** High in the mechanism. Medium-high that it is what killed the Windows worker:
     that rests on elimination, because the run's exec-trace artifact could not be downloaded.
-  - **It corrects the earlier record.** The 2026-09-17 writer-lock entry above called it a 3.11 swallow
-    "that delays shutdown", and `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` §8 item 3 said "never a lost
-    write". In fact it:
+  - **It corrects the earlier records.** The 2026-09-14 writer-lock repair note (PR #110), in the
+    2026-09-09 Windows Merge Candidate entry above, called it a 3.11 swallow "that delays shutdown".
+    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` §8 item 3 put its cost at up to 5 s of shutdown
+    latency, "never a lost write". "Never a lost write" still holds. The latency and liveness cost was
+    understated. It:
     - affects 3.10 too;
     - loses the cancel outright, so a waiter without a bound hangs;
     - costs `stop()` its full 5 s bound silently, since `wait_for` then returns `None` and B5's
       `producer_tasks_terminal` stays `True`;
-    - lets drives run after the skills are unloaded.
+    - lets a further due drive run after the skills are unloaded; a due reminder would then be
+      recorded `DELIVERY_FAILED` (read from the code, not observed).
   - **The repair**, on its own branch, `claude/scheduler-drive-cancellation-repair`:
     - The seam runs the drive as its own task under `asyncio.wait()`, which has no swallow branch on
       any supported Python. It cancels and settles the drive, then re-raises the caller's
@@ -1594,6 +1600,9 @@
     - It matches `wait_for` otherwise, including timeout parity.
     - It is one code path on every version, with no retry and no scheduler change.
     - Three teardowns now assert that a single cancel stops the scheduler, with a bound.
+    - The new tests force every ordering with events, not wall-clock windows, and 13 of 13 mutants
+      are caught.
+    - PR #126.
   - **Consequence for PR #125.** Its acceptance sequence is invalidated and restarts at 0/3 on a head
     that contains this repair (record §9).
   - **Follow-ups recorded, not absorbed:**
