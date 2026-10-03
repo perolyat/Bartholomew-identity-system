@@ -404,6 +404,15 @@ NO CAUSAL RELATIONSHIP ESTABLISHED; the job was re-run once (drive rule), not fi
    `task.cancel()`, until its 10 s `wait_for` timed out and cancelled again. Cost: up to the
    waiter's timeout of extra shutdown latency (5 s in `KernelDaemon.stop()`), never a lost write.
    Not this class.
+   **Corrected 2026-09-30** (`docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md`). "Never a lost write"
+   still holds. The latency cost above holds only for a waiter with a bound.
+   - CPython 3.10 is affected as well as 3.11.
+   - The cancellation is lost outright, so a waiter without a bound hangs. By elimination, with
+     medium-high confidence, that is what killed an xdist worker in PR #125's acceptance run 2
+     (record §3).
+   - `stop()`'s 5 s is lost silently: `wait_for` then returns `None`, not `TimeoutError`.
+   - A further due drive can run after the skills are unloaded.
+   - A separate package (PR #126) repairs it at the seam.
 4. **Operator self-state routes** (`routes/self_state.py`: `update_affect`, `set_attention`,
    `activate_drive`, `satisfy_drive`, `add_goal`, `complete_goal`) reach `narrator.py`'s
    episode writes synchronously through `global_workspace.publish` on the loop thread. Same

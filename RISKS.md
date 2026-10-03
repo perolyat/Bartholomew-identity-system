@@ -1263,7 +1263,9 @@
   > connection cost on Windows, which pushed the heavy-burst containment test past 120 s in that run
   > (the one failure, a killed worker) and the `slow` memory and soak tests past 120 s in the nightly
   > serial runs on the branch **and on `main`'s same-time control**; a Python 3.11 `asyncio.wait_for`
-  > cancellation swallow in the drive seam that delays shutdown; and the operator self-state routes'
+  > cancellation swallow in the drive seam that delays shutdown (**corrected 2026-09-30:** it
+  > affects 3.10 too and loses the cancellation outright; see the watchlist entry "(2026-09-30) The
+  > scheduler's drive seam could lose a cancellation"); and the operator self-state routes'
   > synchronous narrator writes. None is this class; none is absorbed. **The Windows baseline is not
   > yet trustworthy** for the first two reasons, and Band 0 stays gated on it (record §9).
   >
@@ -1555,6 +1557,58 @@
     clock. The common shape is worth naming: *assertions that depend on the wall clock without
     controlling it*. Two of the three were latent for months and surfaced only once a larger
     failure stopped masking them.
+
+- **(2026-09-30) The scheduler's drive seam could lose a cancellation (CPython 3.10/3.11). REPAIR
+  IMPLEMENTED, NOT MERGED.** Full record: `docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md`.
+  - **What happened.** `run_drive_through_runtime_contract()` awaited
+    `asyncio.wait_for(drive_fn(ctx), timeout=timeout)`. On CPython 3.10/3.11, `wait_for` returns the
+    inner result instead of raising when a cancellation lands in the loop iteration in which the
+    inner future finished (`except CancelledError: if fut.done(): return fut.result()`).
+  - **Why it matters.** The seam runs on the scheduler task's stack, and `run_scheduler()` stops only
+    on `CancelledError`. So one `task.cancel()` landing as a drive completed was lost, and the
+    scheduler kept running.
+  - **Observed.** PR #125's acceptance run 2 (Merge Candidate 36566521591, Windows, 2026-09-29).
+    `tests/test_scheduler_persistence_concurrency.py::test_startup_drives_are_paced_not_burst`
+    cancelled the scheduler once and waited for it without a bound. Its xdist worker was killed at
+    the 120 s timeout, and 10 W13 re-drives followed from the lost worker. That this defect is what
+    held the test is inferred by elimination (see Confidence).
+  - **Present on `main`, #124 and #125:** the code is identical.
+  - **Reproduced** against the real code:
+    - forced alignment: every trial, on 3.10 and 3.11;
+    - natural race: 9 of 1000 loaded runs of the run-2 test, on 3.11 (record §3 gives the
+      conditions);
+    - `KernelDaemon.stop()` with an aligned drive: 5.1 s instead of 0.1 s, on 3.11; with a second
+      due drive, that drive ran after the skills were unloaded, on 3.10 and 3.11.
+  - **Not on 3.12/3.13**, whose `wait_for` runs the drive inline.
+  - **Confidence.** High in the mechanism. Medium-high that it is what killed the Windows worker:
+    that rests on elimination, because the run's exec-trace artifact could not be downloaded.
+  - **It corrects the earlier records.** The 2026-09-14 writer-lock repair note (PR #110), in the
+    2026-09-09 Windows Merge Candidate entry above, called it a 3.11 swallow "that delays shutdown".
+    `docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md` §8 item 3 put its cost at up to 5 s of shutdown
+    latency, "never a lost write". "Never a lost write" still holds. The latency and liveness cost was
+    understated. It:
+    - affects 3.10 too;
+    - loses the cancel outright, so a waiter without a bound hangs;
+    - costs `stop()` its full 5 s bound silently, since `wait_for` then returns `None` and B5's
+      `producer_tasks_terminal` stays `True`;
+    - lets a further due drive run after the skills are unloaded; a due reminder would then be
+      recorded `DELIVERY_FAILED` (read from the code, not observed).
+  - **The repair**, on its own branch, `claude/scheduler-drive-cancellation-repair`:
+    - The seam runs the drive as its own task under `asyncio.wait()`, which has no swallow branch on
+      any supported Python. It cancels and settles the drive, then re-raises the caller's
+      cancellation.
+    - It matches `wait_for` otherwise, including timeout parity.
+    - It is one code path on every version, with no retry and no scheduler change.
+    - Three teardowns now assert that a single cancel stops the scheduler, with a bound.
+    - The new tests force every ordering with events, not wall-clock windows; the only time bounds
+      left are hang detectors. 13 of 13 mutants are caught.
+    - PR #126.
+  - **Consequence for PR #125.** Its acceptance sequence is invalidated and restarts at 0/3 on a head
+    that contains this repair (record §9).
+  - **Follow-ups recorded, not absorbed:**
+    - `daemon.py:925`'s `wait_for(task, 5.0)` is not a hard bound;
+    - `stop()` unloads the skills before it cancels the scheduler.
+  - **Risk category:** runtime reliability, shutdown and cancellation. **Status:** open until merged.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
