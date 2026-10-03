@@ -61,10 +61,12 @@ anything -- it refuses to call a run complete that is not.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -358,6 +360,15 @@ class SchedulerRedrive:
 
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
         self._stop.set()
+        report_path = os.environ.get(CONTRACT_REPORT_ENV)
+        if report_path:
+            write_contract_report(
+                report_path,
+                redrives=self.redrives,
+                gave_up=self._gave_up,
+                notes=self.redrive_log,
+                exitstatus=int(exitstatus),
+            )
 
     # -- the watch ---------------------------------------------------------
 
@@ -553,3 +564,95 @@ def _redrive_idle_after() -> float:
         return float(raw)
     except ValueError:
         return SchedulerRedrive.DEFAULT_IDLE_AFTER_S
+
+
+# ---------------------------------------------------------------------------
+# Clause W13, enforced: a re-driven run is not clean evidence.
+#
+# The re-drive recovers the run, and pytest's exit status stays what the
+# tests made it -- a developer's local run, or a diagnosis, still gets its
+# answer. What must not happen is a run that needed recovering being counted
+# as a clean pass by Merge Qualification, which reads exactly one thing: each
+# required job's conclusion. So the enforcement point is that conclusion. The
+# controller writes this report; a named step after the test step in every
+# required xdist job reads it and fails the job if the run was re-driven, or
+# if there is no report at all (a run that could not say is not clean). The
+# job goes red for a stated W13 reason, and the tests' own junit stays true.
+#
+# Known limitation (recorded in docs/WINDOWS_TEST_EXECUTION_CONTRACT.md): the
+# re-drive counts any node that `_reschedule` would top up while work is
+# queued and nothing has completed for the idle bound. In a healthy run that
+# state does not persist -- a completion that takes a node down to that level
+# tops it up at once -- except at start-up, where a node's first units could
+# total two tests or fewer with one of them slow. Such a re-drive is counted
+# too; the report's notes carry the reason so it can be told apart.
+# ---------------------------------------------------------------------------
+
+CONTRACT_REPORT_ENV = "BARTHO_XDIST_CONTRACT_REPORT"
+CONTRACT_REPORT_SCHEMA = 1
+
+
+def write_contract_report(
+    path: str | os.PathLike[str],
+    *,
+    redrives: int,
+    gave_up: bool,
+    notes: list[str],
+    exitstatus: int,
+) -> None:
+    report = {
+        "schema": CONTRACT_REPORT_SCHEMA,
+        "clause": "W13",
+        "redrives": int(redrives),
+        "gave_up": bool(gave_up),
+        "exitstatus": int(exitstatus),
+        "notes": list(notes)[:50],
+    }
+    target = Path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - reported by the check as "no report"
+        print(f"xdist-contract: could not write {target}: {exc!r}", file=sys.stderr)
+
+
+def check_contract_report(path: str | os.PathLike[str]) -> tuple[bool, str]:
+    """Whether the run that wrote ``path`` is clean W13 evidence, and why."""
+    target = Path(path)
+    if not target.is_file():
+        return False, (
+            f"no W13 contract report at {target}: the run did not record whether it "
+            f"needed a scheduler re-drive ({CONTRACT_REPORT_ENV} unset, the contract "
+            "disabled, or the session never finished), so it cannot count as clean"
+        )
+    try:
+        report = json.loads(target.read_text(encoding="utf-8"))
+        redrives = int(report["redrives"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return False, f"unreadable W13 contract report at {target}: {exc!r}"
+    if redrives:
+        notes = "; ".join(report.get("notes", [])[:5])
+        return False, (
+            f"the run completed only after {redrives} scheduler re-drive(s) (clause W13): "
+            "it completed over a pytest-xdist defect and is not clean evidence. "
+            f"{notes}"
+        )
+    return True, "no scheduler re-drive was needed (clause W13)"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 3 or argv[1] != "check":
+        print("usage: python -m scripts.ci.xdist_contract check <report.json>", file=sys.stderr)
+        return 2
+    ok, message = check_contract_report(argv[2])
+    if ok:
+        print(f"W13 clean-run contract: {message}")
+        return 0
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::error title=W13 clean-run contract::{message}")
+    print(f"W13 clean-run contract NOT met: {message}")
+    return 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main(sys.argv))

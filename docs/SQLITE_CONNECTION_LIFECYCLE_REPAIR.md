@@ -253,6 +253,16 @@ requeues its work. Recorded as its own `RISKS.md` entry rather than absorbed her
   path has a different shape (one long-lived connection per store instance already) and was not
   examined here.
 
+  > **Corrected 2026-09-25.** The parenthesis above is wrong: `MemoryStore` has no long-lived
+  > connection. Every method opened its own (`async with aiosqlite.connect(self.db_path)`, 36
+  > sites, plus two synchronous ones), so it has exactly the per-operation shape this package
+  > measured. Those connections also ran on SQLite's defaults — `synchronous=FULL`,
+  > `foreign_keys=OFF`, 5 s at setup — rather than the shared policy. The Windows reliability
+  > incident package routes all of them through one seam that applies the shared authority's
+  > lifecycle (`docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md` §3, A1). Ownership is
+  > unchanged: still one connection per unit of work, still closed when it ends, still not a
+  > pool.
+
 ## 6. Documentation corrected
 
 - `RISKS.md` said PR #112 was "NOT MERGED, awaiting Taylor's User Approval Gate". It merged on

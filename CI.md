@@ -343,8 +343,12 @@ than ignore:
   than run, and a summary line that looks green without it would have been wrong.
 - `xdist contract: the scheduler stalled and was re-driven N time(s)` — the run *completed*, but it
   completed over a pytest-xdist defect: the controller stopped handing queued work to idle workers
-  and had to be re-asked. A non-zero count is a real defect report, not a health metric. It is
-  yellow rather than red because the work did get done.
+  and had to be re-asked. A non-zero count is a real defect report, not a health metric. The banner
+  is yellow because the work did get done — but **since 2026-09-25 such a run is not clean
+  evidence**: every xdist job Merge Qualification requires has a `W13 clean-run contract (no
+  scheduler re-drive)` step after its test step, which reads the controller's
+  `xdist-contract.json` and fails the job if the run was re-driven or left no report. pytest's own
+  result is unchanged; read that step, not the test step, to see why the job is red.
 - `xdist-contract: giving up after N re-drives` — re-driving did not restore progress, so the run is
   stalled for some other reason. Set `BARTHO_EXEC_TRACE=1` to capture stacks and let the watchdog
   end the run instead of the job cap.
@@ -360,6 +364,13 @@ blew its 120 s budget); how much of a slow report was the test versus getting th
 controller; what was queued and outstanding at a stall; and what the storage-heavy tests cost, split
 into connect, commit and close. A worker that stops existing has its in-flight test reported as
 failed with no message, so **that row names the test the worker died on, not a test that failed.**
+Since 2026-09-25 a worker killed by the per-test timeout also leaves `gwN.timeout.txt` — every
+thread's stack taken just before the kill — and the summary says "per-test timeout (120s) imminent
+in `<phase>`" for it, or that there was no timeout evidence. "Imminent", not "expired": the kill
+leaves no record of its own, so the evidence proves the deadline was about 10 s away, and the
+summary says a different death in that window is not excluded. A `database is locked` failure is
+listed against any slow commit or close on the same worker at the time; that is correlation, not
+proof of which connection held the lock.
 
 **Process:**
 - Fix one at a time (smallest surface first)

@@ -67,6 +67,8 @@ jobs:
       # The 70% gate is the project's declared threshold; it was measured
       # before being wired in (73.52% at the time) and is not lowered here.
       - name: "Default test suite with coverage (gate: line >= 70%)"
+        env:
+          BARTHO_XDIST_CONTRACT_REPORT: xdist-contract.json
         run: >-
           python -m pytest -p no:cacheprovider
           -n auto --dist loadfile
@@ -78,6 +80,15 @@ jobs:
           --cov-report=xml
           --cov-fail-under=70
           --junitxml=junit-integration-py3.11.xml
+
+      # Clause W13 (docs/WINDOWS_TEST_EXECUTION_CONTRACT.md): a run that needed a
+      # scheduler re-drive completed over a pytest-xdist defect and is not clean
+      # evidence. The re-drive still recovers the run and the tests' own result
+      # is unchanged; this step is what keeps Merge Qualification, which reads
+      # this job's conclusion, from counting such a run as green. Fails closed
+      # when the controller left no report.
+      - name: W13 clean-run contract (no scheduler re-drive)
+        run: python -m scripts.ci.xdist_contract check xdist-contract.json
 
       - name: Upload coverage.xml and junit
         if: always()

@@ -42,6 +42,36 @@ def _windows_release_handles(delay: float = 0.05) -> None:
 #: database file when SQLite refuses to wait for it (see `_enable_wal`).
 _WAL_CONVERSION_RETRY_S = 5.0
 
+# ---------------------------------------------------------------------------
+# The shared connection policy, named once.
+#
+# A connection's life has two lock budgets, and both are live:
+#
+# * SETUP -- `connect(timeout=SETUP_LOCK_TIMEOUT_S)` installs a 30 s busy
+#   handler, and every setup statement that needs a database lock (the WAL
+#   pragma, `synchronous`) runs under it. That matters because a connection's
+#   first lock acquisition is the one statement a concurrent last-close
+#   checkpoint can block: once a connection holds its read lock, no other
+#   connection's close can be the "last" one. Measured 2026-09-25: a setup
+#   statement here survives an 8 s exclusive hold; a 5 s connection does not.
+# * OPERATION -- setup ends with `PRAGMA busy_timeout = OPERATIONAL_BUSY_TIMEOUT_MS`,
+#   which *replaces* the setup handler for everything the caller then does.
+#   That is the effective 5 s Taylor retained on 2026-08-22 (RISKS.md).
+#
+# `CONNECTION_SETUP_PRAGMAS` are connection-local, so they must be issued on
+# every connection -- the file persists `journal_mode` only. Any other module
+# that opens its own connections to the shared database (MemoryStore's
+# aiosqlite seam) applies exactly these, in this order, so the two cannot
+# drift apart.
+# ---------------------------------------------------------------------------
+SETUP_LOCK_TIMEOUT_S = 30.0
+OPERATIONAL_BUSY_TIMEOUT_MS = 5000
+CONNECTION_SETUP_PRAGMAS = (
+    "PRAGMA synchronous = NORMAL",
+    "PRAGMA foreign_keys = ON",
+)
+OPERATIONAL_BUSY_TIMEOUT_PRAGMA = f"PRAGMA busy_timeout = {OPERATIONAL_BUSY_TIMEOUT_MS}"
+
 
 def _enable_wal(conn: sqlite3.Connection) -> None:
     """
@@ -119,16 +149,18 @@ def set_wal_pragmas(conn: sqlite3.Connection) -> None:
         >>> set_wal_pragmas(conn)
     """
     _enable_wal(conn)
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    for pragma in CONNECTION_SETUP_PRAGMAS:
+        conn.execute(pragma)
+    # Last, and only once setup has succeeded: from here the connection runs
+    # on the operational budget rather than the setup one (see above).
+    conn.execute(OPERATIONAL_BUSY_TIMEOUT_PRAGMA)
 
 
 def connect(
     db_path_or_uri: str,
     *,
     uri: bool = False,
-    timeout: float = 30.0,
+    timeout: float = SETUP_LOCK_TIMEOUT_S,
     check_same_thread: bool = False,
 ) -> sqlite3.Connection:
     """
