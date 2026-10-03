@@ -208,7 +208,8 @@ notes were working files; the reasons below are the durable record.
 one `slow` stress test. Every wait on a task is bounded with `asyncio.wait(..., timeout)` plus an
 assertion, so a regression fails the test instead of killing a worker. Every ordering between the
 test, the seam and the drive is forced by events (a drive's cleanup lasts until the test releases
-it), never by a wall-clock window, so a stalled runner cannot produce a false failure.
+it), never by a wall-clock window. The only time bounds left are hang detectors (§10), so a
+stalled runner can fail a test only by outlasting one of them.
 
 | Test | What it proves |
 |---|---|
@@ -230,7 +231,7 @@ it), never by a wall-clock window, so a stalled runner cannot produce a false fa
 | `test_stress_control_the_same_harness_loses_cancels_to_stdlib_before_3_12` | The stress harness is sensitive: stdlib loses cancels there on 3.10/3.11 and none on 3.12+. |
 | `test_one_cancel_landing_as_a_drive_completes_stops_the_real_scheduler[0,1]` | **The run-2 hang, deterministically, with the real `run_scheduler`.** It stops within the bound and *returns*, keeping the `loop.py` `break` contract that `_on_scheduler_task_done` relies on. The aligned drive ran once, no other drive ran, no ticks were written, and the store drained. |
 | `test_stress_one_cancel_at_a_random_instant_stops_the_real_scheduler` (`slow`) | 120 trials with the real always-on drives and one cancel in the first 150 ms. |
-| `test_daemon_stop_is_not_slowed_by_a_drive_completing_as_it_cancels` | **`KernelDaemon.stop()`, the production caller**, with two due drives. The second never runs, no tick is written, and `stop()` finishes inside its own 5 s bound. Before, the second drive ran after the skills were unloaded and `stop()` took 5.1 s. Its "did not terminate" check is a guard only: it could not see the old loss, because `wait_for` then returned `None`. |
+| `test_daemon_stop_is_not_slowed_by_a_drive_completing_as_it_cancels` | **`KernelDaemon.stop()`, the production caller**, with two due drives. The second never runs and no tick is written. The test pins the scheduler's drive timeout to 60 s for itself, so a slow `stop()` stage cannot time out the drive it holds (§10). Before, the second drive ran after the skills were unloaded and `stop()` took 5.1 s. Its "did not terminate" check is a guard only: it could not see the old loss, because `wait_for` then returned `None`. |
 
 **Hardened (defence in depth only): three teardowns that cancel the real scheduler.**
 - They are `test_fresh_database_scheduler_startup_does_not_hang` and
@@ -356,8 +357,15 @@ cancelling it.
 - **The forced-alignment tests rely on CPython's callback ordering.** They depend on `call_soon`
   being FIFO and on done-callbacks being scheduled when a task completes. Both were stable on
   3.10–3.13; the causal control would catch a change on 3.10/3.11.
-- **Wall-clock dependence left in the tests.** Two kinds only: the daemon test's `stop()` < 5 s,
-  which is `stop()`'s own bound and about 40 times the measured 0.12 s, and the 5 s per-wait bounds
-  (`BOUND_S`), which only catch hangs.
+- **Wall-clock dependence left in the tests.** Hang bounds only: the 5 s per-wait bounds
+  (`BOUND_S`) and the daemon test's 15 s bound around `stop()`. A stall that outlasts one of them
+  still fails a test, as a hang.
+  - The daemon test no longer asserts `stop()` < 5 s (Codex review comment 4171700100,
+    2026-10-03). That span covered every stage of `stop()`, before and after the cancel, so a slow
+    snapshot or checkpoint could fail it while the seam worked.
+  - The same test pins the scheduler's drive timeout (`DRIVE_TIMEOUT`, 5 s) to 60 s for itself.
+    The drive it holds across `stop()`'s earlier stages could otherwise time out on a slow runner
+    and change the ordering the test asserts. The value is finite and above the 15 s bound: with no
+    timeout, the old seam's swallow branch is never reached and the test stops discriminating.
 - **At-least-once re-run.** A drive superseded at shutdown runs again at the next start, and a
   time-dependent nudge can differ.

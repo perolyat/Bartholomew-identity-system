@@ -1600,8 +1600,8 @@
     - It matches `wait_for` otherwise, including timeout parity.
     - It is one code path on every version, with no retry and no scheduler change.
     - Three teardowns now assert that a single cancel stops the scheduler, with a bound.
-    - The new tests force every ordering with events, not wall-clock windows, and 13 of 13 mutants
-      are caught.
+    - The new tests force every ordering with events, not wall-clock windows; the only time bounds
+      left are hang detectors. 13 of 13 mutants are caught.
     - PR #126.
   - **Consequence for PR #125.** Its acceptance sequence is invalidated and restarts at 0/3 on a head
     that contains this repair (record §9).
