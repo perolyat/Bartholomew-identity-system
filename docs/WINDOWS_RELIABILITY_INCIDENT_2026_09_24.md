@@ -10,6 +10,18 @@ merge). Job 107543292415, "Windows full default suite + actuation (py3.11)", fai
 unchanged head `a55c8f9` (three consecutive clean Windows full-suite executions, preceded by a
 clean Merge Candidate and green ordinary CI). **Not closed:** that is Taylor's decision, and the
 worker-loss stall cause is still unresolved (§5, §7 "What this does not establish"). Not merged.
+**Status (2026-10-03):** the head moved after that acceptance, from `a55c8f9` through `6125598`
+(this record), `bfc207b` and `dd0a680` (a Codex finding and its disposition) to `1adf251` (W15 test
+timing). The PR-triggered Merge Candidate on `1adf251` (36153552522) was **cancelled at the
+40-minute cap** with three workers lost inside SQLite closes (§7, last row); Merge Qualification
+refused that head, and Taylor's hold of 2026-09-27 (option 2) parked the PR unmerged at `1adf251`
+with no re-run. On 2026-10-03 current `main` (`2beeb6d`, the PR #126 drive-seam cancellation
+repair) was merged into this branch by merge commit `7925644`; the one conflict,
+`dispositions.yml`, was resolved by keeping both pull requests' records, and nothing in this
+package's repairs changed. **Qualification and the §7 acceptance sequence restart from zero on the
+new head.** The evidence on `a55c8f9` and the attempts on `dd0a680` and `1adf251` qualify nothing
+later. The worker-loss stall cause (§5) is still unresolved, and the PR #126 repair does not
+explain it. Not merged.
 
 This record keeps four kinds of statement apart, and labels each: **verified** (demonstrated by
 a log, a runtime measurement or a reproduction), **repaired** (a verified defect this package
@@ -219,6 +231,7 @@ below as they happen.
 | **2** | Merge Candidate 36126510276 / job 108043755393 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test 57.6 s (close 34.3 s, commit 19.6 s). |
 | **3** | Merge Candidate 36129492255 / job 108053221935 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test **92.1 s** (close 56.8 s, commit 31.8 s). **Observation, unexplained:** worker `gw0` wrote `session_finish` but not `process_exit`; the controller recorded it as finished, not crashed, and every one of its tests reported. Not a worker loss under W3; recorded rather than dismissed. |
 | post-acceptance | Merge Candidate 36149262520 / job 108118576298 (PR-triggered) | `dd0a680` | **failed** — 1 failed, 5589 passed, 103 skipped | The failure was this package's own W15 test, `test_the_evidence_spans_setup_and_call_as_the_timeout_does`: its inner run's `timeout_imminent` event was written (phase `call`, elapsed ≥ 4 s), but `gw0.timeout.txt` never was. With a 5 s inner timeout the evidence had 0.5 s before the kill, and on the loaded runner the kill landed in between. Not reproduced on Linux (8x CPU oversubscription, 3 of 3 passed). Fixed at the next head: the killed-test cases use a 20 s inner timeout (a 2 s head start; production has 10 s), the inner run no longer re-runs the killed test on four replacement workers (which kept each test at about 20 s), and a missing stack file now says whether the kill pre-empted the write or the write failed. Otherwise: no worker lost, no stall, no `database is locked`, W13 clean. Heaviest test 79.6 s (close 49.9 s, commit 27.4 s). |
+| post-acceptance | Merge Candidate 36153552522 / job 108132502235 (PR-triggered) | `1adf251` | **cancelled at the 40-minute job cap** — the test step ran 37 min and was cancelled; no pytest summary; the W13 step was skipped | Three workers lost to the 120 s per-test timeout, each with W15 evidence taken 10 s before the kill and the test's thread inside a SQLite connection close: gw0 `tests/test_learning_memory_control_centre.py::test_b6d_the_material_field_vocabulary_is_enforced_not_documented` (`objective_store._set_status`), gw2 `tests/test_memory_agency_review_fixes.py::test_queued_outcome_is_independent_of_inbox_size` (the MemoryStore `aiosqlite` close), gw3 `tests/integration/test_fts_unavailable_vector_quality.py::test_vector_quality_maintained_when_fts_unavailable` (`db_ctx.wal_db` via `vector_store.upsert`; 77 s in close, 41 s in commit). None was hung. One further failure on gw4, `tests/test_objective_store.py::…::test_the_window_holds_when_everything_happens_in_the_same_second`, a wall-clock assertion. 22 W13 re-drives followed once the replacement workers started. The runner was slow throughout: ordinary setups took 55–58 s. This is the heavy-test headroom route §6 and §7 name, the per-operation connection close, not the lock or seed defects this package repaired; it is W15's first real capture. Not re-run: Taylor's hold of 2026-09-27 (PR #124 comment 5853881682) parked the PR at this head, and a separate package stacked on it (PR #125) took up the headroom item. Under the 2026-09-21 qualification decision a cancelled job refuses: Merge Qualification 36153552561 refused `1adf251`. Reported in PR #124 comment 5835485341. |
 
 **Result.** Three consecutive clean Windows full-suite executions on one unchanged head, preceded by
 a clean Merge Candidate and green ordinary CI and Merge Qualification on that head. The one failed
