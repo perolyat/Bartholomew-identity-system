@@ -46,3 +46,28 @@ dispositions:
       finding is the inline comment review_comment:4105531182, dispositioned
       above as resolved by a later commit.
     recorded_by: "Claude Code (PR #124 author session), for Taylor's review"
+  # PR #126 (scheduler drive-seam cancellation repair). Codex, on 49c9b61: the
+  # daemon stop() test's `elapsed < 5.0` assertion can fail on a stalled runner
+  # although the repaired seam stopped the scheduler.
+  - finding_id: review_comment:4171700100
+    classification: resolved_by_later_commit
+    resolved_by_commit: 019186c17ce5ef50ed1c3a2f598a93e1dff91317
+    rationale: >-
+      Valid, and wider than stated. The elapsed span covered every stage of
+      KernelDaemon.stop(), so a slow snapshot or checkpoint failed it while the
+      seam worked. The "deterministic" run/tick checks Codex pointed to had the
+      same exposure: the held drive hit the scheduler's 5 s DRIVE_TIMEOUT during
+      stop()'s earlier stages and the next due drive started before the cancel.
+      019186c removes the elapsed assertion and pins DRIVE_TIMEOUT to a finite
+      60 s for that test only, keeping the run/tick checks and the 15 s hang
+      bound. Under five injected 5.5 s stall patterns the new seam passes on
+      3.10, 3.11 and 3.12, and the old seam still fails on 3.10 and 3.11. No
+      production code changed.
+    recorded_by: "Claude Code (PR #126 author session), for Taylor's review"
+  - finding_id: review:5399002921
+    classification: non_substantive
+    rationale: >-
+      The review body is Codex's header and product boilerplate only. Its one
+      finding is the inline comment review_comment:4171700100, dispositioned
+      above as resolved by a later commit.
+    recorded_by: "Claude Code (PR #126 author session), for Taylor's review"
