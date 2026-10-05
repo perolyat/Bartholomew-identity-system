@@ -22,6 +22,19 @@ package's repairs changed. **Qualification and the §7 acceptance sequence resta
 new head.** The evidence on `a55c8f9` and the attempts on `dd0a680` and `1adf251` qualify nothing
 later. The worker-loss stall cause (§5) is still unresolved, and the PR #126 repair does not
 explain it. Not merged.
+**Status (2026-10-05):** the §7 acceptance sequence **passed** on the unchanged head `8405905`
+(`840590549cf64b9eea23018adda884ac1f169035`): PR-triggered Merge Candidate 37259077092, then three
+consecutive dispatched Windows full-suite executions, Merge Candidate 37261089218, 37263416482 and
+37265065826, each attempt 1, all seven jobs green, W13 clean, 4/4 workers finished normally, no
+worker lost, no `database is locked` (§7). The head is `03c5f2d` plus `b9ab007` (the W13
+contract-report checker accepts only this contract's own report; Codex finding
+review_comment:4180458481, raised on `03c5f2d` before any acceptance run) and `8405905` (its
+disposition). On `8405905` CI 37259077140, Integration 37259077099 and the PR-event Merge
+Qualification 37259077090 are green; the hand-dispatched Merge Qualification 37260739733 is READY
+and bound to this exact head; Codex found no major issues (PR #124 comment 5987558838). **Not
+closed:** that is Taylor's decision. The worker-loss stall cause (§5) is still unresolved, and
+heavy-test headroom (§6) stays deferred to PR #125. Not merged: Taylor's User Approval Gate is in
+force.
 
 This record keeps four kinds of statement apart, and labels each: **verified** (demonstrated by
 a log, a runtime measurement or a reproduction), **repaired** (a verified defect this package
@@ -208,6 +221,9 @@ ownership.**
 - Orphaned msedge / Notepad processes from the actuation step, present in both attempts.
 - Heavy-test headroom — re-measured on Windows after A1 (§7): the heaviest test ran 57.6–94.9 s
   of its 120 s budget across four runs on `a55c8f9`, dominated by close. **Not improved by A1.**
+  On `8405905` (§7) it ran 61.2, 82.3, 56.3 and 58.4 s across four runs, close 33–50 s: measured,
+  not claimed improved (the run-to-run variance on one head is already recorded as 1.6x, and nothing
+  since `a55c8f9` touches that path). Taken up by PR #125 as its own package; still deferred here.
 - No audit of existing field databases for orphan child rows written while operational
   connections ran with foreign keys off.
 - The Linux xdist jobs run without the execution trace, so a timeout kill there stays
@@ -232,10 +248,15 @@ below as they happen.
 | **3** | Merge Candidate 36129492255 / job 108053221935 (dispatched) | `a55c8f9` | **passed** — all 7 jobs; W13 step passed | No worker lost, no stall, no `database is locked`. Heaviest test **92.1 s** (close 56.8 s, commit 31.8 s). **Observation, unexplained:** worker `gw0` wrote `session_finish` but not `process_exit`; the controller recorded it as finished, not crashed, and every one of its tests reported. Not a worker loss under W3; recorded rather than dismissed. |
 | post-acceptance | Merge Candidate 36149262520 / job 108118576298 (PR-triggered) | `dd0a680` | **failed** — 1 failed, 5589 passed, 103 skipped | The failure was this package's own W15 test, `test_the_evidence_spans_setup_and_call_as_the_timeout_does`: its inner run's `timeout_imminent` event was written (phase `call`, elapsed ≥ 4 s), but `gw0.timeout.txt` never was. With a 5 s inner timeout the evidence had 0.5 s before the kill, and on the loaded runner the kill landed in between. Not reproduced on Linux (8x CPU oversubscription, 3 of 3 passed). Fixed at the next head: the killed-test cases use a 20 s inner timeout (a 2 s head start; production has 10 s), the inner run no longer re-runs the killed test on four replacement workers (which kept each test at about 20 s), and a missing stack file now says whether the kill pre-empted the write or the write failed. Otherwise: no worker lost, no stall, no `database is locked`, W13 clean. Heaviest test 79.6 s (close 49.9 s, commit 27.4 s). |
 | post-acceptance | Merge Candidate 36153552522 / job 108132502235 (PR-triggered) | `1adf251` | **cancelled at the 40-minute job cap** — the test step ran 37 min and was cancelled; no pytest summary; the W13 step was skipped | Three workers lost to the 120 s per-test timeout, each with W15 evidence taken 10 s before the kill and the test's thread inside a SQLite connection close: gw0 `tests/test_learning_memory_control_centre.py::test_b6d_the_material_field_vocabulary_is_enforced_not_documented` (`objective_store._set_status`), gw2 `tests/test_memory_agency_review_fixes.py::test_queued_outcome_is_independent_of_inbox_size` (the MemoryStore `aiosqlite` close), gw3 `tests/integration/test_fts_unavailable_vector_quality.py::test_vector_quality_maintained_when_fts_unavailable` (`db_ctx.wal_db` via `vector_store.upsert`; 77 s in close, 41 s in commit). None was hung. One further failure on gw4, `tests/test_objective_store.py::…::test_the_window_holds_when_everything_happens_in_the_same_second`, a wall-clock assertion. 22 W13 re-drives followed once the replacement workers started. The runner was slow throughout: ordinary setups took 55–58 s. This is the heavy-test headroom route §6 and §7 name, the per-operation connection close, not the lock or seed defects this package repaired; it is W15's first real capture. Not re-run: Taylor's hold of 2026-09-27 (PR #124 comment 5853881682) parked the PR at this head, and a separate package stacked on it (PR #125) took up the headroom item. Under the 2026-09-21 qualification decision a cancelled job refuses: Merge Qualification 36153552561 refused `1adf251`. Reported in PR #124 comment 5835485341. |
+| — | Merge Candidate 37145536077 / job 111268566815 (PR-triggered) | `03c5f2d` | **passed** — all 7 jobs; W13 step passed | Ordinary checks on the reconciled head (`main` at `2beeb6d` merged by `7925644`, plus this record's 2026-10-03 update): CI 37145536097, Integration 37145536072 and Merge Qualification 37145536079 also green. Windows: no worker lost, no stall, no `database is locked`. Heaviest test 61.3 s (close 36.5 s, commit 20.9 s). Not an acceptance run: the fresh Codex review requested on this head found review_comment:4180458481 (the W13 contract-report checker accepted any JSON object carrying `"redrives": 0`, without checking schema or clause), repaired at `b9ab007` with its disposition at `8405905`, so the head moved before any dispatched run. |
+| — | Merge Candidate 37259077092 / job 111602247638 (PR-triggered) | `8405905` | **passed** — all 7 jobs; W13 step passed | Ordinary checks on the candidate head: CI 37259077140, Integration 37259077099 and Merge Qualification 37259077090 also green; the hand-dispatched Merge Qualification 37260739733 (`pr=124`, run from this branch) is READY, `merge-qualified at 840590549cf64b9eea23018adda884ac1f169035`, its checkout fetched by SHA and the `dispositions.yml` it read proven this head's own by the records that exist only here. Codex found no major issues on `840590549c` (PR #124 comment 5987558838). Windows: no worker lost, no stall, no `database is locked`. Heaviest test 61.2 s (close 36.1 s, commit 20.9 s). The sequence's criteria (expected counts, per-run checks, timing thresholds) were registered in PR #124 comment 5987779241 before Run 1 was dispatched. |
+| **1** | Merge Candidate 37261089218 / job 111608282761 (dispatched, attempt 1) | `8405905` | **passed** — all 7 jobs; W13 step passed | `5639 passed, 103 skipped, 166 warnings in 1236.49s (0:20:36)`. 4/4 workers finished, each `session_finish=yes process_exit=yes`; no stall; no `database is locked`; "what failed: nothing". Heaviest test **82.3 s** (close 49.9 s, commit 27.9 s) — 69 % of the budget. The slowest Windows job of the three on every substantive step: its clean-start and scheduler-readiness steps ran at about twice the PR-triggered run's and its install step about a quarter longer (clean-start 20 s against 8 s, scheduler readiness 19 s against 11 s, install 55 s against 44 s): the unexplained runner-slowdown pattern already recorded on `1adf251`, which PR #125 tracks as its follow-up FU-3. **Observation only:** inside every registered threshold (test step 20:39 against a stop at 28:06; heaviest test under the 100 s flag), nothing failed, and no repair is claimed. |
+| **2** | Merge Candidate 37263416482 / job 111615150799 (dispatched, attempt 1) | `8405905` | **passed** — all 7 jobs; W13 step passed | `5639 passed, 103 skipped, 166 warnings in 991.94s (0:16:31)`. 4/4 workers finished normally; no stall; no `database is locked`; "what failed: nothing". Heaviest test 56.3 s (close 33.2 s, commit 18.9 s). Setup steps back in line with the PR-triggered run. |
+| **3** | Merge Candidate 37265065826 / job 111620025938 (dispatched, attempt 1) | `8405905` | **passed** — all 7 jobs; W13 step passed | `5639 passed, 103 skipped, 166 warnings in 1061.18s (0:17:41)`. 4/4 workers finished normally; no stall; no `database is locked`; "what failed: nothing". Heaviest test 58.4 s (close 34.4 s, commit 20.1 s). |
 
-**Result.** Three consecutive clean Windows full-suite executions on one unchanged head, preceded by
-a clean Merge Candidate and green ordinary CI and Merge Qualification on that head. The one failed
-attempt in this record (above) was on an earlier head and is kept.
+**Result (2026-09-25, `a55c8f9`).** Three consecutive clean Windows full-suite executions on one
+unchanged head, preceded by a clean Merge Candidate and green ordinary CI and Merge Qualification
+on that head. The one failed attempt in this record (above) was on an earlier head and is kept.
 
 **What this establishes.** On `a55c8f9`: no `database is locked` in four Windows full-suite runs
 (the seed path that raised it twice no longer re-initialises a live database, and every
@@ -255,6 +276,50 @@ re-drive now unable to pass as clean; no worker lost.
   so this is the likeliest route to the next worker loss — and W15 will now say so if it happens.
 - The heaviest-test figures vary by 1.6x between runs on one head, so no single run's figure is
   a measurement of the fix.
+
+**Result (2026-10-05, `8405905`).** The sequence restarted from zero on the new head, as the
+2026-10-03 status required, and passed: three consecutive clean dispatched Windows full-suite
+executions (Merge Candidate 37261089218, 37263416482, 37265065826), each attempt 1, on the one
+unchanged head `840590549cf64b9eea23018adda884ac1f169035`, preceded by a clean PR-triggered Merge
+Candidate and green CI, Integration and Merge Qualification on that head. The branch tip was read
+from the forge at every dispatch and every completion and never moved; no Merge Candidate was in
+flight when a run was dispatched; no attempt was discarded or repeated. In every run: all seven
+jobs succeeded; Windows `5639 passed, 103 skipped`; 4/4 workers finished with `session_finish`
+and `process_exit`; no scheduler re-drive (W13 clean in the Windows job and both Ubuntu xdist
+jobs); no `database is locked`, `node down`, `TESTS LOST` or `Not properly terminated`; Tests +
+coverage `5740 passed, 2 skipped` on both Pythons (coverage 79.84–79.91 %, gate 70 %); Critical
+`315 passed, 25 skipped` then 6, 10 and 17 passed on both Pythons; no test step crossed its
+registered threshold (Windows 20:39, 16:33, 17:42 against 28:06). The failed and cancelled
+attempts above, on `4be5b44`, `dd0a680` and `1adf251`, are kept. Reported in PR #124 comment
+5988506124.
+
+**What this establishes (`8405905`).** On the reconciled head, with the W13 checker repaired: no
+`database is locked` in four Windows full-suite runs; no W13 re-drive in any of them, with a
+re-drive, a missing report and a report that is not this contract's all unable to pass as clean;
+no worker lost. The lock, seed and W13 defects this package repaired did not recur.
+
+**What this does not establish (`8405905`).**
+- **The worker-loss stall cause is still unresolved.** No worker was lost in these four runs, so W15
+  captured nothing here. Its real captures remain the `1adf251` run above and, through PR #125's
+  branch, the `gw3` loss in PR #125's acceptance run 2 (Merge Candidate 36566521591 on `2906a81`,
+  2026-09-29; `docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md` §1). Four clean runs on this head are
+  not evidence that the stall behind gw0/gw2, or the `1adf251` losses, cannot recur.
+- **Heavy-test headroom is live and stays deferred.** The heaviest test,
+  `tests/test_memory_agency_review_fixes.py::test_queued_outcome_is_independent_of_inbox_size`,
+  took 61.2, 82.3, 56.3 and 58.4 s across the four runs on this head (close 33–50 s, commit 19–28
+  s). These are lower than the `a55c8f9` figures, but within the 1.6x run-to-run variance already
+  recorded, and nothing since `a55c8f9` touches the connection-teardown path: A1 is in both heads,
+  and `git diff a55c8f9..8405905` changes neither `db_ctx.py` nor `memory_store.py` (the commits
+  since then are this record, the W15 summary wording and test timing, dispositions, the merge of
+  `main` with the PR #126 drive-seam repair in `runtime_contract.py`, and the W13 checker repair).
+  **No improvement is claimed.** The repair is PR #125's package, stacked on `1adf251`, to be
+  retargeted and requalified after this PR; its state is not changed by this record.
+- **Run 1's slowness is an observation, not a finding.** Its clean-start and scheduler-readiness
+  steps ran at about twice the other runs' (install about a fifth longer) and its heaviest test
+  spent 49.9 s in SQLite close. That is the unexplained runner-slowdown pattern already recorded on
+  `1adf251` (there, pytest setup phases of 55–58 s; here, the job's own setup steps), which PR #125
+  tracks as its follow-up FU-3; its cause is unresolved, and this run stayed inside every registered
+  threshold.
 
 ## 8. Forbidden-state tests
 

@@ -1701,6 +1701,13 @@
     consecutive dispatched runs (36122898029, 36126510276, 36129492255): all jobs green, W13 clean,
     no worker lost, no `database is locked`. One earlier failed attempt on `4be5b44` (this
     package's own over-tight test) is kept in the record.
+  - **Acceptance (2026-10-05): passed again on `8405905`**, the head after the `1adf251` recurrence
+    (Merge Candidate 36153552522, cancelled at the cap with three workers lost inside SQLite closes;
+    record §7) and the merge of `main` at `2beeb6d`. PR-triggered Merge Candidate 37259077092 plus
+    three consecutive dispatched runs (37261089218, 37263416482, 37265065826), each attempt 1: all
+    jobs green, W13 clean, 4/4 workers finished normally, no worker lost, no `database is locked`.
+    Heaviest test 56.3–82.3 s, headroom still deferred to PR #125. Every attempt is kept in the
+    record.
   - **Risk category:** reliability / CI evidence integrity. **Status:** OPEN pending Taylor's
     closure decision and merge. The lock, seed and W13 defects are repaired and accepted; **the
     worker-loss stall cause is not established**, and heavy-test headroom (entry below) is the
