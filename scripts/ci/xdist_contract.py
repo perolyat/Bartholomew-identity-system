@@ -617,7 +617,15 @@ def write_contract_report(
 
 
 def check_contract_report(path: str | os.PathLike[str]) -> tuple[bool, str]:
-    """Whether the run that wrote ``path`` is clean W13 evidence, and why."""
+    """Whether the run that wrote ``path`` is clean W13 evidence, and why.
+
+    Fails closed unless the file is this contract's own report: a JSON object
+    whose ``schema`` is CONTRACT_REPORT_SCHEMA, whose ``clause`` is "W13" and
+    whose ``redrives`` is a non-negative integer. A JSON boolean is not an
+    integer here, and nothing is coerced. Any other content, however it came
+    to be at ``path``, establishes nothing about this run and is refused with
+    the mismatch named.
+    """
     target = Path(path)
     if not target.is_file():
         return False, (
@@ -627,17 +635,47 @@ def check_contract_report(path: str | os.PathLike[str]) -> tuple[bool, str]:
         )
     try:
         report = json.loads(target.read_text(encoding="utf-8"))
-        redrives = int(report["redrives"])
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError) as exc:
         return False, f"unreadable W13 contract report at {target}: {exc!r}"
+    problem = _contract_report_problem(report)
+    if problem is not None:
+        return False, (
+            f"W13 contract report at {target} is not this contract's report ({problem}), "
+            "so it establishes nothing about this run and cannot count as clean"
+        )
+    redrives = report["redrives"]
     if redrives:
-        notes = "; ".join(report.get("notes", [])[:5])
+        raw_notes = report.get("notes")
+        notes = (
+            "; ".join(str(note) for note in raw_notes[:5]) if isinstance(raw_notes, list) else ""
+        )
         return False, (
             f"the run completed only after {redrives} scheduler re-drive(s) (clause W13): "
             "it completed over a pytest-xdist defect and is not clean evidence. "
             f"{notes}"
         )
     return True, "no scheduler re-drive was needed (clause W13)"
+
+
+def _contract_report_problem(report: object) -> str | None:
+    """Why ``report`` is not a report this contract wrote, or None if it is.
+
+    ``schema`` and ``redrives`` must be real integers: ``bool`` is a subclass of
+    ``int`` in Python and ``True == 1``, so it is excluded explicitly, and a
+    float such as ``1.0`` is refused rather than compared equal.
+    """
+    if not isinstance(report, dict):
+        return f"top level is {type(report).__name__}, not an object"
+    schema = report.get("schema")
+    if isinstance(schema, bool) or not isinstance(schema, int) or schema != CONTRACT_REPORT_SCHEMA:
+        return f"schema {schema!r}, expected {CONTRACT_REPORT_SCHEMA}"
+    clause = report.get("clause")
+    if clause != "W13":
+        return f"clause {clause!r}, expected 'W13'"
+    redrives = report.get("redrives")
+    if isinstance(redrives, bool) or not isinstance(redrives, int) or redrives < 0:
+        return f"redrives {redrives!r} is not a non-negative integer"
+    return None
 
 
 def main(argv: list[str]) -> int:

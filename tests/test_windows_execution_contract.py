@@ -1561,6 +1561,118 @@ def test_the_w13_check_fails_closed(tmp_path, pytester, monkeypatch):
     assert check_contract_report(report)[0] is False
 
 
+# ---------------------------------------------------------------------------
+# The W13 check reads a report. It must be THIS contract's report.
+#
+# Codex finding review_comment:4180458481 on 03c5f2d: the check read only
+# `redrives`, coerced it with int(), and never looked at `schema` or `clause`,
+# so any JSON object carrying `"redrives": 0` -- a report from another schema,
+# an incomplete one, or a boolean -- would have counted as clean evidence. The
+# check now fails closed unless the report identifies itself as the current
+# contract's and carries a real integer count. The writer is unchanged.
+# ---------------------------------------------------------------------------
+
+_ABSENT = object()
+
+
+def _contract_report_file(tmp_path: Path, name: str, **overrides) -> Path:
+    """A report shaped exactly like the writer's, with one field altered."""
+    from scripts.ci.xdist_contract import CONTRACT_REPORT_SCHEMA
+
+    report = {
+        "schema": CONTRACT_REPORT_SCHEMA,
+        "clause": "W13",
+        "redrives": 0,
+        "gave_up": False,
+        "exitstatus": 0,
+        "notes": [],
+    }
+    for key, value in overrides.items():
+        if value is _ABSENT:
+            report.pop(key, None)
+        else:
+            report[key] = value
+    path = tmp_path / name
+    path.write_text(json.dumps(report), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("schema", 2, id="wrong-schema"),
+        pytest.param("schema", _ABSENT, id="missing-schema"),
+        pytest.param("schema", True, id="schema-is-the-boolean-that-equals-1"),
+        pytest.param("schema", 1.0, id="schema-is-a-float"),
+        pytest.param("schema", "1", id="schema-is-a-string"),
+        pytest.param("clause", "W14", id="wrong-clause"),
+        pytest.param("clause", _ABSENT, id="missing-clause"),
+        pytest.param("redrives", _ABSENT, id="missing-redrives"),
+        pytest.param("redrives", "0", id="redrives-is-a-string"),
+        pytest.param("redrives", 0.0, id="redrives-is-a-float"),
+        pytest.param("redrives", False, id="redrives-is-the-boolean-that-equals-0"),
+        pytest.param("redrives", True, id="redrives-is-the-boolean-that-equals-1"),
+        pytest.param("redrives", None, id="redrives-is-null"),
+        pytest.param("redrives", -1, id="redrives-is-negative"),
+    ],
+)
+def test_a_report_that_is_not_this_contracts_is_refused(tmp_path, field, value):
+    from scripts.ci.xdist_contract import check_contract_report, main
+
+    path = _contract_report_file(tmp_path, "report.json", **{field: value})
+    ok, message = check_contract_report(path)
+    assert not ok
+    assert field in message, message
+    assert "W13" in message and "cannot count as clean" in message
+    assert main(["xdist_contract", "check", str(path)]) == 1
+
+
+def test_a_bare_redrives_object_is_refused(tmp_path):
+    """The exact shape the finding described: nothing but a zero count."""
+    from scripts.ci.xdist_contract import check_contract_report
+
+    bare = tmp_path / "bare.json"
+    bare.write_text('{"redrives": 0}', encoding="utf-8")
+    ok, message = check_contract_report(bare)
+    assert not ok and "schema" in message
+
+
+@pytest.mark.parametrize("text", ["[0]", "0", "null", '"W13"', "true"])
+def test_a_report_whose_top_level_is_not_an_object_is_refused(tmp_path, text):
+    from scripts.ci.xdist_contract import check_contract_report
+
+    path = tmp_path / "shape.json"
+    path.write_text(text, encoding="utf-8")
+    ok, message = check_contract_report(path)
+    assert not ok and "not an object" in message
+
+
+def test_the_writers_own_report_is_accepted_and_its_count_is_honoured(tmp_path):
+    """The repair tightens the reader only: what the writer produces passes,
+    and a writer-produced re-drive count still fails, with the same words."""
+    from scripts.ci.xdist_contract import check_contract_report, write_contract_report
+
+    clean = tmp_path / "clean.json"
+    write_contract_report(clean, redrives=0, gave_up=False, notes=[], exitstatus=0)
+    ok, message = check_contract_report(clean)
+    assert ok, message
+    assert "no scheduler re-drive was needed (clause W13)" == message
+
+    redriven = tmp_path / "redriven.json"
+    write_contract_report(
+        redriven,
+        redrives=2,
+        gave_up=False,
+        notes=["scheduler re-drive #1: no test completed for 33s"],
+        exitstatus=0,
+    )
+    ok, message = check_contract_report(redriven)
+    assert not ok
+    assert "2 scheduler re-drive(s) (clause W13)" in message
+    assert "not clean evidence" in message
+    assert "scheduler re-drive #1" in message
+
+
 def _required_xdist_jobs() -> list[tuple[str, str, dict]]:
     """Every (workflow, job) Merge Qualification requires that runs the suite
     under xdist, with the job's definition. Matrix names are expanded the way
