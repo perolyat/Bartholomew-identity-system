@@ -99,3 +99,26 @@ dispositions:
       finding is the inline comment review_comment:4171700100, dispositioned
       above as resolved by a later commit.
     recorded_by: "Claude Code (PR #126 author session), for Taylor's review"
+  # PR #127 (close-out records). Codex P2, on 159b19a: the 2026-09-30
+  # drive-seam entry in RISKS.md still read "open until merged" after a dated
+  # note had recorded that PR #126 merged.
+  - finding_id: review_comment:4193250224
+    classification: resolved_by_later_commit
+    resolved_by_commit: f9825b998a0cc9aac337a401b2a88badefb491d7
+    rationale: >-
+      Valid. The entry's only closing condition was that PR #126 merge, which
+      it did on 2026-10-03 as 2beeb6d; the 2026-10-06 note recorded the merge
+      and deferred the closure to Taylor. Taylor accepted the finding on
+      2026-10-06 (instruction to this session; the gate approval of this pull
+      request is its forge record). f9825b9 marks the entry CLOSED in the
+      R-RETRIEVAL-1 form (amended in place per R-CTRL-1), keeps its two
+      follow-ups recorded as open items, and states what the closure does not
+      extend to. Documentation only.
+    recorded_by: "Claude Code (PR #127 author session), for Taylor's review"
+  - finding_id: review:5425885316
+    classification: non_substantive
+    rationale: >-
+      The review body is Codex's header and product boilerplate only. Its one
+      finding is the inline comment review_comment:4193250224, dispositioned
+      above as resolved by a later commit.
+    recorded_by: "Claude Code (PR #127 author session), for Taylor's review"
