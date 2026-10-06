@@ -2,7 +2,16 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-25 — **Windows full-suite reliability incident (Merge Candidate
+> **Last updated:** 2026-10-06 — **the 2026-09-30 drive-seam entry is CLOSED** (documentation
+> only). PR #126 merged on 2026-10-03 as `2beeb6d` at Taylor's User Approval Gate; that merge was
+> the entry's only closing condition, and Taylor decided the closure on 2026-10-06, accepting a
+> Codex review finding on PR #127 (review comment 4193250224) that the entry still read "open
+> until merged" after the dated note that recorded the merge. The entry is amended in place per
+> R-CTRL-1: its words stay, a "Why CLOSED" paragraph follows, its two follow-ups stay recorded as
+> **open** items, and a paragraph states what the closure does not extend to. **No risk is removed
+> and no resolved risk is revived.** This pass accompanies no code change.
+>
+> **Previously (2026-09-25).** **Windows full-suite reliability incident (Merge Candidate
 > 35971892908 attempt 1, `main` at `7b21a00`): repair implemented, incident still OPEN.** One new
 > tech-debt entry records the incident with verified, repaired, observable-only and unresolved
 > parts kept apart (full record: `docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md`), and **four
@@ -1607,7 +1616,8 @@
 - **(2026-09-30) The scheduler's drive seam could lose a cancellation (CPython 3.10/3.11). REPAIR
   IMPLEMENTED, NOT MERGED.** Full record: `docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md`.
   *(PR #126 **merged 2026-10-03 as `2beeb6d`** at Taylor's User Approval Gate; the "NOT MERGED"
-  above went stale at that merge and is corrected here, 2026-10-06.)*
+  above went stale at that merge and is corrected here, 2026-10-06.)* **CLOSED 2026-10-06** at
+  Taylor's decision — its two follow-ups remain **OPEN**; see **Status (2026-10-06)** below.
   - **What happened.** `run_drive_through_runtime_contract()` awaited
     `asyncio.wait_for(drive_fn(ctx), timeout=timeout)`. On CPython 3.10/3.11, `wait_for` returns the
     inner result instead of raising when a cancellation lands in the loop iteration in which the
@@ -1653,7 +1663,8 @@
     - PR #126.
   - **Consequence for PR #125.** Its acceptance sequence is invalidated and restarts at 0/3 on a head
     that contains this repair (record §9).
-  - **Follow-ups recorded, not absorbed:**
+  - **Follow-ups recorded, not absorbed — OPEN, and not closed by the 2026-10-06 closure below**
+    (record §7, items 1 and 2):
     - `daemon.py:925`'s `wait_for(task, 5.0)` is not a hard bound;
     - `stop()` unloads the skills before it cancels the scheduler.
   - **Risk category:** runtime reliability, shutdown and cancellation. **Status:** open until merged.
@@ -1661,6 +1672,23 @@
     above went stale at that merge and is noted here, 2026-10-06. The repair is on `main`; per the
     merge commit, "No unresolved item is closed by this merge", and whether this entry closes is
     Taylor's decision, not made here.)*
+  - **Status (2026-10-06): CLOSED.**
+  - **Why CLOSED.** This entry's own closing condition was that PR #126 pass Taylor's User Approval
+    Gate and merge. It did, on 2026-10-03, as `2beeb6d`, so the repaired seam is on `main`. The note
+    above deferred the closure to Taylor; Taylor decided it on 2026-10-06, accepting Codex's review
+    finding on PR #127 (review comment 4193250224) that the entry still read "open until merged"
+    after the note that recorded the merge. Amended in place per R-CTRL-1: the words above stay as
+    written.
+  - **What this closure does NOT extend to.** The two follow-ups recorded above (`daemon.py:925`'s
+    `wait_for(task, 5.0)` is not a hard bound; `stop()` unloads the skills before it cancels the
+    scheduler) **remain open and unrepaired**. The other follow-up findings that the merge commit
+    `2beeb6d` lists as staying open for governed recording (as that commit states them: the Python
+    3.12/3.13 support policy; the Nightly 3.12 lanes, which are red; deeply nested JSON on 3.12+;
+    Docker and uvloop, which are untested; the ready_for_review false block in merge qualification;
+    `stop()` dispatching drives through its pre-cancel window; dispositions being read from the
+    dispatched ref) are **not closed here** and are not recorded by this entry. The 2026-09-25
+    Windows full-suite reliability incident entry below remains OPEN pending Taylor's closure
+    decision, and PR #125's acceptance sequence remains at 0/3 pending its own gate.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
