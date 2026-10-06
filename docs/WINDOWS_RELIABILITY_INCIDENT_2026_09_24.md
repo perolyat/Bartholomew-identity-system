@@ -35,6 +35,24 @@ and bound to this exact head; Codex found no major issues (PR #124 comment 59875
 closed:** that is Taylor's decision. The worker-loss stall cause (§5) is still unresolved, and
 heavy-test headroom (§6) stays deferred to PR #125. Not merged: Taylor's User Approval Gate is in
 force.
+**Status (2026-10-06):** **merged.** PR #124 was merged at Taylor's User Approval Gate as merge
+commit `9ccaec9375338cab44e172515fc38e92d1662e78` (`b5402b1`, the head carrying this record's
+acceptance rows, into `main` at `2beeb6d`; a GitHub merge commit, the repository's normal method;
+the merge commit's tree is `b5402b1`'s). The earlier "not merged" statements above were true when
+written and are left as dated history. The first Merge Candidate on `main` after the merge,
+37399980843 (push, `9ccaec9`), **did not complete** (§7, last row): its Windows full-suite job was
+cancelled at the 40-minute job cap (GitHub's annotation on the job: "The job has exceeded the
+maximum execution time of 40m0s"): the cap fired 37:50 into the test step, which never reported an
+end, and GitHub force-closed the job 5 minutes later at 45:00, so no pytest summary is on record and
+no log was served; its Critical py3.11 job lost its runner 3:25 into its test step ("The runner has
+received a shutdown signal"), with no test failed; the other five jobs were green. It is kept as an
+attempt and was not re-run; whether to re-run it is Taylor's decision. **Not closed:** the merge
+closes nothing by itself, and closure remains Taylor's decision. The lock, seed and W13 repairs are
+on `main`; the worker-loss stall cause (§5) is still unresolved; heavy-test headroom (§6) stays with
+PR #125, which is unchanged by the merge and still to be retargeted and requalified under its own
+gate; gate 8 of `docs/WINDOWS_MERGE_CANDIDATE_REPAIR.md` is still unclaimed: the acceptance runs
+that record and `RISKS.md` wait for now exist and passed (§7, rows 1–3 on `a55c8f9` and on
+`8405905`), this update does not claim it, and whether it is now claimed is not decided here.
 
 This record keeps four kinds of statement apart, and labels each: **verified** (demonstrated by
 a log, a runtime measurement or a reproduction), **repaired** (a verified defect this package
@@ -253,6 +271,7 @@ below as they happen.
 | **1** | Merge Candidate 37261089218 / job 111608282761 (dispatched, attempt 1) | `8405905` | **passed** — all 7 jobs; W13 step passed | `5639 passed, 103 skipped, 166 warnings in 1236.49s (0:20:36)`. 4/4 workers finished, each `session_finish=yes process_exit=yes`; no stall; no `database is locked`; "what failed: nothing". Heaviest test **82.3 s** (close 49.9 s, commit 27.9 s) — 69 % of the budget. The slowest Windows job of the three on every substantive step: its clean-start and scheduler-readiness steps ran at about twice the PR-triggered run's and its install step about a quarter longer (clean-start 20 s against 8 s, scheduler readiness 19 s against 11 s, install 55 s against 44 s): the unexplained runner-slowdown pattern already recorded on `1adf251`, which PR #125 tracks as its follow-up FU-3. **Observation only:** inside every registered threshold (test step 20:39 against a stop at 28:06; heaviest test under the 100 s flag), nothing failed, and no repair is claimed. |
 | **2** | Merge Candidate 37263416482 / job 111615150799 (dispatched, attempt 1) | `8405905` | **passed** — all 7 jobs; W13 step passed | `5639 passed, 103 skipped, 166 warnings in 991.94s (0:16:31)`. 4/4 workers finished normally; no stall; no `database is locked`; "what failed: nothing". Heaviest test 56.3 s (close 33.2 s, commit 18.9 s). Setup steps back in line with the PR-triggered run. |
 | **3** | Merge Candidate 37265065826 / job 111620025938 (dispatched, attempt 1) | `8405905` | **passed** — all 7 jobs; W13 step passed | `5639 passed, 103 skipped, 166 warnings in 1061.18s (0:17:41)`. 4/4 workers finished normally; no stall; no `database is locked`; "what failed: nothing". Heaviest test 58.4 s (close 34.4 s, commit 20.1 s). |
+| post-merge | Merge Candidate 37399980843 / job 112064764414 (push to `main`) | `9ccaec9` | **failed** — the Windows job was **cancelled at the 40-minute job cap** (GitHub's annotation on the job: "The job has exceeded the maximum execution time of 40m0s"): the cap fired at 02:16:12Z, 37:50 into the test step (started 01:38:22Z); the runner never completed the cancellation (the step is recorded in progress with no end time, and the W13 step and the two `if: always()` upload and trace-summary steps are recorded pending), and GitHub force-closed the job at 02:21:12Z, at the end of its 5-minute cancellation timeout (job 45:00; 42:50 after the step started); no pytest summary is on record; the Critical integration + lifecycle (py3.11) job 112064764424 failed 3:25 into its test step on a runner loss (the log reads "The runner has received a shutdown signal", then "The operation was canceled"; 91 tests had passed and none failed); Quality, smoke, Tests + coverage (py3.10 and py3.11) and Critical (py3.10) were green | The first run of the merged tree on `main` (`9ccaec9` = `b5402b1` into `2beeb6d`; the trees are identical). GitHub served no log for the cancelled Windows job at the time of writing (HTTP 404), so whether a worker was lost, whether W15 fired and which test was running at the cap are **not known here**; the only evidence is the job and step timing and the annotation above. The runner loss on the Critical job of the same run is recorded as observed, not as the Windows job's cause. This run establishes nothing about the merged head either way: the merge stands on the `8405905` acceptance rows above (`b5402b1` is docs-only on `8405905`: it carries those rows and changes no code) and on the tier runs on `b5402b1` itself, recorded in the merge commit message rather than in this table (CI 37280890914, Integration 37280891312, Merge Candidate 37280891006 with all seven jobs, and Merge Qualification 37280890885 and 37283584700, READY at `b5402b1`); this is a post-merge verification of `main`. **Not re-run** at the time of writing; whether to re-run it is Taylor's decision, and no attempt is dropped. |
 
 **Result (2026-09-25, `a55c8f9`).** Three consecutive clean Windows full-suite executions on one
 unchanged head, preceded by a clean Merge Candidate and green ordinary CI and Merge Qualification

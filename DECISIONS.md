@@ -3816,6 +3816,8 @@
 
 - **Status:** established 2026-09-18 by the event-processing lease repair (branch
   `claude/event-lease-truncation-race`, **NOT MERGED**, awaiting Taylor's User Approval Gate).
+  *(PR #114 **merged 2026-09-18 as `c5cb3a0`** at that gate; the "NOT MERGED" above went stale at
+  that merge and is corrected here, 2026-10-06.)*
   Found while verifying the SQLite connection-lifecycle package and deliberately split out of it,
   because it is a durable-queue correctness question rather than a connection-lifetime one.
 - **Decision:** a lease is granted and tested against the same clock, at the same resolution. In
