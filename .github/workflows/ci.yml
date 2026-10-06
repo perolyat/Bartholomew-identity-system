@@ -142,10 +142,21 @@ jobs:
       # interleaving. No coverage instrumentation here: it costs ~30% and its
       # gate is enforced in the Integration and Merge Candidate tiers.
       - name: Default test suite (parallel, no coverage)
+        env:
+          BARTHO_XDIST_CONTRACT_REPORT: xdist-contract.json
         run: >-
           python -m pytest -p no:cacheprovider
           -n auto --dist loadfile
           --junitxml=junit-pr-fast-py3.11.xml
+
+      # Clause W13 (docs/WINDOWS_TEST_EXECUTION_CONTRACT.md): a run that needed a
+      # scheduler re-drive completed over a pytest-xdist defect and is not clean
+      # evidence. The re-drive still recovers the run and the tests' own result
+      # is unchanged; this step is what keeps Merge Qualification, which reads
+      # this job's conclusion, from counting such a run as green. Fails closed
+      # when the controller left no report.
+      - name: W13 clean-run contract (no scheduler re-drive)
+        run: python -m scripts.ci.xdist_contract check xdist-contract.json
 
       - name: Upload junit (test timings for tier tuning)
         if: always()

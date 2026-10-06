@@ -45,6 +45,7 @@ from bartholomew.platform.route_policy import (  # noqa: E402
     is_public_path,
 )
 from bartholomew_api_bridge_v0_1.services.api import app as app_module  # noqa: E402
+from tests.helpers.live_app_db import forbid_schema_work_from_the_test_thread  # noqa: E402
 
 COMPETENCY_ID = "estate_management"
 REVIEWER = "taylor"
@@ -55,7 +56,7 @@ def client():
     # Re-asserted immediately before the app starts, for the reason
     # tests/test_self_state_api.py's client fixture documents.
     os.environ["BARTH_DB_PATH"] = _DB_PATH
-    with TestClient(app_module.app) as c:
+    with TestClient(app_module.app) as c, forbid_schema_work_from_the_test_thread(_DB_PATH):
         yield c
 
 
@@ -63,15 +64,20 @@ def _seed_candidate(**overrides) -> tuple[str, str]:
     """
     Put one real candidate lesson in the database, through the real seam.
 
-    A standalone `MemoryStore`/`ObjectiveStore` against the same file rather
-    than the running kernel's -- the kernel's store is bound to the daemon's
-    own event loop, so awaiting it from `asyncio.run()` deadlocks. Same
-    approach, and same reason, as `tests/test_memory_agency.py`'s seeding.
+    A standalone `MemoryStore` against the same file rather than the running
+    kernel's -- the kernel's store is bound to the daemon's own event loop, so
+    awaiting it from `asyncio.run()` deadlocks. Same approach, and same
+    reason, as `tests/test_memory_agency.py`'s seeding.
+
+    It does not initialise anything: the app created every schema on this
+    file at startup, so the seed works through that established state -- a
+    MemoryStore without `init()`, and the kernel's own `objective_store`
+    (synchronous, one connection per call, safe from this thread). See
+    tests/helpers/live_app_db.py for why, and for the guard that enforces it.
     """
     import asyncio
 
     from bartholomew.kernel.memory_store import MemoryStore
-    from bartholomew.kernel.objective_store import ObjectiveStore
     from bartholomew.kernel.runtime_contract import (
         run_candidate_lesson_through_runtime_contract,
     )
@@ -85,8 +91,7 @@ def _seed_candidate(**overrides) -> tuple[str, str]:
             self.blocking_executor = None
 
     async def _run():
-        os_mod.ensure_schema(_DB_PATH)
-        store = ObjectiveStore(_DB_PATH)
+        store = app_module._kernel.objective_store
         objective = store.open(
             title=overrides.get("title", "Get the boiler serviced before winter"),
             outcome_statement="A working boiler with a valid service record",
@@ -108,7 +113,6 @@ def _seed_candidate(**overrides) -> tuple[str, str]:
         )
 
         mem = MemoryStore(_DB_PATH)
-        await mem.init()
         try:
             result = await run_candidate_lesson_through_runtime_contract(
                 _Ctx(mem, store),
@@ -132,7 +136,6 @@ def _seed_memory(kind: str, key: str, value: str) -> bool:
 
     async def _run():
         store = MemoryStore(_DB_PATH)
-        await store.init()
         try:
             result = await store.upsert_memory(
                 kind,

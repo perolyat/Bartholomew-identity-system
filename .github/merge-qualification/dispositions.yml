@@ -26,6 +26,54 @@
 # gate prints: `review_comment:<id>` or `review:<id>`.
 schema_version: 1
 dispositions:
+  # PR #124 (Windows reliability incident). Codex, on 6125598: the W15 summary
+  # said a per-test timeout "expired" when its evidence proves only that the
+  # deadline was imminent.
+  - finding_id: review_comment:4105531182
+    classification: resolved_by_later_commit
+    resolved_by_commit: bfc207bab3160e4dcd2d836d98233c5938992d19
+    rationale: >-
+      Valid. The kill is os._exit and leaves no record, so a different death
+      between the evidence and the deadline looked identical. The summary now
+      says "imminent", gives the seconds remaining and says a different death
+      in that window is not excluded; a new test covers exactly that case and
+      fails with the old wording restored.
+    recorded_by: "Claude Code (PR #124 author session), for Taylor's review"
+  - finding_id: review:5318898511
+    classification: non_substantive
+    rationale: >-
+      The review body is Codex's header and product boilerplate only. Its one
+      finding is the inline comment review_comment:4105531182, dispositioned
+      above as resolved by a later commit.
+    recorded_by: "Claude Code (PR #124 author session), for Taylor's review"
+  # PR #124, after the reconciliation with main. Codex, on 03c5f2d: the W13
+  # contract-report checker accepted any JSON object carrying "redrives": 0 as
+  # clean evidence, without checking the report's schema or clause.
+  - finding_id: review_comment:4180458481
+    classification: resolved_by_later_commit
+    resolved_by_commit: b9ab007b4d27aff33e587e169d4fb3283feab2aa
+    rationale: >-
+      Valid. check_contract_report() read only "redrives", coerced it with
+      int(), and never looked at "schema" or "clause", so a report from another
+      schema, an incomplete one, or a boolean would have passed as clean W13
+      evidence. In CI the report is written by the same run moments before it
+      is read, so the exposure was small, but the check is a fail-closed
+      control and did not fail closed. b9ab007 refuses, naming the mismatch,
+      unless the report is a JSON object with schema == CONTRACT_REPORT_SCHEMA,
+      clause == "W13" and a non-negative integer "redrives"; a bool is not an
+      integer there and nothing is coerced. The writer is unchanged. New tests
+      refuse each malformed shape and the bare object the finding described;
+      the writer's own report and a real clean run are still accepted, and a
+      real re-driven run still fails. Every refusal test fails with the
+      validation removed.
+    recorded_by: "Claude Code (PR #124 requalification session), for Taylor's review"
+  - finding_id: review:5409634406
+    classification: non_substantive
+    rationale: >-
+      The review body is Codex's header and product boilerplate only. Its one
+      finding is the inline comment review_comment:4180458481, dispositioned
+      above as resolved by a later commit.
+    recorded_by: "Claude Code (PR #124 requalification session), for Taylor's review"
   # PR #126 (scheduler drive-seam cancellation repair). Codex, on 49c9b61: the
   # daemon stop() test's `elapsed < 5.0` assertion can fail on a stalled runner
   # although the repaired seam stopped the scheduler.
