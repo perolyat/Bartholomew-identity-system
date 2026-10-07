@@ -2,7 +2,24 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-09-25 — **Windows full-suite reliability incident (Merge Candidate
+> **Last updated:** 2026-10-07 — **one stale statement corrected in the 2026-09-25 incident
+> entry** (documentation only). It said the first Merge Candidate on `main` after PR #124's merge,
+> 37399980843, was "not re-run at the time of writing". It was re-run once at Taylor's decision on
+> 2026-10-06, failed jobs only, as attempt 2 of the same run, and passed; attempt 1 is kept as
+> written and is not explained by the re-run. Corrected in place per R-CTRL-1 with a dated note;
+> the incident record's §7 carries the attempt-2 row. **No risk is removed and no resolved risk is
+> revived.** The incident stays OPEN; gate 8 is not claimed. This pass accompanies no code change.
+>
+> **Previously (2026-10-06).** **The 2026-09-30 drive-seam entry is CLOSED** (documentation
+> only). PR #126 merged on 2026-10-03 as `2beeb6d` at Taylor's User Approval Gate; that merge was
+> the entry's only closing condition, and Taylor decided the closure on 2026-10-06, accepting a
+> Codex review finding on PR #127 (review comment 4193250224) that the entry still read "open
+> until merged" after the dated note that recorded the merge. The entry is amended in place per
+> R-CTRL-1: its words stay, a "Why CLOSED" paragraph follows, its two follow-ups stay recorded as
+> **open** items, and a paragraph states what the closure does not extend to. **No risk is removed
+> and no resolved risk is revived.** This pass accompanies no code change.
+>
+> **Previously (2026-09-25).** **Windows full-suite reliability incident (Merge Candidate
 > 35971892908 attempt 1, `main` at `7b21a00`): repair implemented, incident still OPEN.** One new
 > tech-debt entry records the incident with verified, repaired, observable-only and unresolved
 > parts kept apart (full record: `docs/WINDOWS_RELIABILITY_INCIDENT_2026_09_24.md`), and **four
@@ -13,8 +30,9 @@
 > `database is locked` signature), and **R4**. **This pass accompanies production code changes**
 > — `bartholomew/kernel/memory_store.py` and `bartholomew/kernel/db_ctx.py` (the MemoryStore
 > connection contract) — plus test, CI-harness and workflow changes, on branch
-> `claude/windows-ci-reliability-incident-mc59cm`, **unmerged at the time of writing**. No risk is
-> removed and no resolved risk is revived.
+> `claude/windows-ci-reliability-incident-mc59cm`, **unmerged at the time of writing** (PR #124,
+> **merged 2026-10-06 as `9ccaec9`** at Taylor's User Approval Gate; this note went stale at that
+> merge and is corrected here, 2026-10-06). No risk is removed and no resolved risk is revived.
 >
 > **Previously (2026-09-20, R-RETRIEVAL-1 repaired; one new risk it exposed).** Two changes.
 > **(1)** **R-RETRIEVAL-1 is amended, not duplicated,** with a resolution block recording the root
@@ -1519,6 +1537,8 @@
     module's re-processing is idempotent by design, which bounds the damage, but the lease does
     not provide the guarantee its own docstring states ("A claim is a lease with an expiry").
   - **Repaired in its own package, PR #114 (`claude/event-lease-truncation-race`, NOT MERGED).**
+    *(PR #114 **merged 2026-09-18 as `c5cb3a0`**; the "NOT MERGED" above went stale at that merge
+    and is corrected here, 2026-10-06.)*
     Not applied here: it changes a durable-queue recovery semantic in a governance-adjacent
     subsystem, and belongs to that subsystem's owner under the User Approval Gate rather than to
     the SQLite lifecycle package. Full record there.
@@ -1603,6 +1623,9 @@
 
 - **(2026-09-30) The scheduler's drive seam could lose a cancellation (CPython 3.10/3.11). REPAIR
   IMPLEMENTED, NOT MERGED.** Full record: `docs/SCHEDULER_DRIVE_CANCELLATION_REPAIR.md`.
+  *(PR #126 **merged 2026-10-03 as `2beeb6d`** at Taylor's User Approval Gate; the "NOT MERGED"
+  above went stale at that merge and is corrected here, 2026-10-06.)* **CLOSED 2026-10-06** at
+  Taylor's decision — its two follow-ups remain **OPEN**; see **Status (2026-10-06)** below.
   - **What happened.** `run_drive_through_runtime_contract()` awaited
     `asyncio.wait_for(drive_fn(ctx), timeout=timeout)`. On CPython 3.10/3.11, `wait_for` returns the
     inner result instead of raising when a cancellation lands in the loop iteration in which the
@@ -1648,10 +1671,32 @@
     - PR #126.
   - **Consequence for PR #125.** Its acceptance sequence is invalidated and restarts at 0/3 on a head
     that contains this repair (record §9).
-  - **Follow-ups recorded, not absorbed:**
+  - **Follow-ups recorded, not absorbed — OPEN, and not closed by the 2026-10-06 closure below**
+    (record §7, items 1 and 2):
     - `daemon.py:925`'s `wait_for(task, 5.0)` is not a hard bound;
     - `stop()` unloads the skills before it cancels the scheduler.
   - **Risk category:** runtime reliability, shutdown and cancellation. **Status:** open until merged.
+    *(PR #126 **merged 2026-10-03 as `2beeb6d`** at Taylor's User Approval Gate; the "until merged"
+    above went stale at that merge and is noted here, 2026-10-06. The repair is on `main`; per the
+    merge commit, "No unresolved item is closed by this merge", and whether this entry closes is
+    Taylor's decision, not made here.)*
+  - **Status (2026-10-06): CLOSED.**
+  - **Why CLOSED.** This entry's own closing condition was that PR #126 pass Taylor's User Approval
+    Gate and merge. It did, on 2026-10-03, as `2beeb6d`, so the repaired seam is on `main`. The note
+    above deferred the closure to Taylor; Taylor decided it on 2026-10-06, accepting Codex's review
+    finding on PR #127 (review comment 4193250224) that the entry still read "open until merged"
+    after the note that recorded the merge. Amended in place per R-CTRL-1: the words above stay as
+    written.
+  - **What this closure does NOT extend to.** The two follow-ups recorded above (`daemon.py:925`'s
+    `wait_for(task, 5.0)` is not a hard bound; `stop()` unloads the skills before it cancels the
+    scheduler) **remain open and unrepaired**. The other follow-up findings that the merge commit
+    `2beeb6d` lists as staying open for governed recording (as that commit states them: the Python
+    3.12/3.13 support policy; the Nightly 3.12 lanes, which are red; deeply nested JSON on 3.12+;
+    Docker and uvloop, which are untested; the ready_for_review false block in merge qualification;
+    `stop()` dispatching drives through its pre-cancel window; dispositions being read from the
+    dispatched ref) are **not closed here** and are not recorded by this entry. The 2026-09-25
+    Windows full-suite reliability incident entry below remains OPEN pending Taylor's closure
+    decision, and PR #125's acceptance sequence remains at 0/3 pending its own gate.
 
 - **(2026-08-22) Reflection persistence on the provenance-bearing surfaces is still best-effort,
   pending WP-A2b.** Per `DECISIONS.md`'s "One Reflection sink, two semantic roles" entry: on the
@@ -1708,10 +1753,30 @@
     jobs green, W13 clean, 4/4 workers finished normally, no worker lost, no `database is locked`.
     Heaviest test 56.3–82.3 s, headroom still deferred to PR #125. Every attempt is kept in the
     record.
+  - **Merged (2026-10-06):** PR #124 merged at Taylor's User Approval Gate as merge commit
+    `9ccaec9375338cab44e172515fc38e92d1662e78` (`b5402b1`, the head carrying the acceptance
+    record, into `main` at `2beeb6d`). The merge closes nothing by itself. **The first Merge
+    Candidate on `main` after it (37399980843) did not complete:** the Windows full-suite job was
+    cancelled at the 40-minute job cap (GitHub's annotation: "The job has exceeded the maximum
+    execution time of 40m0s"; the cap fired 37:50 into the test step, which never reported an end;
+    GitHub force-closed the job 5 minutes later at 45:00; no summary on record; no log served at the
+    time of writing) and the Critical py3.11 job lost its runner 3:25 into its test step with no
+    test failed; the other five jobs were green. Kept as an attempt (record §7); not re-run at the
+    time of writing;
+    whether to re-run it is Taylor's decision. *(Re-run once at Taylor's decision on 2026-10-06,
+    failed jobs only, as attempt 2 of the same run: the Windows full-suite job 112146570889 passed
+    (5639 passed, 103 skipped in 21:53; W13 clean; 4/4 workers finished; no stall; no `database is
+    locked`) and the Critical py3.11 job 112146571953 passed (315 passed, 25 skipped, then 6, 10
+    and 17); the run's conclusion is now `success` (record §7, attempt-2 row). Attempt 1 is kept
+    and its cause stays unknown; the re-run neither repairs nor invalidates it, is not an
+    acceptance run, and claims nothing for gate 8 or for closure. The "not re-run" words above were
+    true when written and are corrected here, 2026-10-07; "did not complete" remains true of
+    attempt 1 and is kept.)*
   - **Risk category:** reliability / CI evidence integrity. **Status:** OPEN pending Taylor's
-    closure decision and merge. The lock, seed and W13 defects are repaired and accepted; **the
-    worker-loss stall cause is not established**, and heavy-test headroom (entry below) is the
-    likeliest route to a recurrence.
+    closure decision (merged 2026-10-06 as `9ccaec9`, so the repairs are on `main`; this line
+    previously read "pending Taylor's closure decision and merge"). The lock, seed and W13
+    defects are repaired and accepted; **the worker-loss stall cause is not established**, and
+    heavy-test headroom (entry below) is the likeliest route to a recurrence.
 
 - **(2026-09-25) Orphaned msedge and Notepad processes outlive the Windows actuation step and run
   through the whole default suite — deferred, not repaired.** Both attempts of Merge Candidate

@@ -1,7 +1,8 @@
 # Scheduler Drive Cancellation Repair
 
-**Status:** implemented; tested locally and in PR #126's CI; **not merged**. It waits for review and
-Taylor's User Approval Gate.
+**Status:** implemented; tested locally and in PR #126's CI; **merged 2026-10-03 as `2beeb6d`** at
+Taylor's User Approval Gate (this line previously read "not merged. It waits for review and
+Taylor's User Approval Gate", stale from that merge and corrected here, 2026-10-06).
 **Baseline:** `origin/main` at `7b21a009e53ccde0f2dd13003528b0c3b2431be0` (the merge of PR #123).
 **Branch:** `claude/scheduler-drive-cancellation-repair`, PR #126. It is a separate package: it is
 not part of PR #124 or PR #125, and it changes neither of them.

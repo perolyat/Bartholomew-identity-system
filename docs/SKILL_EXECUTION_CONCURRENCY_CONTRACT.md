@@ -1,7 +1,9 @@
 # Skill Execution Concurrency Contract
 
 > **Status:** established 2026-09-15 in PR #110 (**not merged — awaiting Taylor's User Approval
-> Gate**), as the second consequence of the writer-lock / WAL reliability repair
+> Gate**; PR #110 **merged 2026-09-16 as `6ccf693`** at that gate, so that status went stale at
+> the merge and is corrected here, 2026-10-06), as the second consequence of the writer-lock /
+> WAL reliability repair
 > (`docs/WINDOWS_WAL_WRITER_LOCK_REPAIR.md`). **Non-canonical** — a document under `docs/`;
 > `DECISIONS.md` carries the decision ("Skill execution is one action per skill instance at a
 > time — an overlapping request waits, it is not refused"), `RISKS.md` the disposition and
