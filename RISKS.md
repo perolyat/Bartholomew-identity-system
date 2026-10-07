@@ -2,7 +2,15 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-10-06 — **the 2026-09-30 drive-seam entry is CLOSED** (documentation
+> **Last updated:** 2026-10-07 — **one stale statement corrected in the 2026-09-25 incident
+> entry** (documentation only). It said the first Merge Candidate on `main` after PR #124's merge,
+> 37399980843, was "not re-run at the time of writing". It was re-run once at Taylor's decision on
+> 2026-10-06, failed jobs only, as attempt 2 of the same run, and passed; attempt 1 is kept as
+> written and is not explained by the re-run. Corrected in place per R-CTRL-1 with a dated note;
+> the incident record's §7 carries the attempt-2 row. **No risk is removed and no resolved risk is
+> revived.** The incident stays OPEN; gate 8 is not claimed. This pass accompanies no code change.
+>
+> **Previously (2026-10-06).** **The 2026-09-30 drive-seam entry is CLOSED** (documentation
 > only). PR #126 merged on 2026-10-03 as `2beeb6d` at Taylor's User Approval Gate; that merge was
 > the entry's only closing condition, and Taylor decided the closure on 2026-10-06, accepting a
 > Codex review finding on PR #127 (review comment 4193250224) that the entry still read "open
@@ -1755,7 +1763,15 @@
     time of writing) and the Critical py3.11 job lost its runner 3:25 into its test step with no
     test failed; the other five jobs were green. Kept as an attempt (record §7); not re-run at the
     time of writing;
-    whether to re-run it is Taylor's decision.
+    whether to re-run it is Taylor's decision. *(Re-run once at Taylor's decision on 2026-10-06,
+    failed jobs only, as attempt 2 of the same run: the Windows full-suite job 112146570889 passed
+    (5639 passed, 103 skipped in 21:53; W13 clean; 4/4 workers finished; no stall; no `database is
+    locked`) and the Critical py3.11 job 112146571953 passed (315 passed, 25 skipped, then 6, 10
+    and 17); the run's conclusion is now `success` (record §7, attempt-2 row). Attempt 1 is kept
+    and its cause stays unknown; the re-run neither repairs nor invalidates it, is not an
+    acceptance run, and claims nothing for gate 8 or for closure. The "not re-run" words above were
+    true when written and are corrected here, 2026-10-07; "did not complete" remains true of
+    attempt 1 and is kept.)*
   - **Risk category:** reliability / CI evidence integrity. **Status:** OPEN pending Taylor's
     closure decision (merged 2026-10-06 as `9ccaec9`, so the repairs are on `main`; this line
     previously read "pending Taylor's closure decision and merge"). The lock, seed and W13
