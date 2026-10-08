@@ -210,11 +210,12 @@ in principle, at start-up (a node whose first units total two tests or fewer, on
 None was seen in a healthy local full-suite run (`-n 8`) or in attempt 2; if one appears, the
 report's notes identify it.
 *(2026-10-08: the start-up false positive that occurred was a different one — a re-drive counted
-from the watcher's snapshot taken inside pytest-xdist's initial `schedule()` — and it failed gate
-8's post-merge Run 1/3 (§7), a run whose tests all passed. In PR #128 (unmerged) the count is
-decided by the controller, and a proposal the controller never handles also fails the step; the
-case named above, and what is still counted that is not a stall, are restated in `RISKS.md`'s
-2026-10-08 W13 entry. This note leaves the words above as written.)*
+from the watcher's snapshot taken inside pytest-xdist's initial `schedule()`, established from
+the note's queue depth (§7, the moment not observed) — and it failed gate 8's post-merge Run 1/3
+(§7), a run whose tests all passed. In PR #128 (unmerged) the count is decided by the
+controller, and a proposal the controller never handles also fails the step; the case named
+above, and what is still counted that is not a stall, are restated in `RISKS.md`'s 2026-10-08
+W13 entry. This note leaves the words above as written.)*
 
 ## 4. Observable (diagnosable next time; not claimed fixed)
 

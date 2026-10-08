@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -1332,6 +1333,106 @@ def test_a_hand_off_that_raises_is_counted_and_does_not_end_the_session(pytester
     assert "OSError" in redrive.redrive_log[0]
 
 
+def test_a_hand_off_that_raises_and_hands_nothing_is_declined_and_says_why(pytester):
+    """A unit that never left the queue was not handed out, so the proposal
+    is declined, not counted; the decline names the node and what it raised,
+    because that is the only record of a hand-off that broke."""
+    sched, _node = _stranded_scheduler(pytester)
+
+    def refuse(node) -> None:
+        raise OSError("channel closed")
+
+    sched._reschedule = refuse  # type: ignore[method-assign]
+    redrive, dsession = _redrive_on(sched)
+    assert _watcher_poll(redrive, idle=9.0)[0]
+
+    _dispatch(dsession)
+
+    assert (redrive.redrives, redrive.declined) == (0, 1)
+    assert "gw0 raised OSError('channel closed')" in redrive.declined_log[0]
+
+
+def test_a_failed_hand_off_beside_a_counted_one_is_named_in_the_note(pytester):
+    """When one node's hand-off raises and takes nothing while another's is
+    handed work, the re-drive counts, and the counted note names both, so the
+    failure is not left on stderr alone. Eligibility is pinned to the two
+    nodes so the order is fixed: the failing one first."""
+    sched, node = _stranded_scheduler(pytester)
+    broken = _FakeNode("gw9")
+    reschedule = sched._reschedule
+
+    def hand_off(target) -> None:
+        if target is broken:
+            raise OSError("channel closed")
+        reschedule(target)
+
+    sched._reschedule = hand_off  # type: ignore[method-assign]
+    redrive, dsession = _redrive_on(sched)
+    redrive._eligible_nodes = lambda _sched: [broken, node]  # type: ignore[method-assign]
+    assert _watcher_poll(redrive, idle=9.0)[0]
+
+    _dispatch(dsession)
+
+    assert (redrive.redrives, redrive.declined) == (1, 0)
+    note = redrive.redrive_log[0]
+    assert "gw0 (pending 1 -> " in note
+    assert "handed nothing: gw9 raised OSError('channel closed')" in note
+
+
+def test_no_proposal_is_posted_once_the_session_has_stopped(pytester, tmp_path, monkeypatch):
+    """A poll that reads a stall after ``pytest_sessionfinish`` has begun posts
+    nothing: the controller no longer handles events then, and a proposal it
+    never handles would fail W13 as undispatched."""
+    sched, _node = _stranded_scheduler(pytester)
+    redrive, dsession = _redrive_on(sched)
+    redrive._stop.set()
+
+    _watcher_poll(redrive, idle=9.0)
+
+    assert redrive.proposed == 0 and not dsession.queue.items
+    report, ok, _message = _report_of(redrive, tmp_path, monkeypatch)
+    assert ok and report["undispatched"] == 0
+
+
+def test_a_broken_stderr_does_not_cost_the_count(pytester, monkeypatch):
+    """The handler runs inside ``DSession.loop_once``; a write to stderr that
+    raises there must not end the session or lose the re-drive it reports."""
+
+    class _BrokenStream:
+        def write(self, text: str) -> int:
+            raise OSError("stderr closed")
+
+        def flush(self) -> None:
+            raise OSError("stderr closed")
+
+    sched, _node = _stranded_scheduler(pytester)
+    # xdist's own scheduler log is on in this test's config and writes to
+    # stderr from inside `_reschedule`; it is off in a real run unless
+    # `--debug` is given. Silence it so only this module's writes break.
+    sched.log = lambda *args, **kwargs: None
+    redrive, dsession = _redrive_on(sched)
+    monkeypatch.setattr(sys, "stderr", _BrokenStream())
+
+    assert _watcher_poll(redrive, idle=9.0)[0]
+    _dispatch(dsession)
+
+    assert redrive.redrives == 1 and len(redrive.redrive_log) == 1
+
+
+def test_the_session_end_survives_a_watcher_that_never_started(tmp_path, monkeypatch):
+    """``pytest_sessionfinish`` waits for the watcher only if it is running:
+    joining a thread whose ``start()`` failed would raise, and the report
+    would never be written."""
+    from scripts.ci.xdist_contract import SchedulerRedrive
+
+    redrive = SchedulerRedrive(idle_after_s=0.0)
+    redrive._thread = threading.Thread(target=redrive._watch, daemon=True)
+
+    report, ok, _message = _report_of(redrive, tmp_path, monkeypatch)
+
+    assert ok and report["redrives"] == 0
+
+
 def test_a_stall_xdist_resolves_itself_before_the_controller_looks_is_declined(pytester):
     """The count needs a unit to leave the queue in the re-drive itself.
 
@@ -1564,7 +1665,9 @@ def test_the_start_up_false_positive_in_a_real_xdist_run_is_declined_and_w13_pas
         "no:cacheprovider",
         "-p",
         "no:randomly",
-        timeout=120,
+        # Below the suite's own 120 s per-test timeout, so a hang fails this
+        # test instead of killing the worker running it.
+        timeout=60,
     )
 
     result.assert_outcomes(passed=20)
@@ -1652,7 +1755,9 @@ def test_a_lost_wakeup_in_a_real_xdist_run_is_counted_and_fails_w13(
         "no:cacheprovider",
         "-p",
         "no:randomly",
-        timeout=120,
+        # Below the suite's own 120 s per-test timeout, so a hang fails this
+        # test instead of killing the worker running it.
+        timeout=60,
     )
 
     result.assert_outcomes(passed=7)

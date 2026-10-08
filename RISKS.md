@@ -1788,10 +1788,11 @@
     defects are repaired and accepted; **the worker-loss stall cause is not established**, and
     heavy-test headroom (entry below) is the likeliest route to a recurrence.
     *(2026-10-08: W13's enforcement held, but its count had a defect of its own — a re-drive
-    counted from a snapshot taken inside xdist's initial scheduling — which failed gate 8's
-    post-merge Run 1/3 on `main` (`54c851b`, Merge Candidate 37703362526; record §7), a run whose
-    tests all passed. The post-merge sequence stands at 0 of 3 clean. See the 2026-10-08 W13
-    entry below; repair in PR #128, unmerged.)*
+    counted from a snapshot taken inside xdist's initial scheduling, established from the note's
+    queue depth (record §7) — which failed gate 8's post-merge Run 1/3 on `main` (`54c851b`,
+    Merge Candidate 37703362526; record §7), a run whose tests all passed. The post-merge
+    sequence stands at 0 of 3 clean. See the 2026-10-08 W13 entry below; repair in PR #128,
+    unmerged.)*
 
 - **(2026-09-25) Orphaned msedge and Notepad processes outlive the Windows actuation step and run
   through the whole default suite — deferred, not repaired.** Both attempts of Merge Candidate
@@ -1879,12 +1880,14 @@
     comkNQezEvu4iYYb7 (row recQVKUHV0Cz0N9NN), all of 2026-09-29, recorded Integration
     36519235007's re-drive as the upstream pytest-xdist lost-wakeup defect; it was this false
     positive (Airtable comment comgsBLWsHIcnWnEF noted its start-up shape on 2026-09-30, without
-    follow-up). Commit comment 203956165 on `54c851b` said Run 1/3's was the first in any run on
-    record, which Integration 36519235007 refutes, and that every post-enforcement row in the
-    incident record's §7 is "W13 step passed", which is untrue of the `4be5b44`, `dd0a680`,
-    `1adf251` and `9ccaec9` attempt-1 rows (none of them records a W13 failure). The Airtable
-    incident row's live text repeats "first observed"; correcting it belongs in Airtable and is
-    not part of this change.
+    follow-up). PR #125 comment 5883695615, of the same day, said the run's Tests + coverage job
+    "also stalled, with the xdist re-drive reported above"; that re-drive was this false
+    positive, not evidence of a stall. Commit comment 203956165 on `54c851b` said Run 1/3's was
+    the first in any run on record, which Integration 36519235007 refutes, and that every
+    post-enforcement row in the incident record's §7 is "W13 step passed", which is untrue of the
+    `4be5b44`, `dd0a680`, `1adf251` and `9ccaec9` attempt-1 rows (none of them records a W13
+    failure). The Airtable incident row's live text repeats "first observed"; correcting it
+    belongs in Airtable and is not part of this change.
   - **Why systemic.** Promoted to a systemic issue under the Systemic Issue Escalation &
     Repair-Convergence rule (Airtable Decisions & Constraints `recPHnJMyQnAkLp3W`, Taylor's
     direction of 2026-09-29): two incidents in one trigger, after reactive patches to it

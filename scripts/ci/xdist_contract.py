@@ -398,7 +398,7 @@ class SchedulerRedrive:
 
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
         self._stop.set()
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             # A poll already past its wait could still post; let it finish,
             # so `proposed` is final before undispatched is worked out.
             self._thread.join(timeout=self.POLL_S + 1.0)
@@ -621,25 +621,32 @@ class SchedulerRedrive:
             )
             return
         handed: list[str] = []
+        # Hand-offs that raised and took nothing off the queue; one that did
+        # take a unit is named in its own `handed` entry instead.
         failures: list[str] = []
         for node in self._eligible_nodes(sched):
             units_before = _queued_units(sched)
             pending_before = _pending(sched, node)
-            failure = ""
+            error = ""
             try:
                 sched._reschedule(node)
             except Exception as exc:
-                failure = f"; the hand-off raised {exc!r}"
-                failures.append(f"{_node_id(node)} raised {exc!r}")
-                _say(f"xdist-contract: re-drive of {_node_id(node)} failed: {exc!r}")
+                try:
+                    error = repr(exc)
+                except Exception:  # pragma: no cover - defensive: a broken __repr__
+                    error = type(exc).__name__
+                _say(f"xdist-contract: re-drive of {_node_id(node)} failed: {error}")
             units = units_before - _queued_units(sched)
             if units > 0:
                 pending_after = _pending(sched, node)
+                raised = f"; the hand-off raised {error}" if error else ""
                 handed.append(
                     f"{_node_id(node)} (pending {pending_before} -> {pending_after}: "
                     f"{units} unit(s), {max(pending_after - pending_before, 0)} test(s)"
-                    f"{failure})",
+                    f"{raised})",
                 )
+            elif error:
+                failures.append(f"{_node_id(node)} raised {error}")
         if not handed:
             reason = "at the controller no node could be given queued work"
             if failures:
@@ -653,6 +660,8 @@ class SchedulerRedrive:
                 f"the controller handed queued work to {', '.join(handed)} "
                 f"({queued} unit(s) were queued)"
             )
+            if failures:
+                note += f"; handed nothing: {'; '.join(failures)}"
         except Exception:  # pragma: no cover - defensive: the count stands
             note = f"scheduler re-drive #{self.redrives}"
         self.redrive_log.append(note)
