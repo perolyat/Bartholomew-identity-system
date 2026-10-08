@@ -349,6 +349,10 @@ than ignore:
   scheduler re-drive)` step after its test step, which reads the controller's
   `xdist-contract.json` and fails the job if the run was re-driven or left no report. pytest's own
   result is unchanged; read that step, not the test step, to see why the job is red.
+  *(2026-10-08, PR #128: a re-drive is counted only when the controller, on its own thread, hands
+  queued work to a node. A watcher proposal it cannot confirm prints as `re-drive proposal
+  declined` and is not a failure; a proposal it never handles fails the step. See
+  `docs/WINDOWS_TEST_EXECUTION_CONTRACT.md` clause W13.)*
 - `xdist-contract: giving up after N re-drives` — re-driving did not restore progress, so the run is
   stalled for some other reason. Set `BARTHO_EXEC_TRACE=1` to capture stacks and let the watchdog
   end the run instead of the job cap.

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1091,12 +1092,11 @@ def _redrive_on(sched):
 
 
 def _watcher_poll(redrive, idle: float) -> tuple[bool, str]:
-    """One poll of the watcher, as ``_watch`` makes it."""
-    completions = redrive._completions
-    ok, why = redrive._should_redrive()
-    if ok:
-        redrive._post_redrive(idle, why, completions)
-    return ok, why
+    """One poll of the real watcher (``_watch`` runs ``_poll_once`` in a
+    loop), with no test completed for ``idle`` seconds."""
+    with redrive._lock:
+        redrive._last_progress = time.monotonic() - idle
+    return redrive._poll_once()
 
 
 def _dispatch(dsession) -> None:
@@ -1138,7 +1138,8 @@ def test_a_snapshot_taken_inside_the_initial_distribution_is_not_counted(
     assigned_so_far,
     queued,
 ):
-    """Gate 8 Run 1/3's false positive (252) and Integration #227's (251).
+    """Gate 8 Run 1/3's false positive (252), and the window that produced
+    Integration #227's 251 on a slightly different collection.
 
     Inside ``schedule()``, once ``assigned_so_far`` of the four nodes have
     their first unit, the others are registered and hold nothing, so the
@@ -1331,6 +1332,109 @@ def test_a_hand_off_that_raises_is_counted_and_does_not_end_the_session(pytester
     assert "OSError" in redrive.redrive_log[0]
 
 
+def test_a_stall_xdist_resolves_itself_before_the_controller_looks_is_declined(pytester):
+    """The count needs a unit to leave the queue in the re-drive itself.
+
+    Between the proposal and its dispatch, xdist hands the stranded node its
+    work through its own path (here, a reschedule of every node, as its
+    replacement handling does). The node may still be at or below the top-up
+    threshold, but nothing is queued and the re-drive hands nothing out, so
+    it is not counted.
+    """
+    sched, node = _stranded_scheduler(pytester)
+    redrive, dsession = _redrive_on(sched)
+    assert _watcher_poll(redrive, idle=9.0)[0]
+
+    sched._reschedule(node)  # xdist's own hand-off, before the dispatch
+    assert not sched.workqueue and node.sent
+
+    _dispatch(dsession)
+
+    assert (redrive.redrives, redrive.declined) == (0, 1)
+
+
+def test_a_requeued_finished_unit_handed_out_still_counts(pytester):
+    """After a worker loss xdist re-queues the dead worker's whole workload,
+    finished files included, and later hands those out with no test in them.
+    That hand-off is still a re-drive: it is what drains the queue so the run
+    can end. The note says how many tests went with it -- none."""
+    sched, node = _stranded_scheduler(pytester)
+    sched.workqueue["tests/test_done.py"] = {"tests/test_done.py::test_x": True}
+    sched.workqueue.move_to_end("tests/test_done.py", last=False)
+    redrive, dsession = _redrive_on(sched)
+    assert _watcher_poll(redrive, idle=9.0)[0]
+
+    _dispatch(dsession)
+
+    assert redrive.redrives == 1
+    assert "gw0 (pending 1 -> 1: 1 unit(s), 0 test(s))" in redrive.redrive_log[0]
+
+
+def test_a_snapshot_taken_mid_completion_before_its_top_up_is_not_counted(pytester):
+    """A third phase, mid-run: ``mark_test_complete`` marks the test done and
+    only then tops the node up. A poll landing between the two sees a node
+    at the threshold with work queued; by the time the controller looks, the
+    top-up has happened."""
+    from scripts.ci.xdist_contract import make_safe_scheduler
+
+    sched = make_safe_scheduler(_make_config(pytester))
+    node = _FakeNode("gw0")
+    sched.add_node(node)
+    collection = _small_collection()
+    sched.add_node_collection(node, collection)
+    sched.schedule()
+    redrive, dsession = _redrive_on(sched)
+    # Complete the first unit's tests down to three pending, as the worker
+    # would report them.
+    for index in range(4):
+        sched.mark_test_complete(node, index)
+    assert sched._pending_of(sched.assigned_work[node]) == 3
+
+    reschedule = sched._reschedule
+    seen: dict = {}
+
+    def poll_then_top_up(target):
+        seen["ok"], seen["why"] = _watcher_poll(redrive, idle=10.0)
+        reschedule(target)
+
+    sched._reschedule = poll_then_top_up  # type: ignore[method-assign]
+    sched.mark_test_complete(node, 4)  # pending 3 -> 2, then the top-up
+    sched._reschedule = reschedule  # type: ignore[method-assign]
+
+    assert seen.get("ok"), seen
+    assert sched._pending_of(sched.assigned_work[node]) > 2, "the top-up happened"
+
+    _dispatch(dsession)
+
+    assert (redrive.redrives, redrive.declined) == (0, 1)
+
+
+def test_declined_proposals_are_all_counted_though_only_twenty_are_noted(pytester):
+    sched, node = _deadlocked_scheduler(pytester)
+    sched.assigned_work[node]["tests/test_busy.py"] = {
+        f"tests/test_busy.py::test_{index}": False for index in range(3)
+    }
+    redrive, dsession = _redrive_on(sched)
+    for _ in range(25):
+        redrive._post_redrive(18.0, "a torn snapshot", 0)
+        _dispatch(dsession)
+
+    assert redrive.declined == 25
+    assert len(redrive.declined_log) == redrive.MAX_PROPOSAL_NOTES == 20
+
+    written: list[str] = []
+
+    class _Reporter:
+        def write_sep(self, sep, title, **kwargs):
+            written.append(title)
+
+        def write_line(self, line, **kwargs):
+            written.append(line)
+
+    redrive.pytest_terminal_summary(_Reporter())
+    assert "  ... and 5 more" in written
+
+
 def test_a_proposal_the_controller_never_handled_fails_w13_closed(
     pytester,
     tmp_path,
@@ -1395,6 +1499,84 @@ def test_a_declined_proposal_is_said_but_does_not_read_as_a_redrive(pytester):
     assert "re-driven" not in blob and "pytest-xdist defect" not in blob
 
 
+_HELD_DISTRIBUTION_CONFTEST = """
+import sys, time
+sys.path.insert(0, {root!r})
+
+def pytest_xdist_make_scheduler(config, log):
+    from scripts.ci.xdist_contract import make_safe_scheduler
+
+    sched = make_safe_scheduler(config, log)
+    assign = sched._assign_work_unit
+    calls = []
+
+    def held_first_assignment(node):
+        calls.append(node)
+        if len(calls) != 1:
+            return assign(node)
+        # xdist's own steps, with the controller held between recording the
+        # first unit and sending it: the other node is registered and holds
+        # nothing -- the state Run 1/3's watcher saw -- for long enough that
+        # a poll lands in it, and no worker event can make the controller
+        # look busy meanwhile.
+        scope, work_unit = sched.workqueue.popitem(last=False)
+        sched.assigned_work.setdefault(node, dict())[scope] = work_unit
+        time.sleep(2.5)
+        collection = sched.registered_collections[node]
+        node.send_runtest_some([collection.index(n) for n, done in work_unit.items() if not done])
+
+    sched._assign_work_unit = held_first_assignment
+    return sched
+
+def pytest_configure(config):
+    from scripts.ci import xdist_contract
+    xdist_contract.install(config)
+"""
+
+
+def test_the_start_up_false_positive_in_a_real_xdist_run_is_declined_and_w13_passes(
+    pytester,
+    tmp_path,
+    monkeypatch,
+):
+    """Run 1/3's false positive, end to end in a real controller with real
+    workers: the watcher thread polls while the controller is inside the
+    initial distribution, proposes, and the controller declines once the
+    distribution is done. The run is clean W13 evidence. (On 54c851b the same
+    run counted a re-drive and failed W13.)"""
+    from scripts.ci.xdist_contract import check_contract_report
+
+    report = tmp_path / "xdist-contract.json"
+    monkeypatch.setenv("BARTHO_XDIST_CONTRACT_REPORT", str(report))
+    monkeypatch.setenv("BARTHO_XDIST_REDRIVE_IDLE_S", "0.5")
+    pytester.makeconftest(
+        _HELD_DISTRIBUTION_CONFTEST.format(root=str(Path(__file__).resolve().parents[1])),
+    )
+    body = "".join(f"def test_{index}(): pass\n" for index in range(5))
+    pytester.makepyfile(test_a=body, test_b=body, test_c=body, test_d=body)
+
+    result = pytester.runpytest_subprocess(
+        "-n",
+        "2",
+        "--dist",
+        "loadfile",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:randomly",
+        timeout=120,
+    )
+
+    result.assert_outcomes(passed=20)
+    recorded = json.loads(report.read_text(encoding="utf-8"))
+    assert recorded["redrives"] == 0, recorded
+    assert recorded["declined"] >= 1, recorded
+    assert recorded["undispatched"] == 0, recorded
+    assert "the watcher saw 3 unit(s) queued" in recorded["declined_notes"][0]
+    ok, message = check_contract_report(report)
+    assert ok, message
+
+
 _LOST_WAKEUP_CONFTEST = """
 import sys
 sys.path.insert(0, {root!r})
@@ -1404,16 +1586,19 @@ def pytest_xdist_make_scheduler(config, log):
 
     sched = make_safe_scheduler(config, log)
     reschedule = sched._reschedule
-    lost = []
+    stranded = []
 
     def mark_test_complete(node, item_index, duration=0):
         nodeid = sched.registered_collections[node][item_index]
         sched.assigned_work[node][sched._split_scope(nodeid)][nodeid] = True
-        # The defect, injected: the controller loses the wake-up that should
-        # top this node up -- twice, so the worker is left holding its last
-        # test with no next item to fetch, and stops.
-        if len(lost) < 2 and sched.workqueue and sched._pending_of(sched.assigned_work[node]) <= 2:
-            lost.append(nodeid)
+        pending = sched._pending_of(sched.assigned_work[node])
+        # The defect, injected: the controller loses every wake-up that
+        # should top this node up, until one is lost at a single pending
+        # test. The worker then holds its last test with no next item to
+        # fetch, and stops -- whatever happened on the way there.
+        if not stranded and sched.workqueue and pending <= 2:
+            if pending <= 1:
+                stranded.append(nodeid)
             return
         reschedule(node)
 
@@ -1443,9 +1628,9 @@ def test_a_lost_wakeup_in_a_real_xdist_run_is_counted_and_fails_w13(
 
     report = tmp_path / "xdist-contract.json"
     monkeypatch.setenv("BARTHO_XDIST_CONTRACT_REPORT", str(report))
-    # Three seconds, not one: a node passes through two pending tests on its
-    # way to being stranded, and on a slow runner a trivial test taking a
-    # second there would add a (correctly counted) busy-node re-drive first.
+    # The node passes through two pending tests on its way to being
+    # stranded; if a slow runner holds a test there past the bound, a
+    # busy-node re-drive is counted first and the strand still follows.
     monkeypatch.setenv("BARTHO_XDIST_REDRIVE_IDLE_S", "3")
     pytester.makeconftest(
         _LOST_WAKEUP_CONFTEST.format(root=str(Path(__file__).resolve().parents[1])),
@@ -1467,6 +1652,7 @@ def test_a_lost_wakeup_in_a_real_xdist_run_is_counted_and_fails_w13(
         "no:cacheprovider",
         "-p",
         "no:randomly",
+        timeout=120,
     )
 
     result.assert_outcomes(passed=7)
@@ -1480,10 +1666,10 @@ def test_a_lost_wakeup_in_a_real_xdist_run_is_counted_and_fails_w13(
     assert not ok and "not clean evidence" in message
 
 
-@pytest.mark.parametrize("declined", [3, 0, "3", True, -1, None, [1]])
+@pytest.mark.parametrize("declined", [0, 3])
 def test_declined_proposals_never_change_the_w13_verdict(tmp_path, declined):
-    """Evidence, never a re-drive: whatever ``declined`` holds, a clean run
-    stays clean and a re-driven one stays refused."""
+    """Evidence, never a re-drive: a clean run stays clean and a re-driven
+    one stays refused, whatever the count of declined proposals."""
     from scripts.ci.xdist_contract import check_contract_report
 
     clean = _contract_report_file(tmp_path, "clean.json", declined=declined)
@@ -1492,10 +1678,20 @@ def test_declined_proposals_never_change_the_w13_verdict(tmp_path, declined):
     assert check_contract_report(redriven)[0] is False
 
 
-@pytest.mark.parametrize(
-    ("undispatched", "clean"),
-    [(1, False), (0, True), ("1", True), (True, True), (-1, True), (None, True)],
-)
+@pytest.mark.parametrize("field", ["declined", "undispatched"])
+@pytest.mark.parametrize("value", ["1", True, 1.0, -1, None, [1]])
+def test_a_malformed_new_count_is_refused_like_redrives(tmp_path, field, value):
+    """The 2026-10-08 fields are held to the standard `redrives` is: present
+    and not a non-negative integer, the report is not this contract's."""
+    from scripts.ci.xdist_contract import check_contract_report
+
+    report = _contract_report_file(tmp_path, "report.json", **{field: value})
+    ok, message = check_contract_report(report)
+    assert not ok
+    assert f"{field} {value!r} is not a non-negative integer" in message
+
+
+@pytest.mark.parametrize(("undispatched", "clean"), [(1, False), (2, False), (0, True)])
 def test_only_a_real_count_of_unhandled_proposals_refuses_the_run(
     tmp_path,
     undispatched,
@@ -1505,6 +1701,16 @@ def test_only_a_real_count_of_unhandled_proposals_refuses_the_run(
 
     report = _contract_report_file(tmp_path, "report.json", undispatched=undispatched)
     assert check_contract_report(report)[0] is clean
+
+
+def test_a_report_written_before_the_new_counts_existed_reads_them_as_zero(tmp_path):
+    from scripts.ci.xdist_contract import check_contract_report
+
+    old_shape = _contract_report_file(tmp_path, "old.json")
+    assert check_contract_report(old_shape) == (
+        True,
+        "no scheduler re-drive was needed (clause W13)",
+    )
 
 
 def test_timing_the_write_path_survives_a_positional_factory(tmp_path):

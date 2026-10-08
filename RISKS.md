@@ -2,7 +2,17 @@
 
 > Risk radar: security, privacy, reliability, maintainability, performance, tech debt.
 >
-> **Last updated:** 2026-10-07 — **one stale statement corrected in the 2026-09-25 incident
+> **Last updated:** 2026-10-08 — **one new tech-debt entry: W13 counted re-drives from an
+> unsynchronised view of the scheduler.** Two runs failed W13 on start-up false positives
+> (Integration 36519235007 and gate 8's post-merge Run 1/3, Merge Candidate 37703362526); the
+> issue is promoted to a systemic one, with the corrections to the earlier records that misread
+> it and the open questions it raises about the 2026-09-17 lost-wakeup diagnosis. A dated note is
+> added to the 2026-09-25 incident entry. **This pass accompanies a CI-harness code change**
+> (`scripts/ci/xdist_contract.py`, with its tests) in PR #128, **unmerged at the time of
+> writing**. No risk is removed and no resolved risk is revived. The incident stays OPEN; gate 8
+> is not claimed.
+>
+> **Previously (2026-10-07).** **One stale statement corrected in the 2026-09-25 incident
 > entry** (documentation only). It said the first Merge Candidate on `main` after PR #124's merge,
 > 37399980843, was "not re-run at the time of writing". It was re-run once at Taylor's decision on
 > 2026-10-06, failed jobs only, as attempt 2 of the same run, and passed; attempt 1 is kept as
@@ -1777,6 +1787,11 @@
     previously read "pending Taylor's closure decision and merge"). The lock, seed and W13
     defects are repaired and accepted; **the worker-loss stall cause is not established**, and
     heavy-test headroom (entry below) is the likeliest route to a recurrence.
+    *(2026-10-08: W13's enforcement held, but its count had a defect of its own — a re-drive
+    counted from a snapshot taken inside xdist's initial scheduling — which failed gate 8's
+    post-merge Run 1/3 on `main` (`54c851b`, Merge Candidate 37703362526; record §7), a run whose
+    tests all passed. The post-merge sequence stands at 0 of 3 clean. See the 2026-10-08 W13
+    entry below; repair in PR #128, unmerged.)*
 
 - **(2026-09-25) Orphaned msedge and Notepad processes outlive the Windows actuation step and run
   through the whole default suite — deferred, not repaired.** Both attempts of Merge Candidate
@@ -1829,6 +1844,116 @@
   only "Not properly terminated". **What would close it:** a decision to enable the trace on those
   jobs (cost: artifact volume, a little wall time), or to move the timeout evidence into the
   always-on contract with its own output path. **Risk category:** diagnosability. **Status:** open.
+
+- **(2026-10-08) W13 counted re-drives from an unsynchronised view of the scheduler — two runs
+  failed W13 on start-up false positives; promoted to a systemic issue; the count moved to the
+  controller (PR #128, unmerged).** In the CI, Integration and Merge Candidate runs created from
+  2026-09-25 (W13's enforcement) through 2026-10-07, W13's step ran 112 times and failed exactly
+  twice, both in jobs whose tests all passed with no worker lost:
+  - Integration run 36519235007 (#227), job 109248248510 ("Tests + coverage (Ubuntu, py3.11)",
+    PR #125's head `19014c1`, 2026-09-29): "no test completed for 33s while 251 unit(s) queued and
+    a node able to take them", about 30 ms after the controller's pre-schedule status line and
+    before any test had finished. (The same run's separate "Critical integration + lifecycle"
+    job was cancelled at its 25-minute cap — PR #125 comment 5883695615 — which is unrelated to
+    W13.)
+  - Merge Candidate 37703362526, job 113071834174 (gate 8 post-merge Run 1/3 on `main` at
+    `54c851b`, Windows, 2026-10-07): "18s while 252 unit(s) queued"; the run's six other jobs were
+    green. Incident record §7.
+  - **Cause.** The watcher thread (`SchedulerRedrive._watch`, `scripts/ci/xdist_contract.py`) read
+    `workqueue` and `assigned_work` without a lock while the controller's main thread was inside
+    pytest-xdist 3.8.0's initial `schedule()`. Between the first node's unit and the last, the queue
+    holds N−1, N−2 or N−3 of the N file units while the nodes not yet given one are registered and
+    hold nothing, so `_eligible_nodes` called them able to take work; the idle clock runs from
+    `pytest_sessionstart`, so the idle reported was the whole start-up. The count was taken on the
+    watcher thread from that snapshot, and the posted re-drive then found every node holding more
+    than two tests and changed nothing. Reproduced with the real scheduler, this repository's
+    `SchedulerRedrive` and the default suite's shape at `54c851b` (5742 tests in 253 files, the
+    largest holding 403, 140, 136 and 121): a poll there reads exactly "252 unit(s) queued and a
+    node able to take them", and after the initial distribution 249 units are queued and no node
+    is eligible until tests complete. Run 1/3's instance is therefore established from its note's
+    own queue depth and the source, with no worker lost; the moment of the re-drive was not
+    observed, because the job log's head and artifact 11518889168 (expires 2026-11-06) could not
+    be read from the investigating session. Integration 36519235007's full log was read.
+  - **Corrections to earlier records, which stay as written.** PR #125 comments 5883458577 and
+    5888871135, and Airtable comments comF0xj95hg0D1qrs (row recmtR5E4IOkvPjxo) and
+    comkNQezEvu4iYYb7 (row recQVKUHV0Cz0N9NN), all of 2026-09-29, recorded Integration
+    36519235007's re-drive as the upstream pytest-xdist lost-wakeup defect; it was this false
+    positive (Airtable comment comgsBLWsHIcnWnEF noted its start-up shape on 2026-09-30, without
+    follow-up). Commit comment 203956165 on `54c851b` said Run 1/3's was the first in any run on
+    record, which Integration 36519235007 refutes, and that every post-enforcement row in the
+    incident record's §7 is "W13 step passed", which is untrue of the `4be5b44`, `dd0a680`,
+    `1adf251` and `9ccaec9` attempt-1 rows (none of them records a W13 failure). The Airtable
+    incident row's live text repeats "first observed"; correcting it belongs in Airtable and is
+    not part of this change.
+  - **Why systemic.** Promoted to a systemic issue under the Systemic Issue Escalation &
+    Repair-Convergence rule (Airtable Decisions & Constraints `recPHnJMyQnAkLp3W`, Taylor's
+    direction of 2026-09-29): two incidents in one trigger, after reactive patches to it
+    (`184ed5e`: the idle bound from 60 to 8 s and the poll from 5 to 1 s, which made the
+    start-up window catchable; `b5764d7` and `59c0948`: the eligibility predicate), and a documented
+    limitation that described a different case from the one that occurred. In a model check that
+    assumes the idle bound already met, the same unsynchronised read also counts states while a
+    replacement registers and inside `mark_test_complete` before its top-up; with a timed clock
+    only the start-up window was reached. A start-up special case would have left that class open.
+    The invariant that should hold: **a W13 count means that, at a consistent point on the
+    controller's own thread and with no test completed since the watcher saw the run idle for the
+    bound, a re-drive handed a queued unit to a node at or below xdist's top-up threshold.**
+  - **Repaired (PR #128, unmerged).** The count is the controller's. The watcher only proposes
+    (the first 20 proposals each print one stderr line); `_handle_redrive`, on the controller's
+    main thread, counts a re-drive only when `_reschedule` took a unit off the queue, and declines
+    a proposal if a test has completed since it was made. A declined proposal is recorded — in
+    `xdist-contract.json`, on stderr and in the terminal summary, with what the watcher saw and the
+    pending counts of up to eight nodes (the first 20 declined proposals noted, all counted) — and
+    does not fail W13. A proposal the controller never handled is recorded as `undispatched`, and
+    any positive count fails W13, because unknown is not clean. Each counted note gives, for every
+    node it handed work to, that node's pending count before and after and the tests it received.
+    Eligibility, the idle bound, the W13 step and `BARTHO_XDIST_CONTRACT=0` are unchanged. A model
+    check of whole simulated runs (the real scheduler and collection, the watcher evaluated at
+    every line of scheduler code) found no counted re-drive in a healthy run and every injected
+    stall counted once (PR #128 comment 6062559940, which records that session evidence). Pinned
+    in `tests/test_windows_execution_contract.py`. Regression tests: polls taken inside the initial
+    distribution (252, 251 and 250 queued), while a replacement registers and mid-completion
+    before a top-up are declined; a stale proposal is declined without re-driving; and in a real
+    xdist run whose controller is held inside the initial distribution the proposal is declined
+    and W13 passes (on `54c851b` the same run counts a re-drive and fails W13). Preservation
+    tests: a stranded node (one pending test, work queued) is counted and fails W13, against the
+    scheduler and in a real xdist run with injected lost wake-ups; a re-queued finished unit
+    handed out still counts; an unhandled proposal fails W13.
+  - **Still open, bounded, not in that package.** (1) **The one remaining false-count class,
+    which fails closed:** xdist tops a node up at two pending tests, and a node holding exactly two
+    is usually busy (one running, the next fetched); a re-drive that tops it up is still counted.
+    In this suite it needs a node's first units to total two tests or fewer (with collection inside
+    the idle clock, no slow test is needed) or a worker loss. The two older end-to-end W13 tests
+    exercise this class, and the `_deadlocked_scheduler` fixture models a node at two pending tests
+    although its docstring says one; neither is evidence that a stranded worker is found. Counting
+    only hand-offs to nodes at one pending test or fewer would remove the class but would tie a
+    fail-closed gate to pytest-xdist's prefetch depth; that is a separate decision. Conversely, a
+    stall that xdist itself resolves between a proposal and its dispatch (its replacement path
+    reschedules every node) is declined: the controller finds nothing left to hand out. (2) Every
+    other W13 count found in the logs read since enforcement followed a worker loss (`1adf251`: 22;
+    `2906a81`: 10); the logs of 37399980843 attempt 1 and of the `6125598` run's start were not
+    available. Two pytest-xdist paths strand workers then: `schedule()`'s second call gives a
+    replacement a single unit, which a one-test file leaves stranded, and `remove_node` re-queues a
+    dead worker's whole workload, finished files included, which later go out as empty batches.
+    W13's banner and records attribute such re-drives to a lost wake-up. (3) Whether a crash-free
+    lost wake-up can occur in pytest-xdist 3.8.0 at all is **not established**: by source, every
+    live node stays above the top-up threshold while work is queued, and a randomised model found
+    no stall in 4000 crash-free runs (session evidence, PR #128 comment 6062559940), but execnet
+    message loss was not modelled. This bears on the diagnosis recorded in the 2026-09-09 entry
+    above, in `DECISIONS.md` (2026-09-17), in `docs/WINDOWS_MERGE_CANDIDATE_REPAIR.md` §2.2 and in
+    `docs/WINDOWS_TEST_EXECUTION_CONTRACT.md` §1 and §3, none of which is changed here (first raised
+    2026-09-30, comgsBLWsHIcnWnEF). (4) pytest-xdist is unpinned (`requirements-dev.txt`) while W13
+    reads its internals; pinning stays rejected "for now" (`DECISIONS.md`, 2026-09-17). (5) The
+    code comment in `_eligible_nodes`, `docs/WINDOWS_MERGE_CANDIDATE_REPAIR.md` §12 item 1 and the
+    docstring of `test_a_worker_that_has_not_collected_yet_is_not_a_stall` attribute run
+    35185611629's first twenty re-drives to workers still collecting; in pytest-xdist the queue is
+    empty until the initial distribution, and that run's notes read 209 units queued, so those
+    were busy-node counts (inferred from its log). Left as written here. (6) Gate 8's post-merge
+    acceptance on `main` stands at 0 of 3 clean; it restarts from Run 1/3 on the head this repair
+    produces, if and when Taylor approves it.
+  - **What would close it:** the repair merged at Taylor's User Approval Gate; a clean acceptance
+    sequence on the resulting head; and items (1)–(5) each repaired or recorded with its own
+    closing condition. **Risk category:** CI evidence integrity. **Status:** open; repair in
+    PR #128, unmerged.
 
 ## Red-team focus areas
 

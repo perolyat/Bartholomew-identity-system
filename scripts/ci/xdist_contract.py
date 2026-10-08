@@ -398,6 +398,10 @@ class SchedulerRedrive:
 
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
         self._stop.set()
+        if self._thread is not None:
+            # A poll already past its wait could still post; let it finish,
+            # so `proposed` is final before undispatched is worked out.
+            self._thread.join(timeout=self.POLL_S + 1.0)
         report_path = os.environ.get(CONTRACT_REPORT_ENV)
         if report_path:
             write_contract_report(
@@ -494,18 +498,27 @@ class SchedulerRedrive:
 
     def _watch(self) -> None:
         while not self._stop.wait(self.POLL_S):
-            with self._lock:
-                idle = time.monotonic() - self._last_progress
-                completions = self._completions
-            if idle < self.idle_after_s:
-                continue
-            if self.redrives >= self.MAX_REDRIVES:
-                self._announce_give_up()
-                continue
-            ok, why = self._should_redrive()
-            if not ok:
-                continue
+            self._poll_once()
+
+    def _poll_once(self) -> tuple[bool, str]:
+        """One look at the run; propose a re-drive if it reads as stalled.
+
+        The idle reading and the completion count it was taken against are
+        read together, so the controller can tell whether a test completed
+        between this look and its own.
+        """
+        with self._lock:
+            idle = time.monotonic() - self._last_progress
+            completions = self._completions
+        if idle < self.idle_after_s:
+            return False, "not idle"
+        if self.redrives >= self.MAX_REDRIVES:
+            self._announce_give_up()
+            return False, "gave up"
+        ok, why = self._should_redrive()
+        if ok:
             self._post_redrive(idle, why, completions)
+        return ok, why
 
     def _announce_give_up(self) -> None:
         """Say so, once, when the re-drive stops trying.
@@ -537,7 +550,7 @@ class SchedulerRedrive:
         controller can tell whether the run was still idle when it looked.
         """
         dsession = self._dsession()
-        if dsession is None:  # pragma: no cover - defensive
+        if dsession is None or self._stop.is_set():  # pragma: no cover - defensive
             return
         if not self._installed_handler:
             # DSession dispatches an event by calling `worker_<name>` on
@@ -550,11 +563,9 @@ class SchedulerRedrive:
         if self.proposed <= self.MAX_PROPOSAL_NOTES:
             # Said even though it is not a re-drive: if the controller never
             # handles it, this line is the only trace of what was seen.
-            print(
+            _say(
                 f"xdist-contract: re-drive proposal #{self.proposed}: no test completed for "
                 f"{idle:.0f}s while {why}; awaiting the controller",
-                file=sys.stderr,
-                flush=True,
             )
         try:
             dsession.queue.put(
@@ -610,18 +621,17 @@ class SchedulerRedrive:
             )
             return
         handed: list[str] = []
+        failures: list[str] = []
         for node in self._eligible_nodes(sched):
             units_before = _queued_units(sched)
             pending_before = _pending(sched, node)
             failure = ""
             try:
                 sched._reschedule(node)
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 failure = f"; the hand-off raised {exc!r}"
-                print(
-                    f"xdist-contract: re-drive of {_node_id(node)} failed: {exc!r}",
-                    file=sys.stderr,
-                )
+                failures.append(f"{_node_id(node)} raised {exc!r}")
+                _say(f"xdist-contract: re-drive of {_node_id(node)} failed: {exc!r}")
             units = units_before - _queued_units(sched)
             if units > 0:
                 pending_after = _pending(sched, node)
@@ -631,13 +641,10 @@ class SchedulerRedrive:
                     f"{failure})",
                 )
         if not handed:
-            self._decline(
-                idle,
-                why,
-                "at the controller no node could be given queued work",
-                sched,
-                queued,
-            )
+            reason = "at the controller no node could be given queued work"
+            if failures:
+                reason += f" ({'; '.join(failures)})"
+            self._decline(idle, why, reason, sched, queued)
             return
         self.redrives += 1
         try:
@@ -646,10 +653,10 @@ class SchedulerRedrive:
                 f"the controller handed queued work to {', '.join(handed)} "
                 f"({queued} unit(s) were queued)"
             )
-            self.redrive_log.append(note)
-            print(f"xdist-contract: {note}", file=sys.stderr, flush=True)
         except Exception:  # pragma: no cover - defensive: the count stands
-            self.redrive_log.append(f"scheduler re-drive #{self.redrives}")
+            note = f"scheduler re-drive #{self.redrives}"
+        self.redrive_log.append(note)
+        _say(f"xdist-contract: {note}")
 
     def _decline(self, idle: float, why: str, reason: str, sched: Any, queued: int) -> None:
         """Record a proposal the controller could not confirm. Not a re-drive."""
@@ -666,10 +673,10 @@ class SchedulerRedrive:
                 f"{why or 'a stall'} after {idle:.0f}s, but {reason} "
                 f"({queued} unit(s) queued; {nodes or 'no nodes'}); not a re-drive"
             )
-            self.declined_log.append(note)
-            print(f"xdist-contract: {note}", file=sys.stderr, flush=True)
         except Exception:  # pragma: no cover - defensive: the count stands
-            self.declined_log.append(f"re-drive proposal declined (#{self.declined})")
+            note = f"re-drive proposal declined (#{self.declined})"
+        self.declined_log.append(note)
+        _say(f"xdist-contract: {note}")
 
     def _undispatched(self) -> int:
         """Proposals the controller neither confirmed nor declined."""
@@ -744,6 +751,15 @@ def _node_id(node: Any) -> str:
         return str(node.gateway.id)
     except Exception:  # pragma: no cover - defensive
         return repr(node)
+
+
+def _say(text: str) -> None:
+    """Write a line to stderr; never raise, because the caller may be
+    running inside ``DSession.loop_once``."""
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 def _redrive_idle_after() -> float:
@@ -832,8 +848,10 @@ def check_contract_report(path: str | os.PathLike[str]) -> tuple[bool, str]:
     whose ``redrives`` is a non-negative integer. A JSON boolean is not an
     integer here, and nothing is coerced. Any other content, however it came
     to be at ``path``, establishes nothing about this run and is refused with
-    the mismatch named. A report that records proposals the controller never
-    handled is refused too: whether that run stalled is unknown. Declined
+    the mismatch named. ``declined`` and ``undispatched`` (added 2026-10-08)
+    are optional, read as zero when absent, and held to the same standard
+    when present. A report that records proposals the controller never
+    handled is refused: whether that run stalled is unknown. Declined
     proposals are evidence, never re-drives, and never change the verdict.
     """
     target = Path(path)
@@ -903,6 +921,13 @@ def _contract_report_problem(report: object) -> str | None:
     redrives = report.get("redrives")
     if isinstance(redrives, bool) or not isinstance(redrives, int) or redrives < 0:
         return f"redrives {redrives!r} is not a non-negative integer"
+    # Added 2026-10-08. Absent means a report written before then, read as
+    # zero; present, they are held to the same standard as `redrives`.
+    for field in ("declined", "undispatched"):
+        if field in report:
+            value = report[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return f"{field} {value!r} is not a non-negative integer"
     return None
 
 
