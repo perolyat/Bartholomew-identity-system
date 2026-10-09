@@ -290,6 +290,36 @@ class SchedulerRedrive:
     written to the trace and printed in the terminal summary. A run that
     needed re-driving completed, but it completed over a bug, and the log
     says so rather than quietly looking green.
+
+    **What counts as a re-drive, and which thread decides (2026-10-08).**
+    The watcher reads the scheduler from its own thread, without a lock,
+    while the controller's main thread may be half-way through changing it.
+    What the watcher sees is therefore a *proposal*, never a fact. Inside
+    xdist's initial ``schedule()``, between the first unit's assignment and
+    the last, it sees work queued and nodes that hold nothing yet -- a state
+    that exists only for those milliseconds and that ``_reschedule`` would
+    not act on once ``schedule()`` returns. Counting that snapshot failed
+    the W13 step of Integration run 36519235007 (2026-09-29, "251 unit(s)
+    queued") and of Merge Candidate 37703362526 (2026-10-07, "252 unit(s)
+    queued") on runs that had nothing wrong with them.
+
+    So the count is decided where the schedule is consistent: in the
+    handler, on the controller's main thread, by what ``_reschedule``
+    actually did. A re-drive is counted only when, with no test completed
+    since the watcher saw the run idle for the bound, it handed a queued
+    unit to a node at or below xdist's own top-up threshold. A proposal the
+    controller cannot confirm is not a re-drive: it is recorded as
+    *declined*, printed and written to the report, and never counted. A
+    proposal the controller never got to is reported too, and fails the W13
+    check, because a run that cannot say is not clean. Nothing the watcher
+    sees is dropped silently, and nothing it sees is counted on its say-so.
+
+    One false-count class remains, and it fails closed: a node holding
+    exactly two pending tests is usually busy (one running, the next
+    already fetched), yet it is at the top-up threshold and a re-drive that
+    tops it up is counted. In this suite that state needs a worker loss or
+    a node's first units totalling two tests or fewer; see
+    ``docs/WINDOWS_TEST_EXECUTION_CONTRACT.md`` clause W13.
     """
 
     #: Seconds without a completed test before the scheduler is re-asked.
@@ -318,11 +348,19 @@ class SchedulerRedrive:
     #: xdist's own heuristic: it tops a node up once its pending work
     #: drops to this. Mirrored so eligibility matches _reschedule's.
     DEPLETED_AT = 2
+    #: How many proposals and declined proposals are printed, and how many
+    #: declined ones are kept as notes. All are counted; only text is bounded.
+    MAX_PROPOSAL_NOTES = 20
 
     def __init__(self, idle_after_s: float | None = None) -> None:
         self.idle_after_s = idle_after_s if idle_after_s is not None else _redrive_idle_after()
+        # `redrives` and `declined` are written only on the controller's main
+        # thread, in _handle_redrive; `proposed` only on the watcher thread.
         self.redrives = 0
         self.redrive_log: list[str] = []
+        self.declined = 0
+        self.declined_log: list[str] = []
+        self.proposed = 0
         self._completions = 0
         self._last_progress = time.monotonic()
         self._lock = threading.Lock()
@@ -360,6 +398,10 @@ class SchedulerRedrive:
 
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
         self._stop.set()
+        if self._thread is not None and self._thread.is_alive():
+            # A poll already past its wait could still post; let it finish,
+            # so `proposed` is final before undispatched is worked out.
+            self._thread.join(timeout=self.POLL_S + 1.0)
         report_path = os.environ.get(CONTRACT_REPORT_ENV)
         if report_path:
             write_contract_report(
@@ -368,6 +410,9 @@ class SchedulerRedrive:
                 gave_up=self._gave_up,
                 notes=self.redrive_log,
                 exitstatus=int(exitstatus),
+                declined=self.declined,
+                declined_notes=self.declined_log,
+                undispatched=self._undispatched(),
             )
 
     # -- the watch ---------------------------------------------------------
@@ -385,7 +430,9 @@ class SchedulerRedrive:
 
         Read from a watcher thread while the controller's own loop may be
         mutating the same structures, so every access is defensive: a read
-        that fails means "do not act", never an exception.
+        that fails means "do not act", never an exception. The handler asks
+        the same question on the controller's main thread, where the answer
+        is consistent; only that answer can lead to a counted re-drive.
         """
         try:
             assigned = dict(getattr(sched, "assigned_work", {}) or {})
@@ -451,17 +498,27 @@ class SchedulerRedrive:
 
     def _watch(self) -> None:
         while not self._stop.wait(self.POLL_S):
-            with self._lock:
-                idle = time.monotonic() - self._last_progress
-            if idle < self.idle_after_s:
-                continue
-            if self.redrives >= self.MAX_REDRIVES:
-                self._announce_give_up()
-                continue
-            ok, why = self._should_redrive()
-            if not ok:
-                continue
-            self._post_redrive(idle, why)
+            self._poll_once()
+
+    def _poll_once(self) -> tuple[bool, str]:
+        """One look at the run; propose a re-drive if it reads as stalled.
+
+        The idle reading and the completion count it was taken against are
+        read together, so the controller can tell whether a test completed
+        between this look and its own.
+        """
+        with self._lock:
+            idle = time.monotonic() - self._last_progress
+            completions = self._completions
+        if idle < self.idle_after_s:
+            return False, "not idle"
+        if self.redrives >= self.MAX_REDRIVES:
+            self._announce_give_up()
+            return False, "gave up"
+        ok, why = self._should_redrive()
+        if ok:
+            self._post_redrive(idle, why, completions)
+        return ok, why
 
     def _announce_give_up(self) -> None:
         """Say so, once, when the re-drive stops trying.
@@ -483,9 +540,17 @@ class SchedulerRedrive:
             flush=True,
         )
 
-    def _post_redrive(self, idle: float, why: str) -> None:
+    def _post_redrive(self, idle: float, why: str, completions: int | None = None) -> None:
+        """Propose a re-drive to the controller. Counts nothing.
+
+        Runs on the watcher thread, whose view of the scheduler may be torn
+        (see the class docstring). Whether this was a re-drive is decided by
+        ``_handle_redrive`` on the controller's main thread. ``completions``
+        is the completion count the idle reading was taken against, so the
+        controller can tell whether the run was still idle when it looked.
+        """
         dsession = self._dsession()
-        if dsession is None:  # pragma: no cover - defensive
+        if dsession is None or self._stop.is_set():  # pragma: no cover - defensive
             return
         if not self._installed_handler:
             # DSession dispatches an event by calling `worker_<name>` on
@@ -494,43 +559,161 @@ class SchedulerRedrive:
             # object and leaves pytest-xdist's own class untouched.
             setattr(dsession, f"worker_{self.EVENT_NAME}", self._handle_redrive)
             self._installed_handler = True
-        self.redrives += 1
-        note = (
-            f"scheduler re-drive #{self.redrives}: no test completed for "
-            f"{idle:.0f}s while {why}"
-        )
-        self.redrive_log.append(note)
-        print(f"xdist-contract: {note}", file=sys.stderr, flush=True)
+        self.proposed += 1
+        if self.proposed <= self.MAX_PROPOSAL_NOTES:
+            # Said even though it is not a re-drive: if the controller never
+            # handles it, this line is the only trace of what was seen.
+            _say(
+                f"xdist-contract: re-drive proposal #{self.proposed}: no test completed for "
+                f"{idle:.0f}s while {why}; awaiting the controller",
+            )
         try:
-            dsession.queue.put((self.EVENT_NAME, {}))
+            dsession.queue.put(
+                (self.EVENT_NAME, {"idle": idle, "why": why, "completions": completions}),
+            )
         except Exception as exc:  # pragma: no cover - defensive
             print(f"xdist-contract: could not post re-drive: {exc!r}", file=sys.stderr)
 
     # -- runs on the controller's main thread ------------------------------
 
-    def _handle_redrive(self) -> None:
-        """Ask the scheduler to assign work, from the thread that may.
+    def _handle_redrive(
+        self,
+        idle: float | None = None,
+        why: str = "",
+        completions: int | None = None,
+    ) -> None:
+        """Ask the scheduler to assign work, from the thread that may, and
+        count a re-drive only if it did.
 
         Reached only through ``DSession.loop_once``, so the scheduler
         mutation and the ``channel.send`` inside ``_assign_work_unit``
-        happen exactly where pytest-xdist performs them itself.
+        happen exactly where pytest-xdist performs them itself -- and the
+        schedule read here is consistent, which the watcher's never is.
+
+        A node was re-driven when its ``_reschedule`` took a unit off the
+        queue: the one thing a stall withholds. A unit that turns out to
+        hold no test still counts -- after a worker loss, handing out such
+        units is what drains the queue -- and the note says how many tests
+        went with it. If no node took a unit, or a test completed after the
+        proposal (so the run was not idle when the controller looked), the
+        proposal described a state the controller was not in: it is
+        recorded as declined and is not a re-drive.
+
+        Nothing here may raise into ``loop_once``, which would end the
+        session; the counts are taken before any text is built.
         """
         dsession = self._dsession()
         sched = getattr(dsession, "sched", None) if dsession else None
         if sched is None:  # pragma: no cover - defensive
             return
+        with self._lock:
+            completed_since = completions is not None and self._completions != completions
+            if idle is None:
+                idle = time.monotonic() - self._last_progress
+        queued = _queued_units(sched)
+        if completed_since:
+            self._decline(
+                idle,
+                why,
+                "a test completed after the proposal, so the run was not idle",
+                sched,
+                queued,
+            )
+            return
+        handed: list[str] = []
+        # Hand-offs that raised and took nothing off the queue; one that did
+        # take a unit is named in its own `handed` entry instead.
+        failures: list[str] = []
         for node in self._eligible_nodes(sched):
+            units_before = _queued_units(sched)
+            pending_before = _pending(sched, node)
+            error = ""
             try:
                 sched._reschedule(node)
-            except Exception as exc:  # pragma: no cover - defensive
-                print(
-                    f"xdist-contract: re-drive of {node.gateway.id} failed: {exc!r}",
-                    file=sys.stderr,
+            except Exception as exc:
+                try:
+                    error = repr(exc)
+                except Exception:  # pragma: no cover - defensive: a broken __repr__
+                    error = type(exc).__name__
+                _say(f"xdist-contract: re-drive of {_node_id(node)} failed: {error}")
+            units = units_before - _queued_units(sched)
+            if units > 0:
+                pending_after = _pending(sched, node)
+                raised = f"; the hand-off raised {error}" if error else ""
+                handed.append(
+                    f"{_node_id(node)} (pending {pending_before} -> {pending_after}: "
+                    f"{units} unit(s), {max(pending_after - pending_before, 0)} test(s)"
+                    f"{raised})",
                 )
+            elif error:
+                failures.append(f"{_node_id(node)} raised {error}")
+        if not handed:
+            reason = "at the controller no node could be given queued work"
+            if failures:
+                reason += f" ({'; '.join(failures)})"
+            self._decline(idle, why, reason, sched, queued)
+            return
+        self.redrives += 1
+        try:
+            note = (
+                f"scheduler re-drive #{self.redrives}: no test completed for {idle:.0f}s; "
+                f"the controller handed queued work to {', '.join(handed)} "
+                f"({queued} unit(s) were queued)"
+            )
+            if failures:
+                note += f"; handed nothing: {'; '.join(failures)}"
+        except Exception:  # pragma: no cover - defensive: the count stands
+            note = f"scheduler re-drive #{self.redrives}"
+        self.redrive_log.append(note)
+        _say(f"xdist-contract: {note}")
+
+    def _decline(self, idle: float, why: str, reason: str, sched: Any, queued: int) -> None:
+        """Record a proposal the controller could not confirm. Not a re-drive."""
+        self.declined += 1
+        if self.declined > self.MAX_PROPOSAL_NOTES:
+            return
+        try:
+            nodes = ", ".join(
+                f"{_node_id(node)} pending {_pending(sched, node)}"
+                for node in list(getattr(sched, "assigned_work", {}) or {})[:8]
+            )
+            note = (
+                f"re-drive proposal declined (#{self.declined}): the watcher saw "
+                f"{why or 'a stall'} after {idle:.0f}s, but {reason} "
+                f"({queued} unit(s) queued; {nodes or 'no nodes'}); not a re-drive"
+            )
+        except Exception:  # pragma: no cover - defensive: the count stands
+            note = f"re-drive proposal declined (#{self.declined})"
+        self.declined_log.append(note)
+        _say(f"xdist-contract: {note}")
+
+    def _undispatched(self) -> int:
+        """Proposals the controller neither confirmed nor declined."""
+        return max(self.proposed - self.redrives - self.declined, 0)
 
     # -- reporting ---------------------------------------------------------
 
     def pytest_terminal_summary(self, terminalreporter: Any) -> None:
+        if self.declined:
+            # Not a defect and not a failure: said so that what the watcher
+            # saw is on the record next to what the controller found.
+            terminalreporter.write_line(
+                f"xdist contract: {self.declined} re-drive proposal(s) declined -- the "
+                "controller could not confirm a stall, so none was a re-drive (clause W13)",
+            )
+            for note in self.declined_log:
+                terminalreporter.write_line(f"  {note}")
+            if self.declined > len(self.declined_log):
+                terminalreporter.write_line(
+                    f"  ... and {self.declined - len(self.declined_log)} more",
+                )
+        undispatched = self._undispatched()
+        if undispatched:
+            terminalreporter.write_line(
+                f"xdist contract: {undispatched} re-drive proposal(s) were never handled by "
+                "the controller, so whether the run stalled is unknown (clause W13)",
+                red=True,
+            )
         if not self.redrives:
             return
         terminalreporter.write_sep(
@@ -556,6 +739,38 @@ class SchedulerRedrive:
             )
 
 
+def _queued_units(sched: Any) -> int:
+    """How many work units the scheduler holds unassigned; 0 if unreadable."""
+    try:
+        return len(getattr(sched, "workqueue", ()) or ())
+    except Exception:  # pragma: no cover - defensive
+        return 0
+
+
+def _pending(sched: Any, node: Any) -> int:
+    """Tests assigned to ``node`` and not yet complete; -1 if unreadable."""
+    try:
+        return int(sched._pending_of((getattr(sched, "assigned_work", {}) or {}).get(node, {})))
+    except Exception:  # pragma: no cover - defensive
+        return -1
+
+
+def _node_id(node: Any) -> str:
+    try:
+        return str(node.gateway.id)
+    except Exception:  # pragma: no cover - defensive
+        return repr(node)
+
+
+def _say(text: str) -> None:
+    """Write a line to stderr; never raise, because the caller may be
+    running inside ``DSession.loop_once``."""
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
 def _redrive_idle_after() -> float:
     raw = os.environ.get("BARTHO_XDIST_REDRIVE_IDLE_S")
     if not raw:
@@ -579,13 +794,21 @@ def _redrive_idle_after() -> float:
 # if there is no report at all (a run that could not say is not clean). The
 # job goes red for a stated W13 reason, and the tests' own junit stays true.
 #
+# What is counted (since 2026-10-08): a re-drive the controller confirmed, on
+# its own thread, by handing a queued unit to a node at or below xdist's
+# top-up threshold, with no test completed since the watcher saw the run idle.
+# A proposal it could not confirm is written to the report as `declined` and
+# does not fail W13; one it never handled is `undispatched` and does.
+#
 # Known limitation (recorded in docs/WINDOWS_TEST_EXECUTION_CONTRACT.md): the
-# re-drive counts any node that `_reschedule` would top up while work is
-# queued and nothing has completed for the idle bound. In a healthy run that
-# state does not persist -- a completion that takes a node down to that level
-# tops it up at once -- except at start-up, where a node's first units could
-# total two tests or fewer with one of them slow. Such a re-drive is counted
-# too; the report's notes carry the reason so it can be told apart.
+# threshold is xdist's own, two pending tests, and a node holding exactly two
+# is usually busy -- one running, the next already fetched -- not stalled. A
+# re-drive that tops such a node up is still counted. In a healthy run of
+# this suite that state does not arise: each top-up leaves a node above the
+# threshold while work is queued. It needs a node's first units to total two
+# tests or fewer (the idle clock includes collection, so no slow test is
+# needed), or a worker loss. Such a re-drive's note gives the node's pending
+# count before and after, so it can be told apart.
 # ---------------------------------------------------------------------------
 
 CONTRACT_REPORT_ENV = "BARTHO_XDIST_CONTRACT_REPORT"
@@ -599,6 +822,9 @@ def write_contract_report(
     gave_up: bool,
     notes: list[str],
     exitstatus: int,
+    declined: int = 0,
+    declined_notes: list[str] | None = None,
+    undispatched: int = 0,
 ) -> None:
     report = {
         "schema": CONTRACT_REPORT_SCHEMA,
@@ -607,6 +833,13 @@ def write_contract_report(
         "gave_up": bool(gave_up),
         "exitstatus": int(exitstatus),
         "notes": list(notes)[:50],
+        # Watcher proposals the controller could not confirm: evidence, not
+        # re-drives. The check below never counts them.
+        "declined": int(declined),
+        "declined_notes": list(declined_notes or [])[:50],
+        # Proposals the controller neither confirmed nor declined. Unknown,
+        # so the check below fails closed on any.
+        "undispatched": int(undispatched),
     }
     target = Path(path)
     try:
@@ -624,7 +857,11 @@ def check_contract_report(path: str | os.PathLike[str]) -> tuple[bool, str]:
     whose ``redrives`` is a non-negative integer. A JSON boolean is not an
     integer here, and nothing is coerced. Any other content, however it came
     to be at ``path``, establishes nothing about this run and is refused with
-    the mismatch named.
+    the mismatch named. ``declined`` and ``undispatched`` (added 2026-10-08)
+    are optional, read as zero when absent, and held to the same standard
+    when present. A report that records proposals the controller never
+    handled is refused: whether that run stalled is unknown. Declined
+    proposals are evidence, never re-drives, and never change the verdict.
     """
     target = Path(path)
     if not target.is_file():
@@ -654,7 +891,25 @@ def check_contract_report(path: str | os.PathLike[str]) -> tuple[bool, str]:
             "it completed over a pytest-xdist defect and is not clean evidence. "
             f"{notes}"
         )
+    undispatched = report.get("undispatched")
+    if _positive_int(undispatched):
+        return False, (
+            f"{undispatched} scheduler re-drive proposal(s) were never handled by the "
+            "controller, so whether the run stalled is unknown (clause W13); it cannot "
+            "count as clean"
+        )
+    declined = report.get("declined")
+    if _positive_int(declined):
+        return True, (
+            "no scheduler re-drive was needed (clause W13); "
+            f"{declined} re-drive proposal(s) were declined by the controller, which could "
+            "not confirm a stall, so none was a re-drive"
+        )
     return True, "no scheduler re-drive was needed (clause W13)"
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _contract_report_problem(report: object) -> str | None:
@@ -675,6 +930,13 @@ def _contract_report_problem(report: object) -> str | None:
     redrives = report.get("redrives")
     if isinstance(redrives, bool) or not isinstance(redrives, int) or redrives < 0:
         return f"redrives {redrives!r} is not a non-negative integer"
+    # Added 2026-10-08. Absent means a report written before then, read as
+    # zero; present, they are held to the same standard as `redrives`.
+    for field in ("declined", "undispatched"):
+        if field in report:
+            value = report[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return f"{field} {value!r} is not a non-negative integer"
     return None
 
 
