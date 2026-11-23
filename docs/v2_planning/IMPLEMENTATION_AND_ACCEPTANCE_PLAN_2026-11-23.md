@@ -1,5 +1,7 @@
 # SOLOMON V2 — Implementation Work Packages, Evidence and Release Plan
 
+> **BINDING OWNER REVISION (23 Nov 2026):** The next implementation is a **100% greenfield project in a NEW repository**. All previous application source, tests, schemas/migrations, configurations and binaries are **excluded**; the old Bartholomew repository is read-only for lessons. The earlier R05/R07 selective-reuse direction is superseded. See [GREENFIELD_OVERRIDE_2026-11-23.md](GREENFIELD_OVERRIDE_2026-11-23.md). Product requirements and the frontend-led contract-first vertical delivery method remain unchanged.
+
 **Date:** 2026-11-23 (Australia/Brisbane)  
 **Status:** Draft GitHub planning proposal; **no code, implementation, integration tests or real-world actions started**.  
 **Scope authority:** Owner-approved R03A-02 whole usable Version 1 target, unchanged. User's 2026-11-23 direction delegated **planning reviews**, not authorisation to contact services, pay for models, move financial data, modify phones/PCs, deploy or release.  
@@ -65,10 +67,10 @@ Baseline 16 paired scenarios are **not enough** alone. Include unfamiliar varian
 
 ### P0 — Evidence baseline, source and interface contracts
 
-**Inputs:** pinned GitHub main SHA, 96 source matrix, R03A-02, F01-F13 and B01-B10 hazard map, exact potential reuse inventory.  
-**Deliver:** accepted component truth-table (operational vs integrated/default-off/conceptual), current Windows full-suite and DB lifecycle root-cause baseline, real vs fake model readiness, owner use journeys, typed protocol/permission contract, security/data-flow diagrams and explicitly unsupported capability register.  
+**Inputs:** approved 96-source V2 requirement matrix, R03A-02 whole-V1 scope, F01–F13 and B01–B10 historical failure/hazard lessons, **new empty project repository**, independently compared technology options and fresh contracts; old GitHub SHA is historical provenance only.  
+**Deliver:** newly designed module/interface contracts, Windows/Android feasibility and supported-capability truth table, threat model, clean test/CI and dependency selection, source-derived real-model quality criteria, owner user journeys and explicit limitations. Review the old Windows/DB incident as a historical anti-pattern, **not a module to repair or copy**.  
 **Must fail:** a mock/model answer treated as real-world proof, stale source/CI ready, destructive test data in a live personal DB, any unsupported scope demotion.  
-**Exit:** independent reviews concur about boundaries and high-risk unknowns; no platform/language/deployment changes based merely on an earlier PR.
+**Exit:** independent reviews concur about boundaries and high-risk unknowns; select platform/language/database on fresh proof and owner requirements, without using any previous application files as a starting implementation.
 
 ### P1 — Owner experience and cross-device feasibility
 
@@ -93,7 +95,7 @@ Baseline 16 paired scenarios are **not enough** alone. Include unfamiliar varian
 ### P5 — Integrated reliability, privacy and adversarial qualification
 
 **Deliver:** whole-scenario I01..I08 with adverse/unfamiliar variants, F01-F13 + B01-B10 historical/prospective controls, 16 deep deletion fault scenarios, provider/Windows real-model/PC-phone non-vacuous CI + actual installed UI tests. Exact-build evidence, retries/unknown, system stop, unhealthy dependence, autonomy, spend and privacy tests. At least one genuine independent critique of safety/data-flow.  
-**Exit:** all critical release blockers met, historical Windows Gate8 requalified/closed **on the actual final head** or implementation replaced and newly qualified with verified rationale; risk ledger reconciled, no false READY.
+**Exit:** all critical release blockers met **in the newly built repository and installed application**. Historical Windows Gate8 and associated test failures are translated into newly authored regression/fault tests; do not claim an old project's unresolved gate is the current new project's actual test result. Risk ledger reconciled with clean new evidence, no false READY.
 
 ### P6 — Owner everyday pilot and release authority
 
@@ -126,6 +128,6 @@ See Airtable R03A-03B-03 for per-risk F01..F13, B01..B10 and five cross-system a
 
 ## 8. Decision and authorisation ledger
 
-**Planning completed under owner's standing delegation:** requirement trace, acceptance method, future composite suites, risk transfer, provisional measurement envelope, R04 platform/reuse study, R05 staged strategy and R07 architecture/implementation work packages. These are model-reviewed engineering plans **not individual explicit owner votes**, do not alter original V2 product text.
+**Planning completed under owner's standing delegation, then explicitly overridden by the owner on reuse:** requirement trace, acceptance method, future composite suites, risk transfer, provisional measurement envelope, R04 platform study, **R05-GREENFIELD-01 direct-owner clean-slate decision**, and R07 architecture/implementation work packages **corrected for zero previous code reuse**. These are model-reviewed engineering plans **not individual explicit owner votes**, do not alter original V2 product text.
 
-**Still not authorised or achieved:** changes to GitHub main/canonical decision register, implementation code, provider/server purchases, new mobile/sensor notifications, private bank/health access, external actions, real device integration, live-model capability, deletion success, Windows incident closure, pilot or final V1 release. The PR is intentionally **draft** until the source hierarchy, architecture tradeoffs and final implementation go/no-go are considered. Engineering can now proceed from planning into a bounded authorised build when owner explicitly authorises that consequential transition.
+**Still not authorised or achieved:** creating or coding in the new implementation repository, merging this draft to the old `main`, selecting paid provider/server, modifying device settings, new mobile/sensor notifications, bank/health data access, external actions, real device integration, live-model capability, actual memory deletion proof, pilot or final V1 release. **The old repository is historical reference-only, not the new source tree.** The PR is intentionally **draft** until the source hierarchy, architecture tradeoffs and final implementation go/no-go are considered. Engineering can now proceed from planning into a bounded authorised build when owner explicitly authorises that consequential transition.
