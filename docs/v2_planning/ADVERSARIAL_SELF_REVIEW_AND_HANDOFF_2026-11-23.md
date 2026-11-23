@@ -1,5 +1,7 @@
 # SOLOMON V2 — Adversarial Architecture Self-Review and Builder Handoff
 
+> **EXPLICIT USER DECISION (23 Nov 2026):** Next SOLOMON implementation is from scratch in a **new repository**, with **no old Bartholomew project code, tests, configurations, database schemas/migrations or runtime copied, adapted or carried forward**. The old repository is read-only lessons and history. See [GREENFIELD_OVERRIDE_2026-11-23.md](GREENFIELD_OVERRIDE_2026-11-23.md). Old-code reuse suggestions in earlier studies are superseded; independent third-party libraries may be freshly chosen.
+
 **Prepared:** 2026-11-23 (Australia/Brisbane)  
 **Review type:** A separate **self-challenge of the proposed design**, *not* an independent external audit, empirical test or safety certification. Another reviewer and actual tests are still necessary at the implementation gate.  
 **GitHub source baseline:** `main` commit `0142673628ab74fe5991005d146dfbaa97729c90` (2026-10-09).  
@@ -37,23 +39,23 @@ Yes. Particularly if a polished screen calls a single static model, converts its
 
 **H2: Native Android technology.** React web UI + limited Android native bridge is *preferred provisionally*. Actually test Android OS background, microphone, notification, exact alarm, secure storage, stop and Fold layout against Flutter or an alternative. If this cannot deliver a supported permission-safe user experience at sustainable maintenance cost, choose another option under the evidence-based architectural exception process.
 
-**H3: Persistence architecture.** SQLite/WAL single-owner may be enough with bounded transaction ownership; don't preemptively introduce a cloud database. First investigate measured Windows commit/close concurrency and atomic effects. If retainability fails risk gates, document exact contrary evidence and replace the affected storage seam with migration proof.
+**H3: Greenfield persistence.** Select a database/storage architecture from current performance, reliability, privacy/deletion and Windows/Android deployment needs; SQLite/WAL remains a candidate **external technology**, not inherited database code. The old measured Windows commit/close problem informs newly authored stress tests only. **No old SQLite files, schema, migrations or runtime data may be imported.**
 
-**H4: Models and integrations.** The current code includes local/cloud model adapter paths; current real capability and data contract must be checked. Real model generalisation, accurate tool use and owner-benefit are not proven by static tests or provider availability. Never select a non-consented provider merely because it exists in a manifest.
+**H4: Models and integrations.** Build **new** provider adapters/contracts against actually verified current model capabilities and permitted data boundaries; never copy old local/cloud model router files. Real generalisation, accurate tool use and owner benefit are not proven by static tests or provider availability. Never select a non-consented provider merely because it appears in an old configuration.
 
 **H5: Local stop under offline central control.** A real endpoint can sometimes be disconnected before learning central revocation. Architecture must explicitly distinguish local owner Brake, expiring leases and remote unconfirmed state. Do not promise impossible instantaneous remote stop. When a task requires fresh centrally checked authorization and offline network is unavailable, it must not execute the consequential step.
 
 ## 4. Builder handoff: exact entry point, no hidden assumptions
 
-**Do not start with code changes.** First read GitHub `START_HERE.md`, `CONSTITUTION.md`, `DECISIONS.md`, `COGNITIVE_RUNTIME.md`, `INTERFACES.md`, `ROADMAP.md` and these three V2 draft docs, then independently check GitHub `main` HEAD and whether any prior PR has merged since SHA `014267...`.
+**Do not start with code changes in the historical repo.** First read the current 96 approved V2 requirement sources, this four-document draft planning package and (read-only) historical GitHub `START_HERE.md`, `CONSTITUTION.md`, `DECISIONS.md`, `COGNITIVE_RUNTIME.md`, `INTERFACES.md`, `ROADMAP.md` for context and failure lessons. Confirm that the **new implementation will start from an empty, separate source repository**, not an old-repo fork, migration or cherry-pick. Check the historical GitHub SHA only to understand provenance, not as the greenfield build baseline.
 
 1. Read owner-approved R03A-02 and current V2 Decisions product sources (96/96; don't reapprove or edit), current R03A-03B whole-system gates and R03A-04A deletion fault standard in Airtable.
 2. Read the historical failure and alignment audits. Check the Oct 2026 Windows Gate 8 state, actual source-revision CI, task-effect storage, current Python packaging and no live test-data leaks.
-3. Start a bounded, separately authorized **P0 source/contract/threat feasibility package**; freeze exact app/device/platform evidence before choosing final UI and remote host.
+3. Start a bounded, separately authorized **P0 GREENFIELD architecture/contract/threat and platform feasibility package** in the new implementation context: fresh language/framework/database/device bridge and independent build/test stack based on requirements, OS constraints and licensing. Freeze exact Windows/Android evidence before choosing final UI and remote host; **zero previous code copying**.
 4. Write the versioned typed contract and storyboard all owner-visible normal + denied + offline + unknown + cancelled + reversed states for one goal. Build the *real* P2 vertical effect only after independent grant/Brake and privacy tests are ready.
 5. Prepare independent adversarial test code/oracles using disposable data before exposing any real owner records. Actual Android/Windows integration and provider expenses need separate approval.
 6. When context nears its limit, provide full handoff of exact source SHA, open PR heads, tests **actually run** vs not run, permissions/side effects, blockers, expected next action and whether to branch or split work.
-7. Do not merge this PR or mark it implementation-authoritative without the separately controlled GitHub/owner decision. Do not reinterpret standing PLANNING delegation as permission to pay, publish, send, monitor, update a personal phone, rewrite privacy policies or run the system without owner authorization.
+7. This PR resides in the **historical repository solely to preserve the planning review**. Do not merge it to the old implementation `main`, run the old code as the new build, or treat its prior tests as the new implementation baseline. Set up the greenfield repository only at the separately authorised implementation kickoff. Do not reinterpret standing PLANNING delegation as permission to pay, publish, send, monitor, update a personal phone, rewrite privacy policies or run the system without owner authorization.
 
 ## 5. Honest current readiness
 
@@ -62,7 +64,7 @@ Yes. Particularly if a polished screen calls a single static model, converts its
 | 96 current product requirement sources | Verified Approved in Airtable |
 | Engineering source interpretations and deep MEM03 fault **design** | Approved; tests **not run** |
 | Source-to-first-V1 classification / risk transfer / architecture comparison | Completed as delegated planning in Airtable |
-| Architecture and implementation-stage documents | In draft GitHub PR branch, not merged or executed |
+| Architecture and implementation-stage documents | In draft PR in the historical repository only, not merged or executed; direct owner decision requires a new clean implementation repository |
 | Validated Android integration and real model plan quality | **Not proven** |
 | Current Windows full reliability / Gate 8 | Historic source reports **open**, must reverify current head |
 | Owner-entered finance/health source access, OS alarm, model/cloud spend | **Not granted by these documents** |
