@@ -1,5 +1,7 @@
 # SOLOMON / Bartholomew V2 — Architecture Decision Candidate
 
+> **OWNER DECISION — SUPERSEDES PREVIOUS REUSE STRATEGY (23 Nov 2026):** SOLOMON V2 will be built **entirely from scratch in a new repository**, with **zero previous Bartholomew implementation code, tests, configs, databases or migrations carried forward**. The old repository is read-only historical/reference material. See [GREENFIELD_OVERRIDE_2026-11-23.md](GREENFIELD_OVERRIDE_2026-11-23.md). Any earlier statements below recommending selective reuse are obsolete; mature independently assessed third-party libraries remain permissible.
+
 **Planning date:** 2026-11-23 (Australia/Brisbane)  
 **Status:** Proposed for GitHub canonical promotion; **not merged, not implemented, not tested**  
 **Authority:** 2026-11-23 owner delegation to finish planning reviews without individual prompts, **not** permission to build, spend, connect accounts, expand private data access, or deploy.  
@@ -8,11 +10,11 @@
 
 ## Decision in one paragraph
 
-Develop one persistent, governed, **server-centric** personal AI Executive that is independent of the models, devices and interfaces it uses. Build the first practical single-owner Windows/Android experience **front-end-led, contract-first and vertically integrated**: model the real owner journeys and all success/deny/unknown/stop/rollback states first; implement UI, backend, independent governance, memory, ECI endpoints and independent verification together for real end-to-end results. Reuse validated existing code where its contracts hold, refactor unsafe integration seams, and replace bounded components only where independently justified. An attended Windows-hosted controller is a viable low-cost development configuration, not a promise of always-on cross-device service. Production server location and external account permissions are separate choices. No full robotics, unproven cognitive theory, continuous sensing, autonomous finance trading or commercial multiuser build is a Version 1 prerequisite.
+Develop one persistent, governed, **server-centric** personal AI Executive that is independent of the models, devices and interfaces it uses. Build the first practical single-owner Windows/Android experience **front-end-led, contract-first and vertically integrated**: model the real owner journeys and all success/deny/unknown/stop/rollback states first; implement UI, backend, independent governance, memory, ECI endpoints and independent verification together for real end-to-end results. Write all SOLOMON-authored application code, services, governance and tests fresh in a **new, clean repository**, without porting earlier Bartholomew modules, while choosing mature external libraries independently after licence/security/maintenance review. An attended Windows-hosted controller is a viable low-cost development configuration, not a promise of always-on cross-device service. Production server location and external account permissions are separate choices. No full robotics, unproven cognitive theory, continuous sensing, autonomous finance trading or commercial multiuser build is a Version 1 prerequisite.
 
-## Existing durable repository authority preserved
+## Historical architecture authority and unchanged product safeguards
 
-The 2026-08-17 **server-centric Bartholomew with local/edge capability agents** entry in `DECISIONS.md` explicitly supersedes the older hybrid local-first entry. It does **not** require a paid public cloud or remove offline local protection. Preserve: one central Executive; personal state independent of any LLM/provider/device; device agents act as capabilities; local user-reachable stop even when a server is unreachable; stricter platform and personal brake tiers; no Internet exposure without independently reviewed authentication, authorization and transport security. Existing `CONSTITUTION.md`, `COGNITIVE_RUNTIME.md` and `INTERFACES.md` remain authoritative until an approved canonical change. This candidate is not a conflicting second authority.
+The 2026-08-17 **server-centric Bartholomew with local/edge capability agents** entry in `DECISIONS.md` explicitly supersedes the older hybrid local-first entry. It does **not** require a paid public cloud or remove offline local protection. Preserve: one central Executive; personal state independent of any LLM/provider/device; device agents act as capabilities; local user-reachable stop even when a server is unreachable; stricter platform and personal brake tiers; no Internet exposure without independently reviewed authentication, authorization and transport security. Those historical documents remain read-only evidence of earlier decisions and useful constraints; **the new repository will establish its own canonical implementation architecture** from the currently approved V2 product requirements. The independent stop, owner control, one coherent identity and no model-as-authority principles survive; the old repo's code or specific Python/SQLite stack does not carry forward.
 
 `START_HERE.md` currently documents useful integrated governance and memory substrate, operator-only Windows action, limited conversational Executive behind default-off switches, and absent real-model plan-quality proof. Its current-state snapshot was updated around September 2026 and may be stale. The October 9 merge message reports Windows Gate 8 postmerge qualification still **0/3** and broader incident **OPEN**, despite narrow CI success. Do not confuse old installed binaries, source tests, CI green or mocks with real owner capability.
 
@@ -86,22 +88,24 @@ Official implementation references (read 2026-11-23):
 
 ## Persistence and deletion design constraints
 
-Existing SQLite/WAL is a candidate for single-owner authoritative task/memory/policy/effect state **only after** a dedicated write-owner, bounded transaction, pending-effect ledger, restart/backup process and Windows headroom tests. Do not silently change to a distributed database just to appear extensible. The historical incident includes measured close/commit and scheduler timing issues; no long-running model calls or synchronous blocking control action while holding a SQLite writer. See https://sqlite.org/wal.html.
+For the new clean build, **select storage independently** from requirements, explicit privacy/deletion guarantees, concurrency/recovery needs, licensing, and measured Windows/Android deployment constraints. SQLite/WAL is one available external database technology—not an inherited Bartholomew database implementation. Never port the old database, schema, migrations or stored records. Do not choose a more elaborate database merely to appear extensible. The historical incident includes measured close/commit and scheduler timing issues; no long-running model calls or synchronous blocking control action while holding a SQLite writer. See https://sqlite.org/wal.html.
 
 The approved MEM03 deep assurance specification requires inspect/correct/restrict/delete controls and per-copy removal/no-use truth across originals, summaries, embeddings, logs, provider copies, backups, offline devices and restored snapshots. Distinguish local verified removal, access restriction, cryptographic unreadability, partial failure and third-party unverifiable copies. Do not preserve forbidden plaintext as 'audit evidence'. The new deep fault cases are designed, not run.
 
-## Choice comparison and reuse rules
+## Greenfield strategy and external technology selection
 
-| Approach | Benefit | Serious risk | Disposition |
-|---|---|---|---|
-| Patch entire existing backend | Faster immediate reuse | Repeats old interface/user-value gaps and latent coupling | Not default |
-| Clean rebuild | Control of all internal contracts | Rewrites tested safety/state and reproduces bugs | Only if actual audit proves architectural incompatibility |
-| **Selective staged reuse/refactor/replacement** | Preserves proven work with bounded regression and rollback | Demands independent component qualification | **Preferred** |
-| Strict UI/mock-first | Early visual review | False working product, late safety integration | Reject as complete method |
-| Backend-first foundation-only | Strong local subsystem tests | Later discovery of poor whole-user experience | Reject as milestone strategy |
-| **Frontend-led, contract-first vertical integration** | User experience + safety + actual verified effect continually connected | Requires disciplined shared contracts | **Preferred delivery method** |
+The **direct owner decision** resolves old-code reuse: it is **not allowed**, regardless of whether an old module previously passed tests. The decision supersedes earlier assistant-selected selective-retain/refactor/replacement planning, but preserves the requirement to learn from earlier incidents.
 
-Possible retained modules, not yet requalified for V2: FastAPI service, existing identity/memory, governance/brake, ECI and Windows tool agent, evidence/CI skeleton. Fault-dependent refactors: mixed SQLite access lifecycle, model policy vs runtime router, chat intent and actual general reasoning, incomplete cross-device state, consent/memory derivatives, weak test oracles and final installed experience. All modules can be retained **only if current test evidence supports it**.
+| Choice | Disposition |
+|---|---|
+| Fork, patch or port old Bartholomew application source | **Prohibited** |
+| Copy old memory database, migrations, tests, CI or runtime modules | **Prohibited** |
+| Read historical implementation and failure reports for lessons | **Allowed as read-only reference**, never as imported build artifacts |
+| Choose maintained external packages/SDKs/standard protocols after fresh audit | **Allowed** |
+| Frontend-led, contract-first, real vertically integrated delivery | **Selected build method** |
+| UI-only polished mock or backend-only foundation as completed V1 | **Rejected** |
+
+The new codebase must contain a newly specified Executive, independent governance and emergency stop, memory/privacy/deletion, task/effect/verification store, model interfaces, OS/device bridge, PC/Android UI, CI and end-to-end tests. These are new designs and implementations derived from the **approved V2 requirements**, not renamed copies of the old project's code. The 2026 old-repository Windows/SQLite incidents remain **risk lessons** and future fault-test ideas; the new build must independently establish its own actual defects and test evidence.
 
 ## Architecture acceptance spikes before feature construction
 
